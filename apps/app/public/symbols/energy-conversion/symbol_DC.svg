@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 24 24" width="24" height="24">
+  <defs>
+    <style>
+      .cls-1 {
+        stroke-width: 0px;
+      }
+
+      .cls-1, .cls-2, .cls-3, .cls-4 {
+        fill: none;
+      }
+
+      .cls-5 {
+        clip-path: url(#clippath);
+      }
+
+      .cls-2, .cls-3, .cls-4 {
+        stroke: #000;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .cls-3, .cls-4 {
+        stroke-width: 2px;
+      }
+
+      .cls-6, .cls-4 {
+        display: none;
+      }
+    </style>
+    <clipPath id="clippath">
+      <rect class="cls-1" x="4" y="12.7" width="15.8" height="3.2"/>
+    </clipPath>
+  </defs>
+  <g id="trasnformer" class="cls-6">
+    <circle class="cls-2" cx="6.6" cy="12" r="6.9"/>
+    <circle class="cls-2" cx="17.4" cy="12" r="6.9"/>
+  </g>
+  <g id="Base" class="cls-6">
+    <rect class="cls-3" x="-6.7" y="-6.7" width="37.3" height="37.3" rx="1.3" ry="1.3"/>
+    <line class="cls-3" x1="-6.7" y1="30.7" x2="30.3" y2="-6.3"/>
+  </g>
+  <g id="rectifier" class="cls-6">
+    <path class="cls-2" d="M12,2.3c0,2-1.6,3.7-3.7,3.7s-3.7-1.6-3.7-3.7S3-1.4.9-1.4-2.8.2-2.8,2.3"/>
+    <line class="cls-2" x1="12.5" y1="22.1" x2="26" y2="22.1"/>
+    <line class="cls-2" x1="12.5" y1="24.8" x2="15.2" y2="24.8"/>
+  </g>
+  <g id="rectifier_copy" data-name="rectifier copy">
+    <line class="cls-3" x1="5.2" y1="10.1" x2="18.7" y2="10.1"/>
+    <g class="cls-5">
+      <g>
+        <line class="cls-3" x1="5.1" y1="14.1" x2="7.8" y2="14.1"/>
+        <line class="cls-3" x1="10.5" y1="14.1" x2="13.2" y2="14.1"/>
+        <line class="cls-3" x1="16" y1="14.1" x2="18.7" y2="14.1"/>
+      </g>
+    </g>
+  </g>
+  <path class="cls-4" d="M19.4,12c0,2-1.6,3.7-3.7,3.7s-3.7-1.6-3.7-3.7-1.6-3.7-3.7-3.7-3.7,1.6-3.7,3.7"/>
+</svg>

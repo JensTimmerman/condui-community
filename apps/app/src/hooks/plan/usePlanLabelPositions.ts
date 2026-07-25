@@ -1,0 +1,170 @@
+import { useMemo, useRef } from 'react'
+import { useProjectStore } from '@/stores/projectStore'
+import { buildWallObstacleRects } from '@/lib/plan/labelWallCollision'
+import { buildPlanWireObstacleRects, buildWireObstacleIndex } from '@/lib/plan/labelWireCollision'
+import { getQuadrantWallScores, type QuadrantScores } from '@/utils/planAutoOrient'
+import { calculateLabelPositions } from '@/utils/plan/labelPositioning'
+import { useCanvasFontFamily } from '@/editions/community/communityHooks'
+import type { Placement, PlanWireRoute, PlanWireRouteStyle, Point2, Wall } from '@/types/schema'
+import { PLAN_LABEL_IMAGE_SCORE_MAX_RECOMPUTES_PER_PASS } from '@/constants/canvasConstants'
+
+export type PlanLabelWallCollisionInput = {
+  walls: Wall[]
+  masterWallThickness: number
+  pxPerMeter: number | null
+}
+
+export type PlanLabelWireCollisionInput = {
+  routes: PlanWireRoute[]
+  routeStyle: PlanWireRouteStyle
+  placementPositionOverrides?: Map<string, Point2>
+}
+
+/**
+ * Hook to calculate label positions with collision detection
+ */
+export function usePlanLabelPositions(
+  placements: Array<Placement & { endpointId?: string; junctionPanelLabel?: string }>,
+  planImage: HTMLImageElement | null,
+  planImagePosition: { x: number; y: number },
+  baseSymbolSizePx: number,
+  labelRecalcKey: number,
+  enableImageWallSampling = true,
+  wallCollision: PlanLabelWallCollisionInput | null = null,
+  wireCollision: PlanLabelWireCollisionInput | null = null
+): Map<string, { x: number; y: number }> {
+  const getEndpointById = useProjectStore(
+    (s: ReturnType<typeof useProjectStore.getState>) => s.getEndpointById
+  )
+  const fontFamily = useCanvasFontFamily()
+
+  const cacheRef = useRef<{
+    lastImageKey: string
+    lastPlacementGeomById: Map<string, string>
+    wallScoresByPlacementId: Map<string, QuadrantScores>
+  }>({
+    lastImageKey: '',
+    lastPlacementGeomById: new Map(),
+    wallScoresByPlacementId: new Map(),
+  })
+
+  const wallObstacleRects = useMemo(() => {
+    if (!wallCollision || wallCollision.walls.length === 0) return null
+    return buildWallObstacleRects(
+      wallCollision.walls,
+      wallCollision.masterWallThickness,
+      wallCollision.pxPerMeter
+    )
+  }, [wallCollision])
+
+  const wireObstacleIndex = useMemo(() => {
+    if (!wireCollision || wireCollision.routes.length === 0) return null
+    const rects = buildPlanWireObstacleRects(
+      wireCollision.routes,
+      getEndpointById,
+      wireCollision.placementPositionOverrides,
+      2,
+      wireCollision.routeStyle
+    )
+    return buildWireObstacleIndex(rects)
+  }, [wireCollision, getEndpointById])
+
+  const labelPositions = useMemo(() => {
+    void labelRecalcKey
+    let wallScoresByPlacementId: Map<string, QuadrantScores> | null = null
+    if (enableImageWallSampling && planImage && planImagePosition) {
+      // Cache and filter quadrant scoring aggressively: only recompute for moved placements
+      // and placements near moved ones. Recompute all only when plan image or imagePosition changes.
+      const imageKey = `${planImage.src}|${planImage.width}x${planImage.height}|${planImagePosition.x},${planImagePosition.y}|${baseSymbolSizePx}`
+      const imageChanged = cacheRef.current.lastImageKey !== imageKey
+      cacheRef.current.lastImageKey = imageKey
+
+      // Detect moved placements by geometry change.
+      const movedIds: string[] = []
+      const movedPts: Array<{ id: string; x: number; y: number }> = []
+      const nextGeomById = new Map<string, string>()
+
+      for (const placement of placements) {
+        if (!placement.pos) continue
+        const geom = `${placement.pos.x},${placement.pos.y},${placement.rotationDeg ?? 0},${placement.scale}`
+        nextGeomById.set(placement.id, geom)
+        const prev = cacheRef.current.lastPlacementGeomById.get(placement.id)
+        if (!prev || prev !== geom) {
+          movedIds.push(placement.id)
+          movedPts.push({ id: placement.id, x: placement.pos.x, y: placement.pos.y })
+        }
+      }
+
+      // Drop cache entries for removed placements.
+      if (cacheRef.current.lastPlacementGeomById.size > 0) {
+        for (const id of cacheRef.current.lastPlacementGeomById.keys()) {
+          if (!nextGeomById.has(id)) cacheRef.current.wallScoresByPlacementId.delete(id)
+        }
+      }
+      cacheRef.current.lastPlacementGeomById = nextGeomById
+
+      // Neighbor radius: only nearby placements can have their best label side change
+      // due to local collisions / proximity to the moved symbol.
+      const neighborRadius = baseSymbolSizePx * 8
+      const neighborRadiusSq = neighborRadius * neighborRadius
+
+      const shouldRecompute = (placement: Placement) => {
+        if (imageChanged) return true
+        if (!placement.pos) return false
+        if (movedIds.includes(placement.id)) return true
+        if (movedPts.length === 0) return false
+        const px = placement.pos.x
+        const py = placement.pos.y
+        for (const mp of movedPts) {
+          const dx = px - mp.x
+          const dy = py - mp.y
+          if (dx * dx + dy * dy <= neighborRadiusSq) return true
+        }
+        return false
+      }
+
+      wallScoresByPlacementId = cacheRef.current.wallScoresByPlacementId
+
+      // Only do expensive image sampling for a small subset.
+      let recomputeCount = 0
+      for (const placement of placements) {
+        if (!placement.pos) continue
+        if (!shouldRecompute(placement)) continue
+        if (recomputeCount >= PLAN_LABEL_IMAGE_SCORE_MAX_RECOMPUTES_PER_PASS) continue
+        const scores = getQuadrantWallScores(
+          placement,
+          {
+            image: planImage,
+            imagePosition: planImagePosition,
+          },
+          baseSymbolSizePx
+        )
+        recomputeCount++
+        if (scores) wallScoresByPlacementId.set(placement.id, scores)
+        else wallScoresByPlacementId.delete(placement.id)
+      }
+    }
+    return calculateLabelPositions(
+      placements,
+      getEndpointById,
+      wallScoresByPlacementId,
+      baseSymbolSizePx,
+      fontFamily,
+      wallObstacleRects,
+      wireObstacleIndex
+    )
+  }, [
+    placements,
+    getEndpointById,
+    labelRecalcKey,
+    planImage,
+    planImagePosition,
+    baseSymbolSizePx,
+    fontFamily,
+    enableImageWallSampling,
+    wallObstacleRects,
+    wireObstacleIndex,
+  ])
+
+  return labelPositions
+}

@@ -1,0 +1,3056 @@
+import { logger } from '@/lib/logger'
+import {
+  useRef,
+  useCallback,
+  useMemo,
+  useState,
+  useEffect,
+  type MutableRefObject,
+  type RefObject,
+  type ReactNode,
+} from 'react'
+import { useTranslation } from 'react-i18next'
+import { Group, Rect, Line, Text } from 'react-konva'
+import Konva from 'konva'
+import BaseCanvas, { type BaseCanvasHandle } from '../BaseCanvas'
+import ViewNavigationToolbar from '../ViewNavigationToolbar'
+import CanvasFloatingControlRail from '../CanvasFloatingControlRail'
+import { FloatingControl } from '../FloatingControls'
+
+import { AutoArrangeIcon } from '@/components/icons/UiIcons'
+import { SupplySymbol } from '../eendraad/SupplySymbol'
+import { useUIStore } from '@/stores/uiStore'
+import { useSettingsStore } from '@/stores/settingsStore'
+import { useProjectStore } from '@/stores/projectStore'
+import { useDialogStore } from '@/stores/dialogStore'
+import { useThemeColors } from '@/lib/theme/hooks'
+import { useCanvasFontFamily } from '@/editions/community/communityHooks'
+import { ZOOM_100 } from '@/constants/canvasConstants'
+import {
+  panelGridModuleRefKey,
+  resolveModuleWidthCols,
+  CELL_W,
+  CELL_H,
+  ROW_GAP,
+  ROW_STRIDE,
+  snapToGrid,
+  type ModulePlacement,
+} from './panelGridLayout'
+import { getModuleDisplayInfo } from './getModuleDisplayInfo'
+import ModuleBox, { type ModuleTooltipData } from './ModuleBox'
+import RelationWires, { type PanelHierarchyRoute } from './RelationWires'
+import type { PanelWirePathRegion, WirePathSegment } from './panelWireRouter'
+import { RewireTool } from './RewireTool'
+import { RewirePreviewWire } from './RewirePreviewWire'
+import {
+  buildFullPanelScene,
+  PANEL_SCENE_FRAME_MARGIN,
+  PANEL_SCENE_SHARED_SUPPLY_ID,
+  type BuiltPanelScene,
+  type PanelSceneSurface,
+} from '@/lib/panel/panelScene'
+import { applyPanelSceneFilter, type PanelSceneFilter } from '@/lib/panel/applyPanelSceneFilter'
+import { generateId } from '@/utils'
+import { getNextAvailableCircuitCode } from '@/utils/project'
+import { addToSelection } from '@/utils/selection'
+import { ensureInstallationFeedTopology, getPanelFeedProjection } from '@/lib/feedTopology'
+import {
+  getElectricalInstallationFromProject,
+  getElectricalPanelsFromProject,
+  getMutableElectricalPanelsForProject,
+} from '@/lib/projectV2/electrical'
+import { getPanelRewireOperation, validatePanelRewireOperation } from '@/lib/panel/panelRewire'
+import {
+  createDefaultAcCircuitCable,
+  DEFAULT_AC_CIRCUIT_WIRE_LABEL_FLAGS,
+} from '@/lib/wires/circuitWireDefaults'
+import { getVoltagePolesConfig, getProtectionCreationProps } from '@/lib/protectionDefaults'
+import {
+  PROTECTION_SYMBOL_IDS,
+  protectionTypeFromSymbolId,
+  resolveInitialProtectionBusLabel,
+  ROTATING_SWITCH_SYMBOL_ID,
+} from '@/lib/protectionKind'
+import type {
+  PanelGridSlot,
+  PanelGridModuleRef,
+  ProtectionDevice,
+  Circuit,
+  TrunkDevice,
+  Panel,
+} from '@/types/schema'
+import type { ProjectState } from '@/stores/projectStore'
+import type { CanvasDropMeta, Point, Selection as CanvasSelection } from '@/types/ui'
+import type { ContextMenuItem } from '@/components/common/ContextMenu'
+import type { SymbolMetadata } from '@/lib/symbols'
+import type { EditorCapabilities } from '@/lib/viewerMode'
+import { polesFromConfig } from '@/constants/poleConfig'
+import { clamp, rectContainsRect } from '@/lib/geometry'
+import { upsertPanelGridSlotPosition } from '@/lib/panel/panelSupplySlots'
+import { collectCircuits, getLastAssignableCircuit } from '@/lib/panel/panelTree'
+
+type Project = NonNullable<ProjectState['currentProject']>
+
+function findPanelRecursive(panels: Panel[], id: string): Panel | undefined {
+  for (const panel of panels) {
+    if (panel.id === id) return panel
+    const nested = findPanelRecursive(panel.subPanels ?? [], id)
+    if (nested) return nested
+  }
+  return undefined
+}
+
+function getManualWidthProps(slot?: PanelGridSlot) {
+  return slot?.moduleWidthManual === true && slot.moduleWidth != null
+    ? { moduleWidth: slot.moduleWidth, moduleWidthManual: true as const }
+    : {}
+}
+
+function reindexTrunkDevices(devices: TrunkDevice[] | undefined): void {
+  devices?.forEach((device, index) => {
+    device.trunkPosition = index
+  })
+}
+
+function moveSupplyDeviceFeedOwner(
+  project: Project,
+  deviceId: string,
+  target: { scope: 'shared' } | { scope: 'root'; panelId: string },
+  insertIndex?: number
+): boolean {
+  const installation = getElectricalInstallationFromProject(project)
+  if (!installation) return false
+  const panels = getElectricalPanelsFromProject(project)
+  const topology = ensureInstallationFeedTopology(installation, panels)
+  const sharedDevices = installation.mainSupply.supplyTrunkDevices ?? []
+  let movedDevice: TrunkDevice | undefined
+
+  const sharedIndex = sharedDevices.findIndex((device) => device.id === deviceId)
+  if (sharedIndex >= 0) {
+    movedDevice = sharedDevices.splice(sharedIndex, 1)[0]
+  }
+
+  for (const feed of topology.rootFeeds) {
+    const devices = feed.trunkDevices ?? []
+    const index = devices.findIndex((device) => device.id === deviceId)
+    if (index >= 0) {
+      movedDevice = devices.splice(index, 1)[0]
+      feed.trunkDevices = devices
+      break
+    }
+  }
+
+  if (!movedDevice) return false
+
+  if (target.scope === 'shared') {
+    const targetIndex = clamp(insertIndex ?? sharedDevices.length, 0, sharedDevices.length)
+    sharedDevices.splice(targetIndex, 0, movedDevice)
+  } else {
+    const feed =
+      topology.rootFeeds.find((item) => item.panelId === target.panelId) ??
+      (() => {
+        const created = {
+          id: `root-feed-${target.panelId}`,
+          kind: 'root_panel' as const,
+          connectorId: topology.rootConnector.id,
+          panelId: target.panelId,
+          cable: topology.sharedFeed.cable ?? installation.mainSupply.cable,
+          trunkDevices: [] as TrunkDevice[],
+          segmentCables: [],
+        }
+        topology.rootFeeds.push(created)
+        return created
+      })()
+    if (!feed.trunkDevices) feed.trunkDevices = []
+    const targetIndex = clamp(insertIndex ?? feed.trunkDevices.length, 0, feed.trunkDevices.length)
+    feed.trunkDevices.splice(targetIndex, 0, movedDevice)
+  }
+
+  topology.sharedFeed.trunkDevices = [...sharedDevices]
+  reindexTrunkDevices(sharedDevices)
+  reindexTrunkDevices(topology.sharedFeed.trunkDevices)
+  for (const feed of topology.rootFeeds) reindexTrunkDevices(feed.trunkDevices)
+  return true
+}
+
+function moduleRefMatchesSelection(ref: PanelGridModuleRef, selection: CanvasSelection): boolean {
+  if (!selection.type || selection.ids.length === 0) return false
+  if (selection.type === 'protection')
+    return ref.kind === 'protection' && selection.ids.includes(ref.id)
+  if (selection.type === 'trunkDevice') {
+    return ref.kind === 'trunkDevice' && selection.ids.includes(ref.id)
+  }
+  if (selection.type === 'endpoint') {
+    return ref.kind === 'domotica' && selection.ids.includes(ref.endpointId)
+  }
+  return false
+}
+
+function getModuleSelectionBounds(
+  placements: Array<{
+    x: number
+    y: number
+    width: number
+    height: number
+    ref: PanelGridModuleRef
+  }>,
+  selection: CanvasSelection,
+  padding = 0
+): { x: number; y: number; width: number; height: number } | null {
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  let found = false
+
+  for (const placement of placements) {
+    if (!moduleRefMatchesSelection(placement.ref, selection)) continue
+    minX = Math.min(minX, placement.x)
+    minY = Math.min(minY, placement.y)
+    maxX = Math.max(maxX, placement.x + placement.width)
+    maxY = Math.max(maxY, placement.y + placement.height)
+    found = true
+  }
+
+  if (
+    !found ||
+    !Number.isFinite(minX) ||
+    !Number.isFinite(minY) ||
+    !Number.isFinite(maxX) ||
+    !Number.isFinite(maxY)
+  ) {
+    return null
+  }
+
+  return {
+    x: minX - padding,
+    y: minY - padding,
+    width: maxX - minX + padding * 2,
+    height: maxY - minY + padding * 2,
+  }
+}
+
+function applyPanelRewireOperation({
+  panel,
+  currentProject,
+  origin,
+  target,
+  rewireModules,
+  placeSupplyModuleAfterInsert,
+  updatePanelGridSlots,
+  updateSupplyPanelSlots,
+}: {
+  panel: Panel | null
+  currentProject: Project | null
+  origin: PanelGridModuleRef
+  target: PanelGridModuleRef
+  rewireModules: (originCircuitId: string, targetCircuitId: string) => void
+  placeSupplyModuleAfterInsert: (
+    targetPanel: Panel,
+    targetProject: Project,
+    moduleRef: PanelGridModuleRef,
+    preferredRow?: number,
+    preferredCol?: number
+  ) => { mainSlots: PanelGridSlot[]; supplySlots: PanelGridSlot[] }
+  updatePanelGridSlots: (panelId: string, slots: PanelGridSlot[]) => void
+  updateSupplyPanelSlots: (panelId: string, slots: PanelGridSlot[]) => void
+}): boolean {
+  if (!panel || !currentProject) return false
+  const operation = getPanelRewireOperation(panel, currentProject, origin, target)
+  if (!operation) return false
+
+  if (operation.kind === 'moveSharedSupplyDevice') {
+    useProjectStore.getState().moveSupplyTrunkDevice(operation.targetSupplyId, operation.direction)
+    return true
+  }
+
+  if (operation.kind === 'promoteProtectionToSharedSupply') {
+    const deviceId = generateId()
+    const trunkDevice: TrunkDevice = { id: deviceId, ...operation.trunkDevice }
+    useProjectStore.getState().addSupplyTrunkDevice(trunkDevice, operation.insertIndex, {
+      panelId: panel.id,
+      feedScope: 'shared',
+    })
+    const nextProject = useProjectStore.getState().currentProject
+    const nextPanel =
+      nextProject != null
+        ? findPanelRecursive(getElectricalPanelsFromProject(nextProject), panel.id)
+        : undefined
+    if (nextProject && nextPanel) {
+      const { mainSlots, supplySlots } = placeSupplyModuleAfterInsert(
+        nextPanel,
+        nextProject,
+        { kind: 'trunkDevice', id: deviceId, scope: 'supply' },
+        undefined,
+        undefined
+      )
+      updatePanelGridSlots(panel.id, mainSlots)
+      updateSupplyPanelSlots(panel.id, supplySlots)
+    }
+    useProjectStore.setState((state: ProjectState) => {
+      if (!state.currentProject) return
+      const targetPanel = findPanelRecursive(
+        getMutableElectricalPanelsForProject(state.currentProject),
+        panel.id
+      )
+      if (!targetPanel) return
+      let circuitRemoved = false
+      const findAndRemove = (candidate: Panel): boolean => {
+        const prot = candidate.protections.find((pr) => pr.id === operation.protectionId)
+        if (prot?.circuits) {
+          const circuitIndex = prot.circuits.findIndex((c) => c.id === operation.circuit.id)
+          if (circuitIndex !== -1) {
+            prot.circuits.splice(circuitIndex, 1)
+            circuitRemoved = true
+            if (prot.circuits.length === 0) {
+              const protIndex = candidate.protections.findIndex(
+                (pr) => pr.id === operation.protectionId
+              )
+              if (protIndex !== -1) candidate.protections.splice(protIndex, 1)
+            }
+            return true
+          }
+        }
+        for (const subPanel of candidate.subPanels) if (findAndRemove(subPanel)) return true
+        return false
+      }
+      for (const rootPanel of getMutableElectricalPanelsForProject(state.currentProject))
+        if (findAndRemove(rootPanel)) break
+      if (circuitRemoved) {
+        if (!targetPanel.circuits) targetPanel.circuits = []
+        targetPanel.circuits.push(operation.circuit)
+        state.isDirty = true
+      }
+    })
+    return true
+  }
+
+  if (operation.kind === 'detachCircuitFromSupplyParent') {
+    useProjectStore
+      .getState()
+      .updateCircuit(operation.parentCircuitId, { subCircuitIds: operation.subCircuitIds })
+    return true
+  }
+
+  rewireModules(operation.originCircuitId, operation.targetCircuitId)
+  return true
+}
+
+function getLibraryDropWidthCols(symbol: SymbolMetadata, project: Project | null): number {
+  if (symbol.id === 'energy_meter')
+    return Math.max(1, polesFromConfig(getVoltagePolesConfig(project)))
+  if (symbol.id === ROTATING_SWITCH_SYMBOL_ID) return 1
+  const protectionType = protectionTypeFromSymbolId(symbol.id)
+  const defaults = getProtectionCreationProps(project, protectionType)
+  const poles =
+    defaults.poles ??
+    (defaults.polesConfig ? polesFromConfig(defaults.polesConfig) : undefined) ??
+    1
+  return Math.max(1, poles)
+}
+
+const PANEL_FRAME_MARGIN = PANEL_SCENE_FRAME_MARGIN
+
+export type PanelOption = {
+  id: string
+  name: string
+  panel: Panel
+  depth: number
+  isRoot: boolean
+}
+
+const PANEL_RELATION_DEBUG_WIRE_LEGEND = [
+  { label: 'Available pathways', color: '#06b6d4' },
+  { label: 'Internal routing (WINT)', color: '#22c55e' },
+  { label: 'Shared supply -> main protections (WSPM)', color: '#a855f7' },
+  { label: 'Shared supply -> unique supply device (WSUD)', color: '#0ea5e9' },
+  { label: 'Unique supply -> main protections (WUMP)', color: '#f97316' },
+  { label: 'Panel bus feed -> protections (WPBP)', color: '#f43f5e' },
+  { label: 'Main protection -> secondary panel feed (WSPF)', color: '#2563eb' },
+] as const
+
+const PANEL_RELATION_DEBUG_MODULE_LEGEND = [
+  { label: 'Protection module (MPRO)', color: '#f43f5e' },
+  { label: 'Secondary-panel feeder protection (MSPF)', color: '#2563eb' },
+  { label: 'Shared supply trunk device (MSUP)', color: '#a855f7' },
+  { label: 'Unique supply wire device (MUNQ)', color: '#f97316' },
+  { label: 'Circuit trunk / bus feed device (MCIR)', color: '#06b6d4' },
+  { label: 'Domotica module (MDOM)', color: '#8b5cf6' },
+] as const
+
+/** Parent-side protection that declares `subPanelId` for this secondary panel. */
+function findProtectionFeedingSubPanel(
+  project: Project,
+  subPanelId: string
+): { panel: Panel; protection: ProtectionDevice } | null {
+  const scan = (panels: Panel[]): { panel: Panel; protection: ProtectionDevice } | null => {
+    for (const pan of panels) {
+      for (const pr of pan.protections ?? []) {
+        if (pr.subPanelId === subPanelId) return { panel: pan, protection: pr }
+      }
+      const nested = scan(pan.subPanels ?? [])
+      if (nested) return nested
+    }
+    return null
+  }
+  return scan(getElectricalPanelsFromProject(project))
+}
+
+function findCircuitFeedingSubPanel(pr: ProtectionDevice, subPanelId: string): Circuit | null {
+  for (const c of pr.circuits ?? []) {
+    if (c.endpoints?.some((e) => e.symbol === 'panel_distribution' && e.panelId === subPanelId))
+      return c
+  }
+  return pr.circuits?.[0] ?? null
+}
+void findProtectionFeedingSubPanel
+void findCircuitFeedingSubPanel
+
+type HierarchySurface = PanelSceneSurface
+
+const HIERARCHY_PANEL_FRAME_HIT_MARGIN = 18
+const HIERARCHY_PANEL_FRAME_TITLE_HIT_HEIGHT = 40
+const PANEL_FRAME_DRAG_THRESHOLD = 6
+
+function beginDeferredPanelFrameSelectionRect(options: {
+  event: Konva.KonvaEventObject<MouseEvent>
+  canvasRef: RefObject<BaseCanvasHandle | null>
+  leftDragPansCanvas: boolean
+  pointerDownRef: MutableRefObject<{ x: number; y: number } | null>
+  pendingCleanupRef: MutableRefObject<(() => void) | null>
+}): void {
+  const { event, canvasRef, leftDragPansCanvas, pointerDownRef, pendingCleanupRef } = options
+
+  if (event.evt.button !== 0) return
+
+  const pointer = event.target.getStage()?.getPointerPosition()
+  if (!pointer) return
+
+  pointerDownRef.current = {
+    x: event.evt.clientX,
+    y: event.evt.clientY,
+  }
+
+  if (pendingCleanupRef.current) {
+    pendingCleanupRef.current()
+    pendingCleanupRef.current = null
+  }
+
+  const clientX = event.evt.clientX
+  const clientY = event.evt.clientY
+
+  const cleanup = () => {
+    window.removeEventListener('mousemove', handleWindowMouseMove, true)
+    window.removeEventListener('mouseup', handleWindowMouseUp, true)
+    if (pendingCleanupRef.current === cleanup) {
+      pendingCleanupRef.current = null
+    }
+  }
+
+  const handleWindowMouseMove = (evt: MouseEvent) => {
+    if (!pendingCleanupRef.current) return
+    const dx = evt.clientX - clientX
+    const dy = evt.clientY - clientY
+    if (Math.hypot(dx, dy) <= PANEL_FRAME_DRAG_THRESHOLD) return
+    if (leftDragPansCanvas && !event.evt.shiftKey) {
+      canvasRef.current?.startMousePan(clientX, clientY)
+    } else {
+      canvasRef.current?.startSelectionRect(pointer)
+    }
+    cleanup()
+  }
+
+  const handleWindowMouseUp = () => {
+    cleanup()
+  }
+
+  pendingCleanupRef.current = cleanup
+  window.addEventListener('mousemove', handleWindowMouseMove, true)
+  window.addEventListener('mouseup', handleWindowMouseUp, true)
+
+  event.cancelBubble = true
+}
+
+function hierarchyRouteForHierarchySurface(
+  surface: PanelSceneSurface,
+  sharedSurface: PanelSceneSurface | undefined,
+  side: 'left' | 'right',
+  panelInset: number
+): PanelHierarchyRoute {
+  const panelTopY = surface.y + surface.mainPanelY
+  const panelBottomY = panelTopY + surface.panelFrameHeight
+  const sharedCorridorY = (() => {
+    if (!sharedSurface) return panelBottomY + 8
+    const sharedTopY = sharedSurface.y
+    const sharedBottomY = sharedSurface.y + sharedSurface.height
+    return sharedBottomY <= panelTopY
+      ? (sharedBottomY + panelTopY) / 2
+      : (panelBottomY + sharedTopY) / 2
+  })()
+  return {
+    side,
+    corridorY: sharedCorridorY,
+    panelLeftX: surface.x,
+    panelRightX: surface.x + surface.width,
+    panelTopY,
+    panelBottomY,
+    feedFromTop: surface.feedFromTop,
+    panelInset,
+  }
+}
+
+function buildPanelWirePathRegions(surfaces: PanelSceneSurface[]): PanelWirePathRegion[] {
+  const regions: PanelWirePathRegion[] = []
+  const addRegion = (id: string, surface: PanelSceneSurface, contentTop: number, rows: number) => {
+    const rowCount = Math.max(1, rows)
+    regions.push({
+      id,
+      left: surface.x + PANEL_FRAME_MARGIN / 2,
+      right: surface.x + surface.width - PANEL_FRAME_MARGIN / 2,
+      horizontalYs: Array.from({ length: rowCount + 1 }, (_, gapIndex) => {
+        const rowGapCenterY = contentTop - ROW_GAP / 2 + gapIndex * ROW_STRIDE
+        if (gapIndex === 0) return rowGapCenterY - ROW_GAP / 2
+        if (gapIndex === rowCount) return rowGapCenterY + ROW_GAP / 2
+        return rowGapCenterY
+      }),
+    })
+  }
+
+  for (const surface of surfaces) {
+    if (surface.kind === 'shared_supply') {
+      addRegion(
+        `${surface.id}:shared`,
+        surface,
+        surface.y + PANEL_FRAME_MARGIN,
+        Math.max(1, surface.rows)
+      )
+      continue
+    }
+    addRegion(
+      `${surface.id}:main`,
+      surface,
+      surface.y + surface.mainPanelY + PANEL_FRAME_MARGIN,
+      surface.rows
+    )
+    if (surface.supplyPanelVisible) {
+      addRegion(
+        `${surface.id}:supply`,
+        surface,
+        surface.y + surface.supplyPanelY + PANEL_FRAME_MARGIN,
+        surface.supplyRows
+      )
+    }
+  }
+  return regions
+}
+
+function buildPanelWirePathLinks(connectors: BuiltPanelScene['connectors']): WirePathSegment[] {
+  return connectors.flatMap((connector) => {
+    const segments: WirePathSegment[] = []
+    for (let index = 0; index <= connector.points.length - 4; index += 2) {
+      segments.push({
+        from: { x: connector.points[index]!, y: connector.points[index + 1]! },
+        to: { x: connector.points[index + 2]!, y: connector.points[index + 3]! },
+      })
+    }
+    return segments
+  })
+}
+
+interface HierarchyDragPreview {
+  panelId: string
+  x: number
+  y: number
+  width: number
+  height: number
+  ref?: PanelGridModuleRef
+  invalid?: boolean
+  items?: Array<{
+    ref: PanelGridModuleRef
+    x: number
+    y: number
+    width: number
+    height: number
+  }>
+}
+
+type ModuleScopeKey = string
+
+export function HierarchyPanelCanvas({
+  canvasRef,
+  currentProject,
+  panelOptions,
+  panelSceneFilter,
+  libraryInteraction,
+  libraryCanvasExtras,
+  assignToCircuitMode = false,
+  onAssignTargetClick,
+  feedSideDirection,
+  panelZoom,
+  panelPan,
+  handleZoomChange,
+  handlePanChange,
+  handleFitToView,
+  handleViewTransformCommit,
+  onMultiFingerSwipe,
+  containerRef,
+  getPanelGridModules,
+  buildAutoArrangeSlots,
+  applyPanelAutoArrange,
+  placeSupplyModuleAfterInsert,
+  panelRelationDebug,
+  
+  capabilities,
+}: {
+  canvasRef: RefObject<BaseCanvasHandle | null>
+  currentProject: Project | null
+  panelOptions: PanelOption[]
+  panelSceneFilter: PanelSceneFilter
+  libraryInteraction?: {
+    onGetContextMenuItems?: (position: Point, elementId: string | null) => ContextMenuItem[]
+    onDrop?: (position: Point, symbolData: unknown, meta?: CanvasDropMeta) => void
+    onDragOver?: (position: Point, symbolData: unknown | null) => void
+    onFindElementsInRectangle?: (rect: {
+      x: number
+      y: number
+      width: number
+      height: number
+    }) => Array<{ id: string; type: string }>
+    onGetSelectionBounds?: () => { x: number; y: number; width: number; height: number } | null
+  }
+  libraryCanvasExtras?: ReactNode
+  assignToCircuitMode?: boolean
+  onAssignTargetClick?: (ref: PanelGridModuleRef) => void
+  feedSideDirection: 'left' | 'right'
+  panelZoom: number
+  panelPan: Point
+  handleZoomChange: (zoom: number) => void
+  handlePanChange: (pan: { x: number; y: number }) => void
+  handleFitToView: () => void
+  handleViewTransformCommit: (patch: { pan?: Point; zoom?: number }) => void
+  onMultiFingerSwipe?: (
+    direction: 'left' | 'right' | 'up' | 'down',
+    fingerCount: number,
+    startClientX: number
+  ) => void
+  containerRef: RefObject<HTMLDivElement | null>
+  getPanelGridModules: ProjectState['getPanelGridModules']
+  buildAutoArrangeSlots: (
+    targetPanel: Panel,
+    targetProject: Project
+  ) => { mainSlots: PanelGridSlot[]; supplySlots: PanelGridSlot[] }
+  applyPanelAutoArrange: ProjectState['applyPanelAutoArrange']
+  placeSupplyModuleAfterInsert: (
+    targetPanel: Panel,
+    targetProject: Project,
+    moduleRef: PanelGridModuleRef,
+    preferredRow?: number,
+    preferredCol?: number
+  ) => { mainSlots: PanelGridSlot[]; supplySlots: PanelGridSlot[] }
+  panelRelationDebug: boolean
+  
+  capabilities?: EditorCapabilities
+}) {
+  const { t } = useTranslation()
+  const connectorGroupRef = useRef<Konva.Group>(null)
+  const colors = useThemeColors()
+  const fontFamily = useCanvasFontFamily()
+  const selection = useUIStore((s) => s.selection)
+  const setSelection = useUIStore((s) => s.setSelection)
+  const openDialog = useDialogStore((s) => s.openDialog)
+  const canPlaceSymbols = capabilities?.canPlaceSymbols ?? true
+  const canDragItems = capabilities?.canDragItems ?? true
+  const canUseRewireTools = capabilities?.canUseRewireTools ?? true
+  const leftDragPansCanvas = useSettingsStore((s) => s.leftDragPansCanvas)
+  const updatePanelGridSlots = useProjectStore((s: ProjectState) => s.updatePanelGridSlots)
+  const updateSupplyPanelSlots = useProjectStore((s: ProjectState) => s.updateSupplyPanelSlots)
+  const rewireModules = useProjectStore((s: ProjectState) => s.rewireModules)
+  const [tooltip, setTooltip] = useState<ModuleTooltipData | null>(null)
+  void tooltip
+  void setTooltip
+  const [hoveredModuleRef, setHoveredModuleRef] = useState<PanelGridModuleRef | null>(null)
+  void setHoveredModuleRef
+  const [dragPreview, setDragPreview] = useState<HierarchyDragPreview | null>(null)
+  const [moduleDragPreview, setModuleDragPreview] = useState<HierarchyDragPreview | null>(null)
+  const [moduleDragLive, setModuleDragLive] = useState<HierarchyDragPreview | null>(null)
+  const hierarchyFeedFromTop = useMemo(
+    () => panelOptions.find((option) => option.isRoot)?.panel.gridView?.feedFromTop ?? false,
+    [panelOptions]
+  )
+  const [rewireMode, setRewireMode] = useState(false)
+  const [rewireOriginRef, setRewireOriginRef] = useState<PanelGridModuleRef | null>(null)
+  const [rewireOriginSurfaceId, setRewireOriginSurfaceId] = useState<string | null>(null)
+  const [rewireDragPos, setRewireDragPos] = useState<Point | null>(null)
+  const [rewireTargetRef, setRewireTargetRef] = useState<PanelGridModuleRef | null>(null)
+  const [rewireTargetSurfaceId, setRewireTargetSurfaceId] = useState<string | null>(null)
+  const [rewireTargetValid, setRewireTargetValid] = useState(true)
+
+  const fullScene = useMemo(() => {
+    if (!currentProject) return null
+    const panelScenePanelOptions = panelOptions.map((o) => ({
+      id: o.id,
+      panel: o.panel,
+      isRoot: o.isRoot,
+    }))
+    return buildFullPanelScene({
+      project: currentProject,
+      panelOptions: panelScenePanelOptions,
+      getPanelGridModules,
+      includeDescendants: true,
+      hierarchyFeedFromTop,
+      sharedSupplyLabel: t('panelCanvas.supplyPanel', 'Supply panel'),
+    })
+  }, [currentProject, panelOptions, getPanelGridModules, hierarchyFeedFromTop, t])
+
+  const scene = useMemo(() => {
+    if (!fullScene || !currentProject) return null
+    return applyPanelSceneFilter(fullScene, panelSceneFilter, currentProject, hierarchyFeedFromTop)
+  }, [fullScene, panelSceneFilter, currentProject, hierarchyFeedFromTop])
+  const panelWirePathRegions = useMemo(
+    () => buildPanelWirePathRegions(scene?.surfaces ?? []),
+    [scene]
+  )
+  const panelWirePathLinks = useMemo(
+    () => buildPanelWirePathLinks(scene?.connectors ?? []),
+    [scene]
+  )
+
+  const selectedPanelIds = useMemo(
+    () => (selection.type === 'panel' ? selection.ids : []),
+    [selection]
+  )
+  const selectedSupplyPanelIds = useMemo(
+    () => (selection.type === 'supplyPanel' ? selection.ids : []),
+    [selection]
+  )
+  const selectedPanels = useMemo(
+    () =>
+      selectedPanelIds
+        .map((panelId) => panelOptions.find((panelOption) => panelOption.id === panelId)?.panel)
+        .filter((panel): panel is Panel => panel != null),
+    [panelOptions, selectedPanelIds]
+  )
+  const hierarchyPanelsFromSelection = useMemo(() => {
+    if (!scene || selection.ids.length === 0) return [] as Panel[]
+    const selectedIds = new Set(selection.ids)
+    const byPanelId = new Map<string, Panel>()
+    for (const panelOption of panelOptions) {
+      if (selectedIds.has(panelOption.panel.id))
+        byPanelId.set(panelOption.panel.id, panelOption.panel)
+    }
+    for (const surface of scene.surfaces) {
+      if (surface.kind !== 'panel' || !surface.panel) continue
+      const hasSelectedModule = surface.placements.some((placement) => {
+        if (placement.ref.kind === 'protection') return selectedIds.has(placement.ref.id)
+        if (placement.ref.kind === 'trunkDevice') return selectedIds.has(placement.ref.id)
+        if (placement.ref.kind === 'domotica') return selectedIds.has(placement.ref.endpointId)
+        return false
+      })
+      if (hasSelectedModule) byPanelId.set(surface.panel.id, surface.panel)
+    }
+    return [...byPanelId.values()]
+  }, [panelOptions, scene, selection.ids])
+  const panelDepthById = useMemo(() => {
+    const out = new Map<string, number>()
+    const walk = (panels: Panel[], depth: number) => {
+      for (const candidate of panels) {
+        out.set(candidate.id, depth)
+        walk(candidate.subPanels ?? [], depth + 1)
+      }
+    }
+    if (currentProject) walk(getElectricalPanelsFromProject(currentProject) ?? [], 0)
+    return out
+  }, [currentProject])
+
+  const getSurfaceRewireId = useCallback(
+    (surface: HierarchySurface) =>
+      surface.kind === 'shared_supply' ? PANEL_SCENE_SHARED_SUPPLY_ID : surface.id,
+    []
+  )
+
+  const canUseHierarchyRewireSurface = useCallback(
+    (originSurfaceId: string | null, candidate: HierarchySurface) => {
+      if (!originSurfaceId) return false
+      return getSurfaceRewireId(candidate) === originSurfaceId
+    },
+    [getSurfaceRewireId]
+  )
+
+  const resolveHierarchyRewirePanel = useCallback(
+    (originSurfaceId: string | null, targetSurfaceId: string | null): Panel | null => {
+      if (!scene || !originSurfaceId || !targetSurfaceId) return null
+      if (originSurfaceId !== targetSurfaceId) return null
+
+      if (originSurfaceId === PANEL_SCENE_SHARED_SUPPLY_ID) {
+        return panelOptions.find((opt) => opt.isRoot && opt.panel.isMain)?.panel ?? null
+      }
+
+      const surface = scene.surfaces.find(
+        (candidate) => getSurfaceRewireId(candidate) === originSurfaceId
+      )
+      if (surface?.kind !== 'panel' || !surface.panel) return null
+      return surface.panel
+    },
+    [getSurfaceRewireId, scene, panelOptions]
+  )
+
+  const resetHierarchyRewireState = useCallback(() => {
+    setRewireOriginRef(null)
+    setRewireOriginSurfaceId(null)
+    setRewireDragPos(null)
+    setRewireTargetRef(null)
+    setRewireTargetSurfaceId(null)
+    setRewireTargetValid(true)
+  }, [])
+
+  const handleHierarchyRewireDragStart = useCallback(
+    (surface: HierarchySurface, ref: PanelGridModuleRef) => {
+      if (!rewireMode) return false
+      setRewireOriginRef(ref)
+      setRewireOriginSurfaceId(getSurfaceRewireId(surface))
+      setRewireDragPos(null)
+      setRewireTargetRef(null)
+      setRewireTargetSurfaceId(null)
+      setRewireTargetValid(true)
+      return true
+    },
+    [getSurfaceRewireId, rewireMode]
+  )
+
+  const handleHierarchyRewireDragMove = useCallback(
+    (_surface: HierarchySurface, _stage: Konva.Stage, pointerPos: Point) => {
+      if (!scene || !rewireMode || !rewireOriginRef || !rewireOriginSurfaceId) return
+
+      const zoom = panelZoom
+      const pan = panelPan
+      const canvasPos = {
+        x: (pointerPos.x - pan.x) / zoom,
+        y: (pointerPos.y - pan.y) / zoom,
+      }
+      setRewireDragPos(canvasPos)
+
+      let foundTarget: { ref: PanelGridModuleRef; surfaceId: string } | null = null
+      for (const surface of scene.surfaces) {
+        if (!canUseHierarchyRewireSurface(rewireOriginSurfaceId, surface)) continue
+        for (const placement of surface.placements) {
+          const moduleKey = panelGridModuleRefKey(placement.ref)
+          if (moduleKey === panelGridModuleRefKey(rewireOriginRef)) continue
+          const left = surface.x + placement.x
+          const right = left + placement.width
+          const top = surface.y + placement.y
+          const bottom = top + placement.height
+          if (
+            canvasPos.x >= left &&
+            canvasPos.x <= right &&
+            canvasPos.y >= top &&
+            canvasPos.y <= bottom
+          ) {
+            foundTarget = { ref: placement.ref, surfaceId: getSurfaceRewireId(surface) }
+            break
+          }
+        }
+        if (foundTarget) break
+      }
+
+      setRewireTargetRef(foundTarget?.ref ?? null)
+      setRewireTargetSurfaceId(foundTarget?.surfaceId ?? null)
+      if (!foundTarget) {
+        setRewireTargetValid(true)
+        return
+      }
+
+      const targetPanel = resolveHierarchyRewirePanel(rewireOriginSurfaceId, foundTarget.surfaceId)
+      setRewireTargetValid(
+        validatePanelRewireOperation(targetPanel, currentProject, rewireOriginRef, foundTarget.ref)
+      )
+    },
+    [
+      canUseHierarchyRewireSurface,
+      currentProject,
+      panelPan,
+      panelZoom,
+      resolveHierarchyRewirePanel,
+      rewireMode,
+      rewireOriginRef,
+      rewireOriginSurfaceId,
+      scene,
+      getSurfaceRewireId,
+    ]
+  )
+
+  const handleHierarchyRewireDragEnd = useCallback(() => {
+    if (
+      !rewireMode ||
+      !rewireOriginRef ||
+      !rewireOriginSurfaceId ||
+      !rewireTargetRef ||
+      !rewireTargetValid
+    ) {
+      resetHierarchyRewireState()
+      return
+    }
+
+    const targetPanel = resolveHierarchyRewirePanel(rewireOriginSurfaceId, rewireTargetSurfaceId)
+    if (!targetPanel) {
+      resetHierarchyRewireState()
+      return
+    }
+
+    try {
+      useProjectStore.getState().withSingleUndoEntry(
+        () =>
+          applyPanelRewireOperation({
+            panel: targetPanel,
+            currentProject,
+            origin: rewireOriginRef,
+            target: rewireTargetRef,
+            rewireModules,
+            placeSupplyModuleAfterInsert,
+            updatePanelGridSlots,
+            updateSupplyPanelSlots,
+          }),
+        { sessionLabel: 'rewire panel module connection' }
+      )
+    } finally {
+      resetHierarchyRewireState()
+    }
+  }, [
+    currentProject,
+    placeSupplyModuleAfterInsert,
+    rewireMode,
+    rewireModules,
+    rewireOriginRef,
+    rewireOriginSurfaceId,
+    rewireTargetRef,
+    rewireTargetSurfaceId,
+    rewireTargetValid,
+    resolveHierarchyRewirePanel,
+    resetHierarchyRewireState,
+    updatePanelGridSlots,
+    updateSupplyPanelSlots,
+  ])
+
+  const hierarchyRewirePreviewWire = useMemo(() => {
+    if (!scene || !rewireMode || !rewireOriginRef || !rewireOriginSurfaceId || !rewireDragPos) {
+      return null
+    }
+
+    let originPlacement:
+      | (ModulePlacement & { inSupplyPanel?: boolean; surface: HierarchySurface })
+      | null = null
+    let targetPlacement:
+      | (ModulePlacement & { inSupplyPanel?: boolean; surface: HierarchySurface })
+      | null = null
+
+    for (const surface of scene.surfaces) {
+      const surfaceId = getSurfaceRewireId(surface)
+      for (const placement of surface.placements) {
+        const key = panelGridModuleRefKey(placement.ref)
+        if (surfaceId === rewireOriginSurfaceId && key === panelGridModuleRefKey(rewireOriginRef)) {
+          originPlacement = { ...placement, surface }
+        }
+        if (
+          rewireTargetRef &&
+          rewireTargetSurfaceId === surfaceId &&
+          key === panelGridModuleRefKey(rewireTargetRef)
+        ) {
+          targetPlacement = { ...placement, surface }
+        }
+      }
+    }
+
+    if (!originPlacement) return null
+
+    const originCx = originPlacement.surface.x + originPlacement.x + originPlacement.width / 2
+    const originY = originPlacement.surface.y + originPlacement.y
+    let finalTargetX = rewireDragPos.x
+    let finalTargetY = rewireDragPos.y
+
+    if (targetPlacement) {
+      finalTargetX = targetPlacement.surface.x + targetPlacement.x + targetPlacement.width / 2
+      finalTargetY = targetPlacement.surface.y + targetPlacement.y
+    }
+
+    const useBottomGap =
+      finalTargetY > originY + originPlacement.height &&
+      rewireOriginSurfaceId === rewireTargetSurfaceId
+    const routingGapY = useBottomGap
+      ? originY + originPlacement.height + ROW_GAP / 2
+      : originY - ROW_GAP / 2
+    const points = useBottomGap
+      ? [
+          originCx,
+          originY + originPlacement.height,
+          originCx,
+          routingGapY,
+          finalTargetX,
+          routingGapY,
+          finalTargetX,
+          finalTargetY,
+        ]
+      : [
+          originCx,
+          originY,
+          originCx,
+          routingGapY,
+          finalTargetX,
+          routingGapY,
+          finalTargetX,
+          finalTargetY,
+        ]
+
+    const stroke =
+      rewireTargetRef && targetPlacement ? (rewireTargetValid ? '#10b981' : '#ef4444') : '#f59e0b'
+
+    return {
+      points,
+      stroke,
+    }
+  }, [
+    getSurfaceRewireId,
+    rewireDragPos,
+    rewireMode,
+    rewireOriginRef,
+    rewireOriginSurfaceId,
+    rewireTargetRef,
+    rewireTargetSurfaceId,
+    rewireTargetValid,
+    scene,
+  ])
+
+  const handleHierarchyAutoArrange = useCallback(() => {
+    if (!currentProject || !scene) return
+
+    const targetPanels =
+      selectedPanels.length > 0
+        ? selectedPanels
+        : hierarchyPanelsFromSelection.length > 0
+          ? hierarchyPanelsFromSelection
+          : scene.surfaces
+              .filter(
+                (surface): surface is HierarchySurface & { panel: Panel } =>
+                  surface.kind === 'panel' && surface.panel != null
+              )
+              .map((surface) => surface.panel)
+
+    if (targetPanels.length === 0) return
+
+    openDialog({
+      type: 'confirm',
+      title: t('panelCanvas.autoArrange'),
+      message:
+        targetPanels.length === 1
+          ? t(
+              'panelCanvas.autoArrangeConfirm',
+              'This will fully replace the current panel layout (main and supply). Continue?'
+            )
+          : t(
+              'panelCanvas.autoArrangeVisibleConfirm',
+              'This will fully replace the current layout of the visible panels. Continue?'
+            ),
+      variant: 'warning',
+      confirmLabel: t('common.confirm', 'Confirm'),
+      cancelLabel: t('common.cancel', 'Cancel'),
+      onConfirm: () => {
+        for (const targetPanel of targetPanels) {
+          const { mainSlots, supplySlots } = buildAutoArrangeSlots(targetPanel, currentProject)
+          applyPanelAutoArrange(targetPanel.id, mainSlots, supplySlots)
+        }
+      },
+    })
+  }, [
+    applyPanelAutoArrange,
+    buildAutoArrangeSlots,
+    currentProject,
+    hierarchyPanelsFromSelection,
+    openDialog,
+    scene,
+    selectedPanels,
+    t,
+  ])
+
+  const handleHierarchyPanelSelect = useCallback(
+    (
+      panelId: string,
+      event: { shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean } | undefined
+    ) => {
+      const additive = !!event?.shiftKey || !!event?.ctrlKey || !!event?.metaKey
+      if (!additive || selection.type !== 'panel') {
+        setSelection({ type: 'panel', ids: [panelId] })
+        return
+      }
+      if (selection.ids.includes(panelId)) return
+      setSelection(addToSelection(selection, panelId))
+    },
+    [selection, setSelection]
+  )
+
+  const panelFramePointerDownRef = useRef<{ x: number; y: number } | null>(null)
+  const pendingPanelFrameSelectCleanupRef = useRef<(() => void) | null>(null)
+  const shouldIgnorePanelFrameClick = useCallback(
+    (event?: { clientX?: number; clientY?: number }) => {
+      const start = panelFramePointerDownRef.current
+      panelFramePointerDownRef.current = null
+      if (!start || event?.clientX == null || event?.clientY == null) return false
+      return (
+        Math.hypot(event.clientX - start.x, event.clientY - start.y) > PANEL_FRAME_DRAG_THRESHOLD
+      )
+    },
+    []
+  )
+
+  useEffect(() => {
+    const cleanup = pendingPanelFrameSelectCleanupRef.current
+    return () => {
+      cleanup?.()
+    }
+  }, [])
+
+  const startPanelFrameSelectionRect = useCallback(
+    (event: Konva.KonvaEventObject<MouseEvent>) => {
+      beginDeferredPanelFrameSelectionRect({
+        event,
+        canvasRef,
+        leftDragPansCanvas,
+        pointerDownRef: panelFramePointerDownRef,
+        pendingCleanupRef: pendingPanelFrameSelectCleanupRef,
+      })
+    },
+    [canvasRef, leftDragPansCanvas]
+  )
+
+  const handleGetHierarchySelectionBounds = useCallback(() => {
+    const padding = 20
+    if (!scene) return null
+    if (selection.type === 'panel' && selectedPanelIds.length > 0) {
+      const selectedSurfaces = scene.surfaces.filter(
+        (surface): surface is HierarchySurface & { panel: Panel } =>
+          surface.kind === 'panel' &&
+          surface.panel != null &&
+          selectedPanelIds.includes(surface.panel.id)
+      )
+      if (selectedSurfaces.length === 0) return null
+
+      let minX = Infinity
+      let minY = Infinity
+      let maxX = -Infinity
+      let maxY = -Infinity
+
+      for (const surface of selectedSurfaces) {
+        minX = Math.min(minX, surface.x)
+        minY = Math.min(minY, surface.y)
+        maxX = Math.max(maxX, surface.x + surface.width)
+        maxY = Math.max(maxY, surface.y + surface.height)
+      }
+
+      return {
+        x: minX - padding,
+        y: minY - padding,
+        width: maxX - minX + padding * 2,
+        height: maxY - minY + padding * 2,
+      }
+    }
+
+    const placementsInScene = scene.surfaces.flatMap((surface) =>
+      surface.placements.map((placement) => ({
+        ref: placement.ref,
+        x: surface.x + placement.x,
+        y: surface.y + placement.y,
+        width: placement.width,
+        height: placement.height,
+      }))
+    )
+
+    return getModuleSelectionBounds(placementsInScene, selection, padding)
+  }, [scene, selection, selectedPanelIds])
+
+  const onFindHierarchyElementsInRectangle = useCallback(
+    (rect: { x: number; y: number; width: number; height: number }) => {
+      if (!scene) return []
+      const buckets = new Map<
+        ModuleScopeKey,
+        {
+          hits: Array<{ id: string; type: 'protection' | 'trunkDevice' | 'endpoint' | 'panel' }>
+          panelDepth: number
+        }
+      >()
+      for (const surface of scene.surfaces) {
+        if (surface.kind === 'panel' && surface.panel) {
+          const frameBox = {
+            x: surface.x,
+            y: surface.y + surface.mainPanelY,
+            width: surface.width,
+            height: surface.panelFrameHeight,
+          }
+          if (rectContainsRect(rect, frameBox)) {
+            const scopeKey = `panel:${surface.panel.id}:frame`
+            buckets.set(scopeKey, {
+              hits: [{ id: surface.panel.id, type: 'panel' }],
+              panelDepth: panelDepthById.get(surface.panel.id) ?? Number.MAX_SAFE_INTEGER,
+            })
+          }
+        }
+        for (const pl of surface.placements) {
+          const renderBox = {
+            x: surface.x + pl.x,
+            y: surface.y + pl.y,
+            width: pl.width,
+            height: pl.height,
+          }
+          if (!rectContainsRect(rect, renderBox)) continue
+          const scopeKey =
+            surface.kind === 'panel' && surface.panel
+              ? `panel:${surface.panel.id}:${pl.inSupplyPanel ? 'supply' : 'main'}`
+              : 'shared-supply'
+          const panelDepth =
+            surface.kind === 'panel' && surface.panel
+              ? (panelDepthById.get(surface.panel.id) ?? Number.MAX_SAFE_INTEGER)
+              : -1
+          if (!buckets.has(scopeKey)) {
+            buckets.set(scopeKey, { hits: [], panelDepth })
+          }
+          const bucket = buckets.get(scopeKey)!
+          if (pl.ref.kind === 'protection') {
+            bucket.hits.push({ id: pl.ref.id, type: 'protection' })
+          } else if (pl.ref.kind === 'trunkDevice') {
+            bucket.hits.push({ id: pl.ref.id, type: 'trunkDevice' })
+          } else {
+            const endpoint = useProjectStore.getState().getEndpointById(pl.ref.endpointId)
+            if (endpoint?.symbol === 'panel_distribution' && endpoint.panelId) {
+              bucket.hits.push({ id: endpoint.panelId, type: 'panel' })
+            } else {
+              bucket.hits.push({ id: pl.ref.endpointId, type: 'endpoint' })
+            }
+          }
+        }
+      }
+      let winner: {
+        hits: Array<{ id: string; type: 'protection' | 'trunkDevice' | 'endpoint' | 'panel' }>
+        panelDepth: number
+      } | null = null
+      for (const bucket of buckets.values()) {
+        if (!winner) {
+          winner = bucket
+          continue
+        }
+        if (bucket.hits.length > winner.hits.length) {
+          winner = bucket
+          continue
+        }
+        if (bucket.hits.length === winner.hits.length && bucket.panelDepth < winner.panelDepth) {
+          winner = bucket
+        }
+      }
+      return winner?.hits ?? []
+    },
+    [panelDepthById, scene]
+  )
+
+  const createHierarchySelectionResolver = useCallback(
+    (surface: HierarchySurface, placement: ModulePlacement & { inSupplyPanel?: boolean }) =>
+      (
+        nextSelection: CanvasSelection,
+        context: {
+          event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }
+          currentSelection: CanvasSelection
+        }
+      ) => {
+        const additive = context.event.shiftKey || context.event.ctrlKey || context.event.metaKey
+        if (!additive || nextSelection.type == null) return nextSelection
+        const scopedPlacements = surface.placements.filter(
+          (candidate) => candidate.inSupplyPanel === placement.inSupplyPanel
+        )
+        // Include every module entity id in this zone (all ref kinds). Drag-rect can set
+        // selection.type to a single "dominant" kind while ids list mixes protections, trunks
+        // (e.g. MUNQ), endpoints — filtering only by nextSelection.type would drop the rest.
+        const scopedIds = new Set(
+          scopedPlacements.flatMap((candidate) => {
+            if (candidate.ref.kind === 'protection') return [candidate.ref.id]
+            if (candidate.ref.kind === 'trunkDevice') return [candidate.ref.id]
+            if (candidate.ref.kind === 'domotica') return [candidate.ref.endpointId]
+            return []
+          })
+        )
+        return {
+          type: nextSelection.type,
+          ids: nextSelection.ids.filter((id) => scopedIds.has(id)),
+        }
+      },
+    []
+  )
+
+  const detectHierarchyPanelTarget = useCallback(
+    (position: Point) => {
+      if (!scene) return null
+      for (const surface of scene.surfaces) {
+        if (surface.kind !== 'panel' || !surface.panel) continue
+        const titleHitHeight = 36
+        const frameLeft = surface.x - 10
+        const frameRight = surface.x + surface.width + 10
+        const frameTop = surface.y + surface.mainPanelY - 10
+        const frameBottom = surface.y + surface.mainPanelY + surface.panelFrameHeight + 10
+        if (
+          position.x >= frameLeft &&
+          position.x <= frameRight &&
+          position.y >= frameTop &&
+          position.y <= frameBottom
+        ) {
+          return surface
+        }
+        const titleTop = surface.y + surface.mainPanelY
+        if (
+          position.x >= frameLeft &&
+          position.x <= frameRight &&
+          position.y >= titleTop &&
+          position.y <= titleTop + titleHitHeight
+        ) {
+          return surface
+        }
+      }
+      return null
+    },
+    [scene]
+  )
+
+  const detectHierarchyModuleDropTarget = useCallback(
+    (position: Point, ref: PanelGridModuleRef) => {
+      if (!scene || !currentProject) return null
+      if (ref.kind !== 'trunkDevice' || ref.scope !== 'supply') return null
+
+      for (const surface of scene.surfaces) {
+        if (surface.kind === 'shared_supply') {
+          const frameLeft = surface.x
+          const frameRight = surface.x + surface.width
+          const frameTop = surface.y
+          const frameBottom = surface.y + surface.height
+          if (
+            position.x >= frameLeft &&
+            position.x <= frameRight &&
+            position.y >= frameTop &&
+            position.y <= frameBottom
+          ) {
+            const rootPanel = panelOptions.find(
+              (option) => option.isRoot && option.panel.isMain
+            )?.panel
+            const installation = getElectricalInstallationFromProject(currentProject)
+            const panels = getElectricalPanelsFromProject(currentProject)
+            const knownSupply = rootPanel
+              ? installation
+                ? getPanelFeedProjection(installation, panels, rootPanel)?.devices.some(
+                    (device) => device.id === ref.id
+                  ) === true
+                : false
+              : false
+            if (!rootPanel || !knownSupply) return null
+            return { surface, panel: rootPanel, area: 'supply' as const }
+          }
+          continue
+        }
+
+        if (surface.kind !== 'panel' || !surface.panel) continue
+        const frameLeft = surface.x - 10
+        const frameRight = surface.x + surface.width + 10
+        const mainTop = surface.y + surface.mainPanelY - 10
+        const mainBottom = surface.y + surface.mainPanelY + surface.panelFrameHeight + 10
+        if (
+          position.x >= frameLeft &&
+          position.x <= frameRight &&
+          position.y >= mainTop &&
+          position.y <= mainBottom
+        ) {
+          if (
+            ref.kind === 'trunkDevice' &&
+            ref.scope === 'supply' &&
+            surface.panel.isMain !== true
+          ) {
+            return null
+          }
+          return { surface, panel: surface.panel, area: 'main' as const }
+        }
+
+        const supplyTop = surface.y + surface.supplyPanelY - 10
+        const supplyBottom = surface.y + surface.supplyPanelY + surface.supplyFrameHeight + 10
+        if (
+          surface.supplyPanelVisible &&
+          position.x >= frameLeft &&
+          position.x <= frameRight &&
+          position.y >= supplyTop &&
+          position.y <= supplyBottom
+        ) {
+          const installation = getElectricalInstallationFromProject(currentProject)
+          const panels = getElectricalPanelsFromProject(currentProject)
+          const knownSupply = installation
+            ? getPanelFeedProjection(installation, panels, surface.panel)?.devices.some(
+                (device) => device.id === ref.id
+              ) === true
+            : false
+          if (!knownSupply) return null
+          return { surface, panel: surface.panel, area: 'supply' as const }
+        }
+      }
+      return null
+    },
+    [currentProject, panelOptions, scene]
+  )
+
+  const handleHierarchyDragOver = useCallback(
+    (position: Point, symbolData: unknown | null) => {
+      if (!scene || !currentProject || !symbolData || typeof symbolData !== 'object') {
+        setDragPreview(null)
+        return
+      }
+      const symbol = symbolData as SymbolMetadata
+      const targetSurface = detectHierarchyPanelTarget(position)
+      if (!targetSurface?.panel) {
+        setDragPreview(null)
+        return
+      }
+
+      const localX = position.x - targetSurface.x - PANEL_FRAME_MARGIN
+      const localY = position.y - targetSurface.y - targetSurface.mainPanelY - PANEL_FRAME_MARGIN
+      const widthCols = getLibraryDropWidthCols(symbol, currentProject)
+      const col = Math.max(
+        0,
+        Math.min(
+          targetSurface.cols - widthCols,
+          Math.round(localX / CELL_W) - Math.floor(widthCols / 2)
+        )
+      )
+      const snapped = snapToGrid(localX, localY + CELL_H / 2)
+      const row = clamp(snapped.row, 0, targetSurface.rows - 1)
+
+      setDragPreview({
+        panelId: targetSurface.panel.id,
+        x: targetSurface.x + PANEL_FRAME_MARGIN + col * CELL_W,
+        y: targetSurface.y + targetSurface.mainPanelY + PANEL_FRAME_MARGIN + row * ROW_STRIDE,
+        width: widthCols * CELL_W,
+        height: CELL_H,
+      })
+    },
+    [currentProject, detectHierarchyPanelTarget, scene]
+  )
+
+  const handleHierarchyDrop = useCallback(
+    (position: Point, symbolData: unknown | null, _meta?: CanvasDropMeta) => {
+      setDragPreview(null)
+      if (!currentProject || !symbolData || typeof symbolData !== 'object') return
+      const symbol = symbolData as SymbolMetadata
+      const targetSurface = detectHierarchyPanelTarget(position)
+      const targetPanel = targetSurface?.panel
+      if (!targetSurface || !targetPanel) return
+
+      setSelection({ type: 'panel', ids: [targetPanel.id] })
+
+      const isProtectionDevice = (PROTECTION_SYMBOL_IDS as readonly string[]).includes(symbol.id)
+      const isEnergyMeter = symbol.id === 'energy_meter'
+
+      const localX = position.x - targetSurface.x - PANEL_FRAME_MARGIN
+      const localY = position.y - targetSurface.y - targetSurface.mainPanelY - PANEL_FRAME_MARGIN
+      const droppedModuleWidthCols = getLibraryDropWidthCols(symbol, currentProject)
+      const snapped = snapToGrid(localX, localY + CELL_H / 2)
+      const row = clamp(snapped.row, 0, targetSurface.rows - 1)
+      const col = Math.max(
+        0,
+        Math.min(
+          targetSurface.cols - droppedModuleWidthCols,
+          Math.round(localX / CELL_W) - Math.floor(droppedModuleWidthCols / 2)
+        )
+      )
+
+      if (isProtectionDevice) {
+        const protectionType = protectionTypeFromSymbolId(symbol.id) || 'MCB'
+        const defaults = getProtectionCreationProps(currentProject, protectionType)
+        const autoCircuitCode = resolveInitialProtectionBusLabel(
+          protectionType,
+          getNextAvailableCircuitCode(currentProject, targetPanel.id)
+        )
+        const protectionId = generateId()
+        const circuitId = generateId()
+        const protection: ProtectionDevice = {
+          id: protectionId,
+          type: protectionType,
+          label: autoCircuitCode,
+          circuits: [],
+          ...defaults,
+        }
+        useProjectStore.getState().addProtection(targetPanel.id, protection)
+        const circuit: Circuit = {
+          id: circuitId,
+          code: autoCircuitCode,
+          kind: 'other',
+          cable: createDefaultAcCircuitCable(),
+          endpoints: [],
+          ...DEFAULT_AC_CIRCUIT_WIRE_LABEL_FLAGS,
+        }
+        useProjectStore.getState().addCircuit(targetPanel.id, circuit, protectionId)
+        const moduleRef: PanelGridModuleRef = { kind: 'protection', id: protectionId }
+        const existingSlots = targetPanel.gridView?.slots ?? []
+        useProjectStore
+          .getState()
+          .updatePanelGridSlots(
+            targetPanel.id,
+            [...existingSlots, { row, col, module: moduleRef }],
+            { preserveProtectionOrder: true }
+          )
+        setSelection({ type: 'protection', ids: [protectionId] })
+        return
+      }
+
+      if (isEnergyMeter) {
+        const targetCircuit = getLastAssignableCircuit(targetPanel)
+        if (!targetCircuit) return
+        const deviceId = generateId()
+        const trunkDevice: TrunkDevice = {
+          id: deviceId,
+          type: 'energy_meter',
+          symbol: 'energy_meter',
+          label: 'kWh',
+          trunkPosition: 0,
+        }
+        useProjectStore.getState().addTrunkDevice(targetCircuit.id, trunkDevice)
+        const projectAfterMeter = useProjectStore.getState().currentProject
+        const persistedPanel = projectAfterMeter
+          ? findPanelRecursive(getElectricalPanelsFromProject(projectAfterMeter), targetPanel.id)
+          : undefined
+        const persistedCircuit = persistedPanel
+          ? collectCircuits(persistedPanel).find((circuit) => circuit.id === targetCircuit.id)
+          : undefined
+        if (
+          !persistedPanel ||
+          !persistedCircuit?.trunkDevices?.some((device) => device.id === deviceId)
+        ) {
+          logger.error(
+            'PanelCanvas hierarchy: Energy meter could not be assigned to the target panel circuit',
+            { panelId: targetPanel.id, circuitId: targetCircuit.id, deviceId }
+          )
+          return
+        }
+        const moduleRef: PanelGridModuleRef = {
+          kind: 'trunkDevice',
+          id: deviceId,
+          scope: 'circuit',
+          circuitId: targetCircuit.id,
+        }
+        useProjectStore
+          .getState()
+          .unhideModuleFromPanel(targetPanel.id, panelGridModuleRefKey(moduleRef))
+        const existingSlots = persistedPanel.gridView?.slots ?? []
+        useProjectStore
+          .getState()
+          .updatePanelGridSlots(targetPanel.id, [...existingSlots, { row, col, module: moduleRef }])
+        setSelection({ type: 'trunkDevice', ids: [deviceId] })
+      }
+    },
+    [currentProject, detectHierarchyPanelTarget, setSelection]
+  )
+
+  const selectedRef = useMemo((): PanelGridModuleRef | null => {
+    if (!scene || !selection.type || selection.ids.length === 0) return null
+    const id = selection.ids[0]
+    if (!id) return null
+    for (const surface of scene.surfaces) {
+      const match = surface.placements.find((placement) => {
+        if (selection.type === 'protection') {
+          return placement.ref.kind === 'protection' && placement.ref.id === id
+        }
+        if (selection.type === 'trunkDevice') {
+          return placement.ref.kind === 'trunkDevice' && placement.ref.id === id
+        }
+        if (selection.type === 'endpoint') {
+          return placement.ref.kind === 'domotica' && placement.ref.endpointId === id
+        }
+        return false
+      })
+      if (match) return match.ref
+    }
+    return null
+  }, [scene, selection])
+
+  const isHierarchyRefInSelection = useCallback(
+    (ref: PanelGridModuleRef) => {
+      if (selection.ids.length === 0) return false
+      // Keep hierarchy drag-select behavior aligned with BaseCanvas drag-rect:
+      // mixed-type selections may carry IDs from multiple kinds under one selection.type.
+      if (ref.kind === 'protection') return selection.ids.includes(ref.id)
+      if (ref.kind === 'trunkDevice') return selection.ids.includes(ref.id)
+      if (ref.kind === 'domotica') return selection.ids.includes(ref.endpointId)
+      return false
+    },
+    [selection]
+  )
+
+  const handleHierarchyModuleDragMove = useCallback(
+    (
+      surface: HierarchySurface & { panel: Panel },
+      placement: ModulePlacement & { inSupplyPanel?: boolean },
+      rawX: number,
+      rawY: number
+    ) => {
+      const surfaceTargetId = surface.panel?.id ?? surface.id
+      const key = panelGridModuleRefKey(placement.ref)
+      const moduleCols = Math.max(1, Math.round(placement.width / CELL_W))
+      const maxCol = Math.max(0, surface.cols - moduleCols)
+      const selectedPlacements =
+        selection.ids.length >= 2 && isHierarchyRefInSelection(placement.ref)
+          ? surface.placements.filter(
+              (other) =>
+                other.inSupplyPanel === placement.inSupplyPanel &&
+                isHierarchyRefInSelection(other.ref)
+            )
+          : []
+
+      if (placement.ref.kind === 'trunkDevice' && placement.ref.scope === 'supply') {
+        const canvasPos = { x: surface.x + rawX, y: surface.y + rawY }
+        const target = detectHierarchyModuleDropTarget(canvasPos, placement.ref)
+        const currentArea = placement.inSupplyPanel ? 'supply' : 'main'
+        const targetSurfaceId = target ? (target.surface.panel?.id ?? target.surface.id) : null
+        const currentSurfaceId = surface.panel?.id ?? surface.id
+        if (target && (targetSurfaceId !== currentSurfaceId || target.area !== currentArea)) {
+          const targetCols =
+            target.area === 'supply' ? target.surface.supplyCols : target.surface.cols
+          const targetRows =
+            target.area === 'supply' ? target.surface.supplyRows : target.surface.rows
+          const targetMaxCol = Math.max(0, targetCols - moduleCols)
+          const localX = canvasPos.x - target.surface.x - PANEL_FRAME_MARGIN
+          const localY =
+            target.area === 'supply'
+              ? canvasPos.y - target.surface.y - target.surface.supplyPanelY - PANEL_FRAME_MARGIN
+              : canvasPos.y - target.surface.y - target.surface.mainPanelY - PANEL_FRAME_MARGIN
+          const snapped = snapToGrid(localX, localY + CELL_H / 2)
+          const row =
+            target.area === 'supply'
+              ? clamp(targetRows - 1, 0, snapped.row)
+              : clamp(targetRows - 1, 0, snapped.row)
+          const col = clamp(targetMaxCol, 0, snapped.col)
+          const targetY =
+            target.area === 'supply'
+              ? target.surface.y +
+                target.surface.supplyPanelY +
+                PANEL_FRAME_MARGIN +
+                row * ROW_STRIDE
+              : target.surface.y + target.surface.mainPanelY + PANEL_FRAME_MARGIN + row * ROW_STRIDE
+          const invalid = target.surface.placements.some((other) => {
+            const otherArea = other.inSupplyPanel === true ? 'supply' : 'main'
+            if (otherArea !== target.area) return false
+            if (panelGridModuleRefKey(other.ref) === key) return false
+            if (other.row !== row) return false
+            const otherCols = Math.max(1, Math.round(other.width / CELL_W))
+            return col < other.col + otherCols && other.col < col + moduleCols
+          })
+          setModuleDragLive({
+            panelId: targetSurfaceId ?? currentSurfaceId,
+            x: canvasPos.x,
+            y: canvasPos.y,
+            width: placement.width,
+            height: placement.height,
+            ref: placement.ref,
+          })
+          setModuleDragPreview({
+            panelId: targetSurfaceId ?? currentSurfaceId,
+            x: target.surface.x + PANEL_FRAME_MARGIN + col * CELL_W,
+            y: targetY,
+            width: placement.width,
+            height: placement.height,
+            ref: placement.ref,
+            invalid,
+          })
+          return
+        }
+      }
+
+      if (placement.inSupplyPanel) {
+        const dx = rawX - placement.x
+        const dy = rawY - placement.y
+        if (selectedPlacements.length >= 2) {
+          setModuleDragLive({
+            panelId: surfaceTargetId,
+            x: surface.x + rawX,
+            y: surface.y + rawY,
+            width: placement.width,
+            height: placement.height,
+            ref: placement.ref,
+            items: selectedPlacements.map((selectedPlacement) => ({
+              ref: selectedPlacement.ref,
+              x: surface.x + selectedPlacement.x + dx,
+              y: surface.y + selectedPlacement.y + dy,
+              width: selectedPlacement.width,
+              height: selectedPlacement.height,
+            })),
+          })
+        } else {
+          setModuleDragLive({
+            panelId: surfaceTargetId,
+            x: surface.x + rawX,
+            y: surface.y + rawY,
+            width: placement.width,
+            height: placement.height,
+            ref: placement.ref,
+          })
+        }
+        const col = Math.max(0, Math.min(maxCol, Math.round((rawX - PANEL_FRAME_MARGIN) / CELL_W)))
+        if (selectedPlacements.length >= 2) {
+          const deltaCol = col - placement.col
+          const previewItems = selectedPlacements.map((selectedPlacement) => ({
+            ref: selectedPlacement.ref,
+            col: selectedPlacement.col + deltaCol,
+            x: surface.x + PANEL_FRAME_MARGIN + (selectedPlacement.col + deltaCol) * CELL_W,
+            y: surface.y + surface.supplyPanelY + PANEL_FRAME_MARGIN,
+            width: selectedPlacement.width,
+            height: selectedPlacement.height,
+          }))
+          const invalid =
+            previewItems.some((item) => {
+              const widthCols = Math.max(1, Math.round(item.width / CELL_W))
+              return item.col < 0 || item.col > surface.cols - widthCols
+            }) ||
+            surface.placements.some((other) => {
+              if (!other.inSupplyPanel) return false
+              if (
+                selectedPlacements.some(
+                  (selected) =>
+                    panelGridModuleRefKey(selected.ref) === panelGridModuleRefKey(other.ref)
+                )
+              ) {
+                return false
+              }
+              const otherCols = Math.max(1, Math.round(other.width / CELL_W))
+              return previewItems.some((item) => {
+                const widthCols = Math.max(1, Math.round(item.width / CELL_W))
+                return item.col < other.col + otherCols && other.col < item.col + widthCols
+              })
+            })
+          setModuleDragPreview({
+            panelId: surfaceTargetId,
+            x: surface.x + PANEL_FRAME_MARGIN + col * CELL_W,
+            y: surface.y + surface.supplyPanelY + PANEL_FRAME_MARGIN,
+            width: placement.width,
+            height: placement.height,
+            ref: placement.ref,
+            invalid,
+            items: previewItems.map(({ ref, x, y, width, height }) => ({
+              ref,
+              x,
+              y,
+              width,
+              height,
+            })),
+          })
+          return
+        }
+        const invalid = surface.placements.some((other) => {
+          if (!other.inSupplyPanel) return false
+          if (panelGridModuleRefKey(other.ref) === key) return false
+          const otherCols = Math.max(1, Math.round(other.width / CELL_W))
+          return col < other.col + otherCols && other.col < col + moduleCols
+        })
+        setModuleDragPreview({
+          panelId: surfaceTargetId,
+          x: surface.x + PANEL_FRAME_MARGIN + col * CELL_W,
+          y: surface.y + surface.supplyPanelY + PANEL_FRAME_MARGIN,
+          width: placement.width,
+          height: placement.height,
+          ref: placement.ref,
+          invalid,
+        })
+        return
+      }
+
+      const localX = rawX - PANEL_FRAME_MARGIN
+      const localY = rawY - surface.mainPanelY - PANEL_FRAME_MARGIN
+      const snapped = snapToGrid(localX, localY + CELL_H / 2)
+      const row = clamp(snapped.row, 0, surface.rows - 1)
+      const col = clamp(maxCol, 0, snapped.col)
+      const dx = rawX - placement.x
+      const dy = rawY - placement.y
+      if (selectedPlacements.length >= 2) {
+        setModuleDragLive({
+          panelId: surfaceTargetId,
+          x: surface.x + rawX,
+          y: surface.y + rawY,
+          width: placement.width,
+          height: placement.height,
+          ref: placement.ref,
+          items: selectedPlacements.map((selectedPlacement) => ({
+            ref: selectedPlacement.ref,
+            x: surface.x + selectedPlacement.x + dx,
+            y: surface.y + selectedPlacement.y + dy,
+            width: selectedPlacement.width,
+            height: selectedPlacement.height,
+          })),
+        })
+      } else {
+        setModuleDragLive({
+          panelId: surfaceTargetId,
+          x: surface.x + rawX,
+          y: surface.y + rawY,
+          width: placement.width,
+          height: placement.height,
+          ref: placement.ref,
+        })
+      }
+      if (selectedPlacements.length >= 2) {
+        const deltaRow = row - placement.row
+        const deltaCol = col - placement.col
+        const previewItems = selectedPlacements.map((selectedPlacement) => ({
+          ref: selectedPlacement.ref,
+          row: selectedPlacement.row + deltaRow,
+          col: selectedPlacement.col + deltaCol,
+          x: surface.x + PANEL_FRAME_MARGIN + (selectedPlacement.col + deltaCol) * CELL_W,
+          y:
+            surface.y +
+            surface.mainPanelY +
+            PANEL_FRAME_MARGIN +
+            (selectedPlacement.row + deltaRow) * ROW_STRIDE,
+          width: selectedPlacement.width,
+          height: selectedPlacement.height,
+        }))
+        const invalid =
+          previewItems.some((item) => {
+            const widthCols = Math.max(1, Math.round(item.width / CELL_W))
+            return (
+              item.row < 0 ||
+              item.row >= surface.rows ||
+              item.col < 0 ||
+              item.col > surface.cols - widthCols
+            )
+          }) ||
+          surface.placements.some((other) => {
+            if (other.inSupplyPanel) return false
+            if (
+              selectedPlacements.some(
+                (selected) =>
+                  panelGridModuleRefKey(selected.ref) === panelGridModuleRefKey(other.ref)
+              )
+            ) {
+              return false
+            }
+            const otherCols = Math.max(1, Math.round(other.width / CELL_W))
+            return previewItems.some((item) => {
+              const widthCols = Math.max(1, Math.round(item.width / CELL_W))
+              if (item.row !== other.row) return false
+              return item.col < other.col + otherCols && other.col < item.col + widthCols
+            })
+          })
+        setModuleDragPreview({
+          panelId: surfaceTargetId,
+          x: surface.x + PANEL_FRAME_MARGIN + col * CELL_W,
+          y: surface.y + surface.mainPanelY + PANEL_FRAME_MARGIN + row * ROW_STRIDE,
+          width: placement.width,
+          height: placement.height,
+          ref: placement.ref,
+          invalid,
+          items: previewItems.map(({ ref, x, y, width, height }) => ({ ref, x, y, width, height })),
+        })
+        return
+      }
+      const invalid = surface.placements.some((other) => {
+        if (other.inSupplyPanel) return false
+        if (panelGridModuleRefKey(other.ref) === key) return false
+        if (other.row !== row) return false
+        const otherCols = Math.max(1, Math.round(other.width / CELL_W))
+        return col < other.col + otherCols && other.col < col + moduleCols
+      })
+      setModuleDragPreview({
+        panelId: surfaceTargetId,
+        x: surface.x + PANEL_FRAME_MARGIN + col * CELL_W,
+        y: surface.y + surface.mainPanelY + PANEL_FRAME_MARGIN + row * ROW_STRIDE,
+        width: placement.width,
+        height: placement.height,
+        ref: placement.ref,
+        invalid,
+      })
+    },
+    [detectHierarchyModuleDropTarget, isHierarchyRefInSelection, selection.ids.length]
+  )
+
+  const handleHierarchyModuleDragEnd = useCallback(
+    (
+      surface: HierarchySurface & { panel: Panel },
+      placement: ModulePlacement & { inSupplyPanel?: boolean },
+      rawX: number,
+      rawY: number
+    ) => {
+      logger.warn('[PanelCanvas hierarchy drag] handleHierarchyModuleDragEnd:start', {
+        surfaceId: surface.id,
+        panelId: surface.panel?.id ?? null,
+        placementRef: placement.ref,
+        rawX,
+        rawY,
+        selection: useUIStore.getState().selection,
+      })
+      const preview = moduleDragPreview
+      setModuleDragPreview(null)
+      setModuleDragLive(null)
+      const panel = surface.panel
+      const surfaceTargetId = panel?.id ?? surface.id
+      if (
+        preview &&
+        preview.panelId === surfaceTargetId &&
+        preview.ref &&
+        panelGridModuleRefKey(preview.ref) === panelGridModuleRefKey(placement.ref) &&
+        preview.invalid
+      ) {
+        logger.warn('[PanelCanvas hierarchy drag] abort:invalid-preview')
+        return
+      }
+      const key = panelGridModuleRefKey(placement.ref)
+      const totalCols = placement.inSupplyPanel ? surface.supplyCols : surface.cols
+      const totalRows = surface.rows
+      const moduleCols = Math.max(1, Math.round(placement.width / CELL_W))
+      const maxCol = Math.max(0, totalCols - moduleCols)
+      const selectedPlacements =
+        selection.ids.length >= 2 && isHierarchyRefInSelection(placement.ref)
+          ? surface.placements.filter(
+              (other) =>
+                other.inSupplyPanel === placement.inSupplyPanel &&
+                isHierarchyRefInSelection(other.ref)
+            )
+          : []
+
+      if (placement.ref.kind === 'trunkDevice' && placement.ref.scope === 'supply') {
+        const supplyRef = placement.ref
+        if (preview?.invalid) return
+        const canvasPos = { x: surface.x + rawX, y: surface.y + rawY }
+        const target = detectHierarchyModuleDropTarget(canvasPos, supplyRef)
+        const currentArea = placement.inSupplyPanel ? 'supply' : 'main'
+        const targetSurfaceId = target ? (target.surface.panel?.id ?? target.surface.id) : null
+        const currentSurfaceId = surface.panel?.id ?? surface.id
+        if (target && (targetSurfaceId !== currentSurfaceId || target.area !== currentArea)) {
+          const targetCols =
+            target.area === 'supply' ? target.surface.supplyCols : target.surface.cols
+          const targetRows =
+            target.area === 'supply' ? target.surface.supplyRows : target.surface.rows
+          const targetMaxCol = Math.max(0, targetCols - moduleCols)
+          const localX = canvasPos.x - target.surface.x - PANEL_FRAME_MARGIN
+          const localY =
+            target.area === 'supply'
+              ? canvasPos.y - target.surface.y - target.surface.supplyPanelY - PANEL_FRAME_MARGIN
+              : canvasPos.y - target.surface.y - target.surface.mainPanelY - PANEL_FRAME_MARGIN
+          const snapped = snapToGrid(localX, localY + CELL_H / 2)
+          const row = clamp(targetRows - 1, 0, snapped.row)
+          const col = clamp(targetMaxCol, 0, snapped.col)
+          const sourcePanel =
+            panel ??
+            panelOptions.find((option) => option.isRoot && option.panel.isMain)?.panel ??
+            target.panel
+          const sourceMainSlots = sourcePanel.gridView?.slots ?? []
+          const sourceSupplySlots = sourcePanel.gridView?.supplyPanelSlots ?? []
+          const sourceMainSlot = sourceMainSlots.find(
+            (slot) => panelGridModuleRefKey(slot.module) === key
+          )
+          const sourceSupplySlot = sourceSupplySlots.find(
+            (slot) => panelGridModuleRefKey(slot.module) === key
+          )
+          const manual = getManualWidthProps(sourceMainSlot ?? sourceSupplySlot)
+
+          if (sourcePanel.id !== target.panel.id) {
+            updatePanelGridSlots(
+              sourcePanel.id,
+              sourceMainSlots.filter((slot) => panelGridModuleRefKey(slot.module) !== key)
+            )
+            updateSupplyPanelSlots(
+              sourcePanel.id,
+              sourceSupplySlots.filter((slot) => panelGridModuleRefKey(slot.module) !== key)
+            )
+          }
+
+          useProjectStore.setState((state: ProjectState) => {
+            if (!state.currentProject) return
+            const moved = moveSupplyDeviceFeedOwner(
+              state.currentProject,
+              supplyRef.id,
+              target.area === 'main'
+                ? { scope: 'root', panelId: target.panel.id }
+                : { scope: 'shared' }
+            )
+            if (moved) state.isDirty = true
+          })
+
+          const targetMainSlots = target.panel.gridView?.slots ?? []
+          const targetSupplySlots = target.panel.gridView?.supplyPanelSlots ?? []
+          if (target.area === 'main') {
+            updateSupplyPanelSlots(
+              target.panel.id,
+              targetSupplySlots.filter((slot) => panelGridModuleRefKey(slot.module) !== key)
+            )
+            updatePanelGridSlots(target.panel.id, [
+              ...targetMainSlots.filter((slot) => panelGridModuleRefKey(slot.module) !== key),
+              { row, col, module: supplyRef, ...manual },
+            ])
+          } else {
+            updatePanelGridSlots(
+              target.panel.id,
+              targetMainSlots.filter((slot) => panelGridModuleRefKey(slot.module) !== key)
+            )
+            updateSupplyPanelSlots(target.panel.id, [
+              ...targetSupplySlots.filter((slot) => panelGridModuleRefKey(slot.module) !== key),
+              { row, col, module: supplyRef, ...manual },
+            ])
+          }
+          return
+        }
+      }
+
+      if (placement.inSupplyPanel) {
+        if (!panel) {
+          if (
+            placement.ref.kind !== 'trunkDevice' ||
+            placement.ref.scope !== 'supply' ||
+            !currentProject
+          ) {
+            logger.warn('[PanelCanvas hierarchy drag] abort:shared-supply-missing-context')
+            return
+          }
+          const rootPanel = panelOptions.find((option) => option.isRoot)?.panel
+          if (!rootPanel) return
+          const existingSupplySlots = rootPanel.gridView?.supplyPanelSlots ?? []
+          const draggedRef = placement.ref
+          const sourceX = rawX
+          const snappedCol = Math.max(
+            0,
+            Math.min(maxCol, Math.round((sourceX - PANEL_FRAME_MARGIN) / CELL_W))
+          )
+          const previousSlot = existingSupplySlots.find(
+            (slot) => panelGridModuleRefKey(slot.module) === key
+          )
+          const collidedSlot = existingSupplySlots.find((slot) => {
+            const slotKey = panelGridModuleRefKey(slot.module)
+            if (slotKey === key) return false
+            const width = Math.max(1, resolveModuleWidthCols(slot.module, currentProject, slot))
+            return snappedCol < slot.col + width && slot.col < snappedCol + moduleCols
+          })
+          const reorderedSupplySlots = existingSupplySlots.map((slot) => {
+            const slotKey = panelGridModuleRefKey(slot.module)
+            if (
+              collidedSlot &&
+              slotKey === panelGridModuleRefKey(collidedSlot.module) &&
+              previousSlot
+            ) {
+              return {
+                ...slot,
+                row: previousSlot.row,
+                col: previousSlot.col,
+              }
+            }
+            return slot
+          })
+          const nextSupplySlots = upsertPanelGridSlotPosition(
+            reorderedSupplySlots,
+            draggedRef,
+            0,
+            snappedCol
+          )
+          logger.warn('[PanelCanvas hierarchy drag] shared-supply reorder:calc', {
+            draggedId: draggedRef.id,
+            snappedCol,
+            sourceX,
+            usedPreviewX: false,
+            rawX,
+            rootPanelId: rootPanel.id,
+            surfaceSupplyIds: surface.placements
+              .filter(
+                (
+                  p
+                ): p is typeof p & { ref: { kind: 'trunkDevice'; id: string; scope: 'supply' } } =>
+                  p.inSupplyPanel === true &&
+                  p.ref.kind === 'trunkDevice' &&
+                  p.ref.scope === 'supply'
+              )
+              .sort(
+                (a, b) =>
+                  a.col - b.col ||
+                  panelGridModuleRefKey(a.ref).localeCompare(panelGridModuleRefKey(b.ref))
+              )
+              .map((p) => p.ref.id),
+            existingSlotIds: existingSupplySlots.map((slot) =>
+              slot.module.kind === 'trunkDevice'
+                ? slot.module.id
+                : panelGridModuleRefKey(slot.module)
+            ),
+            nextSlotIds: nextSupplySlots.map((slot) =>
+              slot.module.kind === 'trunkDevice'
+                ? slot.module.id
+                : panelGridModuleRefKey(slot.module)
+            ),
+          })
+          updateSupplyPanelSlots(rootPanel.id, nextSupplySlots)
+          logger.warn('[PanelCanvas hierarchy drag] commit:shared-supply-reorder', {
+            unchanged:
+              existingSupplySlots.length === nextSupplySlots.length &&
+              existingSupplySlots.every(
+                (slot, index) =>
+                  panelGridModuleRefKey(slot.module) ===
+                    panelGridModuleRefKey(nextSupplySlots[index]?.module ?? slot.module) &&
+                  slot.col === nextSupplySlots[index]?.col &&
+                  slot.row === nextSupplySlots[index]?.row
+              ),
+          })
+          return
+        }
+        const existingSupplySlots = panel.gridView?.supplyPanelSlots ?? []
+        const previousSlot = existingSupplySlots.find(
+          (slot) => panelGridModuleRefKey(slot.module) === key
+        )
+        const snappedSupply = snapToGrid(
+          rawX - PANEL_FRAME_MARGIN,
+          rawY - (surface.supplyPanelY + PANEL_FRAME_MARGIN) + CELL_H / 2
+        )
+        const row = clamp(surface.supplyRows - 1, 0, snappedSupply.row)
+        const col = Math.max(0, Math.min(maxCol, Math.round((rawX - PANEL_FRAME_MARGIN) / CELL_W)))
+        if (selectedPlacements.length >= 2) {
+          const selectedKeys = new Set(
+            selectedPlacements.map((selected) => panelGridModuleRefKey(selected.ref))
+          )
+          const deltaRow = row - placement.row
+          const deltaCol = col - placement.col
+          let nextSupplySlots = existingSupplySlots.map((slot) => {
+            const slotKey = panelGridModuleRefKey(slot.module)
+            if (!selectedKeys.has(slotKey)) return slot
+            const selectedPlacement = selectedPlacements.find(
+              (selected) => panelGridModuleRefKey(selected.ref) === slotKey
+            )
+            return {
+              ...slot,
+              row: (selectedPlacement?.row ?? slot.row) + deltaRow,
+              col: (selectedPlacement?.col ?? slot.col) + deltaCol,
+            }
+          })
+          for (const selectedPlacement of selectedPlacements) {
+            nextSupplySlots = upsertPanelGridSlotPosition(
+              nextSupplySlots,
+              selectedPlacement.ref,
+              selectedPlacement.row + deltaRow,
+              selectedPlacement.col + deltaCol
+            )
+          }
+          updateSupplyPanelSlots(panel.id, nextSupplySlots)
+          logger.warn('[PanelCanvas hierarchy drag] commit:supply-multi', {
+            selectedCount: selectedPlacements.length,
+            afterCount: nextSupplySlots.length,
+          })
+          return
+        }
+        const collidedSlot = existingSupplySlots.find((slot) => {
+          if (panelGridModuleRefKey(slot.module) === key) return false
+          const width = Math.max(1, resolveModuleWidthCols(slot.module, currentProject, slot))
+          return col < slot.col + width && slot.col < col + moduleCols
+        })
+        const reorderedSupplySlots = existingSupplySlots.map((slot) => {
+          const slotKey = panelGridModuleRefKey(slot.module)
+          if (
+            collidedSlot &&
+            slotKey === panelGridModuleRefKey(collidedSlot.module) &&
+            previousSlot
+          ) {
+            return {
+              ...slot,
+              row: previousSlot.row,
+              col: previousSlot.col,
+            }
+          }
+          return slot
+        })
+        const nextSupplySlots = upsertPanelGridSlotPosition(
+          reorderedSupplySlots,
+          placement.ref,
+          row,
+          col
+        )
+        updateSupplyPanelSlots(panel.id, nextSupplySlots)
+        logger.warn('[PanelCanvas hierarchy drag] commit:supply-single', {
+          afterCount: nextSupplySlots.length,
+        })
+        return
+      }
+
+      const existingMainSlots = panel.gridView?.slots ?? []
+      const previousSlot = existingMainSlots.find(
+        (slot) => panelGridModuleRefKey(slot.module) === key
+      )
+      const localX = rawX - PANEL_FRAME_MARGIN
+      const localY = rawY - surface.mainPanelY - PANEL_FRAME_MARGIN
+      const snapped = snapToGrid(localX, localY + CELL_H / 2)
+      const row = clamp(snapped.row, 0, totalRows - 1)
+      const col = clamp(maxCol, 0, snapped.col)
+      if (selectedPlacements.length >= 2) {
+        const selectedKeys = new Set(
+          selectedPlacements.map((selected) => panelGridModuleRefKey(selected.ref))
+        )
+        const deltaRow = row - placement.row
+        const deltaCol = col - placement.col
+        let nextMainSlots = existingMainSlots.map((slot) => {
+          const slotKey = panelGridModuleRefKey(slot.module)
+          if (!selectedKeys.has(slotKey)) return slot
+          const selectedPlacement = selectedPlacements.find(
+            (selected) => panelGridModuleRefKey(selected.ref) === slotKey
+          )
+          return {
+            ...slot,
+            row: (selectedPlacement?.row ?? slot.row) + deltaRow,
+            col: (selectedPlacement?.col ?? slot.col) + deltaCol,
+          }
+        })
+        for (const selectedPlacement of selectedPlacements) {
+          nextMainSlots = upsertPanelGridSlotPosition(
+            nextMainSlots,
+            selectedPlacement.ref,
+            selectedPlacement.row + deltaRow,
+            selectedPlacement.col + deltaCol
+          )
+        }
+        updatePanelGridSlots(panel.id, nextMainSlots)
+        logger.warn('[PanelCanvas hierarchy drag] commit:main-multi', {
+          selectedCount: selectedPlacements.length,
+          afterCount: nextMainSlots.length,
+        })
+        return
+      }
+      const collidedSlot = existingMainSlots.find((slot) => {
+        if (panelGridModuleRefKey(slot.module) === key) return false
+        const width = Math.max(1, resolveModuleWidthCols(slot.module, currentProject, slot))
+        if (slot.row !== row) return false
+        return col < slot.col + width && slot.col < col + moduleCols
+      })
+      const reorderedMainSlots = existingMainSlots.map((slot) => {
+        const slotKey = panelGridModuleRefKey(slot.module)
+        if (
+          collidedSlot &&
+          slotKey === panelGridModuleRefKey(collidedSlot.module) &&
+          previousSlot
+        ) {
+          return {
+            ...slot,
+            row: previousSlot.row,
+            col: previousSlot.col,
+          }
+        }
+        return slot
+      })
+      const nextMainSlots = upsertPanelGridSlotPosition(reorderedMainSlots, placement.ref, row, col)
+      updatePanelGridSlots(panel.id, nextMainSlots)
+      logger.warn('[PanelCanvas hierarchy drag] commit:main-single', {
+        afterCount: nextMainSlots.length,
+      })
+    },
+    [
+      currentProject,
+      detectHierarchyModuleDropTarget,
+      isHierarchyRefInSelection,
+      moduleDragPreview,
+      panelOptions,
+      selection.ids.length,
+      updatePanelGridSlots,
+      updateSupplyPanelSlots,
+    ]
+  )
+
+  const handleHierarchyModuleResize = useCallback(
+    (
+      surface: HierarchySurface & { panel: Panel },
+      placement: ModulePlacement & { inSupplyPanel?: boolean },
+      newWidthCols: number
+    ) => {
+      const panel = surface.panel
+      const key = panelGridModuleRefKey(placement.ref)
+
+      if (placement.inSupplyPanel) {
+        const existingSupplySlots = panel.gridView?.supplyPanelSlots ?? []
+        const nextSupplySlots: PanelGridSlot[] = existingSupplySlots.map((slot) =>
+          panelGridModuleRefKey(slot.module) === key
+            ? { ...slot, moduleWidth: newWidthCols, moduleWidthManual: true }
+            : slot
+        )
+        updateSupplyPanelSlots(panel.id, nextSupplySlots)
+        return
+      }
+
+      const existingMainSlots = panel.gridView?.slots ?? []
+      let found = false
+      const nextMainSlots: PanelGridSlot[] = existingMainSlots.map((slot) => {
+        if (panelGridModuleRefKey(slot.module) === key) {
+          found = true
+          return { ...slot, moduleWidth: newWidthCols, moduleWidthManual: true }
+        }
+        return slot
+      })
+      if (!found) {
+        nextMainSlots.push({
+          row: placement.row,
+          col: placement.col,
+          module: placement.ref,
+          moduleWidth: newWidthCols,
+          moduleWidthManual: true,
+        })
+      }
+      updatePanelGridSlots(panel.id, nextMainSlots)
+    },
+    [updatePanelGridSlots, updateSupplyPanelSlots]
+  )
+
+  const getHierarchyMaxWidth = useCallback(
+    (
+      surface: HierarchySurface & { panel: Panel },
+      placement: ModulePlacement & { inSupplyPanel?: boolean }
+    ) => {
+      if (placement.inSupplyPanel) {
+        return Math.max(1, surface.cols - placement.col)
+      }
+
+      let maxCol = surface.cols
+      const key = panelGridModuleRefKey(placement.ref)
+      for (const other of surface.placements) {
+        if (other.inSupplyPanel) continue
+        if (panelGridModuleRefKey(other.ref) === key) continue
+        if (other.row === placement.row && other.col > placement.col) {
+          maxCol = Math.min(maxCol, other.col)
+        }
+      }
+      return Math.max(1, maxCol - placement.col)
+    },
+    []
+  )
+
+  const selectedSharedFeederKey = useMemo(() => {
+    if (!scene || !selectedRef) return null
+    const sharedSurface = scene.surfaces.find((surface) => surface.kind === 'shared_supply')
+    const lastPlacement = sharedSurface?.placements[sharedSurface.placements.length - 1]
+    if (!lastPlacement) return null
+    return panelGridModuleRefKey(lastPlacement.ref) === panelGridModuleRefKey(selectedRef)
+      ? panelGridModuleRefKey(lastPlacement.ref)
+      : null
+  }, [scene, selectedRef])
+
+  useEffect(() => {
+    const node = connectorGroupRef.current
+    if (!node) return
+    const tween = new Konva.Tween({
+      node,
+      duration: 0.18,
+      opacity: selectedSharedFeederKey ? 0.18 : 1,
+    })
+    tween.play()
+    return () => tween.destroy()
+  }, [selectedSharedFeederKey])
+
+  return (
+    <>
+      <BaseCanvas
+        ref={canvasRef}
+        gestureZoomCanvas="panel"
+        zoom={panelZoom}
+        pan={panelPan}
+        onZoomChange={handleZoomChange}
+        onPanChange={handlePanChange}
+        onViewTransformCommit={handleViewTransformCommit}
+        onFindElementsInRectangle={
+          libraryInteraction?.onFindElementsInRectangle ?? onFindHierarchyElementsInRectangle
+        }
+        onGetSelectionBounds={
+          libraryInteraction?.onGetSelectionBounds ?? handleGetHierarchySelectionBounds
+        }
+        onGetContextMenuItems={libraryInteraction?.onGetContextMenuItems}
+        longPressDragSelectFromContent
+        selectionFitMaxZoom={ZOOM_100}
+        showGrid={false}
+        gridSize={24}
+        onDragOver={
+          canPlaceSymbols ? (libraryInteraction?.onDragOver ?? handleHierarchyDragOver) : undefined
+        }
+        onDrop={canPlaceSymbols ? (libraryInteraction?.onDrop ?? handleHierarchyDrop) : undefined}
+        onMultiFingerSwipe={onMultiFingerSwipe}
+        
+      >
+        <Group name="canvas-content">
+          {scene && (
+            <Group ref={connectorGroupRef} opacity={1}>
+              {scene.connectors.map((connector, index) => (
+                <Line
+                  key={`hierarchy-connector-${index}`}
+                  points={connector.points}
+                  stroke={colors.supplyWire}
+                  strokeWidth={1.5}
+                  dash={[8, 4]}
+                  lineCap="round"
+                  lineJoin="round"
+                  listening={false}
+                />
+              ))}
+            </Group>
+          )}
+
+          {scene?.surfaces.map((surface) => (
+            <Group
+              key={surface.id}
+              x={surface.x}
+              y={surface.y}
+              name={`hierarchy-surface hierarchy-surface-${surface.id}`}
+            >
+              {surface.kind === 'shared_supply' ? (
+                <Group listening={false}>
+                  <Rect
+                    x={0}
+                    y={0}
+                    width={surface.width}
+                    height={surface.height}
+                    stroke={colors.panelSupplyStroke}
+                    strokeWidth={3}
+                    fill={colors.panelFrameFill}
+                    cornerRadius={4}
+                    listening={false}
+                  />
+                  <Text
+                    x={8}
+                    y={8}
+                    text={t('panelCanvas.supplyPanel', 'Supply panel')}
+                    fontSize={14}
+                    fontStyle="bold"
+                    fontFamily={fontFamily}
+                    fill={colors.panelFrameStroke}
+                    listening={false}
+                  />
+                  <Rect
+                    x={PANEL_FRAME_MARGIN}
+                    y={PANEL_FRAME_MARGIN}
+                    width={surface.contentWidth}
+                    height={CELL_H}
+                    fill="transparent"
+                    stroke={colors.panelFrameStroke}
+                    opacity={0.18}
+                    strokeWidth={1}
+                    listening={false}
+                  />
+                  {Array.from({ length: surface.cols + 1 }).map((_, colIndex) => (
+                    <Line
+                      key={`shared-col-${colIndex}`}
+                      points={[
+                        PANEL_FRAME_MARGIN + colIndex * CELL_W,
+                        PANEL_FRAME_MARGIN,
+                        PANEL_FRAME_MARGIN + colIndex * CELL_W,
+                        PANEL_FRAME_MARGIN + CELL_H,
+                      ]}
+                      stroke={colors.panelFrameStroke}
+                      opacity={0.08}
+                      strokeWidth={0.75}
+                      listening={false}
+                    />
+                  ))}
+                  {(() => {
+                    const firstPlacement = surface.placements[0]
+                    const symbolX = firstPlacement
+                      ? firstPlacement.x + firstPlacement.width / 2
+                      : PANEL_FRAME_MARGIN + surface.contentWidth / 2
+                    const symbolY = surface.feedFromTop ? -20 : surface.height + 20
+                    const wireStartY = surface.feedFromTop
+                      ? PANEL_FRAME_MARGIN
+                      : PANEL_FRAME_MARGIN + CELL_H
+                    return (
+                      <>
+                        <Line
+                          points={[symbolX, wireStartY, symbolX, symbolY]}
+                          stroke={colors.supplyWire}
+                          strokeWidth={1.5}
+                          dash={[8, 4]}
+                          lineCap="round"
+                          lineJoin="round"
+                          listening={false}
+                        />
+                        <SupplySymbol x={symbolX} y={symbolY} />
+                      </>
+                    )
+                  })()}
+                </Group>
+              ) : (
+                <>
+                  <Rect
+                    x={-HIERARCHY_PANEL_FRAME_HIT_MARGIN}
+                    y={
+                      surface.mainPanelY -
+                      Math.max(
+                        HIERARCHY_PANEL_FRAME_HIT_MARGIN,
+                        HIERARCHY_PANEL_FRAME_TITLE_HIT_HEIGHT
+                      )
+                    }
+                    width={surface.width + HIERARCHY_PANEL_FRAME_HIT_MARGIN * 2}
+                    height={
+                      surface.panelFrameHeight +
+                      HIERARCHY_PANEL_FRAME_HIT_MARGIN +
+                      Math.max(
+                        HIERARCHY_PANEL_FRAME_HIT_MARGIN,
+                        HIERARCHY_PANEL_FRAME_TITLE_HIT_HEIGHT
+                      )
+                    }
+                    fill="rgba(0,0,0,0.001)"
+                    stroke="transparent"
+                    strokeWidth={0}
+                    cornerRadius={4}
+                    name={`panel-${surface.panel?.id ?? surface.id}`}
+                    onMouseDown={startPanelFrameSelectionRect}
+                    onClick={(e) => {
+                      if (!surface.panel) return
+                      if (shouldIgnorePanelFrameClick(e.evt)) {
+                        e.cancelBubble = true
+                        return
+                      }
+                      e.cancelBubble = true
+                      handleHierarchyPanelSelect(surface.panel.id, e.evt)
+                    }}
+                    onTap={(e) => {
+                      if (!surface.panel) return
+                      e.cancelBubble = true
+                      handleHierarchyPanelSelect(surface.panel.id, e.evt)
+                    }}
+                  />
+                  {surface.supplyPanelVisible && (
+                    <>
+                      <Group listening={false}>
+                        <Rect
+                          x={0}
+                          y={surface.supplyPanelY}
+                          width={surface.width}
+                          height={surface.supplyFrameHeight}
+                          stroke={colors.panelSupplyStroke}
+                          strokeWidth={3}
+                          fill={colors.panelFrameFill}
+                          cornerRadius={4}
+                          listening={false}
+                        />
+                        <Text
+                          x={8}
+                          y={surface.supplyPanelY + 8}
+                          text={t('panelCanvas.supplyPanel', 'Supply panel')}
+                          fontSize={14}
+                          fontStyle="bold"
+                          fontFamily={fontFamily}
+                          fill={colors.panelFrameStroke}
+                          listening={false}
+                        />
+                        <Rect
+                          x={PANEL_FRAME_MARGIN}
+                          y={surface.supplyPanelY + PANEL_FRAME_MARGIN}
+                          width={surface.supplyContentWidth}
+                          height={
+                            surface.supplyRows * CELL_H +
+                            Math.max(0, surface.supplyRows - 1) * ROW_GAP
+                          }
+                          fill="transparent"
+                          stroke={colors.panelFrameStroke}
+                          opacity={0.12}
+                          strokeWidth={1}
+                          listening={false}
+                        />
+                        {Array.from({ length: surface.supplyCols + 1 }).map((_, colIndex) => (
+                          <Line
+                            key={`supply-col-${surface.id}-${colIndex}`}
+                            points={[
+                              PANEL_FRAME_MARGIN + colIndex * CELL_W,
+                              surface.supplyPanelY + PANEL_FRAME_MARGIN,
+                              PANEL_FRAME_MARGIN + colIndex * CELL_W,
+                              surface.supplyPanelY +
+                                PANEL_FRAME_MARGIN +
+                                surface.supplyRows * CELL_H +
+                                Math.max(0, surface.supplyRows - 1) * ROW_GAP,
+                            ]}
+                            stroke={colors.panelFrameStroke}
+                            opacity={0.08}
+                            strokeWidth={0.75}
+                            listening={false}
+                          />
+                        ))}
+                        {Array.from({ length: Math.max(0, surface.supplyRows - 1) }).map(
+                          (_, rowIndex) => (
+                            <Line
+                              key={`supply-row-${surface.id}-${rowIndex}`}
+                              points={[
+                                PANEL_FRAME_MARGIN,
+                                surface.supplyPanelY +
+                                  PANEL_FRAME_MARGIN +
+                                  (rowIndex + 1) * ROW_STRIDE -
+                                  ROW_GAP,
+                                PANEL_FRAME_MARGIN + surface.supplyContentWidth,
+                                surface.supplyPanelY +
+                                  PANEL_FRAME_MARGIN +
+                                  (rowIndex + 1) * ROW_STRIDE -
+                                  ROW_GAP,
+                              ]}
+                              stroke={colors.panelFrameStroke}
+                              opacity={0.08}
+                              strokeWidth={0.75}
+                              listening={false}
+                            />
+                          )
+                        )}
+                      </Group>
+                      <Rect
+                        x={0}
+                        y={surface.supplyPanelY}
+                        width={surface.width}
+                        height={surface.supplyFrameHeight}
+                        name={`supplyPanel-${surface.panel?.id ?? surface.id}`}
+                        fill="transparent"
+                        stroke="transparent"
+                        strokeWidth={0}
+                        cornerRadius={4}
+                        onMouseDown={startPanelFrameSelectionRect}
+                        onClick={(e) => {
+                          if (!surface.panel) return
+                          if (shouldIgnorePanelFrameClick(e.evt)) {
+                            e.cancelBubble = true
+                            return
+                          }
+                          e.cancelBubble = true
+                          setSelection({ type: 'supplyPanel', ids: [surface.panel.id] })
+                        }}
+                        onTap={(e) => {
+                          if (!surface.panel) return
+                          e.cancelBubble = true
+                          setSelection({ type: 'supplyPanel', ids: [surface.panel.id] })
+                        }}
+                      />
+                    </>
+                  )}
+                  <Group y={surface.mainPanelY} listening={false}>
+                    <Rect
+                      x={0}
+                      y={0}
+                      width={surface.width}
+                      height={surface.panelFrameHeight}
+                      stroke={colors.panelFrameStroke}
+                      strokeWidth={3}
+                      fill={colors.panelFrameFill}
+                      cornerRadius={4}
+                      listening={false}
+                    />
+                    <Text
+                      x={8}
+                      y={8}
+                      text={surface.label}
+                      fontSize={14}
+                      fontStyle="bold"
+                      fontFamily={fontFamily}
+                      fill={colors.panelFrameStroke}
+                      listening={false}
+                    />
+                    {Array.from({ length: surface.rows }).map((_, rowIndex) => (
+                      <Rect
+                        key={`rail-${surface.id}-${rowIndex}`}
+                        x={PANEL_FRAME_MARGIN}
+                        y={PANEL_FRAME_MARGIN + rowIndex * (CELL_H + ROW_GAP)}
+                        width={surface.contentWidth}
+                        height={CELL_H}
+                        fill="transparent"
+                        stroke={colors.panelFrameStroke}
+                        opacity={0.12}
+                        strokeWidth={1}
+                        listening={false}
+                      />
+                    ))}
+                    {Array.from({ length: surface.rows }).map((_, rowIndex) =>
+                      Array.from({ length: surface.cols + 1 }).map((_, colIndex) => (
+                        <Line
+                          key={`grid-${surface.id}-${rowIndex}-${colIndex}`}
+                          points={[
+                            PANEL_FRAME_MARGIN + colIndex * CELL_W,
+                            PANEL_FRAME_MARGIN + rowIndex * (CELL_H + ROW_GAP),
+                            PANEL_FRAME_MARGIN + colIndex * CELL_W,
+                            PANEL_FRAME_MARGIN + rowIndex * (CELL_H + ROW_GAP) + CELL_H,
+                          ]}
+                          stroke={colors.panelFrameStroke}
+                          opacity={0.08}
+                          strokeWidth={0.75}
+                          listening={false}
+                        />
+                      ))
+                    )}
+                  </Group>
+                  <Rect
+                    x={0}
+                    y={surface.mainPanelY}
+                    width={surface.width}
+                    height={surface.panelFrameHeight}
+                    fill="transparent"
+                    stroke={
+                      selectedPanelIds.includes(surface.panel?.id ?? '')
+                        ? colors.moduleBorderSelected
+                        : 'transparent'
+                    }
+                    strokeWidth={selectedPanelIds.includes(surface.panel?.id ?? '') ? 2 : 0}
+                    cornerRadius={4}
+                    listening={false}
+                  />
+                  {surface.supplyPanelVisible && (
+                    <Rect
+                      x={0}
+                      y={surface.supplyPanelY}
+                      width={surface.width}
+                      height={surface.supplyFrameHeight}
+                      stroke={
+                        selectedSupplyPanelIds.includes(surface.panel?.id ?? '')
+                          ? colors.moduleBorderSelected
+                          : 'transparent'
+                      }
+                      strokeWidth={selectedSupplyPanelIds.includes(surface.panel?.id ?? '') ? 2 : 0}
+                      cornerRadius={4}
+                      listening={false}
+                    />
+                  )}
+                </>
+              )}
+
+              {surface.placements.map((placement) => {
+                const surfaceTargetId = surface.panel?.id ?? surface.id
+                const previewItem =
+                  moduleDragLive?.panelId === surfaceTargetId
+                    ? (moduleDragLive?.items?.find(
+                        (item) =>
+                          panelGridModuleRefKey(item.ref) === panelGridModuleRefKey(placement.ref)
+                      ) ??
+                      (moduleDragLive.ref &&
+                      panelGridModuleRefKey(moduleDragLive.ref) ===
+                        panelGridModuleRefKey(placement.ref)
+                        ? {
+                            ref: placement.ref,
+                            x: moduleDragLive.x,
+                            y: moduleDragLive.y,
+                            width: placement.width,
+                            height: placement.height,
+                          }
+                        : null))
+                    : null
+                return (
+                  <ModuleBox
+                    key={`${surface.id}-${panelGridModuleRefKey(placement.ref)}`}
+                    moduleRef={placement.ref}
+                    x={previewItem ? previewItem.x - surface.x : placement.x}
+                    y={previewItem ? previewItem.y - surface.y : placement.y}
+                    width={placement.width}
+                    height={placement.height}
+                    info={getModuleDisplayInfo(placement.ref, currentProject)}
+                    draggable={canDragItems}
+                    onDragMove={
+                      canDragItems
+                        ? (_ref, x, y) =>
+                            handleHierarchyModuleDragMove(
+                              surface as HierarchySurface & { panel: Panel },
+                              placement,
+                              x,
+                              y
+                            )
+                        : undefined
+                    }
+                    onDragEnd={
+                      canDragItems
+                        ? (_ref, x, y) =>
+                            handleHierarchyModuleDragEnd(
+                              surface as HierarchySurface & { panel: Panel },
+                              placement,
+                              x,
+                              y
+                            )
+                        : undefined
+                    }
+                    onHoverChange={setTooltip}
+                    onHoverRefChange={setHoveredModuleRef}
+                    debugMode={panelRelationDebug}
+                    debugSupplyTrunkKind={
+                      panelRelationDebug && scene?.sharedSupplyTrunkRefKeys
+                        ? placement.ref.kind === 'trunkDevice' && placement.ref.scope === 'supply'
+                          ? scene.sharedSupplyTrunkRefKeys.has(panelGridModuleRefKey(placement.ref))
+                            ? 'shared'
+                            : 'unique'
+                          : undefined
+                        : undefined
+                    }
+                    onResizeEnd={
+                      canDragItems
+                        ? (_ref, newWidthCols) =>
+                            handleHierarchyModuleResize(
+                              surface as HierarchySurface & { panel: Panel },
+                              placement,
+                              newWidthCols
+                            )
+                        : undefined
+                    }
+                    maxWidthCols={getHierarchyMaxWidth(
+                      surface as HierarchySurface & { panel: Panel },
+                      placement
+                    )}
+                    onRewireDragStart={
+                      canUseRewireTools && rewireMode
+                        ? (ref) => handleHierarchyRewireDragStart(surface, ref)
+                        : undefined
+                    }
+                    onRewireDragMove={
+                      canUseRewireTools && rewireMode
+                        ? (stage, pointerPos) =>
+                            handleHierarchyRewireDragMove(surface, stage, pointerPos)
+                        : undefined
+                    }
+                    onRewireDragEnd={
+                      canUseRewireTools && rewireMode ? handleHierarchyRewireDragEnd : undefined
+                    }
+                    onSelectionIntent={createHierarchySelectionResolver(surface, placement)}
+                    onAssignTargetClick={
+                      assignToCircuitMode && onAssignTargetClick ? onAssignTargetClick : undefined
+                    }
+                    isRewireOrigin={
+                      rewireMode &&
+                      rewireOriginRef != null &&
+                      rewireOriginSurfaceId === getSurfaceRewireId(surface) &&
+                      panelGridModuleRefKey(placement.ref) ===
+                        panelGridModuleRefKey(rewireOriginRef)
+                    }
+                    isRewireTarget={
+                      rewireMode &&
+                      rewireTargetRef != null &&
+                      rewireTargetSurfaceId === getSurfaceRewireId(surface) &&
+                      panelGridModuleRefKey(placement.ref) ===
+                        panelGridModuleRefKey(rewireTargetRef)
+                    }
+                    isRewireTargetValid={
+                      rewireMode &&
+                      rewireTargetRef != null &&
+                      rewireTargetSurfaceId === getSurfaceRewireId(surface) &&
+                      panelGridModuleRefKey(placement.ref) ===
+                        panelGridModuleRefKey(rewireTargetRef)
+                        ? rewireTargetValid
+                        : true
+                    }
+                  />
+                )
+              })}
+              {moduleDragPreview &&
+                moduleDragPreview.panelId === (surface.panel?.id ?? surface.id) &&
+                (moduleDragPreview.items && moduleDragPreview.items.length > 0
+                  ? moduleDragPreview.items.map((item) => (
+                      <Rect
+                        key={`module-drag-preview-${panelGridModuleRefKey(item.ref)}`}
+                        x={item.x - surface.x}
+                        y={item.y - surface.y}
+                        width={item.width}
+                        height={item.height}
+                        stroke={moduleDragPreview.invalid ? '#ef4444' : colors.hoverColor}
+                        strokeWidth={2}
+                        dash={[8, 4]}
+                        fill="transparent"
+                        listening={false}
+                      />
+                    ))
+                  : [
+                      <Rect
+                        key="module-drag-preview-single"
+                        x={moduleDragPreview.x - surface.x}
+                        y={moduleDragPreview.y - surface.y}
+                        width={moduleDragPreview.width}
+                        height={moduleDragPreview.height}
+                        stroke={moduleDragPreview.invalid ? '#ef4444' : colors.hoverColor}
+                        strokeWidth={2}
+                        dash={[8, 4]}
+                        fill="transparent"
+                        listening={false}
+                      />,
+                    ])}
+              {dragPreview && dragPreview.panelId === surface.panel?.id && (
+                <Rect
+                  x={dragPreview.x - surface.x}
+                  y={dragPreview.y - surface.y}
+                  width={dragPreview.width}
+                  height={dragPreview.height}
+                  stroke={colors.hoverColor}
+                  strokeWidth={2}
+                  dash={[8, 4]}
+                  fill="transparent"
+                  listening={false}
+                />
+              )}
+            </Group>
+          ))}
+          {(() => {
+            const panelSurfaces = scene?.surfaces.filter(
+              (surface): surface is HierarchySurface & { panel: Panel } =>
+                surface.kind === 'panel' && surface.panel != null
+            )
+            if (!panelSurfaces || panelSurfaces.length === 0) return null
+            if (!scene) return null
+
+            const sharedSurface = scene.surfaces.find((item) => item.kind === 'shared_supply')
+            const mergedPlacements = [
+              ...(sharedSurface
+                ? sharedSurface.placements.map((placement) => ({
+                    ...placement,
+                    x: placement.x + sharedSurface.x,
+                    y: placement.y + sharedSurface.y,
+                  }))
+                : []),
+              ...panelSurfaces.flatMap((surface) =>
+                surface.placements.map((placement) => ({
+                  ...placement,
+                  x: placement.x + surface.x,
+                  y: placement.y + surface.y,
+                }))
+              ),
+            ]
+            const mergedSupplyPanelRefKeys = new Set(
+              panelSurfaces.flatMap((surface) =>
+                surface.placements
+                  .filter((placement) => placement.inSupplyPanel === true)
+                  .map((placement) => panelGridModuleRefKey(placement.ref))
+              )
+            )
+            const primarySurface = panelSurfaces.find((s) => s.panel.isMain) ?? panelSurfaces[0]!
+            const defaultHierarchyRoute = hierarchyRouteForHierarchySurface(
+              primarySurface,
+              sharedSurface,
+              feedSideDirection,
+              PANEL_FRAME_MARGIN
+            )
+
+            return (
+              <Group key="hierarchy-relation-wires-merged" listening={false}>
+                <RelationWires
+                  placements={mergedPlacements}
+                  selectedRef={selectedRef}
+                  hoveredRef={hoveredModuleRef}
+                  panel={primarySurface.panel}
+                  project={currentProject}
+                  dragOverride={
+                    moduleDragPreview && moduleDragPreview.ref
+                      ? {
+                          ref: moduleDragPreview.ref,
+                          x: moduleDragPreview.x,
+                          y: moduleDragPreview.y,
+                        }
+                      : null
+                  }
+                  preserveRowForRefKeys={mergedSupplyPanelRefKeys}
+                  supplyPanelRefKeys={mergedSupplyPanelRefKeys}
+                  hierarchyRoute={defaultHierarchyRoute}
+                  getHierarchyRoute={(p) => {
+                    const s = panelSurfaces.find((x) => x.panel.id === p.id)
+                    return s
+                      ? hierarchyRouteForHierarchySurface(
+                          s,
+                          sharedSurface,
+                          feedSideDirection,
+                          PANEL_FRAME_MARGIN
+                        )
+                      : null
+                  }}
+                  animateDash
+                  debugMode={panelRelationDebug}
+                  pathwayRegions={panelWirePathRegions}
+                  pathwayLinks={panelWirePathLinks}
+                />
+              </Group>
+            )
+          })()}
+          {hierarchyRewirePreviewWire && (
+            <RewirePreviewWire
+              points={hierarchyRewirePreviewWire.points}
+              stroke={hierarchyRewirePreviewWire.stroke}
+              animateDash
+            />
+          )}
+          {libraryCanvasExtras}
+          {}
+        </Group>
+      </BaseCanvas>
+
+      <ViewNavigationToolbar
+        zoom={panelZoom}
+        onZoomChange={handleZoomChange}
+        onPanChange={handlePanChange}
+        onFitToView={handleFitToView}
+        canvasType="panel"
+      />
+
+      {scene && (
+        <CanvasFloatingControlRail
+          side="left"
+          verticalAlign="center"
+          topSafeZonePx={110}
+          bottomSafeZonePx={80}
+          dataCanvasOverlayAnchor="left"
+        >
+          <>
+            {canUseRewireTools && (
+              <RewireTool
+                isActive={rewireMode}
+                onToggle={() => {
+                  setRewireMode((prev) => !prev)
+                  resetHierarchyRewireState()
+                }}
+                hasOrigin={!!rewireOriginRef}
+              />
+            )}
+            {canDragItems && (
+              <FloatingControl
+                icon={<AutoArrangeIcon className="w-6 h-6" />}
+                label={t('panelCanvas.autoArrange', 'Auto arrange')}
+                variant="tool"
+                side="left"
+                triggerTestId="e2e-panel-auto-arrange"
+                onClick={handleHierarchyAutoArrange}
+              />
+            )}
+          </>
+        </CanvasFloatingControlRail>
+      )}
+
+      {tooltip && containerRef.current && (
+        <div
+          className="absolute z-50 pointer-events-none"
+          style={{
+            left: tooltip.clientX - containerRef.current.getBoundingClientRect().left,
+            top: tooltip.clientY - containerRef.current.getBoundingClientRect().top,
+            transform: 'translate(12px, 12px)',
+          }}
+        >
+          <div className="rounded bg-black/85 text-white text-xs px-2 py-1 shadow-lg max-w-[240px] whitespace-pre-wrap">
+            {tooltip.text}
+          </div>
+        </div>
+      )}
+      {panelRelationDebug && (
+        <div className="absolute top-3 left-3 z-40 pointer-events-none rounded-md border border-slate-300/70 dark:border-slate-600/80 bg-white/92 dark:bg-slate-900/92 px-3 py-2 shadow-md">
+          <div className="text-[11px] font-semibold text-slate-800 dark:text-slate-100 mb-1">
+            Panel routing debug
+          </div>
+          <div className="text-[10px] font-medium uppercase tracking-wide text-slate-600 dark:text-slate-300 mb-1">
+            Wires
+          </div>
+          <div className="space-y-1 mb-2">
+            {PANEL_RELATION_DEBUG_WIRE_LEGEND.map((item) => (
+              <div
+                key={`wire-${item.label}`}
+                className="flex items-center gap-2 text-[11px] text-slate-700 dark:text-slate-200"
+              >
+                <span
+                  className="inline-block h-2.5 w-2.5 rounded-sm"
+                  style={{ backgroundColor: item.color }}
+                />
+                <span>{item.label}</span>
+              </div>
+            ))}
+          </div>
+          <div className="text-[10px] font-medium uppercase tracking-wide text-slate-600 dark:text-slate-300 mb-1">
+            Modules
+          </div>
+          <div className="space-y-1">
+            {PANEL_RELATION_DEBUG_MODULE_LEGEND.map((item) => (
+              <div
+                key={`module-${item.label}`}
+                className="flex items-center gap-2 text-[11px] text-slate-700 dark:text-slate-200"
+              >
+                <span
+                  className="inline-block h-2.5 w-2.5 rounded-sm"
+                  style={{ backgroundColor: item.color }}
+                />
+                <span>{item.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  )
+}

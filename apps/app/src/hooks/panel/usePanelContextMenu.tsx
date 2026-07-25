@@ -1,0 +1,523 @@
+import { useCallback, useEffect } from 'react'
+import type { TFunction } from 'i18next'
+import HiddenItemsDialog from '@/components/common/HiddenItemsDialog'
+import type { ContextMenuItem } from '@/components/common/ContextMenu'
+import { getContextMenuIcon } from '@/components/common/ContextMenuIcons'
+import { useDialogStore, type DialogConfig } from '@/stores/dialogStore'
+import { useProjectStore, type ProjectState } from '@/stores/projectStore'
+import { useUIStore } from '@/stores/uiStore'
+import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
+import { linkedSubPanelDisplayNamesForProtectionIds } from '@/lib/panel/linkedSubPanelDeleteWarning'
+import { isKeyboardTypingTarget } from '@/lib/ui/keyboardTypingTarget'
+import { panelGridModuleRefKey } from '@/components/canvas/panel/panelGridLayout'
+import type { Panel, PanelGridModuleRef } from '@/types/schema'
+import type { Point, Selection as CanvasSelection } from '@/types/ui'
+
+type ModuleItem = {
+  ref: PanelGridModuleRef
+  inSupplyPanel?: boolean
+}
+
+export function appendPanelShowHiddenMenuEntry(
+  items: ContextMenuItem[],
+  hasHiddenModules: boolean,
+  item: ContextMenuItem
+): void {
+  if (items.length > 0) {
+    items.push({ label: '', onClick: () => {}, separator: true })
+  }
+  items.push({ ...item, disabled: !hasHiddenModules })
+}
+
+export type PanelContext = {
+  panel: Panel
+  panelId: string
+  modules: ModuleItem[]
+  sharedSupplyRefKeys: Set<string>
+}
+
+type UsePanelContextMenuOptions = {
+  canDeleteItems: boolean
+  clearSelection: () => void
+  effectiveActivePanelId: string | null
+  ejectToSupplyPanel: ProjectState['ejectToSupplyPanel']
+  getEndpointById: ProjectState['getEndpointById']
+  getPanelHiddenModuleRefs: ProjectState['getPanelHiddenModuleRefs']
+  getProtectionById: ProjectState['getProtectionById']
+  getTrunkDeviceById: ProjectState['getTrunkDeviceById']
+  hideModuleFromPanel: ProjectState['hideModuleFromPanel']
+  modules: ModuleItem[]
+  openDialog: (config: DialogConfig) => void
+  panel: Panel | null
+  returnFromSupplyPanel: ProjectState['returnFromSupplyPanel']
+  resolvePanelContext?: (position: Point, elementId: string | null) => PanelContext | null
+  selection: CanvasSelection
+  setSupplyPanelVisible: ProjectState['setSupplyPanelVisible']
+  sharedSupplyRefKeys: Set<string>
+  t: TFunction
+  unhideModuleFromPanel: ProjectState['unhideModuleFromPanel']
+}
+
+export function usePanelContextMenu({
+  canDeleteItems,
+  clearSelection,
+  effectiveActivePanelId,
+  ejectToSupplyPanel,
+  getEndpointById,
+  getPanelHiddenModuleRefs,
+  getProtectionById,
+  getTrunkDeviceById,
+  hideModuleFromPanel,
+  modules,
+  openDialog,
+  panel,
+  returnFromSupplyPanel,
+  resolvePanelContext,
+  selection,
+  setSupplyPanelVisible,
+  sharedSupplyRefKeys,
+  t,
+  unhideModuleFromPanel,
+}: UsePanelContextMenuOptions) {
+  const handleGetContextMenuItems = useCallback(
+    (position: Point, elementId: string | null): ContextMenuItem[] => {
+      const resolvedContext = resolvePanelContext?.(position, elementId)
+      const contextPanel = resolvedContext?.panel ?? panel
+      const contextPanelId = resolvedContext?.panelId ?? effectiveActivePanelId
+      const contextModules = resolvedContext?.modules ?? modules
+      const contextSharedSupplyRefKeys = resolvedContext?.sharedSupplyRefKeys ?? sharedSupplyRefKeys
+      if (!contextPanel || !contextPanelId) return []
+
+      const items: ContextMenuItem[] = []
+
+      const findModuleItemInList = (
+        list: ModuleItem[],
+        selType: typeof selection.type,
+        entityId: string,
+      ): ModuleItem | undefined => {
+        if (selType === 'protection') {
+          return list.find((x) => x.ref.kind === 'protection' && x.ref.id === entityId)
+        }
+        if (selType === 'trunkDevice') {
+          const matches = list.filter(
+            (x) => x.ref.kind === 'trunkDevice' && x.ref.id === entityId,
+          )
+          return matches.find((x) => x.inSupplyPanel === true) ?? matches[0]
+        }
+        if (selType === 'endpoint') {
+          return list.find((x) => x.ref.kind === 'domotica' && x.ref.endpointId === entityId)
+        }
+        return undefined
+      }
+
+      /** Shared supply / supply-strip modules live in {@link getPanelGridModules} for the owning main panel only. */
+      const resolveModuleItemForPanelCanvas = (
+        selType: typeof selection.type,
+        entityId: string,
+      ): ModuleItem | undefined => {
+        const m = findModuleItemInList(contextModules, selType, entityId)
+        if (m) return m
+        if (selType !== 'trunkDevice') return undefined
+        const trunkInfo = getTrunkDeviceById(entityId)
+        if (!trunkInfo?.isSupplyDevice) return undefined
+        const project = useProjectStore.getState().currentProject
+        if (!project) return undefined
+        const mainPanelId =
+          (trunkInfo as { supplyPanelId?: string }).supplyPanelId ??
+          getElectricalPanelsFromProject(project).find((p: Panel) => p.isMain)?.id ??
+          null
+        if (!mainPanelId) return undefined
+        const list = useProjectStore
+          .getState()
+          .getPanelGridModules(mainPanelId)
+          .filter(
+            (x) => !(x.ref.kind === 'trunkDevice' && x.ref.scope === 'ground')
+          ) as ModuleItem[]
+        return findModuleItemInList(list, selType, entityId)
+      }
+
+      // Multi-selection hide support (protections / trunk devices / domotica endpoints)
+      const isMultiSelect =
+        (selection.type === 'protection' ||
+          selection.type === 'trunkDevice' ||
+          selection.type === 'endpoint') &&
+        selection.ids.length > 1
+
+      if (isMultiSelect) {
+        const moduleKeys = new Set<string>()
+        if (selection.type === 'protection') {
+          for (const id of selection.ids) {
+            const m = contextModules.find(
+              (x: ModuleItem) => x.ref.kind === 'protection' && x.ref.id === id
+            )
+            if (m) moduleKeys.add(panelGridModuleRefKey(m.ref))
+          }
+        } else if (selection.type === 'trunkDevice') {
+          for (const id of selection.ids) {
+            const m = resolveModuleItemForPanelCanvas('trunkDevice', id)
+            if (m) moduleKeys.add(panelGridModuleRefKey(m.ref))
+          }
+        } else if (selection.type === 'endpoint') {
+          for (const id of selection.ids) {
+            const m = contextModules.find(
+              (x: ModuleItem) => x.ref.kind === 'domotica' && x.ref.endpointId === id
+            )
+            if (m) moduleKeys.add(panelGridModuleRefKey(m.ref))
+          }
+        }
+
+        if (moduleKeys.size > 0) {
+          // Bottom section: Hide in this view + Delete (multi)
+          items.push(
+            { label: '', onClick: () => {}, separator: true },
+            {
+              label: t('contextMenu.hideInThisView', 'Hide in this view'),
+              icon: getContextMenuIcon('hideInThisView'),
+              onClick: () => {
+                moduleKeys.forEach((key) => hideModuleFromPanel(contextPanelId, key))
+              },
+            },
+            {
+              label: t('contextMenu.deleteAll'),
+              icon: getContextMenuIcon('delete'),
+              onClick: () => {
+                const store = useProjectStore.getState()
+                const {
+                  deleteProtections,
+                  deleteEndpoints,
+                  deleteTrunkDevice,
+                  deleteSupplyTrunkDevice,
+                  deleteGroundTrunkDevice,
+                  getTrunkDeviceById: getTrunkById,
+                } = store
+
+                const protectionIds = selection.type === 'protection' ? selection.ids : []
+                const endpointIds = selection.type === 'endpoint' ? selection.ids : []
+                const trunkIds = selection.type === 'trunkDevice' ? selection.ids : []
+
+                const runBulkDelete = () => {
+                  if (protectionIds.length > 0) deleteProtections(protectionIds)
+                  if (endpointIds.length > 0) deleteEndpoints(endpointIds)
+
+                  for (const id of trunkIds) {
+                    const res = getTrunkById(id)
+                    if (!res) continue
+                    const { isSupplyDevice, isGroundDevice, circuit } = res
+                    if (isSupplyDevice) {
+                      deleteSupplyTrunkDevice(id)
+                    } else if (isGroundDevice) {
+                      deleteGroundTrunkDevice(id)
+                    } else if (circuit) {
+                      deleteTrunkDevice(circuit.id, id)
+                    }
+                  }
+
+                  clearSelection()
+                }
+
+                const linkedPanelNames = linkedSubPanelDisplayNamesForProtectionIds(
+                  store.currentProject,
+                  store.getPanelById,
+                  protectionIds,
+                )
+                if (linkedPanelNames.length > 0) {
+                  openDialog({
+                    type: 'confirm',
+                    title: t('protections.deleteLinkedPanelTitle'),
+                    message: t('protections.deleteLinkedPanelMessage', {
+                      panelNames: linkedPanelNames.join(', '),
+                    }),
+                    variant: 'warning',
+                    confirmLabel: t('common.delete'),
+                    cancelLabel: t('common.cancel'),
+                    onConfirm: runBulkDelete,
+                  })
+                } else {
+                  runBulkDelete()
+                }
+              },
+              variant: 'danger',
+            }
+          )
+        }
+      } else {
+        // Single element / panel context menu
+        let key = elementId
+        // Keyboard Delete passes the entity id (protection / trunk / endpoint), but lookups use
+        // panelGridModuleRefKey(ref) which includes scope — resolve when key doesn't match a module.
+        if (selection.ids.length === 1 && selection.ids[0]) {
+          const id = selection.ids[0]
+          const resolveKeyFromSelection = (): string | null => {
+            const m = resolveModuleItemForPanelCanvas(selection.type, id)
+            return m ? panelGridModuleRefKey(m.ref) : null
+          }
+          if (!key) {
+            key = resolveKeyFromSelection() ?? key
+          } else {
+            const matchedByKey = contextModules.some((m: ModuleItem) => panelGridModuleRefKey(m.ref) === key)
+            if (!matchedByKey) {
+              const resolved = resolveKeyFromSelection()
+              if (resolved) key = resolved
+            }
+          }
+        }
+
+        if (!key) {
+          if (elementId === contextPanel.id) {
+            items.push({
+              label: t('panelCanvas.hideSupplyPanel', 'Hide supply panel'),
+              onClick: () => setSupplyPanelVisible(contextPanelId, false),
+            })
+          }
+        } else {
+          let mod = contextModules.find((m: ModuleItem) => panelGridModuleRefKey(m.ref) === key)
+          if (!mod && selection.ids.length === 1 && selection.ids[0]) {
+            mod = resolveModuleItemForPanelCanvas(selection.type, selection.ids[0])
+          }
+          if (mod) {
+            const ref = mod.ref
+            const inSupply = mod.inSupplyPanel === true
+            const isSupplyScope = ref.kind === 'trunkDevice' && ref.scope === 'supply'
+            if (
+              contextPanel.isMain &&
+              isSupplyScope &&
+              !inSupply &&
+              contextSharedSupplyRefKeys.has(panelGridModuleRefKey(ref))
+            ) {
+              items.push({
+                label: t('panelCanvas.moveToSupplyPanel', 'Move to supply panel'),
+                onClick: () => ejectToSupplyPanel(contextPanelId, ref),
+              })
+            }
+            if (inSupply) {
+              items.push({
+                label: t('panelCanvas.moveToMainPanel', 'Move to main panel'),
+                onClick: () => returnFromSupplyPanel(contextPanelId, ref),
+              })
+            }
+
+            if (
+              ref.kind === 'protection' &&
+              selection.type === 'protection' &&
+              selection.ids.length === 1 &&
+              selection.ids[0] === ref.id
+            ) {
+              items.push({
+                label: t('contextMenu.duplicate'),
+                onClick: () => {
+                  const newId = useProjectStore.getState().duplicateProtectionLeft(ref.id)
+                  if (newId) {
+                    useUIStore.getState().setSelection({ type: 'protection', ids: [newId] })
+                  }
+                },
+              })
+            }
+
+            // Bottom section: Hide in this view + Delete for single module
+            items.push({ label: '', onClick: () => {}, separator: true })
+            items.push({
+              label: t('contextMenu.hideInThisView', 'Hide in this view'),
+              icon: getContextMenuIcon('hideInThisView'),
+              onClick: () => hideModuleFromPanel(contextPanelId, key!),
+            })
+            items.push({
+              label: t('contextMenu.delete'),
+              icon: getContextMenuIcon('delete'),
+              onClick: () => {
+                const store = useProjectStore.getState()
+                const {
+                  deleteProtection,
+                  deleteEndpoints,
+                  deleteTrunkDevice,
+                  deleteSupplyTrunkDevice,
+                  deleteGroundTrunkDevice,
+                } = store
+
+                if (ref.kind === 'protection') {
+                  const runDeleteProtection = () => {
+                    deleteProtection(ref.id)
+                    clearSelection()
+                  }
+                  const linkedNames = linkedSubPanelDisplayNamesForProtectionIds(
+                    store.currentProject,
+                    store.getPanelById,
+                    [ref.id],
+                  )
+                  if (linkedNames.length > 0) {
+                    openDialog({
+                      type: 'confirm',
+                      title: t('protections.deleteLinkedPanelTitle'),
+                      message: t('protections.deleteLinkedPanelMessage', {
+                        panelNames: linkedNames.join(', '),
+                      }),
+                      variant: 'warning',
+                      confirmLabel: t('common.delete'),
+                      cancelLabel: t('common.cancel'),
+                      onConfirm: runDeleteProtection,
+                    })
+                  } else {
+                    runDeleteProtection()
+                  }
+                } else if (ref.kind === 'domotica') {
+                  deleteEndpoints([ref.endpointId])
+                  clearSelection()
+                } else if (ref.kind === 'trunkDevice') {
+                  const info = getTrunkDeviceById(ref.id)
+                  if (info) {
+                    const { isSupplyDevice, isGroundDevice, circuit } = info
+                    if (isSupplyDevice) {
+                      deleteSupplyTrunkDevice(ref.id)
+                    } else if (isGroundDevice) {
+                      deleteGroundTrunkDevice(ref.id)
+                    } else if (circuit) {
+                      deleteTrunkDevice(circuit.id, ref.id)
+                    }
+                  }
+                  clearSelection()
+                }
+              },
+              variant: 'danger',
+            })
+          }
+        }
+      }
+
+      // Keep the panel menu discoverable on empty space. When there is nothing to restore,
+      // show the action disabled instead of returning an empty menu.
+      const hiddenRefs = getPanelHiddenModuleRefs(contextPanelId)
+      appendPanelShowHiddenMenuEntry(items, hiddenRefs.length > 0, {
+          label: t('contextMenu.showHidden', 'Show hidden…'),
+          icon: getContextMenuIcon('showHidden'),
+          onClick: () => {
+            const store = useProjectStore.getState()
+            const panelForDialog = store.getPanelById(contextPanelId)
+            if (!panelForDialog) return
+            const currentHidden = getPanelHiddenModuleRefs(contextPanelId)
+            if (currentHidden.length === 0) return
+
+            const dialogItems = currentHidden.map((ref: PanelGridModuleRef) => {
+              let label = ''
+              if (ref.kind === 'protection') {
+                const prot = getProtectionById(ref.id)
+                label =
+                  prot?.label || t('hiddenItemsDialog.protectionFallback', 'Protection device')
+              } else if (ref.kind === 'trunkDevice') {
+                const info = getTrunkDeviceById(ref.id)
+                const base =
+                  info?.device.label || t('hiddenItemsDialog.trunkDeviceFallback', 'Trunk device')
+                if (ref.scope === 'supply') {
+                  label = `${base} (${t('panelCanvas.supplyScope', 'Supply')})`
+                } else if (ref.scope === 'ground') {
+                  label = `${base} (${t('panelCanvas.groundScope', 'Ground')})`
+                } else {
+                  label = base
+                }
+              } else {
+                const ep = getEndpointById(ref.endpointId)
+                label =
+                  ep?.label ||
+                  ep?.symbol ||
+                  t('hiddenItemsDialog.domoticaFallback', 'Domotica module')
+              }
+              return {
+                id: panelGridModuleRefKey(ref),
+                label,
+              }
+            })
+
+            openDialog({
+              type: 'custom',
+              title: t('contextMenu.showHidden', 'Show hidden…'),
+              content: (
+                <HiddenItemsDialog
+                  items={dialogItems}
+                  description={t(
+                    'panelCanvas.showHiddenDescription',
+                    'Select one or more devices to show.'
+                  )}
+                  onConfirm={(selectedKeys) => {
+                    if (selectedKeys.length === 0) {
+                      useDialogStore.getState().closeDialog()
+                      return
+                    }
+                    selectedKeys.forEach((key) =>
+                      unhideModuleFromPanel(contextPanelId, key)
+                    )
+                    useDialogStore.getState().closeDialog()
+                  }}
+                  onCancel={() => {
+                    useDialogStore.getState().closeDialog()
+                  }}
+                />
+              ),
+            })
+          },
+      })
+
+      return items
+    },
+    [
+      panel,
+      effectiveActivePanelId,
+      modules,
+      selection,
+      t,
+      ejectToSupplyPanel,
+      returnFromSupplyPanel,
+      hideModuleFromPanel,
+      setSupplyPanelVisible,
+      getPanelHiddenModuleRefs,
+      getProtectionById,
+      getTrunkDeviceById,
+      getEndpointById,
+      unhideModuleFromPanel,
+      openDialog,
+      clearSelection,
+      sharedSupplyRefKeys,
+      resolvePanelContext,
+    ]
+  )
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!canDeleteItems) return
+      const isDeleteKey = e.key === 'Delete' || e.code === 'Delete'
+      if (!isDeleteKey) return
+
+      if (isKeyboardTypingTarget(e.target)) return
+
+      const effectiveSelection = useUIStore.getState().selection
+      if (effectiveSelection.ids.length === 0) return
+
+      const contextElementId =
+        effectiveSelection.ids.length === 1 ? (effectiveSelection.ids[0] ?? null) : null
+      const itemsForElement = handleGetContextMenuItems({ x: 0, y: 0 }, contextElementId)
+      const itemsForSelection = handleGetContextMenuItems({ x: 0, y: 0 }, null)
+      const pickDeleteItem = (list: ContextMenuItem[]) =>
+        list.find(
+          (item) =>
+            !item.separator &&
+            (item.label === t('contextMenu.deleteAll') || item.label === t('contextMenu.delete'))
+        ) ?? list.find((item) => !item.separator && item.variant === 'danger')
+      let deleteItem = pickDeleteItem(
+        itemsForElement.length > 0 ? itemsForElement : itemsForSelection
+      )
+      if (!deleteItem && itemsForElement.length > 0) {
+        deleteItem = pickDeleteItem(itemsForSelection)
+      }
+      if (!deleteItem) return
+
+      e.preventDefault()
+      e.stopPropagation()
+      e.stopImmediatePropagation()
+      deleteItem.onClick()
+    }
+
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
+  }, [canDeleteItems, handleGetContextMenuItems, t])
+
+
+
+  return handleGetContextMenuItems
+}

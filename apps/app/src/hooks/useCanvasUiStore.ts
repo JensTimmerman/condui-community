@@ -1,0 +1,131 @@
+import { startTransition, useCallback, useEffect, useRef } from 'react'
+import { useStoreWithEqualityFn } from 'zustand/traditional'
+import { useUIStore } from '@/stores/uiStore'
+import type { Endpoint } from '@/types/schema'
+import type { Selection } from '@/types/ui'
+import { endpointSelectionMatches } from '@/lib/ui/crossCanvasSelection'
+
+/** Raw store setter (for effects); use in plan click handlers for immediate symbol feedback. */
+export const useSetSelectionStore = () => useUIStore((s) => s.setSelection)
+
+export const useClearSelectionStore = () => useUIStore((s) => s.clearSelection)
+
+/** Defer past the current input event (microtasks still run before mouseup ends). */
+function scheduleInputCommit(callback: () => void): void {
+  if (typeof window === 'undefined') {
+    callback()
+    return
+  }
+  setTimeout(() => {
+    startTransition(callback)
+  }, 0)
+}
+
+/**
+ * Low-priority selection updates (BaseCanvas empty-click deselect, eendraad).
+ *
+ * Zustand is an external store, so startTransition alone still notifies subscribers during the
+ * input event. setTimeout(0) exits Konva's mouseup/tap handler before React reconciles.
+ */
+export function useCommitSelection() {
+  const setSelection = useUIStore((s) => s.setSelection)
+  const pendingSelectionRef = useRef<Selection | null>(null)
+  const flushScheduledRef = useRef(false)
+  useEffect(() => {
+    return () => {
+      pendingSelectionRef.current = null
+      flushScheduledRef.current = false
+    }
+  }, [])
+  return useCallback(
+    (next: Selection) => {
+      pendingSelectionRef.current = next
+      if (flushScheduledRef.current) return
+      flushScheduledRef.current = true
+      scheduleInputCommit(() => {
+        flushScheduledRef.current = false
+        const pending = pendingSelectionRef.current
+        pendingSelectionRef.current = null
+        if (pending) setSelection(pending)
+      })
+    },
+    [setSelection],
+  )
+}
+
+export function useCommitClearSelection() {
+  const clearSelection = useUIStore((s) => s.clearSelection)
+  return useCallback(() => {
+    const { selection } = useUIStore.getState()
+    // Multi-clear touches many PlacementSymbols + PropertiesPanel; mark low-priority so mouseup exits first.
+    if (selection.ids.length > 1) {
+      scheduleInputCommit(() => {
+        startTransition(() => {
+          clearSelection()
+        })
+      })
+      return
+    }
+    scheduleInputCommit(() => {
+      clearSelection()
+    })
+  }, [clearSelection])
+}
+
+/** @deprecated Use useCommitSelection in click handlers. */
+export const useSetSelection = useCommitSelection
+/** @deprecated Use useCommitClearSelection in click handlers. */
+export const useClearSelection = useCommitClearSelection
+export const useSetHover = () => useUIStore((s) => s.setHover)
+export const useClearHover = () => useUIStore((s) => s.clearHover)
+
+/** Skip re-renders when the derived boolean did not change (critical on large eendraad canvases). */
+const selectionBoolEqual = (a: boolean, b: boolean) => a === b
+
+/** True when this id is in selection.ids (matches protection/trunk style checks). */
+export function useIsIdSelected(id: string): boolean {
+  return useStoreWithEqualityFn(useUIStore, (s) => s.selection.ids.includes(id), selectionBoolEqual)
+}
+
+export function useIsTypeAndIdSelected(
+  type: NonNullable<Selection['type']>,
+  id: string,
+): boolean {
+  return useStoreWithEqualityFn(
+    useUIStore,
+    (s) => s.selection.type === type && s.selection.ids.includes(id),
+    selectionBoolEqual,
+  )
+}
+
+export function useIsWireSelected(wireId: string): boolean {
+  return useStoreWithEqualityFn(
+    useUIStore,
+    (s) => s.selection.type === 'wire' && s.selection.ids.includes(wireId),
+    selectionBoolEqual,
+  )
+}
+
+export function useEndpointSelected(endpoint: Endpoint): boolean {
+  return useStoreWithEqualityFn(
+    useUIStore,
+    (s) => endpointSelectionMatches(s.selection, endpoint),
+    selectionBoolEqual,
+  )
+}
+
+export function useHoverIncludes(type: Selection['type'], id: string): boolean {
+  return useStoreWithEqualityFn(
+    useUIStore,
+    (s) => s.hover.type === type && s.hover.ids.includes(id),
+    selectionBoolEqual,
+  )
+}
+
+export function useInfoBlockBoxSelected(boxId: string, interactive: boolean): boolean {
+  return useStoreWithEqualityFn(
+    useUIStore,
+    (s) => interactive && s.selection.type === 'infoBlock' && s.selection.ids[0] === boxId,
+    selectionBoolEqual,
+  )
+}

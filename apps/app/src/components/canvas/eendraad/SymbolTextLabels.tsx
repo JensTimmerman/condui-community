@@ -1,0 +1,251 @@
+import { Group, Rect, Text } from 'react-konva'
+import type { SymbolLabelDisplayConfig } from '@/types/schema'
+import { getSymbolLabelLayout, getSymbolLabelPosition } from '@/lib/symbolLabels'
+
+export interface SymbolTextLabelItem {
+  key: string
+  text: string
+  /** Draw a thin inset stroked box around this label segment on the one-wire. */
+  frame?: boolean
+}
+
+interface SymbolTextLabelsProps {
+  items: SymbolTextLabelItem[]
+  lines?: string[]
+  /** Per-line frame flags; must match `lines` length when provided. */
+  lineFrames?: boolean[]
+  /**
+   * Vertical anchor line (0-based, fractional allowed). That line's center sits on the symbol center (y=0).
+   * Used for protection labels (e.g. center on breaking-capacity line when three lines are shown).
+   */
+  anchorLineIndex?: number
+  config?: SymbolLabelDisplayConfig
+  textColor: string
+  fontFamily: string
+  fontSize?: number
+  symbolSize?: number
+  symbolWidth?: number
+  symbolHeight?: number
+  offsetFromSymbol?: number
+  lineSpacing?: number
+  sequenceJoiner?: string
+  /**
+   * Side labels (left/right): `auto` top-aligns tall blocks with the symbol top; `center` keeps the
+   * block vertically centered on the symbol (y=0).
+   */
+  sideLabelBlockAlign?: 'auto' | 'center'
+  /** When set, this label block is pointer-interactive and selects the owning symbol (same as clicking the symbol). */
+  onLabelClick?: (e: unknown) => void
+}
+
+export function SymbolTextLabels({
+  items,
+  lines,
+  lineFrames,
+  anchorLineIndex,
+  config,
+  textColor,
+  fontFamily,
+  fontSize = 10,
+  symbolSize = 20,
+  symbolWidth,
+  symbolHeight,
+  offsetFromSymbol = 5,
+  lineSpacing = 2,
+  sequenceJoiner = ' ',
+  sideLabelBlockAlign = 'auto',
+  onLabelClick,
+}: SymbolTextLabelsProps) {
+  if (items.length === 0 && (!lines || lines.length === 0)) return null
+
+  const position = getSymbolLabelPosition(config)
+  const layout = getSymbolLabelLayout(config)
+  const lineHeight = fontSize + lineSpacing
+  const resolvedSymbolWidth = symbolWidth ?? symbolSize
+  const resolvedSymbolHeight = symbolHeight ?? symbolSize
+  const halfSymbolWidth = resolvedSymbolWidth / 2
+  const halfSymbolHeight = resolvedSymbolHeight / 2
+
+  const resolvedLines =
+    lines && lines.length > 0
+      ? lines
+      : layout === 'sequence'
+        ? [items.map((item) => item.text).join(sequenceJoiner)]
+        : items.map((item) => item.text)
+
+  const resolvedLineFrames =
+    lineFrames ??
+    (lines && lines.length > 0
+      ? undefined
+      : layout === 'stack'
+        ? items.map((item) => item.frame ?? false)
+        : undefined)
+
+  const contentHeight = resolvedLines.length * lineHeight
+  const centeredBlockTop = -contentHeight / 2
+  const topAlignedBlockTop = -halfSymbolHeight
+  // Anchor to symbol center only for side labels; bottom/top stay fully below/above, top-aligned.
+  const useSideAnchor =
+    anchorLineIndex != null && (position === 'left' || position === 'right')
+  const anchorBlockTop = useSideAnchor
+    ? -anchorLineIndex * lineHeight - fontSize / 2
+    : null
+  const blockTop =
+    anchorBlockTop ??
+    (position === 'left' || position === 'right'
+      ? sideLabelBlockAlign === 'center' || contentHeight <= resolvedSymbolHeight
+        ? centeredBlockTop
+        : topAlignedBlockTop
+      : centeredBlockTop)
+  const lineWidths = resolvedLines.map((line) =>
+    measureTextWidth(line, fontFamily, fontSize),
+  )
+  const maxLineWidth = Math.max(0, ...lineWidths)
+  const labelHitPad = 4
+
+  if (position === 'right' || position === 'left') {
+    const x =
+      position === 'right'
+        ? halfSymbolWidth + offsetFromSymbol
+        : -(halfSymbolWidth + offsetFromSymbol)
+    const hitX = position === 'right' ? -labelHitPad : -(maxLineWidth + labelHitPad)
+    return (
+      <Group
+        x={x}
+        y={0}
+        listening={!!onLabelClick}
+        onClick={onLabelClick}
+        onTap={onLabelClick}
+      >
+        {onLabelClick && (
+          <Rect
+            x={hitX}
+            y={blockTop - labelHitPad}
+            width={maxLineWidth + labelHitPad * 2}
+            height={contentHeight + labelHitPad * 2}
+            fill="transparent"
+          />
+        )}
+        {resolvedLines.map((line, index) => (
+          <LabelLine
+            key={`${position}-${layout}-${index}`}
+            x={position === 'right' ? 0 : -(lineWidths[index] ?? 0)}
+            y={blockTop + index * lineHeight}
+            text={line}
+            fontSize={fontSize}
+            fontFamily={fontFamily}
+            textColor={textColor}
+            frame={resolvedLineFrames?.[index] ?? false}
+          />
+        ))}
+      </Group>
+    )
+  }
+
+  const y =
+    position === 'top'
+      ? -(halfSymbolHeight + offsetFromSymbol + contentHeight)
+      : halfSymbolHeight + offsetFromSymbol
+  const lineBaseY = 0
+  return (
+    <Group
+      x={0}
+      y={y}
+      listening={!!onLabelClick}
+      onClick={onLabelClick}
+      onTap={onLabelClick}
+    >
+      {onLabelClick && (
+        <Rect
+          x={-maxLineWidth / 2 - labelHitPad}
+          y={lineBaseY - labelHitPad}
+          width={maxLineWidth + labelHitPad * 2}
+          height={contentHeight + labelHitPad * 2}
+          fill="transparent"
+        />
+      )}
+      {resolvedLines.map((line, index) => (
+        <LabelLine
+          key={`${position}-${layout}-${index}`}
+          x={-(lineWidths[index] ?? 0) / 2}
+          y={lineBaseY + index * lineHeight}
+          text={line}
+          fontSize={fontSize}
+          fontFamily={fontFamily}
+          textColor={textColor}
+          frame={resolvedLineFrames?.[index] ?? false}
+        />
+      ))}
+    </Group>
+  )
+}
+
+/** Gap between label text and frame (horizontal vs vertical). */
+const LABEL_FRAME_PAD_X = 1.5
+const LABEL_FRAME_PAD_Y = 1
+const LABEL_FRAME_STROKE = 0.5
+/** Rect sits on the Konva Text top anchor; PDF-specific alignment is handled during SVG export. */
+const LABEL_FRAME_Y_NUDGE = 0
+
+function LabelLine({
+  x,
+  y,
+  text,
+  fontSize,
+  fontFamily,
+  textColor,
+  frame,
+}: {
+  x: number
+  y: number
+  text: string
+  fontSize: number
+  fontFamily: string
+  textColor: string
+  frame: boolean
+}) {
+  const textWidth = measureTextWidth(text, fontFamily, fontSize)
+  const textHeight = fontSize
+  const strokeInset = LABEL_FRAME_STROKE / 2
+  return (
+    <>
+      {frame && (
+        <Rect
+          x={x - LABEL_FRAME_PAD_X + strokeInset}
+          y={y - LABEL_FRAME_PAD_Y + strokeInset + LABEL_FRAME_Y_NUDGE}
+          width={textWidth + LABEL_FRAME_PAD_X * 2 - LABEL_FRAME_STROKE}
+          height={textHeight + LABEL_FRAME_PAD_Y * 2 - LABEL_FRAME_STROKE}
+          stroke={textColor}
+          strokeWidth={LABEL_FRAME_STROKE}
+          listening={false}
+        />
+      )}
+      <Text
+        x={x}
+        y={y}
+        text={text}
+        fontSize={fontSize}
+        fontFamily={fontFamily}
+        fill={textColor}
+        align="left"
+        listening={false}
+      />
+    </>
+  )
+}
+
+let measureCanvas: HTMLCanvasElement | null = null
+function measureTextWidth(text: string, fontFamily: string, fontSize: number): number {
+  if (typeof document === 'undefined') {
+    return text.length * fontSize * 0.6
+  }
+  if (!measureCanvas) {
+    measureCanvas = document.createElement('canvas')
+  }
+  const context = measureCanvas.getContext('2d')
+  if (!context) {
+    return text.length * fontSize * 0.6
+  }
+  context.font = `${fontSize}px ${fontFamily}`
+  return Math.ceil(context.measureText(text).width)
+}

@@ -1,0 +1,410 @@
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { ZOOM_100 } from '@/constants/canvasConstants'
+import { Group, Image, Rect, Text } from 'react-konva'
+import { useSettingsStore } from '@/stores/settingsStore'
+import { useProjectStore } from '@/stores/projectStore'
+import { getSymbolById } from '@/lib/symbols'
+import { protectionTypeToSymbolKey } from '@/lib/protectionKind'
+import { loadProcessedSymbol } from '@/lib/symbolImage'
+import { useIsPreviewSelected } from '@/contexts/SelectionPreviewContext'
+import { logger } from '@/lib/logger'
+import {
+  useCanvasFontFamily,
+  useEffectiveCanvasZoom,
+  useHoverIncludes,
+  useIsIdSelected,
+  useSetSelection,
+} from '@/editions/community/communityHooks'
+import {
+  SYMBOL_SIZE,
+  PROTECTION_OUTLINE_SIZE,
+  getSelectionOutlineProps,
+  getHoverOutlineProps,
+  getPreviewOutlineProps,
+  getTouchAwareHitAreaProps,
+  getSymbolColor,
+  getSecondaryTextColor,
+  getSelectionOutlineStrokeStyle,
+} from './canvasSymbols'
+import { useTouchPrimaryDevice } from '@/editions/community/communityHooks'
+import { ProtectionOneWireLabels } from './ProtectionOneWireLabels'
+import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
+import { getSecondaryBusOrderForCircuit } from '@/lib/eendraad/protectionDragEligibility'
+import type { Circuit, ProtectionDevice } from '@/types/schema'
+import type { Point } from '@/types/ui'
+
+type EendraadPointerEvent = {
+  cancelBubble: boolean
+  evt: { button?: number; shiftKey?: boolean; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean }
+}
+type WindowWithEendraTapSuppression = Window & { __eendraSuppressNextElementTap?: boolean }
+
+interface ProtectionSymbolProps {
+  protection: ProtectionDevice
+  position: Point
+  renderSymbol?: boolean
+  /** If provided, drop target uses this (cursor) position instead of symbol position. */
+  getCanvasPositionFromEvent?: (e: unknown) => Point | null
+  onDragEnd: (newPos: Point) => boolean | void
+  onDragMove?: (newPos: Point) => void
+  onDragStart?: (altKey: boolean, nativeEvt: MouseEvent) => boolean
+  shouldSuppressKonvaDragEnd?: () => boolean
+}
+
+export function ProtectionSymbol({
+  protection,
+  position,
+  renderSymbol = true,
+  getCanvasPositionFromEvent,
+  onDragEnd,
+  onDragMove,
+  onDragStart,
+  shouldSuppressKonvaDragEnd,
+}: ProtectionSymbolProps) {
+  const setSelection = useSetSelection()
+  const isSelected = useIsIdSelected(protection.id)
+  const isHoveredFromBreadcrumb = useHoverIncludes('protection', protection.id)
+  const canvasZoom = useEffectiveCanvasZoom(ZOOM_100, 'eendraad')
+  const meterSelectionStroke = getSelectionOutlineStrokeStyle(canvasZoom).strokeWidth
+  const touchPrimary = useTouchPrimaryDevice()
+  const { theme } = useSettingsStore()
+  const fontFamily = useCanvasFontFamily()
+  const isPreviewSelected = useIsPreviewSelected('protection', protection.id)
+  const [processedImage, setProcessedImage] = useState<HTMLImageElement | null>(null)
+  type ProjectStoreState = ReturnType<typeof useProjectStore.getState>
+  
+  // Subscribe to actual data to make moveInfo reactive
+  const circuit = protection.circuits?.[0]
+  const secondaryBusOrder = useProjectStore((state: ProjectStoreState) => {
+    if (!circuit || !state.currentProject) return null
+    return getSecondaryBusOrderForCircuit(
+      getElectricalPanelsFromProject(state.currentProject),
+      circuit.id
+    )
+  })
+  
+  const mainBusOrder = useProjectStore((state: ProjectStoreState) => {
+    if (!circuit || !state.currentProject) {
+      return null
+    }
+    const panel = state.findPanelForCircuit(circuit.id)
+    if (!panel) {
+      return null
+    }
+    
+    const isDirectCircuit = panel.circuits.some((c: Circuit) => c.id === circuit.id)
+    // Any protection with circuits can be on the main bus (MCB, RCBO, RCD)
+    const isProtectionOnMainBus = protection.circuits && protection.circuits.length > 0
+    
+    if (!isDirectCircuit && !isProtectionOnMainBus) {
+      return null
+    }
+    
+    // Build order string for main bus items
+    // IMPORTANT: We need to preserve the order from panel.protections and panel.circuits arrays
+    const items: string[] = []
+    
+    // Add direct circuits (preserve order from panel.circuits)
+    panel.circuits.forEach((c: Circuit) => {
+      if (c.code !== 'PANEL') {
+        items.push(`circuit:${c.id}`)
+      }
+    })
+    
+    // Add protections with circuits (MCB, RCBO, RCD) - preserve order from panel.protections
+    // Use the same logic as isMainBusProtection: check if this protection's circuit
+    // is in any OTHER protection's circuit's subCircuitIds
+    panel.protections.forEach((p: ProtectionDevice) => {
+      // Include any protection that has circuits (MCB, RCBO, RCD)
+      if (p.circuits && p.circuits.length > 0) {
+        const pCircuit = p.circuits[0] // Use first circuit
+        if (!pCircuit) {
+          return
+        }
+        const myCircuitId = pCircuit.id
+        
+        // Check if this circuit is nested (in a parent protection's circuit's subCircuitIds)
+        // A protection is on main bus if its circuit is NOT in any other protection's circuit's subCircuitIds
+        let isNested = false
+        for (const otherPr of panel.protections) {
+          if (otherPr.id === p.id) continue // Skip self
+          for (const otherCircuit of otherPr.circuits ?? []) {
+            if (otherCircuit.subCircuitIds?.includes(myCircuitId)) {
+              isNested = true
+              break
+            }
+          }
+          if (isNested) break
+        }
+        
+        if (!isNested) {
+          items.push(`protection:${p.id}`)
+        }
+      }
+    })
+    
+    const result = items.join(',')
+    return result
+  })
+  
+  // Determine move capabilities - now reactive to data changes
+  const moveInfo = useMemo(() => {
+    if (!circuit) {
+      return null
+    }
+    
+    // Check secondary bus first
+    if (secondaryBusOrder) {
+      const circuitIds = secondaryBusOrder.split(',')
+      const index = circuitIds.indexOf(circuit.id)
+      if (index !== -1) {
+        return {
+          type: 'secondaryBus' as const,
+          canMoveLeft: index > 0,
+          canMoveRight: index < circuitIds.length - 1,
+        }
+      }
+    }
+    
+    // Check main bus
+    if (mainBusOrder) {
+      const items = mainBusOrder.split(',')
+      const currentItem = items.find((item: string) =>
+        item === `circuit:${circuit.id}` || item === `protection:${protection.id}`
+      )
+      if (currentItem) {
+        const index = items.indexOf(currentItem)
+        return {
+          type: 'mainBus' as const,
+          panelId: useProjectStore.getState().findPanelForCircuit(circuit.id)?.id || '',
+          circuitId: circuit.id,
+          canMoveLeft: index > 0,
+          canMoveRight: index < items.length - 1,
+        }
+      }
+    }
+    
+    return null
+  }, [circuit, protection.id, secondaryBusOrder, mainBusOrder])
+  
+  // Check if selected - allow selection even if type doesn't match (for multi-type drag rect selection)
+  // If ID is in the list, it's selected regardless of selection.type
+  
+  const symbolKey = protectionTypeToSymbolKey(protection.type)
+  const symbol = symbolKey ? getSymbolById(symbolKey) : null
+  
+  // Load symbol image
+  useEffect(() => {
+    if (!symbol) return
+    const isDark = theme.mode === 'dark'
+    loadProcessedSymbol(symbol.svgPath, isDark).then(setProcessedImage).catch(() => {
+      logger.error('Failed to load symbol:', symbol.svgPath)
+      setProcessedImage(null)
+    })
+  }, [symbol, theme.mode])
+  
+  const handleClick = useCallback((event: unknown) => {
+    const e = event as EendraadPointerEvent
+    const eendraWindow = window as WindowWithEendraTapSuppression
+    if (eendraWindow.__eendraSuppressNextElementTap) {
+      eendraWindow.__eendraSuppressNextElementTap = false
+      return
+    }
+    e.cancelBubble = true
+    
+    if (e.evt.button != null && e.evt.button !== 0) {
+      return
+    }
+    
+    setSelection({ type: 'protection', ids: [protection.id] })
+  }, [protection.id, setSelection])
+  
+  const isDark = theme.mode === 'dark'
+  const symbolColor = getSymbolColor(isDark)
+  const [isHovered, setIsHovered] = useState(false)
+  const isHoveredAny = isHovered || isHoveredFromBreadcrumb
+
+  if (!renderSymbol) {
+    return (
+      <Group x={position.x} y={position.y}>
+        <ProtectionOneWireLabels
+          source={protection}
+          defaultPosition="right"
+          textColor={getSecondaryTextColor(isDark)}
+          fontFamily={fontFamily}
+          fontSize={10}
+          symbolSize={SYMBOL_SIZE}
+        />
+      </Group>
+    )
+  }
+  
+  // If no symbol, fallback to simple rectangle
+  if (!symbol || !processedImage) {
+    return (
+      <Group
+        x={position.x}
+        y={position.y}
+        draggable={!!moveInfo && isSelected}
+        onClick={handleClick}
+        onTap={handleClick}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        onDragStart={
+          moveInfo && isSelected && onDragStart
+            ? (e) => {
+                const evt = e.evt as MouseEvent
+                if (onDragStart(!!evt.altKey, evt)) {
+                  e.target.stopDrag()
+                  e.target.position({ x: position.x, y: position.y })
+                }
+              }
+            : undefined
+        }
+        onDragMove={
+          moveInfo && isSelected && onDragMove
+            ? (e) => {
+                onDragMove({ x: e.target.x(), y: e.target.y() })
+              }
+            : undefined
+        }
+        onDragEnd={
+          moveInfo && isSelected
+            ? (e) => {
+                if (shouldSuppressKonvaDragEnd?.()) {
+                  e.target.position({ x: position.x, y: position.y })
+                  return
+                }
+                const pos = getCanvasPositionFromEvent?.(e) ?? { x: e.target.x(), y: e.target.y() }
+                onDragEnd(pos)
+                e.target.position({ x: position.x, y: position.y })
+              }
+            : undefined
+        }
+      >
+        <Rect
+          x={-15}
+          y={-7.5}
+          width={30}
+          height={15}
+          fill="transparent"
+          stroke={isSelected ? '#fbbf24' : symbolColor}
+          strokeWidth={isSelected ? meterSelectionStroke : meterSelectionStroke * 0.85}
+          cornerRadius={2}
+        />
+        {/* Preview highlight (during selection rectangle drag) */}
+        {isPreviewSelected && !isSelected && (
+          <Rect {...getPreviewOutlineProps(canvasZoom, PROTECTION_OUTLINE_SIZE)} />
+        )}
+        {/* Hover highlight (from breadcrumb or mouse) */}
+        {(isHovered || isHoveredFromBreadcrumb) && !isSelected && !isPreviewSelected && (
+          <Rect {...getHoverOutlineProps(canvasZoom, PROTECTION_OUTLINE_SIZE)} />
+        )}
+        {circuit?.eendraadLetterVisible !== false && (
+          <Text
+            x={-12.5}
+            y={-4}
+            width={25}
+            text={protection.label}
+            fontSize={10}
+            fontFamily={fontFamily}
+            fill={symbolColor}
+            align="center"
+          />
+        )}
+      </Group>
+    )
+  }
+  
+  return (
+    <Group
+      name={`protection-${protection.id}`}
+      x={position.x}
+      y={position.y}
+      draggable={!!moveInfo && isSelected}
+      onClick={handleClick}
+      onTap={handleClick}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      onDragStart={
+        moveInfo && isSelected && onDragStart
+          ? (e) => {
+              const evt = e.evt as MouseEvent
+              if (onDragStart(!!evt.altKey, evt)) {
+                e.target.stopDrag()
+                e.target.position({ x: position.x, y: position.y })
+              }
+            }
+          : undefined
+      }
+      onDragMove={
+        moveInfo && isSelected && onDragMove
+          ? (e) => {
+              onDragMove({ x: e.target.x(), y: e.target.y() })
+            }
+          : undefined
+      }
+      onDragEnd={
+        moveInfo && isSelected
+          ? (e) => {
+              if (shouldSuppressKonvaDragEnd?.()) {
+                e.target.position({ x: position.x, y: position.y })
+                return
+              }
+              const pos = getCanvasPositionFromEvent?.(e) ?? { x: e.target.x(), y: e.target.y() }
+              onDragEnd(pos)
+              e.target.position({ x: position.x, y: position.y })
+            }
+          : undefined
+      }
+    >
+      {renderSymbol && (
+        <>
+          {/* Invisible hit area - matches outline size for hover detection */}
+          <Rect
+            {...getTouchAwareHitAreaProps(
+              PROTECTION_OUTLINE_SIZE,
+              canvasZoom,
+              isSelected,
+              touchPrimary,
+            )}
+          />
+      
+          {/* Symbol image */}
+          <Image
+            key={`${symbol.svgPath}-${theme.mode}`}
+            image={processedImage}
+            width={SYMBOL_SIZE}
+            height={SYMBOL_SIZE}
+            offsetX={SYMBOL_SIZE / 2}
+            offsetY={SYMBOL_SIZE / 2}
+            y={0}
+            listening={false}
+          />
+      
+          {/* Preview highlight (during selection rectangle drag) */}
+          {isPreviewSelected && !isSelected && (
+            <Rect {...getPreviewOutlineProps(canvasZoom, PROTECTION_OUTLINE_SIZE)} />
+          )}
+          {/* Hover highlight (from breadcrumb or mouse) */}
+          {isHoveredAny && !isSelected && !isPreviewSelected && (
+            <Rect {...getHoverOutlineProps(canvasZoom, PROTECTION_OUTLINE_SIZE)} />
+          )}
+      
+          {/* Selection outline */}
+          {isSelected && <Rect {...getSelectionOutlineProps(canvasZoom, PROTECTION_OUTLINE_SIZE)} />}
+        </>
+      )}
+      
+      <ProtectionOneWireLabels
+        source={protection}
+        defaultPosition="right"
+        textColor={getSecondaryTextColor(isDark)}
+        fontFamily={fontFamily}
+        fontSize={10}
+        symbolSize={SYMBOL_SIZE}
+        onLabelClick={handleClick}
+      />
+    </Group>
+  )
+}

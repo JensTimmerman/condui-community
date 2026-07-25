@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 24 24">
+  <!-- Generator: Adobe Illustrator 30.4.0, SVG Export Plug-In . SVG Version: 2.1.4 Build 226)  -->
+  <defs>
+    <style>
+      .st0 {
+        fill: none;
+        stroke: #000;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2px;
+      }
+    </style>
+  </defs>
+  <g id="_x3C_Radial_Repeat_x3E_">
+    <g>
+      <polyline class="st0" points="15.85 20.11 15.85 15.78 20.31 15.78"/>
+      <line class="st0" x1="15.85" y1="15.78" x2="22.19" y2="22.11"/>
+    </g>
+  </g>
+  <g id="_x3C_Radial_Repeat_x3E_1" data-name="_x3C_Radial_Repeat_x3E_">
+    <g>
+      <polyline class="st0" points="3.89 15.85 8.22 15.85 8.22 20.31"/>
+      <line class="st0" x1="8.22" y1="15.85" x2="1.89" y2="22.19"/>
+    </g>
+  </g>
+  <g id="_x3C_Radial_Repeat_x3E_2" data-name="_x3C_Radial_Repeat_x3E_">
+    <g>
+      <polyline class="st0" points="8.15 3.89 8.15 8.22 3.69 8.22"/>
+      <line class="st0" x1="8.15" y1="8.22" x2="1.81" y2="1.89"/>
+    </g>
+  </g>
+  <g id="_x3C_Radial_Repeat_x3E_3" data-name="_x3C_Radial_Repeat_x3E_">
+    <g>
+      <polyline class="st0" points="20.11 8.15 15.78 8.15 15.78 3.69"/>
+      <line class="st0" x1="15.78" y1="8.15" x2="22.11" y2="1.81"/>
+    </g>
+  </g>
+</svg>

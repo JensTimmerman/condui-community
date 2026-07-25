@@ -1,0 +1,37 @@
+:root {
+  --eendra-slate-50: #f8fafc;
+  --eendra-slate-100: #f1f5f9;
+  --eendra-slate-200: #e2e8f0;
+  --eendra-slate-300: #cbd5e1;
+  --eendra-slate-400: #94a3b8;
+  --eendra-slate-600: #475569;
+  --eendra-slate-700: #334155;
+  --eendra-slate-800: #1e293b;
+  --eendra-slate-900: #0f172a;
+  --eendra-gray-50: #f9fafb;
+  --eendra-gray-100: #f3f4f6;
+  --eendra-gray-200: #e5e7eb;
+  --eendra-gray-300: #d1d5db;
+  --eendra-gray-400: #9ca3af;
+  --eendra-gray-600: #4b5563;
+  --eendra-gray-700: #374151;
+  --eendra-gray-800: #1f2937;
+  --eendra-gray-900: #111827;
+  --eendra-primary-50: #f0f9ff;
+  --eendra-primary-100: #e0f2fe;
+  --eendra-primary-200: #bae6fd;
+  --eendra-primary-300: #7dd3fc;
+  --eendra-primary-400: #38bdf8;
+  --eendra-primary-500: #0ea5e9;
+  --eendra-primary-600: #0284c7;
+  --eendra-primary-700: #0369a1;
+  --eendra-primary-800: #075985;
+  --eendra-primary-900: #0c4a6e;
+  --eendra-chrome-bg: #ffffff;
+  --eendra-brand-logo-color: var(--eendra-gray-900);
+}
+
+.dark {
+  --eendra-chrome-bg: var(--eendra-gray-900);
+  --eendra-brand-logo-color: #ffffff;
+}

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <defs>
+    <style>
+      .cls-1, .cls-2 {
+        fill: none;
+        stroke: #000;
+        stroke-width: 2px;
+      }
+      .cls-1 {
+        stroke-linejoin: round;
+      }
+      .cls-2 {
+        stroke-miterlimit: 10;
+      }
+    </style>
+  </defs>
+  <circle class="cls-2" cx="24" cy="24" r="11"/>
+  <circle class="cls-1" cx="24" cy="24" r="5"/>
+</svg>
+

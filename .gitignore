@@ -1,0 +1,11 @@
+node_modules/
+apps/app/node_modules/
+apps/app/dist/
+apps/app/.community-module-audit.local.json
+
+.env
+.env.*
+!.env.example
+
+*.log
+.DS_Store

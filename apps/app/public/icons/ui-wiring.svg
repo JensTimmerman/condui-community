@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+  <defs>
+    <style>
+      .cls-1, .cls-2 {
+        fill: none;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 1.9;
+      }
+
+      .cls-2 {
+        stroke-dasharray: 2.2 2.4;
+      }
+    </style>
+  </defs>
+  <circle class="cls-1" cx="4.27" cy="20.19" r="2.25"/>
+  <circle class="cls-1" cx="20.41" cy="4.75" r="2.25"/>
+  <path class="cls-2" d="M7.11,20.19c9.5.25,2.39-15.38,11.11-14.95"/>
+</svg>

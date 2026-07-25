@@ -1,0 +1,479 @@
+import { useEffect, useRef, useCallback } from 'react'
+import { ZOOM_MIN, ZOOM_MAX } from '@/constants/canvasConstants'
+import { useUIStore } from '@/stores/uiStore'
+import { useProjectStore } from '@/stores/projectStore'
+import {
+  getViewportPanelAtClientPoint,
+  getViewportPanelZones,
+} from '@/components/layout/viewportGeometry'
+import { planFloorDrawingConsumesTabRef } from '@/lib/plan/planFloorDrawingKeyboardGate'
+import { planFloorDrawingUndoRef } from '@/lib/plan/planFloorDrawingUndo'
+import { isTextLikeFocusTarget } from '@/lib/ui/blurFocusStealingActiveElement'
+import { dispatchExtendPropertiesPanelFieldBlur } from '@/lib/ui/propertiesPanelFieldBlur'
+import {
+  canDuplicateEendraadSelection,
+  runEendraadDuplicate,
+} from '@/lib/eendraad/duplicateSelection'
+import {
+  canDuplicatePlanSelection,
+  runPlanDuplicate,
+} from '@/lib/plan/planDuplicateSelection'
+import type { CanvasType, ViewportLayout } from '@/types/ui'
+import type { EditorCapabilities } from '@/lib/viewerMode'
+import { isKeyboardTypingTarget } from '@/lib/ui/keyboardTypingTarget'
+import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
+
+/**
+ * Hook to handle global keyboard shortcuts for the application.
+ *
+ * Spacebar: focus the viewport panel under the mouse (maximize it).
+ *           If already focused, restore the previous multi-panel layout.
+ */
+export function useKeyboardShortcuts(options?: { capabilities?: EditorCapabilities }) {
+  const capabilities = options?.capabilities
+  const canEditProject = capabilities?.canEditProject ?? true
+  const canPlaceSymbols = capabilities?.canPlaceSymbols ?? true
+  const togglePanel = useUIStore(
+    (state: ReturnType<typeof useUIStore.getState>) => state.togglePanel
+  )
+  const requestFitToView = useUIStore(
+    (state: ReturnType<typeof useUIStore.getState>) => state.requestFitToView
+  )
+  const toggleMainDockPanelsCollapse = useUIStore(
+    (state: ReturnType<typeof useUIStore.getState>) => state.toggleMainDockPanelsCollapse
+  )
+  const closeFloatingWindows = useUIStore(
+    (state: ReturnType<typeof useUIStore.getState>) => state.closeFloatingWindows
+  )
+  const setPanelCanvas = useUIStore(
+    (state: ReturnType<typeof useUIStore.getState>) => state.setPanelCanvas
+  )
+  const undo = useProjectStore((state: ReturnType<typeof useProjectStore.getState>) => state.undo)
+  const redo = useProjectStore((state: ReturnType<typeof useProjectStore.getState>) => state.redo)
+  const mousePos = useRef({ x: 0, y: 0 })
+  const pendingSpaceToggleRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      mousePos.current = { x: e.clientX, y: e.clientY }
+    }
+    window.addEventListener('mousemove', handleMouseMove)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      if (pendingSpaceToggleRef.current != null) {
+        window.cancelAnimationFrame(pendingSpaceToggleRef.current)
+        pendingSpaceToggleRef.current = null
+      }
+    }
+  }, [])
+
+  const findPanelIndexAtPoint = useCallback((x: number, y: number): number | null => {
+    const layout = useUIStore.getState().viewportLayout
+    const contentEl = document.querySelector('[data-viewport-content]') as HTMLElement | null
+    const contentRect = contentEl?.getBoundingClientRect()
+    if (!contentRect) return null
+
+    return (
+      getViewportPanelAtClientPoint(
+        layout,
+        {
+          left: contentRect.left,
+          top: contentRect.top,
+          width: contentRect.width,
+          height: contentRect.height,
+        },
+        x,
+        y
+      )?.panelIndex ?? null
+    )
+  }, [])
+
+  const findPanelIndexFromTarget = useCallback((target: EventTarget | null): number | null => {
+    if (!(target instanceof Element)) return null
+    const panelEl = target.closest('[data-viewport-panel]')
+    if (!panelEl) return null
+    const value = panelEl.getAttribute('data-viewport-panel')
+    if (!value) return null
+    const panelIndex = Number.parseInt(value, 10)
+    return Number.isNaN(panelIndex) ? null : panelIndex
+  }, [])
+
+  const applyFastViewportLayoutPreview = useCallback(
+    (layout: ViewportLayout, panelIndex: number | null) => {
+      const contentEl = document.querySelector('[data-viewport-content]') as HTMLElement | null
+      if (!contentEl) return
+
+      const previewLayout: ViewportLayout | null = layout.focusReturnLayout
+        ? layout.focusReturnLayout
+        : layout.panels.length > 1 && panelIndex != null && layout.panels[panelIndex]
+          ? {
+              preset: 'single',
+              panels: [{ canvas: layout.panels[panelIndex].canvas }],
+              primaryRatio: 1,
+              secondaryRatio: 0.5,
+              focusReturnLayout: null,
+            }
+          : null
+
+      if (!previewLayout) return
+
+      const previewZones = getViewportPanelZones(previewLayout)
+      const panels = Array.from(
+        contentEl.querySelectorAll<HTMLElement>('[data-viewport-panel][data-viewport-canvas]')
+      )
+
+      for (const panelEl of panels) {
+        const canvas = panelEl.getAttribute('data-viewport-canvas') as CanvasType | null
+        const zone = canvas ? previewZones.find((candidate) => candidate.type === canvas) : null
+
+        panelEl.style.transition = 'none'
+        panelEl.style.willChange = 'left, top, width, height'
+
+        if (!zone) {
+          panelEl.style.visibility = 'hidden'
+          panelEl.style.pointerEvents = 'none'
+          continue
+        }
+
+        const r = zone.rect
+        panelEl.style.visibility = ''
+        panelEl.style.pointerEvents = ''
+        panelEl.style.left = `${r.left * 100}%`
+        panelEl.style.top = `${r.top * 100}%`
+        panelEl.style.width = `${r.width * 100}%`
+        panelEl.style.height = `${r.height * 100}%`
+        panelEl.setAttribute('data-viewport-fast-preview', '1')
+      }
+
+      window.setTimeout(() => {
+        for (const panelEl of panels) {
+          panelEl.style.transition = ''
+          panelEl.style.willChange = ''
+          panelEl.removeAttribute('data-viewport-fast-preview')
+        }
+      }, 250)
+    },
+    []
+  )
+
+  const scheduleViewportPanelFocusToggle = useCallback((panelIndex: number | null) => {
+    if (pendingSpaceToggleRef.current != null) {
+      window.cancelAnimationFrame(pendingSpaceToggleRef.current)
+      pendingSpaceToggleRef.current = null
+    }
+    pendingSpaceToggleRef.current = window.requestAnimationFrame(() => {
+      pendingSpaceToggleRef.current = null
+      window.setTimeout(() => {
+        useUIStore.getState().toggleViewportPanelFocus(panelIndex)
+      }, 0)
+    })
+  }, [])
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const layout = useUIStore.getState().viewportLayout
+      const allCanvases = layout.panels.map((p) => p.canvas)
+
+      if (e.ctrlKey || e.metaKey) {
+        switch (e.key) {
+          case 'z':
+          case 'Z': {
+            if (!canEditProject) break
+            const isTyping = isKeyboardTypingTarget(e.target)
+            if (!isTyping) {
+              e.preventDefault()
+              if (e.shiftKey) {
+                if (planFloorDrawingUndoRef.current?.tryRedo()) return
+                redo()
+              } else {
+                if (planFloorDrawingUndoRef.current?.tryUndo()) return
+                undo()
+              }
+              return
+            }
+            break
+          }
+          case 'y':
+          case 'Y': {
+            if (!canEditProject) break
+            const isTyping = isKeyboardTypingTarget(e.target)
+            if (!isTyping) {
+              e.preventDefault()
+              redo()
+              return
+            }
+            break
+          }
+          case 'l':
+          case 'L':
+            if (!canPlaceSymbols) break
+            e.preventDefault()
+            togglePanel('library')
+            break
+          case 'p':
+          case 'P':
+            e.preventDefault()
+            togglePanel('properties')
+            break
+          case 'd':
+          case 'D': {
+            if (!canEditProject) break
+            const isTypingDup = isKeyboardTypingTarget(e.target)
+            if (isTypingDup || e.shiftKey) break
+            e.preventDefault()
+            let duplicated = false
+            const selDup = useUIStore.getState().selection
+            const store = useProjectStore.getState()
+            const ui = useUIStore.getState()
+            const panelIdx =
+              findPanelIndexAtPoint(mousePos.current.x, mousePos.current.y) ??
+              findPanelIndexFromTarget(e.target)
+            const hoveredCanvas =
+              panelIdx != null ? layout.panels[panelIdx]?.canvas : undefined
+            const onPlanCanvas = hoveredCanvas === 'plan'
+            const planGetters = {
+              getEndpointById: store.getEndpointById,
+              getPlacementById: store.getPlacementById,
+              getPlacementsByFloor: store.getPlacementsByFloor,
+              findCircuitForEndpoint: store.findCircuitForEndpoint,
+              getPanelById: store.getPanelById,
+              getPanelByName: store.getPanelByName,
+              getAllEndpoints: store.getAllEndpoints,
+              getCurrentProject: () => store.currentProject,
+            }
+            const preferPlanDuplicate = onPlanCanvas || selDup.type === 'placement'
+            if (
+              preferPlanDuplicate &&
+              canDuplicatePlanSelection(selDup, planGetters, ui.activeFloorId)
+            ) {
+              const planDupResult = runPlanDuplicate(selDup, ui.activeFloorId, {
+                withSingleUndoEntry: (fn, opts) => store.withSingleUndoEntry(fn, opts),
+              })
+              if (planDupResult) {
+                duplicated = true
+                ui.setSelection(planDupResult)
+              }
+            }
+            if (!duplicated) {
+              const getters = {
+                getEndpointById: store.getEndpointById,
+                getCircuitById: store.getCircuitById,
+                findCircuitForEndpoint: store.findCircuitForEndpoint,
+                getTrunkDeviceById: store.getTrunkDeviceById,
+                getProtectionById: store.getProtectionById,
+                getCurrentProject: () => store.currentProject,
+                getSupplyTrunkDeviceIndex: (id: string) =>
+                  (store.currentProject
+                    ? getElectricalInstallationFromProject(store.currentProject)
+                    : undefined
+                  )?.mainSupply?.supplyTrunkDevices?.findIndex(
+                    (d: { id: string }) => d.id === id,
+                  ) ?? -1,
+                getGroundTrunkDeviceIndex: (id: string) =>
+                  (store.currentProject
+                    ? getElectricalInstallationFromProject(store.currentProject)
+                    : undefined
+                  )?.groundTrunkDevices?.findIndex(
+                    (d: { id: string }) => d.id === id,
+                  ) ?? -1,
+              }
+              if (canDuplicateEendraadSelection(selDup, getters)) {
+                const dupResult = runEendraadDuplicate(
+                  selDup,
+                  getters,
+                  {
+                    addEndpoint: store.addEndpoint,
+                    addCircuit: store.addCircuit,
+                    addTrunkDevice: store.addTrunkDevice,
+                    updateTrunkDevice: store.updateTrunkDevice,
+                    addSupplyTrunkDevice: store.addSupplyTrunkDevice,
+                    addGroundTrunkDevice: store.addGroundTrunkDevice,
+                    insertProtectionAfter: store.insertProtectionAfter,
+                    updateCircuit: store.updateCircuit,
+                    setSelection: useUIStore.getState().setSelection,
+                  },
+                  (protectionId) => store.duplicateProtectionLeft(protectionId),
+                  (fn, opts) => store.withSingleUndoEntry(fn, opts),
+                )
+                if (dupResult) {
+                  duplicated = true
+                  useUIStore.getState().setSelection(dupResult.selection)
+                }
+              }
+            }
+            break
+          }
+        }
+      }
+
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key === 'Tab') {
+        if (planFloorDrawingConsumesTabRef.current) {
+          return
+        }
+        if (isTextLikeFocusTarget(document.activeElement)) {
+          return
+        }
+        const tabPanelIdx = findPanelIndexAtPoint(mousePos.current.x, mousePos.current.y)
+        if (tabPanelIdx == null) {
+          return
+        }
+        e.preventDefault()
+        toggleMainDockPanelsCollapse()
+        return
+      }
+
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key === 'Escape') {
+        if (closeFloatingWindows()) {
+          e.preventDefault()
+          return
+        }
+      }
+
+      if (!e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+        const isTyping = isKeyboardTypingTarget(e.target)
+
+        // Don't hijack typable keys when focus is in an input
+        if (
+          isTyping &&
+          [' ', '+', '-', '=', 'f', 'F', 'q', 'Q', 'w', 'W', 'd', 'D'].includes(e.key)
+        ) {
+          return
+        }
+
+        const canvasSwitchByFunctionKey: Record<string, CanvasType> = {
+          F1: 'eendraad',
+          F2: 'plan',
+          F3: 'panel',
+        }
+        const switchTargetCanvas = canvasSwitchByFunctionKey[e.key]
+        if (switchTargetCanvas) {
+          const panelIdx =
+            findPanelIndexAtPoint(mousePos.current.x, mousePos.current.y) ??
+            findPanelIndexFromTarget(e.target)
+          if (panelIdx != null) {
+            const panel = layout.panels[panelIdx]
+            if (panel && panel.canvas !== switchTargetCanvas) {
+              e.preventDefault()
+              setPanelCanvas(panelIdx, switchTargetCanvas)
+            }
+          }
+          return
+        }
+        if (e.key === ' ' || e.code === 'Space') {
+          const spaceTarget = e.target
+          if (spaceTarget instanceof Element && spaceTarget.closest('button')) {
+          return
+        }
+
+          e.preventDefault()
+          dispatchExtendPropertiesPanelFieldBlur()
+
+          const idx =
+            layout.panels.length > 1
+              ? (findPanelIndexAtPoint(mousePos.current.x, mousePos.current.y) ??
+                findPanelIndexFromTarget(e.target))
+              : null
+          applyFastViewportLayoutPreview(layout, idx)
+          scheduleViewportPanelFocusToggle(idx)
+          return
+        }
+
+        if (e.key === 'f' || e.key === 'F') {
+          e.preventDefault()
+          const idx =
+            findPanelIndexAtPoint(mousePos.current.x, mousePos.current.y) ??
+            findPanelIndexFromTarget(e.target)
+          const targetPanel =
+            idx != null ? layout.panels[idx] : layout.panels.length === 1 ? layout.panels[0] : null
+          if (targetPanel) {
+            const canvasesToFit =
+              layout.panels.length === 1
+                ? [targetPanel.canvas]
+                : Array.from(new Set(layout.panels.map((panel) => panel.canvas)))
+            requestFitToView(canvasesToFit)
+          }
+          return
+        }
+
+        switch (e.key) {
+          case '+':
+          case '=':
+            e.preventDefault()
+            for (const canvas of allCanvases) {
+              if (canvas === 'eendraad') {
+                useUIStore.setState((state) => ({
+                  eendraadView: {
+                    ...state.eendraadView,
+                    zoom: Math.min(ZOOM_MAX, state.eendraadView.zoom * 1.25),
+                  },
+                }))
+              }
+              if (canvas === 'plan') {
+                useUIStore.setState((state) => ({
+                  planView: {
+                    ...state.planView,
+                    zoom: Math.min(ZOOM_MAX, state.planView.zoom * 1.25),
+                  },
+                }))
+              }
+              if (canvas === 'panel') {
+                useUIStore.setState((state) => ({
+                  panelView: {
+                    ...state.panelView,
+                    zoom: Math.min(ZOOM_MAX, state.panelView.zoom * 1.25),
+                  },
+                }))
+              }
+            }
+            break
+          case '-':
+            e.preventDefault()
+            for (const canvas of allCanvases) {
+              if (canvas === 'eendraad') {
+                useUIStore.setState((state) => ({
+                  eendraadView: {
+                    ...state.eendraadView,
+                    zoom: Math.max(ZOOM_MIN, state.eendraadView.zoom / 1.25),
+                  },
+                }))
+              }
+              if (canvas === 'plan') {
+                useUIStore.setState((state) => ({
+                  planView: {
+                    ...state.planView,
+                    zoom: Math.max(ZOOM_MIN, state.planView.zoom / 1.25),
+                  },
+                }))
+              }
+              if (canvas === 'panel') {
+                useUIStore.setState((state) => ({
+                  panelView: {
+                    ...state.panelView,
+                    zoom: Math.max(ZOOM_MIN, state.panelView.zoom / 1.25),
+                  },
+                }))
+              }
+            }
+            break
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [
+    findPanelIndexAtPoint,
+    findPanelIndexFromTarget,
+    applyFastViewportLayoutPreview,
+    redo,
+    requestFitToView,
+    scheduleViewportPanelFocusToggle,
+    closeFloatingWindows,
+    toggleMainDockPanelsCollapse,
+    togglePanel,
+    setPanelCanvas,
+    undo,
+    canEditProject,
+    canPlaceSymbols,
+  ])
+}

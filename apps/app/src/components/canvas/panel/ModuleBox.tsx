@@ -1,0 +1,939 @@
+import { memo, useCallback, useRef, useEffect, useState } from 'react'
+import { Rect, Group, Text, Image, Line } from 'react-konva'
+import { useUIStore } from '@/stores/uiStore'
+import { useThemeColors } from '@/lib/theme/hooks'
+import { useSettingsStore } from '@/stores/settingsStore'
+import { useCanvasFontFamily } from '@/editions/community/communityHooks'
+import { useProjectStore, type ProjectState } from '@/stores/projectStore'
+import type { PanelGridModuleRef, Endpoint } from '@/types/schema'
+import type { Selection } from '@/types/ui'
+import { toggleSelection, selectMultiple } from '@/utils/selection'
+import type { ModuleDisplayInfo } from './getModuleDisplayInfo'
+import { CELL_W, panelGridModuleRefKey } from './panelGridLayout'
+import { findPanelContainingModuleRef, getRelationEdges } from './panelRelationEdges'
+import Konva from 'konva'
+import type { KonvaEventObject } from 'konva/lib/Node'
+import { DOMOTICA_CONTROL_OVERLAY_PATHS, getSwitchSymbolPaths, getSymbolById, getDomainForSymbol } from '@/lib/symbols'
+import { loadProcessedSymbol } from '@/lib/symbolImage'
+import { logger } from '@/lib/logger'
+import { useIsMarqueeSelecting, useIsPreviewSelected } from '@/contexts/SelectionPreviewContext'
+
+const DRAG_THRESHOLD = 8
+const RESIZE_HANDLE_W = 10
+
+export interface ModuleTooltipData {
+  text: string
+  clientX: number
+  clientY: number
+}
+
+interface ModuleBoxProps {
+  moduleRef: PanelGridModuleRef
+  x: number
+  y: number
+  width: number
+  height: number
+  info: ModuleDisplayInfo
+  onDragEnd?: (ref: PanelGridModuleRef, x: number, y: number) => void
+  onDragMove?: (ref: PanelGridModuleRef, x: number, y: number) => void
+  onDragStart?: (ref: PanelGridModuleRef, x: number, y: number) => void
+  draggable?: boolean
+  onAssignTargetClick?: (ref: PanelGridModuleRef) => void
+  onHoverChange?: (data: ModuleTooltipData | null) => void
+  onHoverRefChange?: (ref: PanelGridModuleRef | null) => void
+  onResizeEnd?: (ref: PanelGridModuleRef, newWidthCols: number) => void
+  maxWidthCols?: number
+  onRewireDragStart?: (ref: PanelGridModuleRef, x: number, y: number) => boolean
+  onRewireDragMove?: (stage: Konva.Stage, pointerPos: { x: number; y: number }) => void
+  onRewireDragEnd?: () => void
+  isRewireOrigin?: boolean
+  isRewireTarget?: boolean
+  isRewireTargetValid?: boolean
+  onSelectionIntent?: (
+    nextSelection: Selection,
+    context: {
+      ref: PanelGridModuleRef
+      event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }
+      currentSelection: Selection
+    }
+  ) => Selection | null
+  /** Dev-only panel relation debug palette for module role overlays. */
+  debugMode?: boolean
+  /** Dev-only: classify trunk supply devices as shared vs unique. */
+  debugSupplyTrunkKind?: 'shared' | 'unique'
+}
+
+function getSelectionForRef(
+  ref: PanelGridModuleRef,
+  endpoint?: Endpoint
+): Selection {
+  if (ref.kind === 'protection') return { type: 'protection', ids: [ref.id] }
+  if (ref.kind === 'trunkDevice') return { type: 'trunkDevice', ids: [ref.id] }
+  if (ref.kind === 'domotica') {
+    if (endpoint?.symbol === 'panel_distribution' && endpoint.panelId) {
+      return { type: 'panel', ids: [endpoint.panelId] }
+    }
+    return { type: 'endpoint', ids: [ref.endpointId] }
+  }
+  return { type: null, ids: [] }
+}
+
+const LABEL_FONT_SIZE = 10
+const LABEL_Y = 1
+const SPEC_FONT_SIZE = 7.5
+const SPEC_START_Y = 13
+const SPEC_LINE_HEIGHT = 8.5
+const MAX_SPEC_LINES = 3
+
+const TOOLTIP_DELAY_MS = 650
+
+interface KonvaDragEntry {
+  dragStatus?: string
+}
+
+interface KonvaDragDropInternals {
+  _dragElements?: Map<number, KonvaDragEntry>
+}
+
+type KonvaWithDragDropInternals = typeof Konva & {
+  DD?: KonvaDragDropInternals
+}
+
+type KonvaNodeWithId = Konva.Node & {
+  _id?: number
+}
+
+type ModuleMouseEvent = KonvaEventObject<MouseEvent>
+type ModuleClickEvent = KonvaEventObject<MouseEvent | TouchEvent>
+type ModuleDragEvent = KonvaEventObject<DragEvent>
+
+function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove, onDragStart, draggable = false, onAssignTargetClick, onHoverChange, onHoverRefChange, onResizeEnd, maxWidthCols, onRewireDragStart, onRewireDragMove, onRewireDragEnd, isRewireOrigin = false, isRewireTarget = false, isRewireTargetValid = true, onSelectionIntent, debugMode = false, debugSupplyTrunkKind }: ModuleBoxProps) {
+  const selection = useUIStore((s) => s.selection)
+  const setSelection = useUIStore((s) => s.setSelection)
+  const colors = useThemeColors()
+  const themeMode = useSettingsStore((s) => s.theme.mode)
+  const fontFamily = useCanvasFontFamily()
+  const getEndpointById = useProjectStore((s: ProjectState) => s.getEndpointById)
+  const getTrunkDeviceById = useProjectStore((s: ProjectState) => s.getTrunkDeviceById)
+  const currentProject = useProjectStore((s: ProjectState) => s.currentProject)
+  const groupRef = useRef<Konva.Group>(null)
+  const isDragging = useRef(false)
+  const bgRectRef = useRef<Konva.Rect>(null)
+  const labelTextRef = useRef<Konva.Text>(null)
+  const specTextRefs = useRef<(Konva.Text | null)[]>([])
+  const handleVisualRef = useRef<Konva.Rect>(null)
+  const resizeWidthRef = useRef<number | null>(null)
+  const [isHovered, setIsHovered] = useState(false)
+  const isMarqueeSelecting = useIsMarqueeSelecting()
+  const isPreviewSelected = useIsPreviewSelected(
+    moduleRef.kind === 'domotica' ? 'endpoint' : moduleRef.kind,
+    moduleRef.kind === 'domotica' ? moduleRef.endpointId : moduleRef.id,
+  )
+  const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const tooltipVisibleRef = useRef(false)
+  const mousePositionRef = useRef<{ clientX: number; clientY: number }>({ clientX: 0, clientY: 0 })
+
+  const [domoticaMainImage, setDomoticaMainImage] = useState<HTMLImageElement | null>(null)
+  const [domoticaControlImages, setDomoticaControlImages] = useState<
+    Partial<Record<'programmed_control' | 'wireless_control' | 'detection_control' | 'button_control', HTMLImageElement | null>>
+  >({})
+  const [liveWidth, setLiveWidth] = useState<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isMarqueeSelecting) return
+    setIsHovered(false)
+    onHoverRefChange?.(null)
+    if (tooltipTimerRef.current) {
+      clearTimeout(tooltipTimerRef.current)
+      tooltipTimerRef.current = null
+    }
+    tooltipVisibleRef.current = false
+    onHoverChange?.(null)
+  }, [isMarqueeSelecting, onHoverChange, onHoverRefChange])
+
+  useEffect(() => {
+    if (groupRef.current) {
+      groupRef.current.dragDistance(DRAG_THRESHOLD)
+    }
+  }, [])
+
+  // Force Konva node position to match React props after every render.
+  // react-konva's diffing doesn't detect divergence caused by drag internals.
+  useEffect(() => {
+    const node = groupRef.current
+    if (node && !isDragging.current) {
+      node.x(x)
+      node.y(y)
+    }
+  }, [x, y])
+
+  const domoticaEndpoint: Endpoint | undefined =
+    moduleRef.kind === 'domotica' ? getEndpointById(moduleRef.endpointId) : undefined
+  const sel = getSelectionForRef(moduleRef, domoticaEndpoint)
+  const isSelected =
+    sel.type !== null &&
+    sel.ids.length > 0 &&
+    sel.ids[0] != null &&
+    selection.ids.includes(sel.ids[0]) &&
+    (selection.type === sel.type || selection.ids.length > 1)
+
+  // Promote hovered/selected module to top so its outline is never clipped by neighbours.
+  // Selection wins over hover — both call moveToTop so the last selected module stays on top
+  // even if another module is hovered afterwards.
+  useEffect(() => {
+    if (isPreviewSelected || isHovered || isSelected) {
+      groupRef.current?.moveToTop()
+    }
+  }, [isHovered, isPreviewSelected, isSelected])
+
+  // Workaround for Konva bug: DD._dragElements entries with dragStatus "ready"
+  // are not cleaned up on pointerup/mouseup for nodes inside react-konva trees.
+  // This leaves a stale "ready" entry that triggers a spurious drag on the next
+  // mousemove, even though no button is held. We flush these stale entries
+  // whenever a click fires (click = the gesture was NOT a drag).
+  const flushStaleDragEntry = useCallback(() => {
+    const dd = (Konva as KonvaWithDragDropInternals).DD
+    const nodeId = (groupRef.current as KonvaNodeWithId | null)?._id
+    if (!dd?._dragElements || nodeId == null) return
+    const entry = dd._dragElements.get(nodeId)
+    if (entry && entry.dragStatus === 'ready') {
+      dd._dragElements.delete(nodeId)
+    }
+  }, [])
+
+  const handleMouseDown = useCallback(
+    (e: ModuleMouseEvent) => {
+      if (e.evt.button != null && e.evt.button !== 0) {
+        flushStaleDragEntry()
+      }
+    },
+    [flushStaleDragEntry]
+  )
+
+  const handleDragStart = useCallback(
+    (e: ModuleDragEvent) => {
+      // In rewire mode, handle differently
+      if (onRewireDragStart) {
+        const pos = e.target.position()
+        const shouldPrevent = onRewireDragStart(moduleRef, pos.x, pos.y)
+        if (shouldPrevent) {
+          // Don't stop drag, but mark it as rewire drag
+          // Clear any existing tooltip when starting rewire drag
+          if (tooltipTimerRef.current) { clearTimeout(tooltipTimerRef.current); tooltipTimerRef.current = null }
+          tooltipVisibleRef.current = false
+          onHoverChange?.(null)
+          isDragging.current = true
+          return
+        }
+      }
+      
+      isDragging.current = true
+      setIsHovered(false)
+      onHoverRefChange?.(null)
+      if (tooltipTimerRef.current) { clearTimeout(tooltipTimerRef.current); tooltipTimerRef.current = null }
+      tooltipVisibleRef.current = false
+      onHoverChange?.(null)
+      const sel = getSelectionForRef(moduleRef)
+      if (sel.type === null) return
+      const id = sel.ids[0] as string
+      const isInMultiSelection = selection.ids.length > 1 && selection.ids.includes(id)
+      if (!isInMultiSelection) {
+        setSelection(sel)
+      } else if (onDragStart) {
+        const pos = e.target.position()
+        onDragStart(moduleRef, pos.x, pos.y)
+      }
+    },
+    [moduleRef, setSelection, onHoverRefChange, onHoverChange, onRewireDragStart, onDragStart, selection]
+  )
+
+  const handleDragMove = useCallback(
+    (e: ModuleDragEvent) => {
+      const pos = e.target.position()
+      
+      // In rewire mode, track position for preview wire (use stage coordinates)
+      if (onRewireDragMove) {
+        const stage = e.target.getStage()
+        if (!stage) return
+        const pointerPos = stage.getPointerPosition()
+        if (pointerPos) {
+          // Pass stage and pointer position for hit detection and preview wire
+          onRewireDragMove(stage, pointerPos)
+        }
+        // Reset module position to prevent movement during rewire drag
+        e.target.x(x)
+        e.target.y(y)
+        return
+      }
+      
+      if (onDragMove) {
+        onDragMove(moduleRef, pos.x, pos.y)
+      }
+    },
+    [moduleRef, onDragMove, onRewireDragMove, x, y]
+  )
+
+  const handleDragEnd = useCallback(
+    (e: ModuleDragEvent) => {
+      isDragging.current = false
+      
+      // In rewire mode, handle rewire end
+      if (onRewireDragEnd) {
+        onRewireDragEnd()
+        e.target.x(x)
+        e.target.y(y)
+        return
+      }
+      
+      if (!onDragEnd) return
+      const pos = e.target.position()
+      logger.warn('[ModuleBox drag] dragEnd', {
+        ref: moduleRef,
+        pos,
+        hasOnDragEnd: !!onDragEnd,
+        hasOnRewireDragEnd: !!onRewireDragEnd,
+      })
+      e.target.x(x)
+      e.target.y(y)
+      onDragEnd(moduleRef, pos.x, pos.y)
+    },
+    [moduleRef, onDragEnd, onRewireDragEnd, x, y]
+  )
+
+  const handleClick = useCallback(
+    (e: ModuleClickEvent) => {
+      if ('button' in e.evt && e.evt.button != null && e.evt.button !== 0) return
+      e.cancelBubble = true
+      flushStaleDragEntry()
+      if (onAssignTargetClick) {
+        onAssignTargetClick(moduleRef)
+        return
+      }
+      const sel = getSelectionForRef(moduleRef)
+      if (sel.type === null) return
+      const id = sel.ids[0] as string
+      const shift = e.evt.shiftKey === true
+      const ctrl = e.evt.ctrlKey === true || e.evt.metaKey === true
+      const applySelection = (nextSelection: Selection) => {
+        const resolvedSelection = onSelectionIntent?.(nextSelection, {
+          ref: moduleRef,
+          event: {
+            shiftKey: shift,
+            ctrlKey: ctrl,
+            metaKey: e.evt.metaKey === true,
+          },
+          currentSelection: selection,
+        })
+        if (resolvedSelection === null) return
+        setSelection(resolvedSelection ?? nextSelection)
+      }
+      if (shift) {
+        if (selection.type === sel.type) {
+          applySelection(selectMultiple(sel.type, [...new Set([...selection.ids, id])]))
+        } else if (
+          selection.type === 'protection' ||
+          selection.type === 'trunkDevice' ||
+          selection.type === 'endpoint'
+        ) {
+          // Mixed module selection (e.g. protections + MUNQ trunk): merge ids; parent
+          // onSelectionIntent scopes to same panel zone.
+          applySelection(selectMultiple(sel.type, [...new Set([...selection.ids, id])]))
+        } else {
+          applySelection(sel)
+        }
+      } else if (ctrl) {
+        if (selection.type === sel.type) {
+          applySelection(toggleSelection(selection, id))
+        } else if (
+          selection.type === 'protection' ||
+          selection.type === 'trunkDevice' ||
+          selection.type === 'endpoint'
+        ) {
+          applySelection(toggleSelection({ ...selection, type: sel.type }, id))
+        } else {
+          applySelection(sel)
+        }
+      } else {
+        applySelection(sel)
+      }
+    },
+    [moduleRef, setSelection, onAssignTargetClick, flushStaleDragEntry, selection, onSelectionIntent]
+  )
+
+  const handleMouseEnter = useCallback(
+    (e: { evt: MouseEvent }) => {
+      if (isMarqueeSelecting) return
+      setIsHovered(true)
+      onHoverRefChange?.(moduleRef)
+      mousePositionRef.current = { clientX: e.evt.clientX, clientY: e.evt.clientY }
+      // Disable tooltips in rewire mode
+      if (info.tooltipText && onHoverChange && !onRewireDragStart) {
+        if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current)
+        tooltipTimerRef.current = setTimeout(() => {
+          tooltipVisibleRef.current = true
+          tooltipTimerRef.current = null
+          onHoverChange({ text: info.tooltipText!, clientX: mousePositionRef.current.clientX, clientY: mousePositionRef.current.clientY })
+        }, TOOLTIP_DELAY_MS)
+      }
+    },
+    [info.tooltipText, isMarqueeSelecting, onHoverChange, onHoverRefChange, moduleRef, onRewireDragStart]
+  )
+
+  const handleMouseMove = useCallback(
+    (e: { evt: MouseEvent }) => {
+      if (isMarqueeSelecting) return
+      mousePositionRef.current = { clientX: e.evt.clientX, clientY: e.evt.clientY }
+      // Disable tooltips in rewire mode
+      if (tooltipVisibleRef.current && info.tooltipText && onHoverChange && !onRewireDragStart) {
+        onHoverChange({ text: info.tooltipText, clientX: e.evt.clientX, clientY: e.evt.clientY })
+      }
+    },
+    [info.tooltipText, isMarqueeSelecting, onHoverChange, onRewireDragStart]
+  )
+
+  const handleMouseLeave = useCallback(() => {
+    setIsHovered(false)
+    onHoverRefChange?.(null)
+    if (tooltipTimerRef.current) {
+      clearTimeout(tooltipTimerRef.current)
+      tooltipTimerRef.current = null
+    }
+    tooltipVisibleRef.current = false
+    // Clear tooltip even in rewire mode to ensure clean state
+    onHoverChange?.(null)
+  }, [onHoverChange, onHoverRefChange])
+
+  const bg = colors.moduleBg
+  const isMspfProtectionModule = (() => {
+    if (!debugMode) return false
+    if (moduleRef.kind !== 'protection') return false
+    if (!currentProject) return false
+    const sourcePanel = findPanelContainingModuleRef(moduleRef, currentProject)
+    if (!sourcePanel) return false
+    const sourcePanelId = sourcePanel.id
+
+    const seen = new Set<string>()
+    const stack: string[] = [moduleRef.id]
+    while (stack.length > 0) {
+      const id = stack.pop()
+      if (!id || seen.has(id)) continue
+      seen.add(id)
+
+      const pRef = { kind: 'protection' as const, id }
+      const owner = findPanelContainingModuleRef(pRef, currentProject)
+      if (!owner) continue
+      const { childRefs } = getRelationEdges(pRef, owner, currentProject)
+
+      for (const child of childRefs) {
+        if (child.kind === 'protection') {
+          const childOwner = findPanelContainingModuleRef(child, currentProject)
+          if (childOwner && childOwner.id !== sourcePanelId) return true
+          if (!seen.has(child.id)) stack.push(child.id)
+          continue
+        }
+        if (child.kind === 'trunkDevice' && child.scope === 'circuit') {
+          const childOwner = findPanelContainingModuleRef(child, currentProject)
+          if (childOwner && childOwner.id !== sourcePanelId) return true
+        }
+      }
+    }
+    return false
+  })()
+  const debugModuleColor = (() => {
+    if (!debugMode) return null
+    if (moduleRef.kind === 'protection') {
+      if (isMspfProtectionModule) return '#2563eb' // MSPF
+      return '#f43f5e' // MPRO
+    }
+    if (moduleRef.kind === 'domotica') return '#8b5cf6' // MDOM
+    if (moduleRef.kind === 'trunkDevice' && moduleRef.scope === 'supply') {
+      if (debugSupplyTrunkKind === 'unique') return '#f97316' // MUNQ
+      return '#a855f7' // MSUP
+    }
+    if (moduleRef.kind === 'trunkDevice' && moduleRef.scope === 'circuit') return '#06b6d4' // MCIR
+    return '#22c55e' // MINT (unexpected)
+  })()
+  const border = isRewireTarget
+    ? (isRewireTargetValid ? '#10b981' : '#ef4444') // Green for valid rewire target, red for invalid
+    : (isRewireOrigin
+      ? '#f59e0b' // Amber for rewire origin
+      : (isSelected || isPreviewSelected || (isHovered && !isMarqueeSelecting)
+        ? colors.moduleBorderSelected
+        : colors.moduleBorder))
+  const debugBorder = debugModuleColor ?? border
+  const debugBg = debugModuleColor ? `${debugModuleColor}14` : bg
+  const borderWidth = isRewireTarget || isRewireOrigin ? 3 : (isSelected || isPreviewSelected ? 2 : 1)
+  const borderDash = isRewireTarget || isRewireOrigin
+    ? [6, 4]
+    : (isHovered && !isMarqueeSelecting && !isSelected && !isPreviewSelected ? [4, 3] : undefined)
+  const textColor = colors.moduleText
+  const secondaryColor = colors.moduleSecondary
+
+  const visibleSpecLines = info.specLines.slice(0, MAX_SPEC_LINES)
+
+  // In rewire mode, disable dragging only on target modules (not on origin or other modules)
+  const effectiveDraggable = isRewireTarget ? false : draggable
+
+  const domoticaProps = domoticaEndpoint?.domoticaProps
+  const domoticaMainType = domoticaProps?.mainDeviceType
+
+  const trunkInfo = moduleRef.kind === 'trunkDevice' ? getTrunkDeviceById(moduleRef.id) : undefined
+  const isEnergyMeterDevice = !!trunkInfo && trunkInfo.device.symbol === 'energy_meter'
+  const energyMeterCircuitLabel =
+    isEnergyMeterDevice && trunkInfo?.circuit?.code ? trunkInfo.circuit.code : info.label
+
+  // Energy conversion modules (rectifier, inverter, transformer, etc.)
+  const energyDeviceSymbol = trunkInfo?.device.symbol ?? domoticaEndpoint?.symbol
+  const energySymbolMeta = energyDeviceSymbol ? getSymbolById(energyDeviceSymbol) : null
+  const isEnergyConversionModule = !!energySymbolMeta && energySymbolMeta.category === 'energyConversion'
+  const energyDomains = isEnergyConversionModule && energyDeviceSymbol
+    ? getDomainForSymbol(energyDeviceSymbol)
+    : null
+
+  const [acSymbolImage, setAcSymbolImage] = useState<HTMLImageElement | null>(null)
+  const [dcSymbolImage, setDcSymbolImage] = useState<HTMLImageElement | null>(null)
+  const [energyDeviceImage, setEnergyDeviceImage] = useState<HTMLImageElement | null>(null)
+
+  // Load AC/DC domain symbols for energy conversion modules (panel view)
+  useEffect(() => {
+    if (!isEnergyConversionModule) {
+      setAcSymbolImage(null)
+      setDcSymbolImage(null)
+      return
+    }
+    const isDark = themeMode === 'dark'
+    loadProcessedSymbol('/symbols/energy-conversion/symbol_AC.svg', isDark)
+      .then(setAcSymbolImage)
+      .catch(() => setAcSymbolImage(null))
+    loadProcessedSymbol('/symbols/energy-conversion/symbol_DC.svg', isDark)
+      .then(setDcSymbolImage)
+      .catch(() => setDcSymbolImage(null))
+  }, [isEnergyConversionModule, themeMode])
+
+  // Show the actual conversion-device symbol in the center of the panel module.
+  useEffect(() => {
+    if (!isEnergyConversionModule || !energySymbolMeta?.svgPath) {
+      setEnergyDeviceImage(null)
+      return
+    }
+    loadProcessedSymbol(energySymbolMeta.svgPath, themeMode === 'dark')
+      .then(setEnergyDeviceImage)
+      .catch(() => setEnergyDeviceImage(null))
+  }, [energySymbolMeta?.svgPath, isEnergyConversionModule, themeMode])
+
+  // Load domotica main symbol image for panel modules
+  useEffect(() => {
+    if (moduleRef.kind !== 'domotica' || !domoticaProps) {
+      setDomoticaMainImage(null)
+      return
+    }
+    let path: string | null = null
+    if (domoticaMainType === 'switch' && domoticaProps.mainSwitchSymbol) {
+      if (domoticaProps.mainSwitchSymbol === 'relay') {
+        const sym = getSymbolById('relay')
+        path = sym?.svgPath ?? null
+      } else {
+        path = getSwitchSymbolPaths(domoticaProps.mainSwitchSymbol, domoticaProps.mainSwitchProps).basePath
+      }
+    } else if (domoticaMainType === 'socket' && domoticaProps.mainSocketSymbol) {
+      const sym = getSymbolById(domoticaProps.mainSocketSymbol)
+      path = sym?.svgPath ?? null
+    }
+    if (!path) {
+      setDomoticaMainImage(null)
+      return
+    }
+    const isDark = themeMode === 'dark'
+    loadProcessedSymbol(path, isDark)
+      .then(setDomoticaMainImage)
+      .catch(() => setDomoticaMainImage(null))
+  }, [
+    moduleRef.kind,
+    domoticaMainType,
+    domoticaProps,
+    domoticaProps?.mainSwitchSymbol,
+    domoticaProps?.mainSwitchProps,
+    domoticaProps?.mainSocketSymbol,
+    themeMode,
+  ])
+
+  // Load domotica control overlay icons (shared SVGs per key) for panel modules
+  useEffect(() => {
+    if (moduleRef.kind !== 'domotica') {
+      setDomoticaControlImages({})
+      return
+    }
+    const keys: Array<keyof typeof DOMOTICA_CONTROL_OVERLAY_PATHS> = [
+      'programmed_control',
+      'wireless_control',
+      'detection_control',
+      'button_control',
+    ]
+    keys.forEach((key) => {
+      const path = DOMOTICA_CONTROL_OVERLAY_PATHS[key]
+      const isDark = themeMode === 'dark'
+      loadProcessedSymbol(path, isDark)
+        .then((img) => {
+          setDomoticaControlImages((prev) => ({ ...prev, [key]: img }))
+        })
+        .catch(() => {
+          setDomoticaControlImages((prev) => ({ ...prev, [key]: null }))
+        })
+    })
+  }, [moduleRef.kind, themeMode])
+
+  return (
+    <Group
+      name={`panelModule-${panelGridModuleRefKey(moduleRef)}`}
+      ref={groupRef}
+      x={x}
+      y={y}
+      draggable={effectiveDraggable}
+      onMouseDown={handleMouseDown}
+      onDragStart={handleDragStart}
+      onDragMove={handleDragMove}
+      onDragEnd={handleDragEnd}
+      onClick={handleClick}
+      onTap={handleClick}
+      onMouseEnter={handleMouseEnter}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={handleMouseLeave}
+    >
+      <Rect
+        ref={bgRectRef}
+        width={liveWidth ?? width}
+        height={height}
+        fill={debugBg}
+        stroke={debugBorder}
+        strokeWidth={borderWidth}
+        dash={borderDash}
+        perfectDrawEnabled={false}
+        listening={true}
+      />
+      {/* Energy conversion domain indicators (AC/DC) for trunk devices */}
+      {isEnergyConversionModule && energyDomains && (
+        (() => {
+          const effectiveWidth = liveWidth ?? width
+          const effectiveHeight = height
+          const iconSize = Math.min(effectiveWidth, effectiveHeight) * 0.22
+          const padding = 3
+          const topMargin = LABEL_Y + 12 + padding
+
+          const getImageForDomain = (domain: 'AC' | 'DC') =>
+            domain === 'DC' ? dcSymbolImage : acSymbolImage
+
+          const inputImg = getImageForDomain(energyDomains.inputDomain)
+          const outputImg = getImageForDomain(energyDomains.outputDomain)
+
+          return (
+            <>
+              {/* Diagonal line from bottom-left to top-right, same color as outline */}
+              <Line
+                points={[padding, effectiveHeight - padding, effectiveWidth - padding, padding]}
+                stroke={debugBorder}
+                strokeWidth={1}
+                listening={false}
+              />
+              {/* Output domain symbol – top-left, below label */}
+              {outputImg && (
+                <Image
+                  image={outputImg}
+                  width={iconSize}
+                  height={iconSize}
+                  offsetX={iconSize / 2}
+                  offsetY={iconSize / 2}
+                  x={padding + iconSize / 2}
+                  y={topMargin + iconSize / 2}
+                  listening={false}
+                />
+              )}
+              {/* Input domain symbol – bottom-right */}
+              {inputImg && (
+                <Image
+                  image={inputImg}
+                  width={iconSize}
+                  height={iconSize}
+                  offsetX={iconSize / 2}
+                  offsetY={iconSize / 2}
+                  x={effectiveWidth - padding - iconSize / 2}
+                  y={effectiveHeight - padding - iconSize / 2}
+                  listening={false}
+                />
+              )}
+            </>
+          )
+        })()
+      )}
+      {isEnergyConversionModule && energyDeviceImage && (
+        (() => {
+          const effectiveWidth = liveWidth ?? width
+          const availableHeight = Math.max(12, height - 18)
+          const symbolSize = Math.min(effectiveWidth * 0.48, availableHeight * 0.72)
+          return (
+            <Image
+              image={energyDeviceImage}
+              x={effectiveWidth / 2}
+              y={18 + availableHeight / 2}
+              width={symbolSize}
+              height={symbolSize}
+              offsetX={symbolSize / 2}
+              offsetY={symbolSize / 2}
+              listening={false}
+            />
+          )
+        })()
+      )}
+      {/* Label - prominent, bold */}
+      <Text
+        ref={labelTextRef}
+        x={2}
+        y={LABEL_Y}
+        width={width - 4}
+        height={12}
+        text={energyMeterCircuitLabel}
+        fontSize={LABEL_FONT_SIZE}
+        fontStyle={isEnergyMeterDevice ? 'italic bold' : 'bold'}
+        fontFamily={fontFamily}
+        fill={textColor}
+        perfectDrawEnabled={false}
+        listening={false}
+        wrap="none"
+        ellipsis={true}
+      />
+      {/* Spec lines - smaller, secondary color, one per line */}
+      {visibleSpecLines.map((line, i) => (
+        <Text
+          key={i}
+          ref={(el: Konva.Text | null) => { specTextRefs.current[i] = el }}
+          x={2}
+          y={SPEC_START_Y + i * SPEC_LINE_HEIGHT}
+          width={width - 4}
+          height={SPEC_LINE_HEIGHT}
+          text={line}
+          fontSize={SPEC_FONT_SIZE}
+          fontFamily={fontFamily}
+          fill={secondaryColor}
+          perfectDrawEnabled={false}
+          listening={false}
+          wrap="none"
+          ellipsis={true}
+        />
+      ))}
+      {/* Domotica visual overlays inside panel modules */}
+      {moduleRef.kind === 'domotica' && domoticaProps && (
+        <>
+          {/* Control icons: 2x2 grid for 4 controls on narrow modules, otherwise single centered row (live during resize) */}
+          {(() => {
+            const activeKeys = (domoticaProps.control ?? []).filter((key) =>
+              ['programmed_control', 'wireless_control', 'detection_control', 'button_control'].includes(key),
+            ) as Array<keyof typeof DOMOTICA_CONTROL_OVERLAY_PATHS>
+            const count = activeKeys.length
+            if (count === 0) return null
+
+            const effectiveWidth = liveWidth ?? width
+            const effectiveHeight = height
+
+            const moduleCols = Math.max(1, Math.round(effectiveWidth / CELL_W))
+            const isOneWide = moduleCols === 1
+            const baseSize = Math.min(effectiveWidth, effectiveHeight)
+            const iconSize = isOneWide ? baseSize * 0.33 : baseSize * 0.22
+
+            if (isOneWide && count === 4) {
+              const positions = [
+                { x: effectiveWidth * 0.3, y: effectiveHeight * 0.34 },
+                { x: effectiveWidth * 0.7, y: effectiveHeight * 0.34 },
+                { x: effectiveWidth * 0.3, y: effectiveHeight * 0.5 },
+                { x: effectiveWidth * 0.7, y: effectiveHeight * 0.5 },
+              ]
+              return activeKeys.map((key, index) => {
+                const img = domoticaControlImages[key]
+                if (!img) return null
+                const pos = positions[index]!
+                return (
+                  <Image
+                    key={key}
+                    image={img}
+                    width={iconSize}
+                    height={iconSize}
+                    offsetX={iconSize / 2}
+                    offsetY={iconSize / 2}
+                    x={pos.x}
+                    y={pos.y}
+                    listening={false}
+                  />
+                )
+              })
+            }
+
+            // Single row, centered horizontally regardless of count
+            const rowY = isOneWide ? effectiveHeight * 0.34 : effectiveHeight * 0.34
+            return activeKeys.map((key, index) => {
+              const img = domoticaControlImages[key]
+              if (!img) return null
+              const cx = (effectiveWidth * (index + 1)) / (count + 1)
+              return (
+                <Image
+                  key={key}
+                  image={img}
+                  width={iconSize}
+                  height={iconSize}
+                  offsetX={iconSize / 2}
+                  offsetY={iconSize / 2}
+                  x={cx}
+                  y={rowY}
+                  listening={false}
+                />
+              )
+            })
+          })()}
+
+          {/* Main device symbol, centered underneath controls (live during resize) */}
+          {domoticaMainImage && domoticaMainType && (
+            (() => {
+              const effectiveWidth = liveWidth ?? width
+              const effectiveHeight = height
+              const moduleCols = Math.max(1, Math.round(effectiveWidth / CELL_W))
+              const sizeFactor = moduleCols === 1 ? 0.55 : 0.4
+              const size = Math.min(effectiveWidth, effectiveHeight) * sizeFactor
+              const yFactor = moduleCols === 1 ? 0.75 : 0.7
+              return (
+                <Image
+                  image={domoticaMainImage}
+                  width={size}
+                  height={size}
+                  offsetX={size / 2}
+                  offsetY={size / 2}
+                  x={effectiveWidth / 2}
+                  y={effectiveHeight * yFactor}
+                  listening={false}
+                />
+              )
+            })()
+          )}
+        </>
+      )}
+
+      {/* Energy meter label: draw centered \"kWh\" text inside module, with a box (live during resize) */}
+      {isEnergyMeterDevice && (
+        (() => {
+          const effectiveWidth = liveWidth ?? width
+          const effectiveHeight = height
+          const boxWidth = effectiveWidth * 0.6
+          const boxHeight = SPEC_LINE_HEIGHT + 4
+          const boxX = (effectiveWidth - boxWidth) / 2
+          const boxY = effectiveHeight * 0.45 - 2
+          return (
+            <>
+              <Rect
+                x={boxX}
+                y={boxY}
+                width={boxWidth}
+                height={boxHeight}
+                stroke={textColor}
+                strokeWidth={1}
+                fill="transparent"
+                perfectDrawEnabled={false}
+                listening={false}
+              />
+              <Text
+                x={boxX}
+                y={boxY + 2}
+                width={boxWidth}
+                height={SPEC_LINE_HEIGHT}
+                text="kWh"
+                fontSize={SPEC_FONT_SIZE + 1}
+                fontStyle="bold"
+                fontFamily={fontFamily}
+                fill={textColor}
+                perfectDrawEnabled={false}
+                listening={false}
+                align="center"
+              />
+            </>
+          )
+        })()
+      )}
+      {/* Resize handle — visible when selected, but not during rewire mode */}
+      {isSelected && onResizeEnd && !onRewireDragStart && !isRewireTarget && (
+        <>
+          <Rect
+            ref={handleVisualRef}
+            x={width - 2}
+            y={height * 0.15}
+            width={4}
+            height={height * 0.7}
+            fill="#0284c7"
+            opacity={0.9}
+            cornerRadius={2}
+            perfectDrawEnabled={false}
+            listening={false}
+          />
+          <Rect
+            x={width - RESIZE_HANDLE_W / 2}
+            y={0}
+            width={RESIZE_HANDLE_W}
+            height={height}
+            fill="transparent"
+            draggable
+            onMouseDown={(e: KonvaEventObject<MouseEvent>) => { e.cancelBubble = true }}
+            onClick={(e: KonvaEventObject<MouseEvent>) => { e.cancelBubble = true }}
+            onTap={(e: KonvaEventObject<TouchEvent>) => { e.cancelBubble = true }}
+            onDragStart={(e: KonvaEventObject<DragEvent>) => {
+              e.cancelBubble = true
+              resizeWidthRef.current = width
+            }}
+            onDragMove={(e: KonvaEventObject<DragEvent>) => {
+              e.cancelBubble = true
+              const node = e.target
+              const handleCenter = node.x() + RESIZE_HANDLE_W / 2
+              const newCols = Math.max(1, Math.min(maxWidthCols ?? 999, Math.round(handleCenter / CELL_W)))
+              const snapped = newCols * CELL_W
+              node.x(snapped - RESIZE_HANDLE_W / 2)
+              node.y(0)
+              bgRectRef.current?.width(snapped)
+              handleVisualRef.current?.x(snapped - 2)
+              labelTextRef.current?.width(snapped - 4)
+              specTextRefs.current.forEach(r => r?.width(snapped - 4))
+              resizeWidthRef.current = snapped
+              setLiveWidth(snapped)
+            }}
+            onDragEnd={(e: KonvaEventObject<DragEvent>) => {
+              e.cancelBubble = true
+              const finalWidthPx = resizeWidthRef.current ?? width
+              const finalCols = Math.round(finalWidthPx / CELL_W)
+              const originalCols = Math.round(width / CELL_W)
+              resizeWidthRef.current = null
+              if (finalCols !== originalCols && onResizeEnd) {
+                onResizeEnd(moduleRef, finalCols)
+              } else {
+                e.target.x(width - RESIZE_HANDLE_W / 2)
+                bgRectRef.current?.width(width)
+                handleVisualRef.current?.x(width - 2)
+                labelTextRef.current?.width(width - 4)
+                specTextRefs.current.forEach(r => r?.width(width - 4))
+              }
+              setLiveWidth(null)
+            }}
+            onMouseEnter={(e: KonvaEventObject<MouseEvent>) => {
+              const stage = e.target.getStage()
+              if (stage) stage.container().style.cursor = 'ew-resize'
+            }}
+            onMouseLeave={(e: KonvaEventObject<MouseEvent>) => {
+              const stage = e.target.getStage()
+              if (stage) stage.container().style.cursor = ''
+            }}
+          />
+        </>
+      )}
+    </Group>
+  )
+}
+
+ModuleBox.displayName = 'ModuleBox'
+export default memo(ModuleBox)

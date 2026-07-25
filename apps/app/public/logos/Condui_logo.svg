@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_3" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 482.5 111.5">
+  <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="18" d="M81.63,20.48v11.73c-6.9-7.33-16.44-11.73-26.97-11.73-21.05,0-37,17.22-37,40.67s17.28,40,38.33,40c9.41,0,19.15-4.99,25.5-10.67v11.33"/>
+  <circle fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="18" cx="145.41" cy="76.42" r="25.17"/>
+  <circle fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="18" cx="314.14" cy="76.42" r="25.17"/>
+  <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="18" d="M251.21,101.58v-30.92c0-11.18-9.07-20.25-20.25-20.25h-1.83c-11.18,0-20.25,9.07-20.25,20.25v30.92"/>
+  <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="18" d="M377.48,50.42v30.92c0,11.18,9.07,20.25,20.25,20.25h1.83c11.18,0,20.25-9.07,20.25-20.25v-30.92"/>
+  <line fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="18" x1="339.3" y1="20.71" x2="339.3" y2="101.58"/>
+  <line fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="18" x1="461.66" y1="51.25" x2="461.66" y2="101.58"/>
+  <circle fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" cx="461.52" cy="23.25" r="8.44"/>
+  <line fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="18" x1="208.88" y1="86.25" x2="208.88" y2="50.42"/>
+  <line fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="18" x1="419.82" y1="70.92" x2="419.82" y2="101.58"/>
+</svg>

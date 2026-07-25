@@ -1,0 +1,273 @@
+import { getPanelFeedProjection } from '@/lib/feedTopology'
+import {
+  getElectricalInstallationFromProject,
+  getElectricalPanelsFromProject,
+  type ProjectWithOptionalV2Electrical,
+} from '@/lib/projectV2/electrical'
+import { getCircuitIdFromModuleRef } from '@/components/canvas/panel/panelRelationEdges'
+import { panelGridModuleRefKey } from '@/components/canvas/panel/panelGridLayout'
+import type {
+  Circuit,
+  Panel,
+  PanelGridModuleRef,
+  ProtectionDevice,
+  SymbolKey,
+  TrunkDevice,
+} from '@/types/schema'
+
+export type SupplyTrunkModuleRef = {
+  kind: 'trunkDevice'
+  id: string
+  scope: 'supply'
+  circuitId?: string
+}
+
+export type PanelRewireOperation =
+  | { kind: 'moveSharedSupplyDevice'; targetSupplyId: string; direction: 'left' | 'right' }
+  | {
+      kind: 'promoteProtectionToSharedSupply'
+      protectionId: string
+      circuit: Circuit
+      insertIndex: number
+      trunkDevice: Omit<TrunkDevice, 'id'>
+    }
+  | { kind: 'detachCircuitFromSupplyParent'; parentCircuitId: string; subCircuitIds?: string[] }
+  | { kind: 'rewireCircuit'; originCircuitId: string; targetCircuitId: string }
+
+export function isSupplyTrunkRef(ref: PanelGridModuleRef): ref is SupplyTrunkModuleRef {
+  return ref.kind === 'trunkDevice' && ref.scope === 'supply'
+}
+
+export function getSharedSupplyRefKeysForPanel(
+  project: ProjectWithOptionalV2Electrical,
+  panel: Panel | null,
+): Set<string> {
+  if (!panel?.isMain) return new Set()
+  const installation = getElectricalInstallationFromProject(project)
+  if (!installation) return new Set()
+  const projection = getPanelFeedProjection(installation, getElectricalPanelsFromProject(project), panel)
+  return new Set(
+    (projection?.sharedFeed.trunkDevices ?? []).map((device) =>
+      panelGridModuleRefKey({ kind: 'trunkDevice', id: device.id, scope: 'supply' }),
+    ),
+  )
+}
+
+export function getSharedSupplyRefsForPanel(
+  project: ProjectWithOptionalV2Electrical,
+  panel: Panel | null,
+): PanelGridModuleRef[] {
+  if (!panel?.isMain) return []
+  const installation = getElectricalInstallationFromProject(project)
+  if (!installation) return []
+  const projection = getPanelFeedProjection(installation, getElectricalPanelsFromProject(project), panel)
+  return (projection?.sharedFeed.trunkDevices ?? []).map(
+    (device) => ({ kind: 'trunkDevice', id: device.id, scope: 'supply' }) as PanelGridModuleRef,
+  )
+}
+
+export function isSharedSupplyTrunkRef(
+  project: ProjectWithOptionalV2Electrical,
+  panel: Panel | null,
+  ref: PanelGridModuleRef,
+): ref is SupplyTrunkModuleRef {
+  if (!isSupplyTrunkRef(ref)) return false
+  return getSharedSupplyRefKeysForPanel(project, panel).has(panelGridModuleRefKey(ref))
+}
+
+export function isModuleRefOnSupplyStrip(panel: Panel | null, ref: PanelGridModuleRef): boolean | null {
+  if (!panel?.gridView) return null
+  const key = panelGridModuleRefKey(ref)
+  if (panel.gridView.supplyPanelSlots?.some((slot) => panelGridModuleRefKey(slot.module) === key)) {
+    return true
+  }
+  if (panel.gridView.slots?.some((slot) => panelGridModuleRefKey(slot.module) === key)) {
+    return false
+  }
+  return null
+}
+
+function flattenPanelsDepthFirst(panels: Panel[]): Panel[] {
+  const out: Panel[] = []
+  const walk = (panel: Panel) => {
+    out.push(panel)
+    for (const subPanel of panel.subPanels ?? []) walk(subPanel)
+  }
+  for (const panel of panels) walk(panel)
+  return out
+}
+
+function findCircuitInPanels(panels: Panel[], circuitId: string): Circuit | null {
+  for (const panel of flattenPanelsDepthFirst(panels)) {
+    const direct = panel.circuits.find((circuit) => circuit.id === circuitId)
+    if (direct) return direct
+    for (const protection of panel.protections) {
+      const protectedCircuit = protection.circuits?.find((circuit) => circuit.id === circuitId)
+      if (protectedCircuit) return protectedCircuit
+    }
+  }
+  return null
+}
+
+function findProtectionById(panels: Panel[], protectionId: string): ProtectionDevice | null {
+  for (const panel of flattenPanelsDepthFirst(panels)) {
+    const protection = panel.protections.find((candidate) => candidate.id === protectionId)
+    if (protection) return protection
+  }
+  return null
+}
+
+function findParentCircuitId(panels: Panel[], targetCircuitId: string): string | null {
+  for (const panel of flattenPanelsDepthFirst(panels)) {
+    for (const circuit of panel.circuits) {
+      if (circuit.subCircuitIds?.includes(targetCircuitId)) return circuit.id
+    }
+    for (const protection of panel.protections) {
+      for (const circuit of protection.circuits ?? []) {
+        if (circuit.subCircuitIds?.includes(targetCircuitId)) return circuit.id
+      }
+    }
+  }
+  return null
+}
+
+function canReachCircuit(panels: Panel[], fromCircuitId: string, targetId: string, visited = new Set<string>()): boolean {
+  if (visited.has(fromCircuitId)) return false
+  visited.add(fromCircuitId)
+  const from = findCircuitInPanels(panels, fromCircuitId)
+  if (!from?.subCircuitIds?.length) return false
+  if (from.subCircuitIds.includes(targetId)) return true
+  for (const subId of from.subCircuitIds) {
+    if (canReachCircuit(panels, subId, targetId, visited)) return true
+  }
+  return false
+}
+
+function getSharedSupplyDeviceIndex(
+  project: ProjectWithOptionalV2Electrical,
+  panel: Panel,
+  supplyId: string,
+): number {
+  return getSharedSupplyRefsForPanel(project, panel)
+    .filter(isSupplyTrunkRef)
+    .findIndex((device) => device.id === supplyId)
+}
+
+function trunkDeviceFromProtection(
+  targetProtection: ProtectionDevice,
+  circuit: Circuit,
+  insertIndex: number,
+): Omit<TrunkDevice, 'id'> {
+  return {
+    type: 'protection',
+    symbol: targetProtection.type.toLowerCase() as SymbolKey,
+    label: targetProtection.label || circuit.code || '',
+    trunkPosition: insertIndex,
+    protectionType: targetProtection.type,
+    ...(targetProtection.ratingA ? { ratingA: targetProtection.ratingA } : {}),
+    ...(targetProtection.curve ? { curve: targetProtection.curve } : {}),
+    ...(targetProtection.sensitivityMa ? { sensitivityMa: targetProtection.sensitivityMa } : {}),
+    ...(targetProtection.residualCurrentType
+      ? { residualCurrentType: targetProtection.residualCurrentType }
+      : {}),
+    ...(targetProtection.poles ? { poles: targetProtection.poles } : {}),
+  }
+}
+
+export function getPanelRewireOperation(
+  panel: Panel | null,
+  currentProject: ProjectWithOptionalV2Electrical | null,
+  origin: PanelGridModuleRef,
+  target: PanelGridModuleRef,
+): PanelRewireOperation | null {
+  if (!panel || !currentProject) return null
+  if (panelGridModuleRefKey(origin) === panelGridModuleRefKey(target)) return null
+
+  const originStrip = isModuleRefOnSupplyStrip(panel, origin)
+  const targetStrip = isModuleRefOnSupplyStrip(panel, target)
+  if (originStrip != null && targetStrip != null && originStrip !== targetStrip) return null
+
+  const panels = getElectricalPanelsFromProject(currentProject)
+  const originIsSupply = isSupplyTrunkRef(origin)
+  const targetIsSupply = isSupplyTrunkRef(target)
+
+  if (originIsSupply && targetIsSupply) {
+    if (
+      !isSharedSupplyTrunkRef(currentProject, panel, origin) ||
+      !isSharedSupplyTrunkRef(currentProject, panel, target)
+    ) {
+      return null
+    }
+
+    const originIndex = getSharedSupplyDeviceIndex(currentProject, panel, origin.id)
+    const targetIndex = getSharedSupplyDeviceIndex(currentProject, panel, target.id)
+    if (originIndex === -1 || targetIndex === -1 || originIndex === targetIndex) return null
+
+    const newIndex = originIndex + 1
+    if (targetIndex === newIndex) return null
+
+    return {
+      kind: 'moveSharedSupplyDevice',
+      targetSupplyId: target.id,
+      direction: targetIndex > originIndex ? 'left' : 'right',
+    }
+  }
+
+  if (originIsSupply || targetIsSupply) {
+    const supplyRef = originIsSupply ? origin : target
+    const otherRef = originIsSupply ? target : origin
+    if (!isSharedSupplyTrunkRef(currentProject, panel, supplyRef)) return null
+
+    if (otherRef.kind === 'protection') {
+      const targetProtection = findProtectionById(panels, otherRef.id)
+      if (!targetProtection?.circuits?.length) return null
+      const circuit = targetProtection.circuits[0]
+      if (!circuit || (circuit.subCircuitIds?.length ?? 0) > 1) return null
+      const supplyDeviceIndex = getSharedSupplyDeviceIndex(currentProject, panel, supplyRef.id)
+      const insertIndex = supplyDeviceIndex >= 0
+        ? supplyDeviceIndex + 1
+        : getSharedSupplyRefsForPanel(currentProject, panel).length
+
+      return {
+        kind: 'promoteProtectionToSharedSupply',
+        protectionId: otherRef.id,
+        circuit,
+        insertIndex,
+        trunkDevice: trunkDeviceFromProtection(targetProtection, circuit, insertIndex),
+      }
+    }
+
+    const targetCircuitId = getCircuitIdFromModuleRef(otherRef, panel, currentProject)
+    if (!targetCircuitId) return null
+    const parentCircuitId = findParentCircuitId(panels, targetCircuitId)
+    if (!parentCircuitId) return null
+    const parentCircuit = findCircuitInPanels(panels, parentCircuitId)
+    if (!parentCircuit) return null
+    const index = (parentCircuit.subCircuitIds ?? []).indexOf(targetCircuitId)
+    if (index === -1) return null
+    const updatedSubCircuitIds = [...(parentCircuit.subCircuitIds ?? [])]
+    updatedSubCircuitIds.splice(index, 1)
+
+    return {
+      kind: 'detachCircuitFromSupplyParent',
+      parentCircuitId,
+      subCircuitIds: updatedSubCircuitIds.length > 0 ? updatedSubCircuitIds : undefined,
+    }
+  }
+
+  const originCircuitId = getCircuitIdFromModuleRef(origin, panel, currentProject)
+  const targetCircuitId = getCircuitIdFromModuleRef(target, panel, currentProject)
+  if (!originCircuitId || !targetCircuitId || originCircuitId === targetCircuitId) return null
+  if (canReachCircuit(panels, targetCircuitId, originCircuitId)) return null
+
+  return { kind: 'rewireCircuit', originCircuitId, targetCircuitId }
+}
+
+export function validatePanelRewireOperation(
+  panel: Panel | null,
+  currentProject: ProjectWithOptionalV2Electrical | null,
+  origin: PanelGridModuleRef,
+  target: PanelGridModuleRef,
+): boolean {
+  return getPanelRewireOperation(panel, currentProject, origin, target) != null
+}

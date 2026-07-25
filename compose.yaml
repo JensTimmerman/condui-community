@@ -1,0 +1,7 @@
+services:
+  condui:
+    build: .
+    image: condui-community:local
+    restart: unless-stopped
+    ports:
+      - "8080:8080"

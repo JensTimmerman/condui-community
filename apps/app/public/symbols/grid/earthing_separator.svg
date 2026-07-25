@@ -1,0 +1,5 @@
+<svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" width="48" height="48">
+  <!-- Earthing separator (aardingsonderbreker) - two horizontal lines -->
+  <line x1="10" y1="20" x2="38" y2="20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+  <line x1="10" y1="28" x2="38" y2="28" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+</svg>

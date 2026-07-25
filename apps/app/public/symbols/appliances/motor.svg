@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 48 48" width="48" height="48">
+  <defs>
+    <style>
+      .cls-1, .cls-2, .cls-3, .cls-4, .cls-5, .cls-6, .cls-7 {
+        fill: none;
+      }
+
+      .cls-1, .cls-2, .cls-3, .cls-4, .cls-8, .cls-6, .cls-7 {
+        stroke: #000;
+      }
+
+      .cls-1, .cls-2, .cls-4, .cls-8 {
+        stroke-miterlimit: 10;
+      }
+
+      .cls-1, .cls-2, .cls-8, .cls-6, .cls-7 {
+        stroke-width: 2px;
+      }
+
+      .cls-9, .cls-5 {
+        stroke-width: 0px;
+      }
+
+      .cls-9, .cls-8 {
+        fill: #000;
+      }
+
+      .cls-2, .cls-3, .cls-4, .cls-6, .cls-7 {
+        stroke-linecap: round;
+      }
+
+      .cls-3 {
+        stroke-width: 1.6px;
+      }
+
+      .cls-3, .cls-7 {
+        stroke-linejoin: round;
+      }
+
+      .cls-10 {
+        clip-path: url(#clippath-1);
+      }
+
+      .cls-11 {
+        clip-path: url(#clippath);
+      }
+
+      .cls-12 {
+        display: none;
+      }
+    </style>
+    <clipPath id="clippath">
+      <polygon class="cls-5" points="5.7 5.7 42.3 5.7 42.3 42.3 24 42.3 24 24 5.7 24 5.7 5.7"/>
+    </clipPath>
+    <clipPath id="clippath-1">
+      <polygon class="cls-5" points="7.1 7 24 7 27.4 9.7 43.3 9.3 43.3 40.4 24.8 40.4 22.5 38 7.1 38.2 7.1 7"/>
+    </clipPath>
+  </defs>
+  <g id="Layer_1" data-name="Layer 1" class="cls-12">
+    <rect class="cls-7" x="2.3" y="2.3" width="43.5" height="43.5"/>
+  </g>
+  <g id="Stove" class="cls-12">
+    <g class="cls-11">
+      <g>
+        <circle class="cls-7" cx="13.7" cy="13.7" r="7"/>
+        <circle class="cls-7" cx="34" cy="13.7" r="7"/>
+        <circle class="cls-7" cx="13.7" cy="34.1" r="7"/>
+        <circle class="cls-7" cx="34" cy="34.1" r="7"/>
+      </g>
+    </g>
+  </g>
+  <g id="Microwave" class="cls-12">
+    <g class="cls-10">
+      <g>
+        <path class="cls-6" d="M8.1,3.8s0-6.3,7.2-6.3,7.8,9.7,17.8,9.7,6.9-6.3,6.9-6.3"/>
+        <path class="cls-6" d="M8.1,14.3s0-6.3,7.2-6.3,7.8,9.7,17.8,9.7,6.9-6.3,6.9-6.3"/>
+        <path class="cls-6" d="M8.1,24.8s0-6.3,7.2-6.3,7.8,9.7,17.8,9.7,6.9-6.3,6.9-6.3"/>
+        <path class="cls-6" d="M8.1,35.3s0-6.3,7.2-6.3,7.8,9.7,17.8,9.7,6.9-6.3,6.9-6.3"/>
+        <path class="cls-6" d="M8.1,45.9s0-6.3,7.2-6.3,7.8,9.7,17.8,9.7,6.9-6.3,6.9-6.3"/>
+      </g>
+    </g>
+  </g>
+  <g id="Oven" class="cls-12">
+    <line class="cls-1" x1="2.3" y1="10.6" x2="45.7" y2="10.6"/>
+    <circle class="cls-8" cx="24" cy="31.2" r="7.2"/>
+  </g>
+  <g id="Washer" class="cls-12">
+    <circle class="cls-8" cx="24" cy="24" r="7.2"/>
+    <circle class="cls-1" cx="24" cy="24" r="17.5"/>
+  </g>
+  <g id="Drier" class="cls-12">
+    <circle class="cls-8" cx="24" cy="34.3" r="7.2"/>
+    <circle class="cls-1" cx="32.2" cy="13.5" r="7.2"/>
+    <circle class="cls-1" cx="16.8" cy="13.5" r="7.2"/>
+  </g>
+  <g id="Dishwasher" class="cls-12">
+    <line class="cls-1" x1="18.9" y1="29.1" x2="2.7" y2="45.4"/>
+    <line class="cls-1" x1="45.7" y1="2.3" x2="29.1" y2="18.9"/>
+    <path class="cls-1" d="M18.9,29.1c1.3,1.3,3.1,2.1,5.1,2.1s3.8-.8,5.1-2.1c1.3-1.3,2.1-3.1,2.1-5.1s-.8-3.8-2.1-5.1-3.1-2.1-5.1-2.1-3.8.8-5.1,2.1-2.1,3.1-2.1,5.1.8,3.8,2.1,5.1Z"/>
+    <line class="cls-1" x1="45.7" y1="45.7" x2="29.1" y2="29.1"/>
+    <line class="cls-1" x1="18.9" y1="18.9" x2="2.3" y2="2.3"/>
+  </g>
+  <g id="Fridge" class="cls-12">
+    <g>
+      <line class="cls-2" x1="24.5" y1="23.1" x2="24.5" y2="9.1"/>
+      <line class="cls-2" x1="24.5" y1="13.9" x2="27.8" y2="10.7"/>
+      <line class="cls-2" x1="24.5" y1="13.9" x2="21.3" y2="10.7"/>
+    </g>
+  </g>
+  <g id="Freezer" class="cls-12">
+    <rect class="cls-3" x="2.3" y="10.1" width="43.5" height="27.8"/>
+    <g>
+      <line class="cls-4" x1="14.6" y1="23.5" x2="14.6" y2="16.5"/>
+      <line class="cls-4" x1="14.6" y1="19" x2="16.3" y2="17.3"/>
+      <line class="cls-4" x1="14.6" y1="19" x2="13" y2="17.3"/>
+    </g>
+    <g>
+      <line class="cls-4" x1="33" y1="23.5" x2="33" y2="16.5"/>
+      <line class="cls-4" x1="33" y1="19" x2="34.6" y2="17.3"/>
+      <line class="cls-4" x1="33" y1="19" x2="31.3" y2="17.3"/>
+    </g>
+  </g>
+  <g id="Motor">
+    <circle class="cls-2" cx="24" cy="24" r="16.6"/>
+    <polyline class="cls-7" points="12.2 37 7.4 41.6 7.4 45.1 40.6 45.1 40.6 41.3 35.4 36.1"/>
+    <path class="cls-9" d="M23.5,30.6c-.4,0-.7-.2-.9-.6l-3.5-10.1h0c0,.2,0,.6,0,1s0,.9,0,1.3,0,.9,0,1.4v6.1c0,.5-.4.9-.9.9h-.1c-.5,0-.9-.4-.9-.9v-11c0-.5.4-.9.9-.9h1.4c.4,0,.7.2.9.6l3.4,9.7h0l3.5-9.7c.1-.4.5-.6.8-.6h1.4c.5,0,.9.4.9.9v11c0,.5-.4.9-.9.9h-.2c-.5,0-.9-.4-.9-.9v-6.3c0-.4,0-.8,0-1.3s0-.9,0-1.3c0-.4,0-.7,0-1h0l-3.6,10.1c-.1.4-.5.6-.8.6h-.6Z"/>
+    <g class="cls-12">
+      <line class="cls-2" x1="10.9" y1="34.4" x2="8.8" y2="36"/>
+      <line class="cls-2" x1="7.8" y1="28.4" x2="5.3" y2="29"/>
+      <line class="cls-2" x1="7.4" y1="21.6" x2="4.8" y2="21.2"/>
+      <line class="cls-2" x1="9.8" y1="15.2" x2="7.5" y2="13.8"/>
+      <line class="cls-2" x1="14.4" y1="10.3" x2="12.9" y2="8.1"/>
+      <line class="cls-2" x1="20.6" y1="7.6" x2="20.1" y2="5"/>
+      <line class="cls-2" x1="27.4" y1="7.6" x2="28" y2="5.1"/>
+      <line class="cls-2" x1="33.6" y1="10.3" x2="35.2" y2="8.2"/>
+      <line class="cls-2" x1="38.3" y1="15.3" x2="40.5" y2="13.9"/>
+      <line class="cls-2" x1="40.6" y1="21.7" x2="43.2" y2="21.3"/>
+      <line class="cls-2" x1="40.1" y1="28.4" x2="42.7" y2="29.1"/>
+      <line class="cls-2" x1="37.1" y1="34.5" x2="39.1" y2="36.1"/>
+    </g>
+  </g>
+</svg>

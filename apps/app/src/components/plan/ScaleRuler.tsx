@@ -1,0 +1,437 @@
+import { useState, useRef, useCallback, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
+import type { Point2 } from '@/types/schema'
+import FloatingDistanceInput from './FloatingDistanceInput'
+import { computePlanImportFitScale } from './planImportViewport'
+
+interface ScaleRulerProps {
+  imageDataUrl: string
+  onScaleComplete: (reference: { p1: Point2; p2: Point2; meters: number }) => void
+  onSkip: () => void
+  onCancel: () => void
+  initialReference?: { p1: Point2; p2: Point2; meters: number } | null
+  autoCreateInitialReference?: boolean
+  onReferenceChange?: (reference: { p1: Point2; p2: Point2; meters: number } | null) => void
+  invertPreview?: boolean
+  surfaceClassName?: string
+  showInlineContinue?: boolean
+}
+
+function ScaleRuler({
+  imageDataUrl,
+  onScaleComplete,
+  onSkip,
+  onCancel: _onCancel,
+  initialReference = null,
+  autoCreateInitialReference = false,
+  onReferenceChange,
+  invertPreview = false,
+  surfaceClassName = 'bg-gray-50 dark:bg-gray-800',
+  showInlineContinue = true,
+}: ScaleRulerProps) {
+  const { t } = useTranslation()
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [isDrawing, setIsDrawing] = useState(false)
+  const [draggingHandle, setDraggingHandle] = useState<'start' | 'end' | null>(null)
+  const [startPoint, setStartPoint] = useState<Point2 | null>(null)
+  const [endPoint, setEndPoint] = useState<Point2 | null>(null)
+  const [tempEndPoint, setTempEndPoint] = useState<Point2 | null>(null)
+  const [meters, setMeters] = useState<number>(1)
+  const [scale, setScale] = useState(1)
+  const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null)
+  const [imageLoaded, setImageLoaded] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const lastEmittedRef = useRef<string | null>(null)
+  const lastAppliedInitialRef = useRef<string | null>(null)
+  const autoCreatedForImageRef = useRef<string | null>(null)
+  const onReferenceChangeRef = useRef<ScaleRulerProps['onReferenceChange']>(onReferenceChange)
+
+  useEffect(() => {
+    onReferenceChangeRef.current = onReferenceChange
+  }, [onReferenceChange])
+
+  useEffect(() => {
+    const initialSignature = initialReference
+      ? `${initialReference.p1.x},${initialReference.p1.y},${initialReference.p2.x},${initialReference.p2.y},${initialReference.meters}`
+      : null
+    if (initialSignature === lastAppliedInitialRef.current) return
+    // Don't rehydrate while user is actively interacting; that can fight drag updates.
+    if (isDrawing || draggingHandle) return
+    if (!initialReference) {
+      lastAppliedInitialRef.current = null
+      setStartPoint(null)
+      setEndPoint(null)
+      setTempEndPoint(null)
+      setMeters(1)
+      setIsDrawing(false)
+      setDraggingHandle(null)
+      return
+    }
+    lastAppliedInitialRef.current = initialSignature
+    setStartPoint(initialReference.p1)
+    setEndPoint(initialReference.p2)
+    setTempEndPoint(null)
+    setMeters(initialReference.meters)
+    setIsDrawing(false)
+    setDraggingHandle(null)
+  }, [initialReference, isDrawing, draggingHandle])
+
+  // Auto-persist reference as soon as line + meters are valid.
+  useEffect(() => {
+    const emit = onReferenceChangeRef.current
+    if (!emit) return
+    // Never autosync while actively drawing or dragging handles; this prevents
+    // feedback loops between local interaction state and parent rehydration.
+    if (isDrawing || draggingHandle) return
+    if (!startPoint || !endPoint || !Number.isFinite(meters) || meters <= 0) {
+      if (lastEmittedRef.current !== null) {
+        lastEmittedRef.current = null
+        emit(null)
+      }
+      return
+    }
+    const signature = `${startPoint.x},${startPoint.y},${endPoint.x},${endPoint.y},${meters}`
+    if (lastEmittedRef.current === signature) return
+    lastEmittedRef.current = signature
+    emit({
+      p1: startPoint,
+      p2: endPoint,
+      meters,
+    })
+  }, [startPoint, endPoint, meters, isDrawing, draggingHandle])
+
+  // Load image and set up canvas
+  useEffect(() => {
+    const img = new Image()
+    img.onload = () => {
+      setImageSize({ width: img.width, height: img.height })
+      setImageLoaded(true)
+      autoCreatedForImageRef.current = null
+    }
+    img.src = imageDataUrl
+  }, [imageDataUrl])
+
+  useEffect(() => {
+    if (!autoCreateInitialReference || initialReference || !imageLoaded || !imageSize) return
+    if (startPoint || endPoint || isDrawing || draggingHandle) return
+
+    const signature = `${imageDataUrl}:${imageSize.width}x${imageSize.height}`
+    if (autoCreatedForImageRef.current === signature) return
+    autoCreatedForImageRef.current = signature
+
+    const y = imageSize.height / 2
+    const p1 = { x: imageSize.width * 0.25, y }
+    const p2 = { x: imageSize.width * 0.75, y }
+    setStartPoint(p1)
+    setEndPoint(p2)
+    setTempEndPoint(null)
+    setMeters(5)
+    setIsDrawing(false)
+    setDraggingHandle(null)
+  }, [
+    autoCreateInitialReference,
+    initialReference,
+    imageLoaded,
+    imageSize,
+    imageDataUrl,
+    startPoint,
+    endPoint,
+    isDrawing,
+    draggingHandle,
+  ])
+
+  // Update scale when container size changes (same fit logic as ImageCropper)
+  useEffect(() => {
+    if (!imageLoaded || !imageSize) return
+
+    const updateScale = () => {
+      const container = containerRef.current
+      if (!container) {
+        setTimeout(updateScale, 100)
+        return
+      }
+
+      const containerWidth = container.clientWidth
+      const containerHeight = container.clientHeight
+      if (containerWidth <= 0 || containerHeight <= 0) {
+        setTimeout(updateScale, 100)
+        return
+      }
+
+      const newScale = computePlanImportFitScale(imageSize, containerWidth, containerHeight)
+      if (newScale != null) {
+        setScale(newScale)
+      }
+    }
+
+    requestAnimationFrame(() => {
+      updateScale()
+    })
+
+    const resizeObserver = new ResizeObserver(() => {
+      updateScale()
+    })
+    if (containerRef.current) {
+      resizeObserver.observe(containerRef.current)
+    }
+
+    return () => {
+      resizeObserver.disconnect()
+    }
+  }, [imageLoaded, imageSize])
+
+  // Draw canvas
+  useEffect(() => {
+    if (!canvasRef.current || !imageSize || !imageLoaded) return
+
+    const canvas = canvasRef.current
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    const img = new Image()
+    img.onload = () => {
+      canvas.width = img.width * scale
+      canvas.height = img.height * scale
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      
+      // Draw image
+      ctx.save()
+      if (invertPreview) {
+        ctx.filter = 'invert(1)'
+      }
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+      ctx.restore()
+      
+      // Draw ruler line if we have points (including preview while dragging)
+      const displayEndPoint = endPoint || tempEndPoint
+      if (startPoint && displayEndPoint) {
+        const x1 = startPoint.x * scale
+        const y1 = startPoint.y * scale
+        const x2 = displayEndPoint.x * scale
+        const y2 = displayEndPoint.y * scale
+        
+        // Draw line
+        ctx.strokeStyle = '#0284c7'
+        ctx.lineWidth = 3
+        ctx.beginPath()
+        ctx.moveTo(x1, y1)
+        ctx.lineTo(x2, y2)
+        ctx.stroke()
+        
+        // Draw start point (larger if being dragged)
+        ctx.fillStyle = draggingHandle === 'start' ? '#0284c7' : '#0284c7'
+        ctx.beginPath()
+        ctx.arc(x1, y1, draggingHandle === 'start' ? 8 : 6, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.strokeStyle = '#ffffff'
+        ctx.lineWidth = 2
+        ctx.stroke()
+        
+        // Draw end point (larger if being dragged)
+        ctx.fillStyle = draggingHandle === 'end' ? '#0284c7' : '#0284c7'
+        ctx.beginPath()
+        ctx.arc(x2, y2, draggingHandle === 'end' ? 8 : 6, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.strokeStyle = '#ffffff'
+        ctx.lineWidth = 2
+        ctx.stroke()
+      }
+    }
+    img.src = imageDataUrl
+  }, [imageDataUrl, imageSize, scale, startPoint, endPoint, tempEndPoint, imageLoaded, isDrawing, draggingHandle, invertPreview])
+
+  // Check if point is near a handle
+  const getHandleAt = useCallback((x: number, y: number) => {
+    if (!startPoint || !endPoint) return null
+    
+    const handleRadius = 10 / scale // Handle detection radius in image coordinates
+    const startDist = Math.sqrt((x - startPoint.x) ** 2 + (y - startPoint.y) ** 2)
+    const endDist = Math.sqrt((x - endPoint.x) ** 2 + (y - endPoint.y) ** 2)
+    
+    if (startDist < handleRadius) return 'start'
+    if (endDist < handleRadius) return 'end'
+    return null
+  }, [startPoint, endPoint, scale])
+
+  // Handle mouse down
+  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!imageSize) return
+    
+    const rect = canvasRef.current?.getBoundingClientRect()
+    if (!rect) return
+    
+    const x = (e.clientX - rect.left) / scale
+    const y = (e.clientY - rect.top) / scale
+    
+    // If we have a complete line, check if clicking on a handle
+    if (startPoint && endPoint) {
+      const handle = getHandleAt(x, y)
+      if (handle) {
+        setDraggingHandle(handle)
+        return
+      }
+      // Clicked away from handles: start a brand-new line from this point.
+      // This lets users quickly redo short/incorrect lines by dragging anywhere.
+      setStartPoint({ x, y })
+      setEndPoint(null)
+      setTempEndPoint(null)
+      setIsDrawing(true)
+      setDraggingHandle(null)
+      return
+    }
+    
+    if (!startPoint) {
+      // First click - set start point and start drawing
+      setStartPoint({ x, y })
+      setEndPoint(null)
+      setTempEndPoint(null)
+      setIsDrawing(true)
+    } else if (startPoint && !endPoint) {
+      // Second click - set end point (completes the line)
+      setEndPoint({ x, y })
+      setTempEndPoint(null)
+      setIsDrawing(false)
+      setTimeout(() => inputRef.current?.focus(), 100)
+    }
+  }, [imageSize, scale, startPoint, endPoint, getHandleAt])
+
+  // Handle mouse move
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const rect = canvasRef.current?.getBoundingClientRect()
+    if (!rect || !imageSize) return
+    
+    const x = (e.clientX - rect.left) / scale
+    const y = (e.clientY - rect.top) / scale
+    
+    // If dragging a handle, update that handle's position
+    if (draggingHandle === 'start' && startPoint) {
+      setStartPoint({ x, y })
+    } else if (draggingHandle === 'end' && endPoint) {
+      setEndPoint({ x, y })
+    } else if (isDrawing && startPoint && !endPoint) {
+      // Update preview end point while drawing new line
+      setTempEndPoint({ x, y })
+    }
+  }, [startPoint, endPoint, imageSize, scale, isDrawing, draggingHandle])
+
+  // Handle mouse up
+  const handleMouseUp = useCallback(() => {
+    // If we were dragging a handle, stop dragging
+    if (draggingHandle) {
+      setDraggingHandle(null)
+      return
+    }
+    
+    // If we were drawing and have a temp end point from drag motion, finalize only
+    // when the segment has a meaningful length; otherwise keep waiting for the
+    // second click to avoid accidental zero-length lines.
+    if (isDrawing && startPoint && !endPoint && tempEndPoint) {
+      const minDistance = 2 / Math.max(scale, 0.0001)
+      const rulerDistance = Math.hypot(tempEndPoint.x - startPoint.x, tempEndPoint.y - startPoint.y)
+      if (rulerDistance >= minDistance) {
+        setEndPoint(tempEndPoint)
+        setTempEndPoint(null)
+        setIsDrawing(false)
+        setTimeout(() => inputRef.current?.focus(), 100)
+      }
+    }
+    // If clicking (not dragging), the click handler already handled it
+  }, [isDrawing, startPoint, endPoint, tempEndPoint, draggingHandle, scale])
+
+  // Handle complete
+  const handleComplete = useCallback(() => {
+    if (!startPoint || !endPoint) return
+    
+    onScaleComplete({
+      p1: startPoint,
+      p2: endPoint,
+      meters,
+    })
+  }, [startPoint, endPoint, meters, onScaleComplete])
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
+      <p className="flex-shrink-0 text-sm text-gray-600 dark:text-gray-400">
+        {t('planImport.scaleDescription')}
+      </p>
+
+      <div
+        ref={containerRef}
+        className={`relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-gray-300 dark:border-gray-600 ${surfaceClassName}`}
+      >
+        <div className="flex min-h-0 flex-1 items-center justify-center p-4">
+          {!imageLoaded || !imageSize ? (
+            <div className="text-gray-500 dark:text-gray-400">{t('planImport.loading')}</div>
+          ) : (
+            <canvas
+              ref={canvasRef}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+              className={`max-h-full max-w-full object-contain ${draggingHandle ? 'cursor-move' : 'cursor-crosshair'}`}
+            />
+          )}
+        </div>
+        
+        {/* Floating distance input on the line */}
+        {imageLoaded && imageSize && startPoint && endPoint && (
+          <FloatingDistanceInput
+            startPoint={startPoint}
+            endPoint={endPoint}
+            scale={scale}
+            meters={meters}
+            onMetersChange={setMeters}
+            inputRef={inputRef}
+            canvasRef={canvasRef}
+            containerRef={containerRef}
+          />
+        )}
+      </div>
+
+      <div className="flex flex-shrink-0 flex-wrap gap-3">
+        {startPoint && endPoint ? (
+          <>
+            {showInlineContinue && (
+              <button
+                type="button"
+                onClick={handleComplete}
+                className="flex-1 px-6 py-3 bg-sky-600 hover:bg-sky-700 text-white font-semibold rounded-md shadow-md transition-colors"
+              >
+                {t('common.continue')}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setStartPoint(null)
+                setEndPoint(null)
+                setTempEndPoint(null)
+                setMeters(1)
+                setIsDrawing(false)
+              }}
+              className={`${showInlineContinue ? '' : 'flex-1'} px-6 py-3 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 font-medium rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors`}
+            >
+              {t('planImport.redraw')}
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            data-testid="e2e-import-plan-skip-scale"
+            onClick={onSkip}
+            className="flex-1 px-6 py-3 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 font-medium rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+          >
+            {t('planImport.skipScale')}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export default ScaleRuler

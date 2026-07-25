@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 24 24">
+  <!-- Generator: Adobe Illustrator 30.4.0, SVG Export Plug-In . SVG Version: 2.1.4 Build 226)  -->
+  <defs>
+    <style>
+      .st0 {
+        fill: none;
+        stroke: #000;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2px;
+      }
+
+      .st1 {
+        display: none;
+      }
+    </style>
+  </defs>
+  <path class="st1" d="M4,3h6c.55,0,1,.45,1,1s-.45,1-1,1h-3.59l4.3,4.29c.39.39.39,1.03,0,1.42s-1.03.39-1.42,0l-4.29-4.3v3.59c0,.55-.45,1-1,1s-1-.45-1-1v-6c0-.55.45-1,1-1ZM14,4c0-.55.45-1,1-1h5c.55,0,1,.45,1,1v6c0,.55-.45,1-1,1s-1-.45-1-1v-3.59l-4.29,4.3c-.39.39-1.03.39-1.42,0s-.39-1.03,0-1.42l4.3-4.29h-2.59c-.55,0-1-.45-1-1ZM4,13c.55,0,1,.45,1,1v3.59l4.29-4.3c.39-.39,1.03-.39,1.42,0s.39,1.03,0,1.42l-4.3,4.29h3.59c.55,0,1,.45,1,1s-.45,1-1,1h-6c-.55,0-1-.45-1-1v-6c0-.55.45-1,1-1ZM19,14c0-.55.45-1,1-1s1,.45,1,1v6c0,.55-.45,1-1,1h-6c-.55,0-1-.45-1-1s.45-1,1-1h3.59l-4.3-4.29c-.39-.39-.39-1.03,0-1.42s1.03-.39,1.42,0l4.29,4.3v-3.59Z"/>
+  <g>
+    <g id="_x3C_Radial_Repeat_x3E_">
+      <g>
+        <polyline class="st0" points="21.49 17.08 21.49 21.42 17.03 21.42"/>
+        <line class="st0" x1="21.49" y1="21.42" x2="15.16" y2="15.08"/>
+      </g>
+    </g>
+    <g id="_x3C_Radial_Repeat_x3E_1" data-name="_x3C_Radial_Repeat_x3E_">
+      <g>
+        <polyline class="st0" points="6.92 21.49 2.58 21.49 2.58 17.03"/>
+        <line class="st0" x1="2.58" y1="21.49" x2="8.92" y2="15.16"/>
+      </g>
+    </g>
+    <g id="_x3C_Radial_Repeat_x3E_2" data-name="_x3C_Radial_Repeat_x3E_">
+      <g>
+        <polyline class="st0" points="2.51 6.92 2.51 2.58 6.97 2.58"/>
+        <line class="st0" x1="2.51" y1="2.58" x2="8.84" y2="8.92"/>
+      </g>
+    </g>
+    <g id="_x3C_Radial_Repeat_x3E_3" data-name="_x3C_Radial_Repeat_x3E_">
+      <g>
+        <polyline class="st0" points="17.08 2.51 21.42 2.51 21.42 6.97"/>
+        <line class="st0" x1="21.42" y1="2.51" x2="15.08" y2="8.84"/>
+      </g>
+    </g>
+  </g>
+</svg>

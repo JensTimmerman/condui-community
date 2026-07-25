@@ -1,0 +1,311 @@
+/**
+ * Default properties for protection devices (MCB, RCD, RCBO, SPD, etc.)
+ * when created by drop (eendraad or panel). Single source of truth for defaults.
+ */
+import type {
+  ProtectionCreationTemplate,
+  ProtectionDevice,
+  ProtectionType,
+  TrunkDevice,
+  PolesConfig,
+} from '@/types/schema'
+import { polesConfigFromVoltageSystem } from '@/constants/poleConfig'
+import { polesFromConfig } from '@/constants/poleConfig'
+import { getAllSupplyTrunkDevices } from '@/lib/feedTopology'
+import { ROTATING_SWITCH_LABEL_VISIBILITY } from '@/lib/protectionKind'
+import {
+  getElectricalInstallationFromProject,
+  type ProjectWithOptionalV2Electrical,
+} from '@/lib/projectV2/electrical'
+
+/** Mandatory RCBO default residual-current sensitivity. */
+export const DEFAULT_RCBO_SENSITIVITY_MA = 300
+
+/** Default residual-current type for new RCD/RCBO devices. */
+export const DEFAULT_RESIDUAL_CURRENT_TYPE = 'A' as const
+
+/** Standard Belgian breaker rated currents for MCB/RCBO selection (A). */
+export const BE_STANDARD_BREAKER_RATINGS_A = [
+  2, 4, 6, 10, 12, 16, 20, 25, 32, 40, 50, 63, 80, 100,
+] as const
+
+/** Default short-circuit breaking capacity for new MCB/RCBO (3000 / 3 kA). */
+export const DEFAULT_BREAKING_CAPACITY_KA = 3
+
+/** Default unique dropdown value (amp-style `3000`, not `3` kA). */
+export const DEFAULT_BREAKING_CAPACITY_OPTION = '3000'
+
+/** Option values that render with a frame on the one-wire (3000–10000 only). */
+export const BREAKING_CAPACITY_AMP_OPTION_VALUES = new Set(['3000', '4500', '6000', '10000'])
+
+export type BreakingCapacityDropdownOption = {
+  /** Unique CustomDropdown value (may differ from label for duplicate kA entries). */
+  value: string
+  label: string
+  ka: number
+}
+
+/** MCB/RCBO breaking-capacity dropdown — exact labels and order. */
+export const MCB_RCBO_BREAKING_CAPACITY_OPTIONS: BreakingCapacityDropdownOption[] = [
+  { value: '3000', label: '3000', ka: 3 },
+  { value: '4500', label: '4500', ka: 4.5 },
+  { value: '6000', label: '6000', ka: 6 },
+  { value: '10000', label: '10000', ka: 10 },
+  { value: '3', label: '3 kA', ka: 3 },
+  { value: '4.5', label: '4,5 kA', ka: 4.5 },
+  { value: '6', label: '6 kA', ka: 6 },
+  { value: '10', label: '10 kA', ka: 10 },
+  { value: '15', label: '15 kA', ka: 15 },
+  { value: '25', label: '25 kA', ka: 25 },
+  { value: '30', label: '30 kA', ka: 30 },
+]
+
+export function breakingCapacityKaFromSelectValue(value: string): number | undefined {
+  const option = MCB_RCBO_BREAKING_CAPACITY_OPTIONS.find((o) => o.value === value)
+  if (option) return option.ka
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : undefined
+}
+
+export function breakingCapacityPatchFromSelectValue(
+  value: string
+): { breakingCapacityKa: number; breakingCapacityOption: string } | undefined {
+  const option = MCB_RCBO_BREAKING_CAPACITY_OPTIONS.find((o) => o.value === value)
+  if (!option) return undefined
+  return { breakingCapacityKa: option.ka, breakingCapacityOption: option.value }
+}
+
+/** Resolve stored option; legacy projects with only kA default to amp-style when ambiguous. */
+export function resolveBreakingCapacitySelectValue(
+  option: string | undefined,
+  ka: number | undefined
+): string {
+  if (option && MCB_RCBO_BREAKING_CAPACITY_OPTIONS.some((entry) => entry.value === option)) {
+    return option
+  }
+  if (ka != null) {
+    const ampEntry = MCB_RCBO_BREAKING_CAPACITY_OPTIONS.find(
+      (entry) => entry.ka === ka && BREAKING_CAPACITY_AMP_OPTION_VALUES.has(entry.value)
+    )
+    if (ampEntry) return ampEntry.value
+    const kaEntry = MCB_RCBO_BREAKING_CAPACITY_OPTIONS.find(
+      (entry) => entry.ka === ka && !BREAKING_CAPACITY_AMP_OPTION_VALUES.has(entry.value)
+    )
+    if (kaEntry) return kaEntry.value
+    return String(ka)
+  }
+  return DEFAULT_BREAKING_CAPACITY_OPTION
+}
+
+export function breakingCapacityLabelForOption(optionValue: string): string {
+  const entry = MCB_RCBO_BREAKING_CAPACITY_OPTIONS.find((o) => o.value === optionValue)
+  return entry?.label ?? optionValue
+}
+
+/** Frame on one-wire only for 3000, 4500, 6000, 10000 — not for 3 kA etc. */
+export function breakingCapacityOptionIsAmpStyle(optionValue: string): boolean {
+  return BREAKING_CAPACITY_AMP_OPTION_VALUES.has(optionValue)
+}
+
+/** kA options for SPD (surge ratings). */
+export function protectionBreakingCapacityKaOptions(isSPD: boolean): number[] {
+  return isSPD ? [10, 20, 25, 40, 50] : []
+}
+
+/** Get poles config from project installation voltage (1~ → 2P, 3~ → 3P, 3N~ → 4P). */
+export function getVoltagePolesConfig(
+  project: ProjectWithOptionalV2Electrical | null
+): PolesConfig {
+  const system = project
+    ? getElectricalInstallationFromProject(project)?.nominalVoltage?.system
+    : '2~'
+  return polesConfigFromVoltageSystem(system ?? '2~')
+}
+
+/** Keep voltage-derived defaults inside the choices offered by the protection editor. */
+export function getProtectionDefaultPolesConfig(
+  type: ProtectionType,
+  voltagePolesConfig: PolesConfig
+): PolesConfig {
+  if ((type === 'RCD' || type === 'RCBO') && voltagePolesConfig === '3P') return '4P'
+  if (type === 'RCD' && voltagePolesConfig !== '2P' && voltagePolesConfig !== '4P') return '2P'
+  return voltagePolesConfig
+}
+
+export function protectionCreationTemplateFromDevice(
+  protection: ProtectionDevice
+): ProtectionCreationTemplate {
+  const polesConfig =
+    protection.type === 'RCD' && protection.polesConfig
+      ? getProtectionDefaultPolesConfig(protection.type, protection.polesConfig)
+      : protection.polesConfig
+  return {
+    ratingA: protection.ratingA,
+    curve: protection.curve,
+    sensitivityMa: protection.sensitivityMa,
+    residualCurrentType: protection.residualCurrentType,
+    breakingCapacityKa: protection.breakingCapacityKa,
+    breakingCapacityOption: protection.breakingCapacityOption,
+    polesConfig,
+    poles: polesConfig ? polesFromConfig(polesConfig) : protection.poles,
+  }
+}
+
+type ProjectWithProtectionTemplates = ProjectWithOptionalV2Electrical & {
+  project?: {
+    protectionCreationTemplates?: Partial<Record<ProtectionType, ProtectionCreationTemplate>>
+  }
+}
+
+/** Project-specific learned values take precedence over voltage-derived fallbacks. */
+export function getProtectionCreationProps(
+  project: ProjectWithProtectionTemplates | null,
+  type: ProtectionType
+): Partial<ProtectionDevice> {
+  const fallback = getDefaultProtectionProps(type, getVoltagePolesConfig(project))
+  const remembered = project?.project?.protectionCreationTemplates?.[type]
+  return remembered ? { ...fallback, ...remembered } : fallback
+}
+
+/** Default properties for a protection device by type. Use when creating on main bus or in panel. */
+export function getDefaultProtectionProps(
+  type: ProtectionDevice['type'],
+  polesConfig: PolesConfig
+): Partial<ProtectionDevice> {
+  const effectivePolesConfig = getProtectionDefaultPolesConfig(type, polesConfig)
+  const poles = polesFromConfig(effectivePolesConfig)
+  switch (type) {
+    case 'MCB':
+      return {
+        polesConfig: effectivePolesConfig,
+        poles,
+        ratingA: 16,
+        curve: 'C',
+        breakingCapacityKa: DEFAULT_BREAKING_CAPACITY_KA,
+        breakingCapacityOption: DEFAULT_BREAKING_CAPACITY_OPTION,
+      }
+    case 'RCD':
+      return {
+        polesConfig: effectivePolesConfig,
+        poles,
+        sensitivityMa: 300,
+        residualCurrentType: DEFAULT_RESIDUAL_CURRENT_TYPE,
+        ratingA: 40,
+      }
+    case 'RCBO':
+      return {
+        polesConfig: effectivePolesConfig,
+        poles,
+        sensitivityMa: DEFAULT_RCBO_SENSITIVITY_MA,
+        residualCurrentType: DEFAULT_RESIDUAL_CURRENT_TYPE,
+        ratingA: 40,
+        curve: 'C',
+        breakingCapacityKa: DEFAULT_BREAKING_CAPACITY_KA,
+        breakingCapacityOption: DEFAULT_BREAKING_CAPACITY_OPTION,
+      }
+    case 'SPD':
+      return {
+        polesConfig: effectivePolesConfig,
+        poles,
+        breakingCapacityKa: 20,
+      }
+    case 'FUSE':
+      return { polesConfig: '1P', poles: 1, ratingA: 10 }
+    case 'MAIN_SWITCH':
+      return { polesConfig: effectivePolesConfig, poles, ratingA: 63 }
+    case 'ROTATING_SWITCH':
+      return {
+        symbolLabelDisplay: {
+          visibility: { ...ROTATING_SWITCH_LABEL_VISIBILITY },
+        },
+      }
+    default:
+      return { polesConfig: effectivePolesConfig, poles }
+  }
+}
+
+/**
+ * Fill missing MCB/RCBO breaking-capacity fields on supply-trunk protections.
+ * Legacy default projects created the devices with rating/curve but without stored kA values,
+ * so the properties panel showed 3000 while the one-wire diagram had nothing to render.
+ */
+export function healSupplyTrunkProtectionBreakingCapacity(
+  project: ProjectWithOptionalV2Electrical
+): boolean {
+  let changed = false
+  for (const device of getAllSupplyTrunkDevices(project)) {
+    if (device.type !== 'protection') continue
+    const kind = device.protectionType
+    if (kind !== 'MCB' && kind !== 'RCBO') continue
+    if (device.breakingCapacityKa != null && device.breakingCapacityOption != null) continue
+
+    const polesConfig = device.polesConfig ?? getVoltagePolesConfig(project)
+    const defaults = getDefaultTrunkDeviceProtectionProps(kind, polesConfig)
+    if (device.breakingCapacityKa == null && defaults.breakingCapacityKa != null) {
+      device.breakingCapacityKa = defaults.breakingCapacityKa
+      changed = true
+    }
+    if (device.breakingCapacityOption == null && defaults.breakingCapacityOption != null) {
+      device.breakingCapacityOption = defaults.breakingCapacityOption
+      changed = true
+    }
+  }
+  return changed
+}
+
+/** Default properties for a supply trunk device (protection type). Use when dropping on supply wire or in panel supply area. */
+export function getDefaultTrunkDeviceProtectionProps(
+  protectionType: ProtectionDevice['type'],
+  polesConfig: PolesConfig
+): Partial<TrunkDevice> {
+  const effectivePolesConfig = getProtectionDefaultPolesConfig(protectionType, polesConfig)
+  const poles = polesFromConfig(effectivePolesConfig)
+  switch (protectionType) {
+    case 'MCB':
+      return {
+        polesConfig: effectivePolesConfig,
+        poles,
+        ratingA: 16,
+        curve: 'C',
+        breakingCapacityKa: DEFAULT_BREAKING_CAPACITY_KA,
+        breakingCapacityOption: DEFAULT_BREAKING_CAPACITY_OPTION,
+      }
+    case 'RCD':
+      return {
+        polesConfig: effectivePolesConfig,
+        poles,
+        sensitivityMa: 300,
+        residualCurrentType: DEFAULT_RESIDUAL_CURRENT_TYPE,
+        ratingA: 40,
+      }
+    case 'RCBO':
+      return {
+        polesConfig: effectivePolesConfig,
+        poles,
+        sensitivityMa: DEFAULT_RCBO_SENSITIVITY_MA,
+        residualCurrentType: DEFAULT_RESIDUAL_CURRENT_TYPE,
+        ratingA: 40,
+        curve: 'C',
+        breakingCapacityKa: DEFAULT_BREAKING_CAPACITY_KA,
+        breakingCapacityOption: DEFAULT_BREAKING_CAPACITY_OPTION,
+      }
+    case 'SPD':
+      return {
+        polesConfig: effectivePolesConfig,
+        poles,
+        breakingCapacityKa: 20,
+      }
+    case 'FUSE':
+      return { polesConfig: '1P', poles: 1, ratingA: 10 }
+    case 'MAIN_SWITCH':
+      return { polesConfig: effectivePolesConfig, poles, ratingA: 63 }
+    case 'ROTATING_SWITCH':
+      return {
+        symbolLabelDisplay: {
+          visibility: { ...ROTATING_SWITCH_LABEL_VISIBILITY },
+        },
+      }
+    default:
+      return { polesConfig: effectivePolesConfig, poles }
+  }
+}

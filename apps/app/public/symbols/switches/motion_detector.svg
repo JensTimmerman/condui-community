@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 48 48" width="48" height="48">
+  <defs>
+    <style>
+      .st0, .st1, .st2 {
+        stroke: currentColor;
+        stroke-width: 2px;
+        stroke-miterlimit: 10;
+      }
+
+      .st0, .st2 {
+        fill: none;
+        stroke-linecap: round;
+      }
+
+      .st1 {
+        fill: currentColor;
+        stroke-linejoin: round;
+      }
+
+      .st2 {
+        stroke-linejoin: round;
+      }
+
+      .st3 {
+        display: none;
+      }
+    </style>
+  </defs>
+  <g id="Overlay_Light" class="st3">
+    <path class="st2" d="M28,19.9l-8.1,8.4,8.1-8.4Z"/>
+    <path class="st2" d="M19.9,19.9l8.1,8.4-8.1-8.4Z"/>
+  </g>
+  <g>
+    <polygon class="st1" points="34.74 24.69 41.37 27.48 41.37 21.9 34.74 24.69"/>
+    <polygon class="st1" points="32.66 13.45 39.83 13.05 37.38 8.04 32.66 13.45"/>
+    <path class="st0" d="M25.61,38.06c1-1.62,3.92-6.94,3.92-14.06s-2.93-12.44-3.92-14.06"/>
+    <path class="st2" d="M26.65,35.86c-9.05-4.42-15.21-7.44-24.25-11.86,9.05-4.42,15.21-7.44,24.25-11.86"/>
+    <polygon class="st1" points="32.66 34.55 39.83 34.95 37.38 39.96 32.66 34.55"/>
+  </g>
+</svg>

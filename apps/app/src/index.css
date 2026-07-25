@@ -1,0 +1,118 @@
+@import '../../../packages/ui/src/brand-tokens.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Figtree (default) */
+@font-face {
+  font-family: 'Figtree';
+  src: url('/fonts/Figtree/Figtree-VariableFont_wght.ttf') format('truetype');
+  font-weight: 300 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Figtree';
+  src: url('/fonts/Figtree/Figtree-Italic-VariableFont_wght.ttf') format('truetype');
+  font-weight: 300 900;
+  font-style: italic;
+  font-display: swap;
+}
+
+/* Open Sans */
+@font-face {
+  font-family: 'Open Sans';
+  src: url('/fonts/OpenSans/OpenSans-VariableFont_wdth,wght.ttf') format('truetype');
+  font-weight: 300 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Open Sans';
+  src: url('/fonts/OpenSans/OpenSans-Italic-VariableFont_wdth,wght.ttf') format('truetype');
+  font-weight: 300 800;
+  font-style: italic;
+  font-display: swap;
+}
+
+@layer base {
+  :root {
+    --font-family: 'Figtree', system-ui, sans-serif;
+    font-family: var(--font-family);
+    line-height: 1.5;
+    font-weight: 400;
+
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    margin: 0;
+    display: flex;
+    min-width: 320px;
+    min-height: 100dvh;
+    height: 100dvh;
+    overflow: hidden;
+    /* Prevent iOS bounce/overscroll */
+    overscroll-behavior: none;
+    /* Prevent pull-to-refresh on mobile */
+    overscroll-behavior-y: contain;
+    /* Prevent tap highlight on iOS */
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  #root {
+    width: 100%;
+    height: 100dvh;
+    /* Prevent overscroll */
+    overscroll-behavior: none;
+  }
+
+  /* UI icon SVGs: do not force fill on closed paths; stroke-only icons stay stroke-only */
+  .ui-svg-icon svg,
+  .ui-svg-icon svg * {
+    fill: none;
+  }
+
+  /* Library panel scrollbar (theme-aware) */
+  [data-library-scroll='true'] {
+    scrollbar-width: auto;
+    scrollbar-color: #9ca3af #f3f4f6;
+  }
+
+  [data-library-scroll='true']::-webkit-scrollbar {
+    width: 14px;
+  }
+
+  [data-library-scroll='true']::-webkit-scrollbar-track {
+    background: #f3f4f6;
+  }
+
+  [data-library-scroll='true']::-webkit-scrollbar-thumb {
+    background-color: #9ca3af;
+    border-radius: 9999px;
+  }
+
+  [data-library-scroll='true']::-webkit-scrollbar-thumb:hover {
+    background-color: #6b7280;
+  }
+
+  .dark [data-library-scroll='true'] {
+    scrollbar-color: #4b5563 #1f2937;
+  }
+
+  .dark [data-library-scroll='true']::-webkit-scrollbar-track {
+    background: #1f2937;
+  }
+
+  .dark [data-library-scroll='true']::-webkit-scrollbar-thumb {
+    background-color: #4b5563;
+  }
+
+  .dark [data-library-scroll='true']::-webkit-scrollbar-thumb:hover {
+    background-color: #6b7280;
+  }
+}

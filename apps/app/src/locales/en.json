@@ -1,0 +1,1870 @@
+{
+  "appUpdate": {
+    "banner": "A new version of the app is available.",
+    "refresh": "Refresh"
+  },
+  "themeControls": {
+    "light": "Light",
+    "dark": "Dark"
+  },
+  "connectivity": {
+    "offlineBanner": "You are offline. Local projects remain saved on this device.",
+    "offlineReloadNotReady": "Avoid reloading until you have opened the app once while online in this browser tab.",
+    "offlineReloadDevHint": "Reload while offline only works with a production build (npm run build && vite preview), not the dev server.",
+    "dismissOfflineBanner": "Dismiss offline notice",
+    "offlineIndicatorTitle": "You are offline"
+  },
+  "diagnostics": {
+    "anonymousProjectName": "Diagnostics project ({{idShort}})",
+    "importFallbackProjectName": "Imported project ({{idShort}})"
+  },
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "remove": "Remove",
+    "edit": "Edit",
+    "add": "Add",
+    "close": "Close",
+    "open": "Open",
+    "new": "New",
+    "search": "Search",
+    "export": "Export",
+    "import": "Import",
+    "ok": "OK",
+    "back": "Back",
+    "next": "Next",
+    "continue": "Continue",
+    "confirm": "Confirm",
+    "moreActions": "More actions",
+    "none": "None",
+    "mixed": "Mixed"
+  },
+  "home": {
+    "footerCopyright": "© {{year}} {{brand}}",
+    "projectsMissing": {
+      "hint": "Projects missing?",
+      "title": "Projects missing?",
+      "body": "They may be local projects stored in another browser, another device, or on the old Eendraa domain. Contact support if you need help recovering them."
+    },
+    "viewMode": {
+      "grid": "Grid",
+      "list": "List"
+    },
+    "folders": {
+      "newFolder": "New folder",
+      "renameFolder": "Rename folder",
+      "deleteFolder": "Delete folder",
+      "deleteFolderConfirm": "This folder will be deleted permanently and cannot be restored. Projects in it will be moved out of the folder.",
+      "duplicateName": "A folder with this name already exists.",
+      "addToFolder": "Add to folder",
+      "removeFromFolder": "Remove from folder",
+      "folderName": "Folder name",
+      "folderNamePlaceholder": "e.g. 2025",
+      "personal": "Personal",
+      "ungrouped": "Other projects",
+      "emptyFolder": "Drag projects here",
+      "ungroupedDropHint": "Drag projects here to keep them outside folders",
+      "dragHandle": "Drag to move",
+      "dragFolderHandle": "Drag to reorder folder",
+      "selectProject": "Select {{name}}"
+    }
+  },
+  "dialog": {
+    "inputLabel": "Enter value"
+  },
+  "menu": {
+    "open": "Menu",
+    "backToMain": "Back to main",
+    "versions": "Versions",
+    "exportPdf": "Export to PDF",
+    "reExportPdf": "Re-export PDF",
+    "validation": "Validation",
+    "exportProject": "Download project",
+    "exportProjectError": "Failed to download project. Please try again.",
+    "settings": "Settings",
+    "shortcuts": "Shortcuts",
+    "installOffline": "Install for offline use",
+    "contactSupport": "Contact support",
+    "tutorial": "Tutorial"
+  },
+  "pwaInstall": {
+    "iosTitle": "Add to Home Screen",
+    "iosInstructions": "Tap the Share button in Safari, then choose “Add to Home Screen”.",
+    "unavailableTitle": "Install not available yet",
+    "unavailableMessage": "This browser has not offered install yet. Keep using the app in Chrome or Edge, or use the browser menu to install when it appears."
+  },
+  "tutorial": {
+    "title": "Tutorial",
+    "description": "A short walkthrough of the editor so you can get productive quickly.",
+    "close": "Close",
+    "openOnYoutube": "Watch on YouTube"
+  },
+  "touchOnboarding": {
+    "title": "Touch controls",
+    "close": "Close",
+    "tipPan": "Drag with one finger to pan the canvas.",
+    "tipZoom": "Pinch with two fingers to zoom in or out.",
+    "tipFocus": "Focus on the active selection.",
+    "tipCompactPanels": "Use the compact panels for everything else.",
+    "tipTablet": "On iPad and tablets, the full editor stays available, but touch gestures are prioritized."
+  },
+  "shortcuts": {
+    "title": "Shortcuts",
+    "intro": "All shortcuts used in the editor.",
+    "groups": {
+      "general": "General",
+      "viewport": "Viewport",
+      "sitplan": "Situation plan",
+      "quickPlacer": "Quick placer",
+      "oneWire": "One-wire"
+    },
+    "sections": {
+      "projectPanels": "Project & panels",
+      "keyboardNavigation": "Keyboard",
+      "mouseSelection": "Mouse & selection",
+      "trackpadTouch": "Trackpad & touch",
+      "floors": "Floors",
+      "editing": "Editing",
+      "fastPlacement": "Fast mode",
+      "navigation": "Navigation"
+    },
+    "keys": {
+      "ctrlCmdZ": "Ctrl / Cmd + Z",
+      "ctrlCmdShiftZ": "Ctrl / Cmd + Shift + Z",
+      "ctrlCmdY": "Ctrl / Cmd + Y",
+      "ctrlCmdL": "Ctrl / Cmd + L",
+      "ctrlCmdP": "Ctrl / Cmd + P",
+      "ctrlCmdD": "Ctrl / Cmd + D",
+      "tab": "Tab",
+      "esc": "Esc",
+      "space": "Space",
+      "f": "F",
+      "plus": "+",
+      "equals": "=",
+      "minus": "-",
+      "leftClick": "Left click",
+      "rightClick": "Right click",
+      "middleDrag": "Middle drag",
+      "rightDrag": "Right drag",
+      "leftDragEmptyCanvas": "Left drag empty canvas",
+      "shiftClick": "Shift + click",
+      "shiftDragSelect": "Shift + drag select",
+      "ctrlCmdAltClick": "Ctrl / Cmd / Alt + click",
+      "altDragSelect": "Alt + drag select",
+      "mouseWheel": "Mouse wheel",
+      "twoFingerScroll": "Two-finger scroll",
+      "pinch": "Pinch",
+      "ctrlWheel": "Ctrl + wheel",
+      "oneFingerDrag": "One-finger drag",
+      "twoFingerDragPinch": "Two-finger drag / pinch",
+      "doubleTap": "Double tap",
+      "longPress": "Long press",
+      "threeFingerSwipeUpDown": "Three-finger swipe up / down",
+      "threeFingerSwipeLeftRight": "Three-finger swipe left / right",
+      "digit1To9": "1-9",
+      "delete": "Delete",
+      "backspace": "Backspace",
+      "digits": "0-9",
+      "period": ".",
+      "comma": ",",
+      "shiftAZ": "Shift + A-Z",
+      "q": "Q",
+      "w": "W",
+      "d": "D",
+      "f1": "F1",
+      "f2": "F2",
+      "f3": "F3",
+      "arrowKeys": "Arrow keys"
+    },
+    "entries": {
+      "undo": {
+        "description": "Undo"
+      },
+      "redo": {
+        "description": "Redo"
+      },
+      "toggleLibrary": {
+        "description": "Toggle library"
+      },
+      "toggleProperties": {
+        "description": "Toggle properties"
+      },
+      "toggleDockPanels": {
+        "description": "Collapse panels"
+      },
+      "closeFloatingWindows": {
+        "description": "Close windows"
+      },
+      "duplicate": {
+        "description": "Duplicate selection (circuit, branch, or endpoints)"
+      },
+      "deleteSelection": {
+        "description": "Delete selection"
+      },
+      "focusViewport": {
+        "description": "Focus viewport"
+      },
+      "fitView": {
+        "description": "Fit to view"
+      },
+      "zoomIn": {
+        "description": "Zoom in"
+      },
+      "zoomOut": {
+        "description": "Zoom out"
+      },
+      "selectItem": {
+        "description": "Select"
+      },
+      "contextMenu": {
+        "description": "Context menu"
+      },
+      "panCanvas": {
+        "description": "Pan"
+      },
+      "rectangleSelect": {
+        "description": "Rectangle select"
+      },
+      "addToSelection": {
+        "description": "Add to selection"
+      },
+      "removeFromSelection": {
+        "description": "Remove from selection"
+      },
+      "mouseWheelZoom": {
+        "description": "Zoom"
+      },
+      "trackpadPan": {
+        "description": "Pan"
+      },
+      "trackpadPinchZoom": {
+        "description": "Zoom"
+      },
+      "touchPan": {
+        "description": "Pan"
+      },
+      "touchPanZoom": {
+        "description": "Pan & zoom"
+      },
+      "touchContextMenu": {
+        "description": "Context menu"
+      },
+      "touchMultiSelect": {
+        "description": "Toggle / rect select"
+      },
+      "touchFocusViewport": {
+        "description": "Focus viewport"
+      },
+      "touchSidePanels": {
+        "description": "Toggle side panels"
+      },
+      "switchFloor": {
+        "description": "Switch floor"
+      },
+      "toggleQuickPlacer": {
+        "description": "Toggle quick placer",
+        "note": "While hovering the situation plan"
+      },
+      "toggleWiring": {
+        "description": "Toggle wiring tool",
+        "note": "While hovering the situation plan"
+      },
+      "toggleDrawMode": {
+        "description": "Toggle draw mode",
+        "note": "While hovering the situation plan"
+      },
+      "switchToEendraadCanvas": {
+        "description": "Switch viewport to one-wire",
+        "note": "While hovering a viewport panel; no effect if it already shows one-wire"
+      },
+      "switchToPlanCanvas": {
+        "description": "Switch viewport to situation plan",
+        "note": "While hovering a viewport panel; no effect if it already shows the situation plan"
+      },
+      "switchToPanelCanvas": {
+        "description": "Switch viewport to panel",
+        "note": "While hovering a viewport panel; no effect if it already shows the panel canvas"
+      },
+      "openingWidthType": {
+        "description": "Set opening width"
+      },
+      "nudgeSymbols": {
+        "description": "Nudge selected symbols",
+        "note": "While the situation plan is visible and one or more symbols are selected; not while typing in a field. Tap moves 1 cm; hold accelerates from 10 to 18 cm/s after 250 ms. Rapid taps batch into one store commit; snap is ignored."
+      },
+      "quickPlacerEscape": {
+        "description": "Close / exit fast"
+      },
+      "quickPlacerFloor": {
+        "description": "Switch floor"
+      },
+      "quickPlacerPlace": {
+        "description": "Place"
+      },
+      "quickPlacerSkip": {
+        "description": "Skip"
+      },
+      "focusCircuitLetter": {
+        "description": "Focus circuit"
+      }
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "language": "Language",
+    "interface": {
+      "title": "Interface",
+      "language": "Language",
+      "font": "Font",
+      "fontFigtree": "Figtree",
+      "fontOpenSans": "Open Sans"
+    },
+    "navigation": {
+      "title": "Canvas navigation",
+      "leftDragPansCanvas": "Left-drag to pan (desktop)",
+      "leftDragPansCanvasHint": "On laptop and desktop, drag with the left mouse button to pan the canvas (like touch). Hold Shift and drag to select with a rectangle. Middle- and right-button pan still work."
+    },
+    "debug": {
+      "title": "Debug",
+      "eendraadHitboxDebug": "Show one-line hitboxes (1draad)",
+      "eendraadHitboxDebugHint": "Visualize the hit zones used for drop detection on the one-line diagram. UI-only, not exported.",
+      "planPlacementDebug": "Show plan placement debug (sitplan)",
+      "planPlacementDebugHint": "Visualize symbol centers, selection bounds, label positions and wall-based orientation helpers on the sitplan. UI-only, not exported.",
+      "panelRelationDebug": "Show panel relation routing debug (panel canvas)",
+      "panelRelationDebugHint": "Show available pathways, chosen route costs, wire classes, and module roles. Detailed routing is logged in the devtools console. UI-only, not exported."
+    },
+    "installerInfo": {
+      "title": "Installer info (AREI)",
+      "hint": "Name, address and signature required on Belgian AREI-conform plans. Stored for all projects.",
+      "name": "Installer name",
+      "companyNumber": "Company number",
+      "email": "Email",
+      "mobile": "Mobile",
+      "phone": "Phone",
+      "namePlaceholder": "Company or installer name",
+      "address": "Address",
+      "addressPlaceholder": "Street, postal code, city",
+      "signature": "Signature",
+      "uploadSignature": "Upload signature image",
+      "clearSignature": "Clear",
+      "logo": "Logo",
+      "uploadLogo": "Upload logo",
+      "clearLogo": "Clear",
+      "showBrandingInSchematics": "Show logo and signature in schematics",
+      "logoOptional": "Optional. Images are resized to 500 px max before saving.",
+      "save": "Save",
+      "saving": "Saving…",
+      "saved": "Saved"
+    }
+  },
+  "project": {
+    "rename": "Rename project",
+    "new": "New project",
+    "open": "Open project",
+    "save": "Save project",
+    "export": "Export project",
+    "customer": "Customer",
+    "name": "Project name",
+    "companyNumber": "Company number",
+    "customerEmail": "Email",
+    "customerMobile": "Mobile",
+    "customerPhone": "Phone",
+    "yearOfConstruction": "Year of construction",
+    "yearOfConstructionInvalid": "Please enter a valid year between 1800 and 2100.",
+    "meterEanCode": "Meter EAN code",
+    "meterEanCodePlaceholder": "e.g. 5412345678901234",
+    "inspectionAgency": "Inspection agency",
+    "inspectionAgencyName": "Agency name",
+    "created": "Created",
+    "updated": "Updated",
+    "recent": "Recent",
+    "recentProjects": "Recent Projects",
+    "notificationBadgeTooltip": "New project notifications",
+    "notifications": {
+      "shared": "New project shared with you",
+      "versions_one": "New version created by someone else",
+      "versions_other": "{{count}} new versions created by someone else",
+      "comments_one": "{{count}} new comment added",
+      "comments_other": "{{count}} new comments added"
+    },
+    "refresh": "Refresh",
+    "noProjects": "No projects yet",
+    "noProjectsDescription": "Get started by creating your first electrical installation project",
+    "createFirst": "Create Your First Project",
+    "deleteConfirmTitle": "Delete Project?",
+    "deleteConfirmMessage": "Are you sure you want to delete {name}? This action cannot be undone.",
+    "deleteConfirmShort": "Are you sure you want to delete",
+    "deleteConfirmAction": "? This action cannot be undone.",
+    "importDownloaded": "Import downloaded project",
+    "importDownloadedInvalidFile": "Please select a .zip or .pdf project export file.",
+    "importFailedTitle": "Import failed",
+    "importFailedMessage": "Could not import project.",
+    "importProjectLoadingTitle": "Importing project…",
+    "importProjectLoadingBody": "Processing floor plan images and project data. Large files may take a moment.",
+    "importSchematicalsArchive": "Import Schematicals archive (dev)…",
+    "importSchematicalsFolder": "Import Schematicals folder (dev)…",
+    "openExampleProject": "Open Example project",
+    "exampleTitle": "Try an example project",
+    "exampleDescription": "See how a finished setup looks.",
+    "view": "View",
+    "create": "Create project",
+    "download": "Download project",
+    "manageAccess": "Access & versions",
+    "localOptions": "Local project options",
+    "newProjectLocalWarningShort": "Cloud limit reached. This will be a local project.",
+    "newProjectLocalChosenWarning": "This will be a local project. You can upgrade it to cloud later.",
+    "newProjectOfflineLocalWarning": "You are offline. This project will be saved on this device. When you are back online, we will sync it to the cloud if your plan allows.",
+    "newProjectCooldownLocalWarning": "Your free cloud slot is cooling down until {{date}}. This project will be created locally.",
+    "createFailedTitle": "Could not create project",
+    "createFailedMessage": "Something went wrong. Please try again.",
+    "registrationRequiredCreateTitle": "Account needed",
+    "registrationRequiredCreateMessage": "Create a free account to make your own projects. The demo project remains available without an account.",
+    "registrationRequiredCreateWithLocalProjects": "Create a free account to make new projects. Your existing local projects stay on this device and will be available after registration.",
+    "registrationRequiredCreateCta": "Register",
+    "moveToLocal": "Move to local",
+    "openingTitle": "Loading…",
+    "openingBody": "One moment.",
+    "notFoundTitle": "Project not found",
+    "notFoundBody": "Invalid or removed link.",
+    "notFoundBack": "Home"
+  },
+  "infoBlock": {
+    "madeWith": "Made with {{brand}}",
+    "pageNr": "Page",
+    "installerPropertiesTitle": "Installer info",
+    "installerOverride": "Override installer for this project",
+    "installerOverrideHint": "Project-specific installer data. Shown on this project only.",
+    "installerGlobalHint": "Using global installer from Settings. Enable override to set project-specific data.",
+    "headerInstallation": "Installation address",
+    "headerInstaller": "Installer",
+    "viewTitle": {
+      "oneWire": "One-wire diagram",
+      "panel": "Distribution board",
+      "sitplan": "Situation plan"
+    }
+  },
+  "installation": {
+    "title": "Installation",
+    "profile": "Profile",
+    "profileHousehold": "Domestic",
+    "profileNonHousehold": "Non-domestic",
+    "address": "Address",
+    "street": "Street",
+    "postalCode": "Postal code",
+    "city": "City",
+    "country": "Country",
+    "countryBelgium": "Belgium",
+    "voltage": "Voltage",
+    "mainSupply": "Main supply",
+    "voltage_2x230": "2×230V",
+    "voltage_3x230": "3×230V",
+    "voltage_3n400": "3N400V",
+    "voltage_1n400": "1N400V",
+    "voltage_1x230": "1×230V",
+    "lineToNeutral": "Line-to-Neutral (V)",
+    "lineToLine": "Line-to-Line (V)",
+    "notes": "Notes"
+  },
+  "panels": {
+    "title": "Distribution boards",
+    "propertiesTitle": "Distribution board",
+    "add": "Add distribution board",
+    "name": "Name",
+    "location": "Location",
+    "panelType": "Panel type",
+    "secondaryPanelRole": "Secondary panel",
+    "parentSupply": "Parent / supply",
+    "supply": "Supply",
+    "distribution": "Distribution board",
+    "mainPanel": "Main distribution board",
+    "secondaryPanel": "Distribution board {{number}}",
+    "panelNumbering": "Panel numbering",
+    "panelNumberingHint": "Adds B01, B02, … in order from the main panel through sub-panels on the one-wire diagram.",
+    "panelNetTypeLabels": "Net type on diagram",
+    "panelNetTypeLabelsHint": "Adds supply, voltage, and earthing lines on the one-wire panel header when an earthing system is set.",
+    "earthingSystemLabel": "Earthing system",
+    "earthingSystemCustom": "Custom value — no longer synced with the main panel until set to the same system again.",
+    "earthingSystem": {
+      "none": "None",
+      "TT": "TT",
+      "TN-S": "TN-S",
+      "TN-C": "TN-C",
+      "TN-C-S": "TN-C-S",
+      "IT": "IT"
+    },
+    "diagramTitleNumbered": "{{code}} – {{name}}",
+    "diagramFedFrom": "Fed from {{source}}",
+    "diagramNetMain": "Net: {{net}} – {{frequency}} Hz",
+    "diagramNetSecondary": "Net: {{net}} – {{frequency}} Hz – {{earthing}}",
+    "diagramNetWithEarthing": "Net: {{net}} – {{earthing}}",
+    "diagramEarthingSystem": "Earthing system: {{earthing}}"
+  },
+  "panel": {
+    "deleteConfirmTitle": "Delete Panel(s)?",
+    "deleteLastMainTitle": "Delete Last Main Panel?",
+    "deleteLastMainMessage": "You are about to delete the last main panel \"{{panelNames}}\".\n\nAfter deletion, you will need to drop a new panel distribution board to create a new main panel before you can add other components.\n\nAre you sure you want to continue?",
+    "deleteConfirmMessage": "The following panel(s) contain circuits, protections, or sub-panels: {{panelNames}}\n\nDeleting them will also delete all their contents. This action cannot be undone.\n\nAre you sure you want to continue?",
+    "deleteEmptyPanelMessage": "Are you sure you want to delete panel(s): {{panelNames}}?\n\nThis will also remove any associated frames and nested panels. This action cannot be undone."
+  },
+  "protections": {
+    "title": "Protections",
+    "add": "Add protection",
+    "type": "Type",
+    "rating": "Rated current",
+    "curve": "Tripping curve",
+    "sensitivity": "Residual trip current IΔn",
+    "poles": "Poles",
+    "polesConfig": "Pole configuration",
+    "residualCurrentType": "Residual current type",
+    "breakingCapacity": "Breaking capacity",
+    "poles_1P": "1P",
+    "poles_1P_N": "1P+N",
+    "poles_2P": "2P (L+N)",
+    "poles_3P": "3P",
+    "poles_3P_N": "3P+N",
+    "poles_4P": "4P (3L+N)",
+    "residualType_AC": "AC (sinusoidal)",
+    "residualType_A": "A (pulsating DC)",
+    "residualType_F": "F (mixed frequency)",
+    "residualType_B": "B (smooth DC)",
+    "description": "Description",
+    "deleteLinkedPanelTitle": "Remove linked board too?",
+    "deleteLinkedPanelMessage": "This also deletes board \"{{panelNames}}\" and everything on that side of the feed (its circuits, devices, nested boards). Continue?"
+  },
+  "circuits": {
+    "title": "Circuits",
+    "add": "Add circuit",
+    "code": "Code",
+    "kind": "Type",
+    "cable": "Cable",
+    "lighting": "Lighting",
+    "sockets": "Sockets",
+    "fixed_appliance": "Fixed appliance",
+    "mixed": "Mixed",
+    "stove": "Stove",
+    "solar": "Solar",
+    "battery": "Battery",
+    "doorbell": "Doorbell",
+    "subpanel": "Subpanel",
+    "hvac": "HVAC",
+    "boiler": "Boiler",
+    "heating": "Heating",
+    "ev": "EV charger",
+    "empty": "Empty circuit",
+    "other": "Other",
+    "derivedHint": "Suggested from circuit",
+    "noCircuits": "No circuits available",
+    "addNew": "Add new...",
+    "addNewDialogTitle": "Add new circuit",
+    "addNewDialogDescription": "Create a new circuit on the main bus and assign this endpoint to it.",
+    "addNewConfirm": "Add circuit",
+    "addNewLabel": "Label",
+    "addNewLabelPlaceholder": "e.g. A, B, Kitchen",
+    "addNewLabelHint": "Leave empty to auto-label.",
+    "addNewPanel": "Panel"
+  },
+  "planDrop": {
+    "dialogTitle": "Add to circuit",
+    "shortHeadline": "Which circuit?",
+    "adjustHeadline": "Circuit",
+    "applyCircuit": "Apply",
+    "done": "Done",
+    "panelLabel": "Distribution board",
+    "circuitHeading": "Circuit",
+    "confirm": "Add to circuit",
+    "newCircuit": "New circuit",
+    "newCircuitCodeLabel": "Circuit code",
+    "emptyKind": "Empty"
+  },
+  "endpoints": {
+    "title": "Endpoints",
+    "add": "Add endpoint",
+    "label": "Label",
+    "notes": "Notes",
+    "socket": "Socket",
+    "switch": "Switch",
+    "light_point": "Light point",
+    "fixed_appliance": "Fixed appliance",
+    "accumulatingBoiler": "Accumulating boiler",
+    "accumulationHeating": "Accumulation heating",
+    "heatingWithFan": "With fan",
+    "applianceType": "Appliance type",
+    "notesPlaceholder": "Optional notes for this endpoint",
+    "deviceType": "Device Type",
+    "deviceTypeHelp": "Category of electrical device",
+    "switchType": "Switch Type",
+    "lightType": "Light Type",
+    "socketType": "Socket Type",
+    "socketType_socket_gnd_child_short": "Grounded + child protection",
+    "socketType_socket_gnd_short": "Grounded",
+    "socketType_socket_child_short": "Child protection",
+    "socketType_socket_short": "Standard",
+    "socketType_double_socket_gnd_child_short": "Double, grounded + child",
+    "socketType_double_socket_child_short": "Double, child protection",
+    "socketOptions": "Socket options",
+    "socketSwitchOption": "Switch",
+    "socketSwitchNone": "None",
+    "socketSwitchOverlay": "Socket with two-pole switch",
+    "socketSwitchOverlayLock": "Socket with two-pole lockable switch",
+    "socketWaterproof": "Waterproof",
+    "socketCount": "Number of sockets",
+    "setSocketCount": "Set number of sockets",
+    "lightCount": "Number of lights",
+    "switchPoles": "Poles",
+    "switchPoles1": "1 pole",
+    "switchPoles2": "2 poles",
+    "switchPoles3": "3 poles",
+    "twoWayPoles": "Two-way poles",
+    "verklikkerlamp": "Indicator light",
+    "lightPointOptions": "Light point options",
+    "lightPointSafety": "Safety (Veiligheidsstroombaan)",
+    "lightPointAutonomous": "Autonomous",
+    "lightPointSwitch1p": "Switch (1 pole)",
+    "lightPointOnWall": "On wall",
+    "lightPointSafetyShort": "Emergency",
+    "lightPointDecentralShort": "Decentral",
+    "lightPointSwitch1pShort": "Switch",
+    "lightPointOnWallShort": "On wall",
+    "lightSpotBeamType": "Beam type",
+    "lightSpotBeamNone": "None",
+    "lightSpotBeamStraight": "Straight beam",
+    "lightSpotBeamDiverging": "Diverging beam",
+    "lightFluorescentTubes": "Number of tubes",
+    "hvac": {
+      "energySource": "Energy source",
+      "type": "Type",
+      "function": "Function",
+      "energy_electricity": "Electricity",
+      "energy_gas_fan": "Gas (fan flue)",
+      "energy_gas_atmospheric": "Gas (atmospheric)",
+      "energy_liquid": "Liquid fuel",
+      "energy_solid": "Solid fuel",
+      "energy_none": "None",
+      "type_heat_exchange": "Heat exchange",
+      "type_cogeneration": "Cogeneration",
+      "type_tap_spiral": "Tap spiral",
+      "type_boiler": "Boiler",
+      "type_none": "None",
+      "function_none": "None",
+      "function_heat": "Heat",
+      "function_cool": "Cool",
+      "function_heat_cool": "Heat / Cool"
+    },
+    "relay": {
+      "maxCurrentRating": "Max Current Rating",
+      "poles": "Poles",
+      "control": "Control",
+      "control_standard": "Standard",
+      "control_timer": "Timer",
+      "control_clock": "Clock",
+      "control_impulse": "Impulse",
+      "control_thermostat": "Thermostat",
+      "control_dimmer": "Dimmer"
+    },
+    "energyMeter": {
+      "poles": "Poles"
+    },
+    "trunkDevice": {
+      "title": "Trunk Device",
+      "label": "Label",
+      "position": "Position on trunk",
+      "positionBefore": "Before all branches",
+      "positionAfter": "After branch {{n}}",
+      "delete": "Remove from trunk"
+    },
+    "domotica": {
+      "switchControlEnabled": "Enable control output",
+      "switchType": "Control switch type",
+      "switchType_1p": "1P switch",
+      "switchType_2p": "2P switch",
+      "switchType_impulse": "Impulse / push button",
+      "switchCount": "Control switch amount",
+      "endpointCount": "Endpoint outputs",
+      "controlArea": "Control",
+      "control_programmed": "Program.",
+      "control_wireless": "Wireless",
+      "control_detection": "Detection",
+      "control_button": "Button",
+      "mainType": "Main device",
+      "mainType_none": "None",
+      "mainType_socket": "Socket",
+      "mainType_switch": "Switch",
+      "mainSwitchType": "Switch type"
+    },
+    "solarPanel": {
+      "wattage": "Wattage (W)",
+      "voltage": "Voltage (V)"
+    },
+    "battery": {
+      "voltage": "Voltage (V)",
+      "capacity": "Capacity (kWh)",
+      "powerKw": "Power (kW)"
+    },
+    "evCharger": {
+      "groupTitle": "EV charger details"
+    },
+    "certification": {
+      "groupTitle": "Device identification (certification)",
+      "brand": "Brand",
+      "model": "Model",
+      "serialNumber": "Serial number",
+      "power": "Power"
+    },
+    "energyConversion": {
+      "groupTitle": "Energy conversion"
+    },
+    "transformerOptions": {
+      "options": "Options"
+    },
+    "transformer": {
+      "safetyType": "Safety transformer type",
+      "safety_none": "None",
+      "safety_closed_short": "Closed",
+      "safety_open_short": "Open",
+      "shortCircuitProtected": "Short-circuit-proof",
+      "protective": "Protective transformer",
+      "overlayLabel": "Transformer label (overlay)"
+    },
+    "conversion": {
+      "pMaxPrimary": "Pmax U prim (VA)",
+      "pMaxSecondary": "Pmax U sec (VA)",
+      "dcOutputVoltage": "DC output (V)",
+      "dcInputMinVoltage": "DC min input (V)"
+    }
+  },
+  "frames": {
+    "title": "Frame",
+    "notFound": "Frame not found",
+    "frameTitle": "Title",
+    "titlePlaceholder": "Enter frame title...",
+    "titlePosition": "Title Position",
+    "titlePositionInside": "Inside",
+    "titlePositionOutside": "Outside",
+    "fontSize": "Title Font Size",
+    "contentInfo": "This frame groups {{count}} {{type}} items",
+    "contentType_endpoint": "endpoint",
+    "contentType_protection": "protection",
+    "contentType_trunkDevice": "trunk device",
+    "contentType_ground": "ground",
+    "contentType_mixed": "mixed"
+  },
+  "views": {
+    "eendraad": "Single-line diagram",
+    "plan": "Site plan",
+    "panel": "Distribution board",
+    "both": "Both",
+    "panelAndPlan": "Distribution board + Plan"
+  },
+  "panelCanvas": {
+    "selectPanel": "Select panel",
+    "panelOptions": "Panel options",
+    "allHierarchy": "All (hierarchy)",
+    "noPanels": "No panels",
+    "feedFromTop": "Feed from top",
+    "feedFromBottom": "Feed from bottom",
+    "rows": "Rows",
+    "columns": "Columns",
+    "showDomotica": "Show domotica",
+    "modules": "modules",
+    "assignToCircuit": "Assign to circuit",
+    "assignModeOn": "Click a circuit…",
+    "moveToSupplyPanel": "Move to supply panel",
+    "moveToMainPanel": "Move to main panel",
+    "hideFromPanel": "Hide from panel view",
+    "showHiddenDescription": "Select one or more devices to show.",
+    "supplyPanel": "Supply panel",
+    "hideSupplyPanel": "Hide supply panel",
+    "rewireTool": "Rewire tool",
+    "rewireModeOn": "Deactivate Rewire Tool",
+    "rewireModeOff": "Rewire Tool",
+    "autoArrange": "Auto Arrange Modules",
+    "autoArrangeConfirm": "This will fully replace the current panel layout. Continue?",
+    "panelLayout": "Panel Layout"
+  },
+  "panelFilter": {
+    "title": "Panel filter",
+    "allPanels": "All panels",
+    "syncWithPanelView": "Sync with Panel view"
+  },
+  "canvas": {
+    "grid": "Grid",
+    "snap": "Snap",
+    "projectedSnap": "Projected snap",
+    "gridSize": "Grid size",
+    "gridOpacity": "Grid intensity",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "fitToView": "Fit to view",
+    "resetZoom": "Reset zoom",
+    "uploadFloorPlan": "Upload Floor Plan",
+    "controls": "Use mouse wheel to zoom • Right-click & drag to pan",
+    "controlsTouch": "Pinch to zoom • 2 fingers to pan",
+    "splitHorizontal": "Split horizontally",
+    "splitVertical": "Split vertically",
+    "floor": "Floor",
+    "groundFloor": "Ground Floor",
+    "firstFloor": "First Floor",
+    "dragSymbolsHere": "(Drag symbols here)",
+    "noFloors": "No floors",
+    "eendraadNaming": {
+      "menuTitle": "Naming",
+      "automaticNaming": "Auto-label",
+      "automaticNamingDescription": "Circuits get labels automatically (A, B, C…).",
+      "hideFeederLetters": "No label without outlets",
+      "hideFeederLettersDescription": "Circuits without outlets get no label; you can name them manually.",
+      "toggleLetterOnOneWire": "Show or hide the circuit letter on the one-wire diagram",
+      "endpointBranchLabelLocked": "Branch labels follow automatic naming (circuit letter + branch number).",
+      "confirmOverwriteTitle": "Replace circuit letters?",
+      "confirmOverwriteMessage": "Automatic naming will replace current letters with A, B, C… by row order on each panel. Continue?",
+      "confirmOverwriteConfirm": "Continue"
+    }
+  },
+  "planImport": {
+    "title": "Import Plan Image",
+    "uploadDescription": "Upload a floor plan image to use as a background for placing electrical elements.",
+    "dragDropOrClick": "Drag and drop an image here, or click to select",
+    "orPaste": "You can also paste an image from your clipboard",
+    "supportedFormats": "Supported formats: JPG, PNG, GIF, WebP, PDF, SVG, DXF, DWG",
+    "invalidFileType": "Please select a valid image file",
+    "invalidPdfFile": "Please select a valid PDF file",
+    "invalidDxfFile": "Please select a valid DXF file",
+    "invalidDwgFile": "Please select a valid DWG file",
+    "invalidSvgFile": "Please select a valid SVG file",
+    "loading": "Loading...",
+    "cropDescription": "Optionally crop the image. Drag the blue box to adjust the crop area.",
+    "applyCrop": "Apply Crop",
+    "resetCrop": "Reset",
+    "skipCrop": "Skip Crop",
+    "scaleDescription": "Draw a line on the image to set the scale. Click and drag to draw a line representing a known distance.",
+    "enterDistance": "Enter the real-world distance (in meters):",
+    "skipScale": "Skip Scale",
+    "redraw": "Redraw",
+    "selectFloor": "Select Floor",
+    "existingFloor": "Use existing floor",
+    "createNewFloor": "Create new floor",
+    "selectFloorOption": "Select a floor...",
+    "floorNamePlaceholder": "Floor name (e.g., Ground Floor, First Floor)",
+    "floorNameRequired": "Please enter a floor name",
+    "preview": "Preview",
+    "backgroundProcessing": "Background Processing",
+    "backgroundProcessingDescription": "We'll automatically detect and remove white backgrounds, and invert colors for dark mode.",
+    "processing": "Processing image...",
+    "whiteBackgroundDetected": "White background detected",
+    "whiteBackgroundDetectedDescription": "The image has a white background. We can remove it and make it transparent so it works better in dark mode.",
+    "enableBackgroundProcessing": "Remove white background and enable dark mode support",
+    "noWhiteBackground": "No white background detected. The image will be used as-is.",
+    "original": "Original",
+    "processed": "Processed",
+    "pdfSelectPages": "Select one or more pages to import. Each page can be cropped individually.",
+    "selectAllPages": "Select all pages",
+    "clearAllPages": "Clear selection",
+    "pageLabel": "Page {{page}}",
+    "duplicateFloor": "Duplicate floor",
+    "vectorPreferred": "Vector",
+    "rasterFallback": "Raster fallback",
+    "cropPage": "Crop page",
+    "resetPageCrop": "Reset crop",
+    "croppedBadge": "Cropped",
+    "croppedPages": "Cropped pages: {{count}}",
+    "pdfDestination": "Import destination",
+    "newFloorPerPage": "Create a new floor per selected page",
+    "replaceSelectedFloor": "Replace selected floor (first selected page only)",
+    "selectAtLeastOnePage": "Select at least one page",
+    "processingPdf": "Reading PDF pages...",
+    "scaleSettings": "Scale settings",
+    "setScale": "Set scale",
+    "updateScale": "Update scale",
+    "applyScaleToAllPages": "Apply this scale to all imported pages",
+    "scaleSetForPage": "Scale is set using page {{page}}",
+    "importing": "Importing...",
+    "scaleModeTitle": "How do you want to apply scale?",
+    "scaleModeShared": "Set scale once (first selected page) and reuse it for all imported pages",
+    "scaleModePerPage": "Set scale per page individually",
+    "scaleModeSkip": "Skip scale setup for now",
+    "scaledPagesCount": "Scaled pages: {{count}} / {{total}}",
+    "skipScaleImport": "Skip scale and import",
+    "saveFailedTitle": "Import not saved",
+    "saveFailed": "The plan was imported, but the project could not be saved. Please try again.",
+    "resetPageScale": "Reset this page scale",
+    "pdfDarkModeTitle": "Dark mode support",
+    "pdfDarkModeDescription": "Choose whether imported PDF pages should adapt automatically when dark mode is active. This setting applies to all selected pages.",
+    "enablePdfDarkModeProcessing": "Enable dark mode adaptation for all imported PDF pages",
+    "previewPage": "Preview page",
+    "darkModePreview": "Dark mode preview",
+    "cadColorModeTitle": "CAD color mode",
+    "cadColorModeDescription": "Choose whether to import the CAD drawing in color or grayscale. Both previews adapt to the current light or dark mode.",
+    "colorPreview": "Color preview",
+    "enableCadGrayscale": "Convert CAD colors to grayscale",
+    "grayscalePreview": "Grayscale preview"
+  },
+  "planTools": {
+    "movePlanImage": "Move Plan Image",
+    "resetScale": "Reset Scale",
+    "uploadFloorPlanFirst": "Upload a floor plan first to use this tool"
+  },
+  "planWiring": {
+    "tool": "Wiring",
+    "toolDescription": "Trace wire routes between symbols on the active floor"
+  },
+  "layout": {
+    "presetLabel": "Layout"
+  },
+  "floorPlanTools": {
+    "drawMode": "Draw mode",
+    "exitDrawMode": "Exit draw mode",
+    "drawWall": "Draw walls (freehand)",
+    "drawWallRect": "Draw walls (rectangle)",
+    "movePoint": "Move wall point",
+    "insertDoor": "Insert door",
+    "insertWindow": "Insert window",
+    "drawStair": "Draw stairs",
+    "graphicElements": "Graphic elements",
+    "clipWall": "Clip wall",
+    "insertPoint": "Insert point",
+    "select": "Select walls / points"
+  },
+  "planGraphic": {
+    "sizeLocked": "Fixed size",
+    "resizable": "Resizable",
+    "width": "Width (cm)",
+    "height": "Height (cm)",
+    "rotation": "Rotation (degrees)",
+    "elements": {
+      "bathtub": "Bathtub",
+      "shower": "Shower",
+      "washbasin": "Wash basin",
+      "toilet": "Toilet",
+      "kitchenCabinet": "Cabinet",
+      "car": "Car",
+      "rectangle": "Rectangle"
+    }
+  },
+  "quickPlacer": {
+    "title": "Quick Placer",
+    "mode": {
+      "slow": "Slow",
+      "fast": "Fast",
+      "slowTooltip": "Drag a row onto the Situation Plan to reposition that existing symbol.",
+      "fastTooltip": "Left click places. Right click skips. Esc exits fast mode. Keys 1-9 switch floors by order."
+    },
+    "autoSkip": {
+      "short": "Auto-skip",
+      "full": "Auto-skip custom placements"
+    },
+    "noItems": "No items",
+    "itemCount": "{{count}} items",
+    "noNotes": "No notes",
+    "customPlacement": "Custom placement",
+    "defaultPlacement": "Default placement",
+    "floor": "Floor",
+    "current": "Current",
+    "emptyState": "No symbol placements are available.",
+    "availableWhenPlanOpen": "Quick Placer is available when the Situation Plan view is open."
+  },
+  "synergrid": {
+    "fillButton": "Fill with Synergrid list",
+    "verified": "Synergrid C10/26 approved",
+    "types": {
+      "solar": "Solar",
+      "storage": "Storage",
+      "backup": "Backup",
+      "wind": "Wind",
+      "chp": "CHP",
+      "combined": "Combined"
+    },
+    "phases": {
+      "single": "1-phase",
+      "three": "3-phase"
+    },
+    "picker": {
+      "title": "Synergrid C10/26 approved list",
+      "subtitle": "Pick an entry from the official list and use it to fill the properties.",
+      "searchPlaceholder": "Search brand, model or reference",
+      "plugAndPlayOnly": "Plug-and-play only",
+      "loading": "Loading Synergrid list...",
+      "error": "Could not load the Synergrid list",
+      "empty": "No matching entries",
+      "fill": "Fill",
+      "resultCount": "{{count}} entries",
+      "resultLimit": "showing first {{count}}",
+      "resultVisible": "showing {{visible}} of {{count}}",
+      "columns": {
+        "brand": "Brand",
+        "productSeries": "Product series",
+        "model": "Model",
+        "power": "Power",
+        "phase": "Phase",
+        "type": "Type",
+        "approved": "Approved",
+        "reference": "Reference"
+      }
+    }
+  },
+  "inspectionAgencies": {
+    "fillButton": "Fill from approved list",
+    "picker": {
+      "title": "Approved inspection agencies",
+      "subtitle": "Pick an approved agency and fill the inspection info box.",
+      "searchPlaceholder": "Search name, city, KBO, email or domain",
+      "loading": "Loading approved agencies...",
+      "error": "Could not load inspection agencies",
+      "empty": "No matching agencies",
+      "fill": "Fill",
+      "resultCount": "{{count}} agencies",
+      "columns": {
+        "name": "Name",
+        "city": "City",
+        "companyNumber": "KBO",
+        "email": "Email",
+        "phone": "Phone",
+        "domains": "Domains"
+      }
+    }
+  },
+  "sitplanVisibility": {
+    "title": "Visibility",
+    "showAll": "Show all",
+    "groundPlans": "Ground Plans",
+    "opacity": "Opacity",
+    "labels": "Labels",
+    "symbols": "Symbols",
+    "symbolSize": "Symbol size",
+    "wires": "Wiring",
+    "wiresLighting": "Lights and switches",
+    "wiresSockets": "Sockets",
+    "wiresOther": "Other",
+    "wireStyle": "Style",
+    "wireStyleSpline": "Curved",
+    "wireStyleOrthogonal": "90°"
+  },
+  "symbols": {
+    "library": "Symbol library",
+    "recent": "Recent",
+    "favorites": "Favorites",
+    "socket": "Socket",
+    "socket_gnd": "Socket with protective conductor contact",
+    "socket_child": "Socket with child protection",
+    "socket_gnd_child": "Socket with protective conductor contact and child protection",
+    "double_socket_gnd_child": "Double socket with protective conductor contact and child protection",
+    "double_socket_child": "Double socket with child protection",
+    "switch": "Switch",
+    "switch_1p_twoway": "Two-way switch",
+    "switch_2p_twoway": "Two-way switch (2-pole)",
+    "switch_dimmer": "Dimmer",
+    "switch_1p_changeover": "Changeover switch",
+    "switch_1p_pull": "Pull switch",
+    "switch_impulse": "Impulse/Push switch",
+    "switch_cross": "Cross switch",
+    "motion_detector": "Motion detector",
+    "light_point": "Light point",
+    "light_spot": "Spot light",
+    "light_led": "LED fixture",
+    "light_fluorescent": "Fluorescent tube",
+    "fixed_appliance_generic": "Device",
+    "oven": "Oven",
+    "washer": "Washing machine",
+    "dryer": "Dryer",
+    "dishwasher": "Dishwasher",
+    "boiler": "Electric boiler",
+    "ev": "EV Charger",
+    "freezer": "Freezer",
+    "fridge": "Fridge",
+    "microwave": "Microwave",
+    "motor": "Motor",
+    "stove": "Stove",
+    "heating": "Heating",
+    "ventilation": "Ventilation",
+    "door_lock": "Door lock",
+    "furnace": "HVAC source",
+    "buzzer": "Buzzer",
+    "bell": "Bell",
+    "horn": "Horn",
+    "siren": "Siren",
+    "panel_distribution": "Distribution board",
+    "relay": "Relay",
+    "domotica": "Domotica / Smart home device",
+    "energy_meter": "Energy meter",
+    "transformer": "Transformer",
+    "rectifier": "Rectifier (AC → DC)",
+    "inverter": "Inverter (DC → AC)",
+    "dc_dc_converter": "DC-DC Converter",
+    "solar_panel": "Solar panel",
+    "battery": "Battery",
+    "mcb": "MCB (Circuit Breaker)",
+    "rcd": "RCD (Residual Current Device)",
+    "rcbo": "RCBO (Combined)",
+    "fuse": "Fuse",
+    "main_switch": "Main Switch",
+    "spd": "SPD (Surge Protection Device)",
+    "rotating_switch": "Rotating switch",
+    "earthing": "Earthing",
+    "earthing_separator": "Earthing Separator"
+  },
+  "earthing": {
+    "deleteConfirmTitle": "Remove earthing?"
+  },
+  "orphan": {
+    "banner": {
+      "dev": {
+        "one": "1 orphan or quarantined item detected",
+        "many": "{{count}} orphans or quarantined items detected"
+      },
+      "prod": {
+        "quarantinedOnly": "{{count}} hidden item(s) were recovered due to a data issue.",
+        "detectedOnly": "{{count}} item(s) have a data inconsistency and may not appear correctly.",
+        "both": "{{count}} item(s) need attention due to a data issue."
+      },
+      "viewInspector": "View in Orphan Inspector",
+      "inspectOrRepair": "Inspect or repair"
+    },
+    "inspector": {
+      "title": "Orphan Inspector",
+      "detected": "Detected issues",
+      "quarantined": "Quarantined (hidden)",
+      "quarantinedHint": "These items are preserved but excluded from the diagram. Restore to put them back, or remove to delete permanently.",
+      "focus": "Focus",
+      "quarantine": "Quarantine",
+      "fix": "Fix",
+      "fixAll": "Fix all",
+      "fixAllHint": "Run every available automatic fix (same as Fix on each row).",
+      "restore": "Restore",
+      "remove": "Remove",
+      "removePermanent": "Remove permanently",
+      "fixQuarantineBranchesHintCircuit": "Repair branch membership on this quarantined circuit before restoring.",
+      "fixQuarantineBranchesHintEndpoint": "Repair branch membership on the circuit still on the diagram (recommended before restoring this endpoint).",
+      "empty": "No orphaned or quarantined items."
+    },
+    "labels": {
+      "unnamedCircuit": "[unnamed circuit]",
+      "unnamedProtection": "[unnamed protection]"
+    },
+    "reason": {
+      "circuitRefMismatch": "Circuit under wrong protection",
+      "endpointNotInBranch": "Endpoint not on branch",
+      "branchRefsMissingEndpoint": "Branch references missing endpoint",
+      "frameContentOrphan": "Frame references missing content",
+      "subCircuitSelfReference": "Circuit lists itself as sub-circuit",
+      "subCircuitIdMissingCircuit": "Circuit references missing sub-circuit",
+      "endpointOnPanelCircuit": "Endpoint on PANEL pseudo-circuit",
+      "endpointMultipleFloorPlacements": "Endpoint placed on multiple floors",
+      "endpointPlacementIntegrity": "Endpoint placement integrity violation",
+      "endpointMissingPlanPlacement": "Missing on plan",
+      "panelDistributionLabelDrift": "Panel symbol out of sync",
+      "panelMissingOneWireSymbol": "Panel missing one-wire symbol",
+      "panelGridDuplicateModule": "Duplicate module on panel canvas",
+      "supplyTrunkMisplacedInMainGrid": "Supply device on wrong panel area",
+      "branchMultiplierEndpointsSplit": "Multiplier symbols split on one branch",
+      "danglingReference": "Dangling reference",
+      "invalidGeometry": "Invalid geometry"
+    },
+    "circuit": "Circuit",
+    "endpoint": "Endpoint"
+  },
+  "validation": {
+    "title": "AREI Validation",
+    "disclaimer": "Automated checks to help review your installation.",
+    "disclaimerTooltip": "Checks are based on the available project information and do not cover every AREI requirement.",
+    "errors": "Errors",
+    "warnings": "Warnings",
+    "info": "Info",
+    "noIssues": "No issues were found by these checks. This does not guarantee full AREI compliance.",
+    "allClear": "All available checks passed",
+    "checking": "Checking...",
+    "errorsFound": "{{count}} error(s) found",
+    "warningsFound": "{{count}} warning(s) found",
+    "revalidate": "Re-validate now",
+    "revalidateInProgress": "Re-validating…",
+    "goToIssue": "Go to issue",
+    "moreInfo": "More info",
+    "lessInfo": "Less info",
+    "linkedIssuesTooltip": "These issues are linked. Fixing one may resolve the other.",
+    "noFilteredIssues": "No issues match the current filters.",
+    "rules": {
+      "be.areibook1.2025": {
+        "diagram-sitplan-consistency": {
+          "shortTitle": "Placement missing circuit ID",
+          "message": "Placement lacks valid circuit point identifier",
+          "details": "Every sitplan placement of an outlet/light/control unit must have an endpoint that belongs to a circuit with a branch label (circuit letter + number). Switches must reference controlled loads.",
+          "remediation": "Ensure all placements are associated with endpoints that have valid circuit identifiers (e.g., \"A1\", \"B3\")."
+        },
+        "hidden-situation-plan-symbols": {
+          "shortTitle": "Hidden situation-plan symbols",
+          "message": "One-wire symbols are hidden on the situation plan",
+          "details": "Symbols used on the one-wire diagram must remain visible on the situation plan.",
+          "remediation": "Open the situation plan and show the hidden symbols again."
+        },
+        "sources-consistency": {
+          "shortTitle": "Main supply origin missing",
+          "message": "Main supply origin should be specified",
+          "details": "If main supply has origin other than grid (e.g., pv_inverter), it must be represented consistently in the installation.",
+          "remediation": "Specify the main supply origin in the installation settings."
+        },
+        "nonhousehold-board-grounded-network": {
+          "shortTitle": "Grounded network not shown",
+          "message": "Board does not show its grounded network system",
+          "details": "A non-domestic board marking must identify its grounded network system.",
+          "remediation": "Open the board properties, enable Net type on diagram, and select the applicable TT, TN, or IT earthing system."
+        },
+        "nonhousehold-board-numbering": {
+          "shortTitle": "Board numbering not shown",
+          "message": "Board sequence numbering is not shown",
+          "details": "Each non-domestic board must carry an individual sequence number.",
+          "remediation": "Open the board properties and enable Panel numbering."
+        },
+        "nonhousehold-circuit-cable-length": {
+          "shortTitle": "Cable length not shown",
+          "message": "Circuit cable length is not shown",
+          "details": "Non-domestic circuit documentation must include the length of electrical lines.",
+          "remediation": "Select the circuit wire, enter a positive length, and enable Show wire length on one-wire."
+        },
+        "overcurrent-upstream": {
+          "shortTitle": "No upstream overcurrent device",
+          "message": "Circuit lacks upstream overcurrent protection",
+          "details": "Every circuit must have an overcurrent protective device (MCB, RCBO, or fuse) upstream.",
+          "remediation": "Add an MCB, RCBO, or fuse upstream of the circuit to provide overcurrent protection."
+        },
+        "rcd-grouping": {
+          "shortTitle": "Too many circuits per RCD",
+          "message": "Too many circuits under one 30 mA RCD",
+          "details": "A 30 mA RCD should protect at most 8 circuits (RCBO-protected circuits are excluded from this count) to reduce nuisance tripping and limit leakage current accumulation.",
+          "remediation": "Reduce the number of circuits under this RCD or split into multiple RCDs. Circuits protected by an RCBO do not count toward the limit."
+        },
+        "rcd-selectivity": {
+          "shortTitle": "RCD selectivity incorrect",
+          "message": "RCD selectivity: upstream must be less sensitive than downstream",
+          "details": "The main RCD (e.g. 300 mA for fire protection) must be upstream of more sensitive RCDs (e.g. 30 mA for personal protection). Never place a 30 mA RCD upstream of a 300 mA device.",
+          "remediation": "Ensure the main supply RCD is 300 mA (or less sensitive) and panel RCDs are 30 mA (more sensitive), so that upstream sensitivity (mA) is greater than downstream."
+        },
+        "bathroom-rcd-30ma": {
+          "shortTitle": "Bathroom circuit needs 30 mA RCD",
+          "message": "Bathroom/wet room circuit requires 30 mA RCD/RCBO protection",
+          "details": "Circuits supplying rooms with a bath and/or shower must be protected by a high/very high sensitivity residual current device (typically 30 mA). Because room detection is ambiguous, this check triggers when the circuit notes mention bathroom/bath/shower terms in any language.",
+          "remediation": "Route this circuit through a 30 mA RCD, or protect it with a 30 mA RCBO. If the circuit does not actually supply a bathroom/wet room, adjust the circuit notes."
+        },
+        "max-endpoints-per-circuit": {
+          "shortTitle": "Too many endpoints on circuit",
+          "message": "Too many endpoints on circuit",
+          "details": "Each circuit should have a maximum number of endpoints to ensure proper load distribution and protection.",
+          "remediation": "Split the circuit into multiple circuits to reduce the endpoint count."
+        },
+        "minimum-lighting-circuits": {
+          "shortTitle": "Too few lighting circuits",
+          "message": "At least two separate lighting circuits required",
+          "details": "For a typical dwelling, AREI requires at least two separate circuits for lighting (lighting or mixed leaf circuits). Container circuits with sub-circuits are not counted.",
+          "remediation": "Add a second lighting or mixed circuit so lighting is spread across at least two circuits."
+        },
+        "cable-cross-section": {
+          "shortTitle": "Cables missing cross-section",
+          "message": "Circuit has cable segments without cross-section",
+          "details": "All cable segments must have a valid cross-section specified.",
+          "remediation": "Specify the cross-section (sectionMm2) for all cable segments in the circuit."
+        },
+        "breaker-vs-cross-section": {
+          "shortTitle": "Breaker too large for cable",
+          "message": "Breaker rating vs cable size",
+          "details": "The MCB/RCBO rating must not exceed the admissible current for the cable cross-section.",
+          "remediation": "Reduce the breaker rating or increase the cable cross-section to meet AREI limits."
+        },
+        "minimum-cross-section": {
+          "shortTitle": "Cable section below minimum",
+          "message": "Cable cross-section too small for circuit type",
+          "details": "Each circuit type has a minimum required cable cross-section according to AREI 5.2.1.",
+          "remediation": "Increase the cable cross-section to at least the minimum value for this circuit type."
+        },
+        "cascade-protection": {
+          "shortTitle": "Downstream breaker too large",
+          "message": "Downstream breaker rated higher than upstream breaker",
+          "details": "Downstream circuit breakers should not be rated higher than their upstream protection.",
+          "remediation": "Adjust breaker ratings so that downstream devices are rated equal to or below their upstream breaker."
+        },
+        "main-rcd": {
+          "shortTitle": "Main RCD missing or wrong",
+          "message": "Main RCD/RCBO on supply trunk must be present and correctly sized",
+          "details": "AREI Book 1 requires a main residual current device at the origin of the installation, typically 300 mA type A with at least 40 A rated current.",
+          "remediation": "Add a main RCD or RCBO on the supply trunk upstream of the main panel and ensure it is at least 40 A, at most 300 mA and at least type A."
+        },
+        "board-global-isolation": {
+          "shortTitle": "Board not fully isolatable",
+          "message": "Board lacks a device that disconnects all active conductors",
+          "details": "Each distribution board, including sub-boards, must be disconnectable from all active conductors either by a local disconnector in the board or by an upstream feeder device.",
+          "remediation": "Add a local main switch/disconnector in the board, or ensure an upstream feeder protection/disconnector can disconnect all active conductors of this board."
+        },
+        "board-local-isolation-hint": {
+          "shortTitle": "No local board isolator",
+          "message": "Board is only isolatable via upstream device",
+          "details": "This board can be disconnected upstream, but has no local disconnector in the board itself. Inspectors commonly expect local disconnectability for safety and usability.",
+          "remediation": "Consider adding a local main switch/disconnector in this board."
+        },
+        "switch-load-reference": {
+          "shortTitle": "Switch has no loads",
+          "message": "Switch has no controlled loads",
+          "details": "Every switch must have at least one controlled load (controlledEndpointIds) or explicit \"controls\" reference.",
+          "remediation": "Add controlledEndpointIds to the switch to specify which loads it controls."
+        },
+        "switch-sequence": {
+          "shortTitle": "Invalid two-way/cross sequence",
+          "message": "Two-way and cross switches are not in a valid order on this branch",
+          "details": "Staircase switching needs exactly two two-way switches: either two-way → two-way, or two-way → (any crosses) → two-way. No extra two-ways and no chaining beyond that pattern.",
+          "remediation": "Use exactly two two-ways: two-way → two-way, or two-way → cross → … → cross → two-way. Remove any third two-way or two-way placed between crosses."
+        },
+        "electrical-domain": {
+          "shortTitle": "AC/DC domain mismatch",
+          "message": "Electrical domain mismatch (AC/DC)",
+          "details": "A wire's domain must match the expected input domain of the connected component. Only conversion components may connect different domains.",
+          "remediation": "Set the wire domain to match the component's input/output, or use a conversion component (transformer, rectifier, inverter, DC-DC) where domain changes."
+        },
+        "dc-cross-section-heuristic": {
+          "shortTitle": "DC wire sizing warning",
+          "message": "Estimated DC current may be high for wire section",
+          "details": "This warning uses a conservative estimate on DC segments (I ~= P/U) based on known converter/device power and DC voltage values. It is informational and should be confirmed against real device specs and installation conditions.",
+          "remediation": "Check converter output power and actual DC voltage/current. If needed, increase DC wire section, reduce expected load, or adjust converter/device configuration."
+        },
+        "post-main-bus-pe-conductor": {
+          "shortTitle": "No PE conductor after main bus",
+          "message": "AC wiring after the main bus should include protective earth (G)",
+          "details": "Protective earth is connected at the main bus. Installation-side supply cabling (from the panel boundary to the bus) and circuits fed from the bus should use conductor counts with G (e.g. 3G, 4G), not ungrounded counts such as 3 or 4. DC wiring is not checked.",
+          "remediation": "Choose 3G, 4G, or another …G conductor option for installation-side wires. Utility-side supply before the dashed panel boundary may stay without G."
+        },
+        "heavy-appliance-dedicated-circuit": {
+          "shortTitle": "Heavy appliance not on own circuit",
+          "message": "Heavy fixed appliances must be on their own dedicated circuit",
+          "details": "Electric cookers, hobs, ovens, washing machines, tumble dryers and dishwashers each require a dedicated circuit without additional sockets, lighting or other loads.",
+          "remediation": "Move each heavy fixed appliance to its own circuit, or split the existing circuit so that each such appliance has its own overcurrent protection and cable."
+        },
+        "fixed-appliance-dedicated-hint": {
+          "shortTitle": "Fixed appliance not dedicated",
+          "message": "Fixed appliance shares a circuit that is not dedicated",
+          "details": "Fixed appliances are often placed on their own circuit so the cable size and protection match the appliance and possible future replacements.",
+          "remediation": "Consider moving the fixed appliance to its own circuit without extra sockets, lights or other loads."
+        },
+        "stove-sizing-hint": {
+          "shortTitle": "Cooker circuit sizing hint",
+          "message": "Cooker circuit sizing recommendation",
+          "details": "Typical Belgian practice is to feed full-size electric cookers with a dedicated circuit around 32A and 6mm² copper, even if smaller values may be legally acceptable when matched to the appliance rating.",
+          "remediation": "Consider increasing the cooker circuit breaker rating and cable cross-section to around 32A and 6mm², or verify that the current design matches the actual stove rating."
+        },
+        "rcd-required-by-circuit-type": {
+          "shortTitle": "30 mA RCD required",
+          "message": "30 mA RCD required for designated household and EV circuits",
+          "details": "Lighting, general-purpose sockets, washing machines, tumble dryers, dishwashers and EV charging circuits require 30 mA residual-current protection under AREI 4.2.4.3(b) and 7.22.4.1.",
+          "remediation": "Route these circuits through an RCD or RCBO with 30 mA sensitivity, either at the panel or via a main 30 mA device."
+        },
+        "eendraad-orphans": {
+          "shortTitle": "One-line diagram orphan or inconsistency",
+          "message": "Circuit, endpoint or frame is inconsistent with the one-line diagram",
+          "details": "Some circuits, endpoints or frame contents are not correctly linked, so they do not appear in the one-line (eendraad) view or appear under the wrong protection. Endpoints that should appear on the floor plan may also lack any sitplan placement. Fix circuit subcircuit assignments, branch endpoint lists, frame content references, or add plan placements.",
+          "remediation": "Ensure each circuit is under only one protection; add every endpoint to a branch (or remove it); fix or remove frame content references to missing items; add a floor-plan placement for endpoints that are missing from the plan."
+        },
+        "duplicate-panel-protection-label": {
+          "shortTitle": "Duplicate protection label on panel",
+          "message": "Two or more protections on this panel share the same label",
+          "details": "Each protection on one panel (main bus, secondary bus, supply strip, or incoming feed) must have a unique label so circuits stay identifiable on the one-line diagram and panel layout. This is not a wiring orphan — it is a naming conflict.",
+          "remediation": "Rename one of the conflicting protections, or turn on automatic naming so letters are reassigned without duplicates."
+        }
+      }
+    },
+    "orphanDetection": {
+      "circuitRefMismatch": "Circuit {{circuitCode}} is listed under protection \"{{listedUnderLabel}}\" but appears in the one-line diagram under circuit {{parentCircuitCode}} (protection \"{{displayedUnderLabel}}\").",
+      "endpointNotInBranch": "Endpoint \"{{endpointLabel}}\" on circuit {{circuitCode}} is not on any branch and will not appear on the one-line diagram.",
+      "branchRefsMissingEndpoint": "Branch \"{{branchLabel}}\" on circuit {{circuitCode}} references missing endpoint {{endpointId}}.",
+      "frameContentOrphans": "Frame \"{{frameTitle}}\" references missing or invalid content ({{contentId}}).",
+      "subCircuitSelfReference": "Circuit \"{{circuitCode}}\" lists its own id in subCircuitIds (invalid). It may not render on the one-line diagram but still appear in circuit pickers.",
+      "subCircuitIdMissingCircuit": "Circuit \"{{parentCircuitCode}}\" references missing sub-circuit (id: {{missingCircuitId}}).",
+      "endpointOnPanelCircuit": "Endpoint \"{{endpointLabel}}\" is attached to the PANEL pseudo-circuit and will not appear correctly on the one-line diagram.",
+      "endpointMultipleFloorPlacements": "Endpoint \"{{endpointLabel}}\" is placed on {{floorCount}} floors, but this symbol should have only one placement.",
+      "endpointPlacementIntegrity": "Endpoint \"{{endpointLabel}}\" has invalid placement data ({{violation}}).",
+      "endpointMissingPlanPlacement": "{{endpointLabel}} ({{circuitCode}}) — not on plan.",
+      "panelDistributionLabelDrift": "Panel symbol \"{{endpointLabel}}\" does not match board \"{{panelName}}\" (circuit {{circuitCode}}).",
+      "panelMissingOneWireSymbol": "Panel \"{{panelName}}\" exists but has no one-wire feeder symbol/link.",
+      "panelGridDuplicateModule": "Panel canvas shows \"{{moduleLabel}}\" more than once; keep the fuller module and hide the weaker duplicate.",
+      "supplyTrunkMisplacedInMainGrid": "Supply device \"{{label}}\" is placed on the main panel grid (row {{row}}, column {{col}}) but must live in the supply strip only — panel canvas and one-line supply chain disagree.",
+      "branchMultiplierEndpointsSplit": "Circuit {{circuitCode}}: branch \"{{branchLabel}}\" lists {{absorbCount}} extra multiplier symbol(s) (e.g. lights) as separate endpoints; they should be one endpoint with multiple plan placements. Use Repair in the Orphan Inspector."
+    },
+    "primitives": {
+      "duplicatePanelProtectionLabels": {
+        "message": "Protection label \"{{label}}\" is used {{count}} times on this panel",
+        "details": "Duplicate protection names on the same panel (main bus, secondary bus, or supply) make circuits hard to identify. Rename one protection or enable automatic naming."
+      },
+      "hasUpstreamOvercurrent": {
+        "message": "Circuit {{circuitCode}} lacks upstream overcurrent protection",
+        "details": "Every circuit must have an upstream overcurrent protective device (MCB, RCBO, or fuse)."
+      },
+      "countUnderThreshold": {
+        "message": "Count {{count}} exceeds threshold {{threshold}}",
+        "details": "The count of {{count}} exceeds the maximum allowed threshold of {{threshold}}."
+      },
+      "hasValue": {
+        "message": "Missing required {{fieldName}}",
+        "details": "The required field {{fieldName}} is missing or undefined."
+      },
+      "switchHasControlledLoads": {
+        "message": "Switch {{switchLabel}} has no controlled loads",
+        "details": "Every switch must control at least one load (light, outlet, or appliance)."
+      },
+      "branchSwitchSequence": {
+        "wrongTwoWayCount": {
+          "message": "Branch {{branchLabel}} on circuit {{circuitCode}}: needs exactly two two-way switches",
+          "details": "This branch has one or more than two two-way switches in the staircase chain. Use exactly two: two-way → two-way, or two-way → crosses → two-way."
+        },
+        "twoWayChaining": {
+          "message": "Branch {{branchLabel}} on circuit {{circuitCode}}: extra two-way in the chain",
+          "details": "Do not place a two-way between crosses or after the pattern. Valid order is two-way → (crosses only) → two-way."
+        },
+        "crossWithoutLeadingTwoWay": {
+          "message": "Branch {{branchLabel}} on circuit {{circuitCode}}: cross switch needs a two-way before it",
+          "details": "Start with a two-way switch, then any cross switches, then the second two-way."
+        },
+        "crossWithoutTrailingTwoWay": {
+          "message": "Branch {{branchLabel}} on circuit {{circuitCode}}: cross switch needs a two-way after it",
+          "details": "End the chain with a two-way switch after the cross switches, before the load."
+        }
+      },
+      "placementHasValidIdentifier": {
+        "message": "Placement for \"{{endpointLabel}}\" lacks valid circuit point identifier",
+        "details": "The sitplan placement for \"{{endpointLabel}}\" must be linked to an endpoint that has a valid circuit letter and point number (e.g. \"A1\"). Check that this symbol is on a circuit on the one-line diagram."
+      },
+      "hiddenSituationPlanSymbolsAreVisible": {
+        "message_one": "{{count}} symbol from the one-wire diagram is hidden on the situation plan",
+        "message_other": "{{count}} symbols from the one-wire diagram are hidden on the situation plan",
+        "details": "Hidden one-wire symbols are omitted from the situation plan. Show them again before using the drawings."
+      },
+      "cableHasCrossSection": {
+        "message": "Circuit has cable segments without cross-section",
+        "details": "All cable segments must have a valid cross-section specified."
+      },
+      "breakerSizeMatchesCrossSection": {
+        "message": "Circuit {{circuitCode}}: breaker rating {{breakerRating}}A exceeds maximum {{maxRating}}A for {{section}}mm² cable",
+        "details": "For circuit {{circuitCode}}, the breaker rating {{breakerRating}}A is higher than the admissible current for a {{section}}mm² copper cable (maximum {{maxRating}}A). Reduce the breaker rating or increase the cable size."
+      },
+      "minimumCrossSection": {
+        "message": "Circuit {{circuitCode}}: cable cross-section {{section}}mm² is below minimum {{required}}mm²",
+        "details": "Circuit {{circuitCode}} uses a {{section}}mm² cable, but the AREI minimum for this circuit type is {{required}}mm²."
+      },
+      "dcCrossSectionHeuristic": {
+        "message": "Circuit {{circuitCode}}: DC sizing warning — estimated {{estimatedCurrentA}}A exceeds ~{{sectionAmpacity}}A for {{section}}mm²",
+        "details": "Heuristic calculation on the DC section of circuit {{circuitCode}}: I ≈ P/U = {{estimatedPowerW}}W / {{estimatedVoltage}}V = {{estimatedCurrentA}}A. The weakest DC wire section is {{section}}mm² (simplified reference ~{{sectionAmpacity}}A). Voltage source: {{voltageSourceLabel}}. This is a warning, not a hard AREI error; verify the converter and device specifications.",
+        "voltageSources": {
+          "fallback-48V": "fallback 48V (no explicit DC voltage found)",
+          "conversion-device": "conversion device voltage setting",
+          "endpoint-device": "battery/solar voltage setting"
+        }
+      },
+      "cascadeProtectionRatings": {
+        "message": "Downstream protection rating exceeds upstream breaker rating",
+        "details": "A downstream MCB/RCBO on a circuit must not be rated higher than its upstream protection."
+      },
+      "supplyHasMainBreaker": {
+        "message": "Main supply has no upstream breaker or main switch",
+        "details": "The supply trunk should include a main breaker or main switch upstream of the main panel."
+      },
+      "hasSupplyOrigin": {
+        "message": "Main supply origin should be specified",
+        "details": "The main supply origin (grid, generator, pv_inverter, etc.) should be specified in the installation settings."
+      },
+      "nonHouseholdPanelShowsGroundedNetwork": {
+        "message": "Board {{panelName}} does not show its grounded network system",
+        "details": "Non-domestic boards must identify their grounded network system. Enable the net-type label and select the applicable TT, TN, or IT system in the board properties."
+      },
+      "nonHouseholdPanelNumberingIsShown": {
+        "message": "Board numbering is not shown",
+        "details": "Non-domestic boards must carry an individual sequence number. Enable panel numbering in the board properties."
+      },
+      "nonHouseholdCircuitShowsCableLength": {
+        "message": "Circuit {{circuitCode}} does not show a cable length",
+        "details": "Non-domestic circuit diagrams must include electrical-line lengths. Enter a positive wire length and enable its visibility on the one-wire diagram."
+      },
+      "rcdHasTooManyCircuits": {
+        "message": "RCD has too many circuits ({{circuitCount}} > {{threshold}})",
+        "details": "Circuits under one 30 mA RCD should respect a maximum count ({{threshold}}) to reduce nuisance tripping and limit leakage current accumulation. RCBO-protected circuits are excluded."
+      },
+      "rcdSelectivity": {
+        "message": "RCD selectivity: upstream RCD must be less sensitive than downstream (e.g. 300 mA main, 30 mA sub)",
+        "details": "The main RCD (e.g. 300 mA for fire protection) must be upstream of more sensitive RCDs (e.g. 30 mA for personal protection). Never place a 30 mA RCD upstream of a 300 mA device."
+      },
+      "wetRoomRequires30mAFromCircuitNotes": {
+        "message": "Circuit {{circuitCode}} appears to feed a bathroom (notes), but has no 30 mA RCD/RCBO protection",
+        "details": "This rule was triggered because the circuit notes contain bathroom/bath/shower keywords (match: {{matched}}). AREI requires circuits supplying rooms with a bath and/or shower to be protected by high/very high sensitivity residual current protection (typically 30 mA). Add an upstream 30 mA RCD or use an RCBO with 30 mA sensitivity for this circuit."
+      },
+      "circuitHasTooManyEndpoints": {
+        "message": "Circuit {{circuitCode}} has too many socket-equivalent points ({{endpointCount}} > {{threshold}})",
+        "details": "Socket and mixed circuit {{circuitCode}} has {{endpointCount}} socket-equivalent points; the maximum is {{threshold}}."
+      },
+      "installationHasMinimumLightingCircuits": {
+        "message": "Installation has {{count}} lighting circuit(s); at least {{threshold}} required",
+        "details": "AREI 5.3.5.2 requires at least {{threshold}} separate lighting circuits in a typical dwelling. This installation has {{count}} (lighting or mixed leaf circuits)."
+      },
+      "domainMismatch": {
+        "message": "Cannot connect DC circuit to AC component.",
+        "details": "A wire's domain must match the expected input/output domain of the connected component. Only conversion components (transformer, rectifier, inverter, DC-DC) may connect different domains."
+      },
+      "mainRcdCompliance": {
+        "missing": {
+          "message": "Main supply has no upstream RCD or RCBO",
+          "details": "Belgian AREI Book 1 requires a main residual current device at the origin of the installation. Add a main RCD or RCBO on the supply trunk upstream of the main panel."
+        },
+        "rating": {
+          "message": "Main RCD/RCBO has rating {{ratingA}}A, below the recommended 40A minimum for residential main devices",
+          "details": "The main residual current device at the origin of the installation should have a nominal current of at least 40 A. Increase the device rating or adjust the installation design."
+        },
+        "sensitivity": {
+          "message": "Main RCD/RCBO sensitivity {{sensitivityMa}} mA exceeds 300 mA maximum",
+          "details": "The main residual current device at the origin of the installation should have a residual trip current not exceeding 300 mA. Use a 300 mA (or lower) device."
+        },
+        "type": {
+          "message": "Main RCD/RCBO must be at least type A, not AC-only",
+          "details": "Under recent AREI revisions, the main residual current device at the origin of the installation must be at least type A (sensitive to pulsating DC). Replace AC-only devices with type A, F or B."
+        }
+      },
+      "panelHasGlobalIsolation": {
+        "message": "Panel {{panelName}} has no device that disconnects all active conductors",
+        "details": "Every distribution board must be disconnectable by a scheidingsinrichting that disconnects all active conductors, either locally in the panel or via an upstream feeder device."
+      },
+      "panelHasLocalIsolationHint": {
+        "message": "Panel {{panelName}} is disconnectable only upstream, without a local isolator",
+        "details": "The board can be disconnected via an upstream feeder device, but there is no local main switch/disconnector in this panel. Local isolation improves safety and maintainability."
+      },
+      "circuitHasRcdProtection": {
+        "missing": {
+          "message": "Circuit {{circuitCode}} requires RCD/RCBO protection (30 mA), but none was found upstream",
+          "details": "Lighting, general-purpose socket, washer, dryer, dishwasher and EV charging circuits require 30 mA residual-current protection. Add an RCD or RCBO upstream or route this circuit through an existing 30 mA device."
+        },
+        "sensitivity": {
+          "message": "Circuit {{circuitCode}} is protected by RCD(s), but none have 30 mA sensitivity",
+          "details": "Lighting, general-purpose socket, washer, dryer, dishwasher and EV charging circuits require 30 mA residual-current protection. Adjust the upstream RCD/RCBO sensitivity or route this circuit through a 30 mA device."
+        }
+      },
+      "stoveCircuitSizingHint": {
+        "message": "Cooker circuit {{circuitCode}} uses {{section}}mm² and {{breakerRating}}A; consider at least {{recommendedSection}}mm² and {{recommendedBreaker}}A for a full-size stove",
+        "details": "This is a design recommendation: typical Belgian practice is to feed full-size electric cookers with a dedicated circuit of about {{recommendedBreaker}}A and {{recommendedSection}}mm² copper. Smaller values may still be compliant if matched to the actual appliance rating, but can limit future cooker upgrades."
+      },
+      "heavyApplianceDedicatedCircuit": {
+        "message": "Heavy fixed appliance(s) {{applianceLabels}} on circuit {{circuitCode}} must be on their own circuit without other loads",
+        "details": "Electric cookers, hobs, ovens, washing machines, tumble dryers and dishwashers each require a dedicated circuit without additional sockets, lighting or other loads."
+      },
+      "fixedApplianceDedicatedCircuitHint": {
+        "message": "Fixed appliance(s) {{applianceLabels}} on circuit {{circuitCode}} share the circuit with other loads",
+        "details": "Fixed appliances are often placed on their own circuit so the cable size and protection match the appliance and possible future replacements. Consider moving these appliances to their own circuit without extra sockets, lights or other loads."
+      }
+    },
+    "citations": {
+      "AREI": {
+        "code": "AREI",
+        "title": "General Regulation on Electrical Installations"
+      },
+      "Condui": {
+        "code": "Condui"
+      },
+      "INTERNAL": {
+        "code": "Internal"
+      }
+    }
+  },
+  "placement": {
+    "properties": "Placement Properties",
+    "rotation": "Rotation",
+    "rotateCW": "Rotate clockwise",
+    "rotateCCW": "Rotate counter-clockwise",
+    "cw": "CW",
+    "ccw": "CCW",
+    "position": "Position",
+    "scale": "Scale",
+    "layer": "Layer",
+    "notFound": "Placement not found"
+  },
+  "circuit": {
+    "code": "Circuit"
+  },
+  "export": {
+    "dialog": {
+      "title": "Export to PDF",
+      "selectCanvases": "Select canvases to export",
+      "eendraad": "1draad (Single-line diagram)",
+      "panel": "Distribution board (cabinet view)",
+      "sitplan": "Sitplan (Floor plan)",
+      "pageCount": "Page count",
+      "pagesForEendraad": "{{count}} pages for 1draad",
+      "pagesForPanel": "{{count}} pages for distribution board",
+      "pagesForSitplan": "{{count}} pages for sitplan",
+      "totalPages": "Total: {{count}} pages",
+      "installDates": "Include install dates",
+      "exportButton": "Export",
+      "cancelButton": "Cancel"
+    },
+    "progress": {
+      "title": "Exporting PDF...",
+      "processing": "Processing: {{pageId}}",
+      "complete": "{{percent}}% complete",
+      "cancel": "Cancel"
+    },
+    "error": {
+      "title": "Export Failed",
+      "message": "Failed to export PDF. Please try again.",
+      "details": "Export completed but some pages failed:\n{{errors}}"
+    }
+  },
+  "panelRelationOverview": "Panel relation overview",
+  "properties": {
+    "title": "Properties",
+    "projectProperties": "Project Properties",
+    "viewSettings": "View Settings",
+    "gridSize": "Grid Size",
+    "multiSelectDifferent": "Multiple items selected with different properties. Properties editing is disabled.",
+    "multiSelectSame": "Multiple items selected. Batch editing coming soon.",
+    "selectedCount": "{{count}} items selected",
+    "mixedValue": "Mixed",
+    "multiSelectUnsupported": "These items cannot be edited together."
+  },
+  "stairs": {
+    "width": "Stair width",
+    "stepDepth": "Step depth",
+    "cornerStyle": "Corner style",
+    "cornerStyleRound": "Round",
+    "cornerStyleSharp": "Sharp",
+    "defaultPointBehavior": "Default point behavior",
+    "pointBehaviorTurn": "Steps",
+    "pointBehaviorPlatform": "Platform",
+    "selectedPointOverride": "Selected point override",
+    "selectedPointsOverride": "Selected point overrides",
+    "selectedPointOverrideHelp": "Per-point override. Use platform to create a landing and suppress steps on the adjacent sections.",
+    "clearPointOverride": "Use stair default",
+    "pointOverrideCount": "{{count}} point(s) override this behavior.",
+    "mixedPointModes": "Mixed values",
+    "drawUpArrows": "Draw up arrows",
+    "invertUpArrow": "Invert arrow direction"
+  },
+  "floorSelection": {
+    "selectFloor": "Select floor",
+    "createNew": "Create new floor",
+    "noFloors": "No floors exist. Create the first floor:",
+    "floorName": "Floor name",
+    "floorNamePlaceholder": "e.g., Ground Floor, First Floor",
+    "add": "Add",
+    "delete": "Delete",
+    "addFloor": "Add floor",
+    "deleteFloor": "Delete floor",
+    "selected": "Viewing",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "deleteConfirmTitle": "Delete floor?",
+    "deleteConfirmMessage": "Are you sure you want to delete {{name}}? Placements on this floor will be moved to another floor. This cannot be undone.",
+    "cannotDeleteLast": "At least one floor must remain.",
+    "referenceOverlayShow": "Show this floor as a faint underlay while drawing on another floor",
+    "referenceOverlayHide": "Hide underlay for this floor"
+  },
+  "hiddenItemsDialog": {
+    "description": "Select one or more items to show again on the plan.",
+    "confirm": "Show",
+    "selectAll": "Select all",
+    "none": "There are no hidden items in this view.",
+    "unnamedItem": "Unnamed item",
+    "protectionFallback": "Protection device",
+    "trunkDeviceFallback": "Trunk device",
+    "domoticaFallback": "Domotica module"
+  },
+  "contextMenu": {
+    "addElement": "Add element",
+    "addNote": "Add Note / Label",
+    "addFrame": "Add Frame",
+    "editProperties": "Edit properties",
+    "duplicate": "Duplicate",
+    "moveProtectionToNewPanel": "Move to new distribution board",
+    "copy": "Copy",
+    "cut": "Cut",
+    "paste": "Paste",
+    "delete": "Delete",
+    "deleteAll": "Delete all",
+    "assignToCircuit": "Assign to circuit",
+    "alignLeft": "Align left",
+    "alignRight": "Align right",
+    "alignTop": "Align top",
+    "alignBottom": "Align bottom",
+    "alignCenter": "Align center",
+    "distributeHorizontal": "Distribute horizontally",
+    "distributeVertical": "Distribute vertically",
+    "lockPosition": "Lock position",
+    "unlockPosition": "Unlock position",
+    "sendToBack": "Send to back",
+    "bringToFront": "Bring to front",
+    "moveToFloor": "Move to Floor...",
+    "copyToFloor": "Copy to floor...",
+    "copyToFloorDescription": "Choose target floors for the current floor-plan selection.",
+    "copyOpeningsAlong": "Copy openings along",
+    "copyToFloorSummaryPerFloor": "{{walls}} walls, {{stairs}} stairs, {{openings}} openings per floor",
+    "copyToFloorSummaryTotal": "Copying to {{floors}} floor(s): {{total}} items total",
+    "isolateCircuit": "Isolate circuit",
+    "showAll": "Show all",
+    "addMore": "Add more...",
+    "hideInThisView": "Hide in this view",
+    "showHidden": "Show hidden...",
+    "mergePoints": "Merge Points"
+  },
+  "multiplier": {
+    "setTotalCount": "Set total number of symbols in sitplan",
+    "totalCount": "Total count",
+    "invalidNumber": "Enter a whole number",
+    "mustBeAtLeastCurrent": "Number must be at least the current count",
+    "maxCount": "Maximum is 99"
+  },
+  "tally": {
+    "title": "Hardware tally",
+    "categoryProtection": "Protection devices",
+    "categoryEnergyMeters": "Energy meters",
+    "categorySockets": "Sockets",
+    "categorySwitches": "Switches",
+    "categoryImpulse": "Impulse switches",
+    "categoryLights": "Light points",
+    "categoryRelays": "Relays",
+    "categoryDomotica": "Smarthome / Domotica",
+    "categoryStove": "Stove junction boxes",
+    "categoryPanels": "Distribution boards",
+    "categoryWires": "Wires",
+    "wireLengthTotal": "{{length}} total",
+    "devicesCount": "devices",
+    "typesCount": "types",
+    "exportCsv": "Export to CSV",
+    "supplyWarningTitle": "On supply wire — may be preinstalled or unchangeable",
+    "supplyPathSegment": "Supply",
+    "groundPathSegment": "Ground",
+    "panelGrid": "rows × modules",
+    "panelNoGrid": "Distribution board (no grid)",
+    "stoveJunctionBox": "Stove junction box",
+    "empty": "No devices to list. Add distribution boards, circuits, and endpoints.",
+    "selectSymbol": "Select this symbol",
+    "specOptionsHeading": "Options",
+    "specLinesAria": "Options for this device type",
+    "specSocketOutletCount": "{{count}}×",
+    "socketOptionTwoPoleSwitch": "Two-pole switch",
+    "socketOptionTwoPoleSwitchLock": "Two-pole locking switch",
+    "directCircuit": "Direct",
+    "csvCategory": "Category",
+    "csvSummary": "Summary",
+    "csvCount": "Count",
+    "csvPanel": "Distribution board",
+    "csvPath": "Path",
+    "csvDetails": "Details"
+  },
+  "wires": {
+    "title": "Wire Properties",
+    "type": "Type",
+    "conductors": "Conductors",
+    "thickness": "Thickness",
+    "fireClass": "Fire class",
+    "inTube": "Tube",
+    "onWall": "On wall",
+    "inWall": "In wall",
+    "inGround": "Ground",
+    "inAir": "Air",
+    "routeNone": "None",
+    "routeLabel": "Wire route",
+    "notFound": "Wire segment not found",
+    "onlyVertical": "Properties are only available for vertical wires",
+    "noCircuit": "Wire segment is not associated with a circuit",
+    "circuitNotFound": "Circuit not found",
+    "trySelectingAgain": "Try selecting the wire again. Wire segments are regenerated, so the selection may have been lost.",
+    "other": "Other",
+    "customTypePlaceholder": "Custom type name",
+    "supplyTitle": "Supply Wire Properties",
+    "supplySegmentUpstream": "Supply side (to separator)",
+    "supplySegmentCrossing": "Panel boundary",
+    "supplySegmentDownstream": "Main panel (to bus)",
+    "earthingTitle": "Earthing Wire Properties",
+    "earthingConductorsNote": "Earthing wire is always single conductor with ground (1G).",
+    "noInstallation": "Installation not found",
+    "hideLabel": "Hide Wire Label",
+    "showFireClassLabel": "Show fire class on one-wire",
+    "hideFireClassLabel": "Hide fire class on one-wire",
+    "length": "Length",
+    "lengthPlaceholder": "Length in meters",
+    "lengthWithUnit": "{{value}} m",
+    "domainDc": "DC",
+    "showWireLengthLabel": "Show wire length on one-wire",
+    "hideWireLengthLabel": "Hide wire length on one-wire",
+    "busStubNoProperties": "This wire stub has no editable properties",
+    "domainTag": "Electrical domain (AC/DC)",
+    "domainMismatchTitle": "Cannot connect here",
+    "domainMismatchDrop": "{{component}} requires {{domain}} input, but the wire here is {{wireDomain}}.",
+    "deleteRectifierWithDcDevicesTitle": "Delete rectifier and DC devices?",
+    "deleteRectifierWithDcDevicesMessage": "This rectifier feeds {{count}} DC-only device(s) (solar panels / batteries). Deleting it will also delete those devices. Do you want to continue?"
+  },
+  "plan": {
+    "doorProperties": "Door",
+    "windowProperties": "Window",
+    "openingWidth": "Width",
+    "cm": "cm",
+    "doorHinge": "Hinge",
+    "doorHingeLeft": "Left",
+    "doorHingeRight": "Right",
+    "doorHingeNone": "None",
+    "doorHingeDouble": "Double",
+    "doorOpening": "Opening",
+    "doorOpeningIn": "In",
+    "doorOpeningOut": "Out",
+    "doorOpeningAngle": "Opening angle (deg)",
+    "resetScale": {
+      "confirmRescaleTitle": "Apply new image scale?",
+      "confirmRescaleIntro": "You changed the plan image scale (~{{factor}}x). Choose what to do:",
+      "optionRescale": "Rescale walls/openings (and related symbols) to match the new scale.",
+      "optionKeep": "Keep walls as they are, but apply the new image scale.",
+      "optionCancel": "Cancel and keep everything unchanged.",
+      "confirmRescaleConfirm": "Rescale walls",
+      "confirmRescaleCancel": "Keep walls as-is"
+    }
+  },
+  "junctionPanel": {
+    "label": "Junction board name",
+    "labelPlaceholder": "Name (same name = same board on sitplan)",
+    "pickExisting": "Pick existing…",
+    "noExisting": "No existing names",
+    "labelHelp": "Same name on multiple symbols = one board on sitplan. Change name to add a second board."
+  },
+  "ground": {
+    "trunkDevice": "Ground wire device"
+  },
+  "supply": {
+    "trunkDevice": "Supply wire device",
+    "mainProtectionLabel": "Main",
+    "nameLabelOnDiagramHint": "When shown, appears above the symbol on the horizontal supply wire."
+  },
+  "installDates": {
+    "tool": "Install date",
+    "toolDescription": "Mark selected one-wire items by date",
+    "installDate": "Install date",
+    "installDateHint": "Leave empty to use the project construction year.",
+    "color": "Install date color",
+    "chooseExactDate": "Choose exact date",
+    "clearExplicitDate": "Clear explicit date",
+    "month": "Month",
+    "day": "Day",
+    "menuSection": "Dates",
+    "showLabelsOutsideMode": "Date labels",
+    "showLabelsOutsideModeDescription": "Show outside date mode.",
+    "forceMonochrome": "Monochrome",
+    "forceMonochromeDescription": "Use one neutral color.",
+    "oldInstallation": "Old installation",
+    "propagatePanelTitle": "Change all child devices too?",
+    "propagatePanelMessage": "Choose whether this install date should feed down from the panel.",
+    "propagateCircuitTitle": "Change child devices too?",
+    "propagateCircuitMessage": "Choose whether this install date should feed down to the circuit consumers.",
+    "propagateProtections": "Yes - only protections",
+    "propagateAll": "Yes - all",
+    "propagateConsumers": "Yes - consumers too"
+  },
+  "wallProperties": {
+    "title": "Wall properties",
+    "drawingTitle": "New wall",
+    "thickness": "Thickness (cm)",
+    "thicknessHint": "Thickness in centimeters. Leave empty to use the floor plan master thickness.",
+    "length": "Length",
+    "delete": "Delete wall",
+    "confirmDelete": "Delete this wall?",
+    "appearanceTitle": "Wall appearance",
+    "appearanceHint": "Global colours for all walls on the floor plan. Configure separate colours for light and dark mode.",
+    "modeLight": "Light mode",
+    "modeDark": "Dark mode",
+    "fillColor": "Wall fill",
+    "strokeColor": "Wall outline",
+    "paletteLabel": "Quick palette",
+    "paletteColor": "Apply palette colour"
+  }
+}

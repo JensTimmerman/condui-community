@@ -1,0 +1,333 @@
+/**
+ * Dialog to add a new circuit (with protection) from the endpoint properties circuit dropdown.
+ * Creates protection + circuit on the given panel at the end of the main bus, then assigns the endpoint.
+ */
+import React, { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
+import { useProjectStore, type ProjectState } from '@/stores/projectStore'
+import { generateId } from '@/utils'
+import {
+  createDefaultAcCircuitCable,
+  DEFAULT_AC_CIRCUIT_WIRE_LABEL_FLAGS,
+} from '@/lib/wires/circuitWireDefaults'
+import {
+  getVoltagePolesConfig,
+  getProtectionCreationProps,
+  DEFAULT_RCBO_SENSITIVITY_MA,
+  BE_STANDARD_BREAKER_RATINGS_A,
+} from '@/lib/protectionDefaults'
+import CustomDropdown from '@/components/common/CustomDropdown'
+import {
+  POLE_CONFIG_OPTIONS_RCD,
+  POLE_CONFIG_OPTIONS_RCBO,
+  POLE_CONFIG_OPTIONS_MCB,
+  polesFromConfig,
+  polesConfigToDisplay,
+} from '@/constants/poleConfig'
+import type { ProtectionDevice, Circuit, ProtectionType, PolesConfig } from '@/types/schema'
+import { flattenPanels } from '@/utils/eendraad/panelHelpers'
+import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
+
+const labelClass = 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1'
+const selectClass =
+  'w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm focus:ring-2 focus:ring-sky-500 focus:border-sky-500'
+
+const PROTECTION_TYPES: Array<{ value: ProtectionType; labelKey: string }> = [
+  { value: 'MCB', labelKey: 'symbols.mcb' },
+  { value: 'RCD', labelKey: 'symbols.rcd' },
+  { value: 'RCBO', labelKey: 'symbols.rcbo' },
+]
+
+export interface AddCircuitDialogProps {
+  /** Default panel to add the circuit to (e.g. main panel). */
+  panelId: string
+  endpointId: string
+  onCreated: (circuitId: string) => void
+  onCancel: () => void
+}
+
+export default function AddCircuitDialog({
+  panelId,
+  endpointId,
+  onCreated,
+  onCancel,
+}: AddCircuitDialogProps) {
+  const { t } = useTranslation()
+  const currentProject = useProjectStore((s: ProjectState) => s.currentProject)
+  const addProtection = useProjectStore((s: ProjectState) => s.addProtection)
+  const addCircuit = useProjectStore((s: ProjectState) => s.addCircuit)
+  const updateEndpoint = useProjectStore((s: ProjectState) => s.updateEndpoint)
+
+  const panels = flattenPanels(currentProject ? getElectricalPanelsFromProject(currentProject) : [])
+  const polesConfig = getVoltagePolesConfig(currentProject)
+  const defaultProtectionProps = getProtectionCreationProps(currentProject, 'MCB')
+
+  const [label, setLabel] = useState('')
+  const [selectedPanelId, setSelectedPanelId] = useState(() => {
+    if (panels.some((p) => p.id === panelId)) return panelId
+    return panels[0]?.id ?? panelId
+  })
+  const [protectionType, setProtectionType] = useState<ProtectionType>('MCB')
+  const [ratingA, setRatingA] = useState<number | ''>(defaultProtectionProps.ratingA ?? '')
+  const [curve, setCurve] = useState<string>(defaultProtectionProps.curve ?? 'C')
+  const [sensitivityMa, setSensitivityMa] = useState<number | ''>(
+    (defaultProtectionProps as { sensitivityMa?: number }).sensitivityMa ?? 30
+  )
+  const [residualCurrentType, setResidualCurrentType] = useState<string>(
+    (defaultProtectionProps as { residualCurrentType?: string }).residualCurrentType ?? 'A'
+  )
+  const [breakingCapacityKa, setBreakingCapacityKa] = useState<number | undefined>(
+    defaultProtectionProps.breakingCapacityKa
+  )
+  const [breakingCapacityOption, setBreakingCapacityOption] = useState<string | undefined>(
+    defaultProtectionProps.breakingCapacityOption
+  )
+  const [polesConfigLocal, setPolesConfigLocal] = useState<PolesConfig>(
+    defaultProtectionProps.polesConfig ?? polesConfig
+  )
+
+  const isRCD = protectionType === 'RCD'
+  const isRCBO = protectionType === 'RCBO'
+  const isMCB = protectionType === 'MCB'
+  const hasCurve = isMCB || isRCBO
+  const hasResidual = isRCD || isRCBO
+
+  const poleOptions = isRCD
+    ? POLE_CONFIG_OPTIONS_RCD
+    : isRCBO
+      ? POLE_CONFIG_OPTIONS_RCBO
+      : POLE_CONFIG_OPTIONS_MCB
+
+  const ratingOptions = isRCD
+    ? [25, 40, 63, 80, 100, 125]
+    : isRCBO || isMCB
+      ? [...BE_STANDARD_BREAKER_RATINGS_A]
+      : null
+
+  const sensitivityOptions = isRCBO ? [10, 30, 100, 300] : [10, 30, 100, 300, 500]
+
+  useEffect(() => {
+    const defaults = getProtectionCreationProps(
+      useProjectStore.getState().currentProject,
+      protectionType
+    )
+    setRatingA((defaults.ratingA as number) ?? '')
+    setCurve((defaults.curve as string) ?? 'C')
+    setSensitivityMa((defaults as { sensitivityMa?: number }).sensitivityMa ?? 30)
+    setResidualCurrentType(
+      (defaults as { residualCurrentType?: string }).residualCurrentType ?? 'A'
+    )
+    setBreakingCapacityKa(defaults.breakingCapacityKa)
+    setBreakingCapacityOption(defaults.breakingCapacityOption)
+    setPolesConfigLocal(defaults.polesConfig ?? polesConfig)
+  }, [protectionType, polesConfig])
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    const protectionId = generateId()
+    const circuitId = generateId()
+    const poles = polesFromConfig(polesConfigLocal)
+
+    const labelTrimmed = label.trim()
+    const protection: ProtectionDevice = {
+      id: protectionId,
+      type: protectionType,
+      label: labelTrimmed,
+      circuits: [],
+      polesConfig: polesConfigLocal,
+      poles,
+      ratingA: typeof ratingA === 'number' ? ratingA : undefined,
+      curve: hasCurve ? (curve as 'B' | 'C' | 'D' | 'K' | 'Z') : undefined,
+      sensitivityMa: hasResidual
+        ? typeof sensitivityMa === 'number'
+          ? sensitivityMa
+          : protectionType === 'RCBO'
+            ? DEFAULT_RCBO_SENSITIVITY_MA
+            : undefined
+        : undefined,
+      residualCurrentType: hasResidual
+        ? (residualCurrentType as 'AC' | 'A' | 'F' | 'B')
+        : undefined,
+      breakingCapacityKa: hasCurve ? breakingCapacityKa : undefined,
+      breakingCapacityOption: hasCurve ? breakingCapacityOption : undefined,
+    }
+
+    const circuit: Circuit = {
+      id: circuitId,
+      code: labelTrimmed,
+      kind: 'empty',
+      cable: createDefaultAcCircuitCable(),
+      endpoints: [],
+      ...DEFAULT_AC_CIRCUIT_WIRE_LABEL_FLAGS,
+    }
+
+    addProtection(selectedPanelId, protection)
+    addCircuit(selectedPanelId, circuit, protectionId)
+    updateEndpoint(endpointId, { circuitId })
+    onCreated(circuitId)
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <p className="text-sm text-gray-600 dark:text-gray-400">
+        {t(
+          'circuits.addNewDialogDescription',
+          'Create a new circuit on the main bus and assign this endpoint to it.'
+        )}
+      </p>
+
+      <div>
+        <label className={labelClass}>{t('circuits.addNewLabel', 'Label')}</label>
+        <input
+          type="text"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          className={selectClass}
+          placeholder={t('circuits.addNewLabelPlaceholder', 'e.g. A, B, Kitchen')}
+        />
+        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+          {t('circuits.addNewLabelHint', 'Leave empty to auto-label.')}
+        </p>
+      </div>
+
+      {panels.length > 1 && (
+        <div>
+          <label className={labelClass}>{t('circuits.addNewPanel', 'Panel')}</label>
+          <CustomDropdown
+            value={selectedPanelId}
+            onChange={setSelectedPanelId}
+            options={panels.map((panel) => ({
+              value: panel.id,
+              label: `${panel.name}${panel.isMain ? ` (${t('panels.mainPanel', 'Main')})` : ''}`,
+            }))}
+            className={selectClass}
+          />
+        </div>
+      )}
+
+      <div>
+        <label className={labelClass}>{t('protections.type', 'Type')}</label>
+        <CustomDropdown
+          value={protectionType}
+          onChange={(nextValue) => setProtectionType(nextValue as ProtectionType)}
+          options={PROTECTION_TYPES.map((opt) => ({
+            value: opt.value,
+            label: t(opt.labelKey, opt.value),
+          }))}
+          className={selectClass}
+        />
+      </div>
+
+      <div>
+        <label className={labelClass}>{t('protections.polesConfig', 'Pole configuration')}</label>
+        <CustomDropdown
+          value={polesConfigToDisplay(polesConfigLocal) || polesConfigLocal}
+          onChange={(nextValue) => setPolesConfigLocal(nextValue as PolesConfig)}
+          options={poleOptions.map((opt) => ({ value: opt, label: opt }))}
+          className={selectClass}
+        />
+      </div>
+
+      <div>
+        <label className={labelClass}>{t('protections.rating', 'Rated current')} (A)</label>
+        {ratingOptions ? (
+          isMCB || isRCBO ? (
+            <CustomDropdown
+              value={ratingA === '' ? '' : String(ratingA)}
+              onChange={(nextValue) => setRatingA(nextValue ? Number(nextValue) : '')}
+              options={ratingOptions.map((r) => ({ value: String(r), label: `${r} A` }))}
+              placeholder={t('common.select', 'Select')}
+              className={selectClass}
+            />
+          ) : (
+            <CustomDropdown
+              value={ratingA === '' ? '' : String(ratingA)}
+              onChange={(nextValue) => setRatingA(nextValue ? Number(nextValue) : '')}
+              options={ratingOptions.map((r) => ({ value: String(r), label: `${r} A` }))}
+              className={selectClass}
+            />
+          )
+        ) : (
+          <input
+            type="number"
+            value={ratingA === '' ? '' : ratingA}
+            onChange={(e) => setRatingA(e.target.value ? Number(e.target.value) : '')}
+            min={1}
+            step={1}
+            className={selectClass}
+          />
+        )}
+      </div>
+
+      {hasCurve && (
+        <div>
+          <label className={labelClass}>{t('protections.curve', 'Tripping curve')}</label>
+          <CustomDropdown
+            value={curve}
+            onChange={setCurve}
+            options={[
+              { value: 'B', label: 'B' },
+              { value: 'C', label: 'C' },
+              { value: 'D', label: 'D' },
+              ...(isMCB
+                ? [
+                    { value: 'K', label: 'K' },
+                    { value: 'Z', label: 'Z' },
+                  ]
+                : []),
+            ]}
+            className={selectClass}
+          />
+        </div>
+      )}
+
+      {hasResidual && (
+        <>
+          <div>
+            <label className={labelClass}>
+              {t('protections.sensitivity', 'Residual trip current IΔn')} (mA)
+            </label>
+            <CustomDropdown
+              value={sensitivityMa === '' ? '' : String(sensitivityMa)}
+              onChange={(nextValue) => setSensitivityMa(nextValue ? Number(nextValue) : '')}
+              options={sensitivityOptions.map((mA) => ({ value: String(mA), label: `${mA} mA` }))}
+              className={selectClass}
+            />
+          </div>
+          <div>
+            <label className={labelClass}>
+              {t('protections.residualCurrentType', 'Residual current type')}
+            </label>
+            <CustomDropdown
+              value={residualCurrentType}
+              onChange={setResidualCurrentType}
+              options={[
+                { value: 'AC', label: t('protections.residualType_AC', 'AC (sinusoidal)') },
+                { value: 'A', label: t('protections.residualType_A', 'A (pulsating DC)') },
+                { value: 'F', label: t('protections.residualType_F', 'F (mixed frequency)') },
+                { value: 'B', label: t('protections.residualType_B', 'B (smooth DC)') },
+              ]}
+              className={selectClass}
+            />
+          </div>
+        </>
+      )}
+
+      <div className="flex justify-end gap-2 pt-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 font-medium rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+        >
+          {t('common.cancel')}
+        </button>
+        <button
+          type="submit"
+          className="px-4 py-2 bg-sky-600 text-white font-medium rounded-md hover:bg-sky-700 transition-colors"
+        >
+          {t('circuits.addNewConfirm', 'Add circuit')}
+        </button>
+      </div>
+    </form>
+  )
+}

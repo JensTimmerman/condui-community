@@ -1,0 +1,1873 @@
+{
+  "appUpdate": {
+    "banner": "Er is een nieuwe versie van de app beschikbaar.",
+    "refresh": "Vernieuwen"
+  },
+  "themeControls": {
+    "light": "Licht",
+    "dark": "Donker"
+  },
+  "connectivity": {
+    "offlineBanner": "Je bent offline. Lokale projecten blijven op dit apparaat opgeslagen.",
+    "offlineReloadNotReady": "Vermijd herladen tot je de app minstens één keer online in deze browsertab hebt geopend.",
+    "offlineReloadDevHint": "Herladen terwijl je offline bent werkt alleen met een productiebuild (npm run build && vite preview), niet met de dev-server.",
+    "dismissOfflineBanner": "Offline melding sluiten",
+    "offlineIndicatorTitle": "Je bent offline"
+  },
+  "diagnostics": {
+    "anonymousProjectName": "Diagnosticsproject ({{idShort}})",
+    "importFallbackProjectName": "Geïmporteerd project ({{idShort}})"
+  },
+  "common": {
+    "save": "Opslaan",
+    "cancel": "Annuleren",
+    "delete": "Verwijderen",
+    "remove": "Verwijderen",
+    "edit": "Bewerken",
+    "add": "Toevoegen",
+    "close": "Sluiten",
+    "open": "Openen",
+    "new": "Nieuw",
+    "search": "Zoeken",
+    "export": "Exporteren",
+    "import": "Importeren",
+    "ok": "OK",
+    "back": "Terug",
+    "next": "Volgende",
+    "continue": "Doorgaan",
+    "confirm": "Bevestigen",
+    "moreActions": "Meer acties",
+    "none": "Geen",
+    "mixed": "Gemengd"
+  },
+  "home": {
+    "footerCopyright": "© {{year}} {{brand}}",
+    "projectsMissing": {
+      "hint": "Projecten kwijt?",
+      "title": "Projecten kwijt?",
+      "body": "Ze staan mogelijk lokaal in een andere browser, op een ander toestel of op het oude Eendraa-domein. Contacteer support als je hulp nodig hebt."
+    },
+    "viewMode": {
+      "grid": "Raster",
+      "list": "Lijst"
+    },
+    "folders": {
+      "newFolder": "Nieuwe map",
+      "renameFolder": "Map hernoemen",
+      "deleteFolder": "Map verwijderen",
+      "deleteFolderConfirm": "Deze map wordt permanent verwijderd en kan niet worden hersteld. Projecten in de map worden uit de map gehaald.",
+      "duplicateName": "Er bestaat al een map met deze naam.",
+      "addToFolder": "Toevoegen aan map",
+      "removeFromFolder": "Uit map halen",
+      "folderName": "Mapnaam",
+      "folderNamePlaceholder": "bv. 2025",
+      "personal": "Persoonlijk",
+      "ungrouped": "Overige projecten",
+      "emptyFolder": "Sleep projecten hierheen",
+      "ungroupedDropHint": "Sleep projecten hierheen om ze buiten mappen te houden",
+      "dragHandle": "Sleep om te verplaatsen",
+      "dragFolderHandle": "Sleep om map te herschikken",
+      "selectProject": "{{name}} selecteren"
+    }
+  },
+  "dialog": {
+    "inputLabel": "Voer waarde in"
+  },
+  "menu": {
+    "open": "Menu",
+    "backToMain": "Terug naar start",
+    "versions": "Versies",
+    "exportPdf": "Exporteren naar PDF",
+    "reExportPdf": "Her-exporteer PDF",
+    "validation": "Validatie",
+    "exportProject": "Project downloaden",
+    "exportProjectError": "Project downloaden mislukt. Probeer het opnieuw.",
+    "settings": "Instellingen",
+    "shortcuts": "Sneltoetsen",
+    "installOffline": "Installeren voor offline gebruik",
+    "contactSupport": "Contacteer support",
+    "tutorial": "Tutorial"
+  },
+  "pwaInstall": {
+    "iosTitle": "Toevoegen aan beginscherm",
+    "iosInstructions": "Tik op Delen in Safari en kies “Voeg toe aan beginscherm”.",
+    "unavailableTitle": "Installeren nog niet beschikbaar",
+    "unavailableMessage": "Deze browser biedt installatie nog niet aan. Gebruik de app verder in Chrome of Edge, of installeer via het browsermenu zodra dat verschijnt."
+  },
+  "tutorial": {
+    "title": "Tutorial",
+    "description": "Een korte rondleiding door de editor zodat je snel aan de slag kan.",
+    "close": "Sluiten",
+    "openOnYoutube": "Bekijk op YouTube"
+  },
+  "touchOnboarding": {
+    "title": "Aanraakbediening",
+    "close": "Sluiten",
+    "tipPan": "Sleep met één vinger om over het canvas te pannen.",
+    "tipZoom": "Knijp met twee vingers om in of uit te zoomen.",
+    "tipFocus": "Focus op de actieve selectie.",
+    "tipCompactPanels": "Gebruik de compacte panelen voor de rest.",
+    "tipTablet": "Op iPad en tablets blijft de volledige editor beschikbaar, met prioriteit voor aanraakgebaren."
+  },
+  "shortcuts": {
+    "title": "Sneltoetsen",
+    "intro": "Alle sneltoetsen die in de editor gebruikt worden.",
+    "groups": {
+      "general": "Algemeen",
+      "viewport": "Viewport",
+      "sitplan": "Situatieplan",
+      "quickPlacer": "Snelplaatser",
+      "oneWire": "1-draadschema"
+    },
+    "sections": {
+      "projectPanels": "Project & panelen",
+      "keyboardNavigation": "Toetsenbord",
+      "mouseSelection": "Muis & selectie",
+      "trackpadTouch": "Trackpad & touch",
+      "floors": "Verdiepingen",
+      "editing": "Bewerken",
+      "fastPlacement": "Snelle modus",
+      "navigation": "Navigatie"
+    },
+    "keys": {
+      "ctrlCmdZ": "Ctrl / Cmd + Z",
+      "ctrlCmdShiftZ": "Ctrl / Cmd + Shift + Z",
+      "ctrlCmdY": "Ctrl / Cmd + Y",
+      "ctrlCmdL": "Ctrl / Cmd + L",
+      "ctrlCmdP": "Ctrl / Cmd + P",
+      "ctrlCmdD": "Ctrl / Cmd + D",
+      "tab": "Tab",
+      "esc": "Esc",
+      "space": "Spatie",
+      "f": "F",
+      "plus": "+",
+      "equals": "=",
+      "minus": "-",
+      "leftClick": "Linksklik",
+      "rightClick": "Rechtsklik",
+      "middleDrag": "Middelste muisknop slepen",
+      "rightDrag": "Rechts slepen",
+      "leftDragEmptyCanvas": "Links slepen op leeg canvas",
+      "shiftClick": "Shift + klik",
+      "shiftDragSelect": "Shift + sleepselectie",
+      "ctrlCmdAltClick": "Ctrl / Cmd / Alt + klik",
+      "altDragSelect": "Alt + sleepselectie",
+      "mouseWheel": "Muiswiel",
+      "twoFingerScroll": "Scrollen met twee vingers",
+      "pinch": "Knijpen",
+      "ctrlWheel": "Ctrl + muiswiel",
+      "oneFingerDrag": "Slepen met één vinger",
+      "twoFingerDragPinch": "Slepen / knijpen met twee vingers",
+      "doubleTap": "Dubbeltik",
+      "longPress": "Lang indrukken",
+      "threeFingerSwipeUpDown": "Met drie vingers omhoog / omlaag vegen",
+      "threeFingerSwipeLeftRight": "Met drie vingers links / rechts vegen",
+      "digit1To9": "1-9",
+      "delete": "Delete",
+      "backspace": "Backspace",
+      "digits": "0-9",
+      "period": ".",
+      "comma": ",",
+      "shiftAZ": "Shift + A-Z",
+      "q": "Q",
+      "w": "W",
+      "d": "D",
+      "f1": "F1",
+      "f2": "F2",
+      "f3": "F3",
+      "arrowKeys": "Pijltjestoetsen"
+    },
+    "entries": {
+      "undo": {
+        "description": "Ongedaan maken"
+      },
+      "redo": {
+        "description": "Opnieuw uitvoeren"
+      },
+      "toggleLibrary": {
+        "description": "Bibliotheek schakelen"
+      },
+      "toggleProperties": {
+        "description": "Eigenschappen schakelen"
+      },
+      "toggleDockPanels": {
+        "description": "Panelen inklappen"
+      },
+      "closeFloatingWindows": {
+        "description": "Vensters sluiten"
+      },
+      "duplicate": {
+        "description": "Selectie dupliceren (circuit, aftakking of eindpunten)"
+      },
+      "deleteSelection": {
+        "description": "Selectie verwijderen"
+      },
+      "focusViewport": {
+        "description": "Viewport focussen"
+      },
+      "fitView": {
+        "description": "Passend in beeld"
+      },
+      "zoomIn": {
+        "description": "Inzoomen"
+      },
+      "zoomOut": {
+        "description": "Uitzoomen"
+      },
+      "selectItem": {
+        "description": "Selecteren"
+      },
+      "contextMenu": {
+        "description": "Contextmenu"
+      },
+      "panCanvas": {
+        "description": "Verschuiven"
+      },
+      "rectangleSelect": {
+        "description": "Rechthoekselectie"
+      },
+      "addToSelection": {
+        "description": "Toevoegen aan selectie"
+      },
+      "removeFromSelection": {
+        "description": "Verwijderen uit selectie"
+      },
+      "mouseWheelZoom": {
+        "description": "Zoomen"
+      },
+      "trackpadPan": {
+        "description": "Verschuiven"
+      },
+      "trackpadPinchZoom": {
+        "description": "Zoomen"
+      },
+      "touchPan": {
+        "description": "Verschuiven"
+      },
+      "touchPanZoom": {
+        "description": "Verschuiven & zoomen"
+      },
+      "touchContextMenu": {
+        "description": "Contextmenu"
+      },
+      "touchMultiSelect": {
+        "description": "Toggle / kaderen"
+      },
+      "touchFocusViewport": {
+        "description": "Viewport focussen"
+      },
+      "touchSidePanels": {
+        "description": "Zijpanelen schakelen"
+      },
+      "switchFloor": {
+        "description": "Verdieping wisselen"
+      },
+      "toggleQuickPlacer": {
+        "description": "Snelplaatser aan/uit",
+        "note": "Terwijl u over het situatieplan beweegt"
+      },
+      "toggleWiring": {
+        "description": "Bedradingsgereedschap aan/uit",
+        "note": "Terwijl u over het situatieplan beweegt"
+      },
+      "toggleDrawMode": {
+        "description": "Tekenmodus aan/uit",
+        "note": "Terwijl u over het situatieplan beweegt"
+      },
+      "switchToEendraadCanvas": {
+        "description": "Viewport naar 1-draadschema",
+        "note": "Terwijl u over een viewportpaneel beweegt; geen effect als dat paneel al het 1-draadschema toont"
+      },
+      "switchToPlanCanvas": {
+        "description": "Viewport naar situatieplan",
+        "note": "Terwijl u over een viewportpaneel beweegt; geen effect als dat paneel al het situatieplan toont"
+      },
+      "switchToPanelCanvas": {
+        "description": "Viewport naar paneelcanvas",
+        "note": "Terwijl u over een viewportpaneel beweegt; geen effect als dat paneel al het paneelcanvas toont"
+      },
+      "openingWidthType": {
+        "description": "Breedte instellen"
+      },
+      "nudgeSymbols": {
+        "description": "Geselecteerde symbolen verschuiven",
+        "note": "Als het situatieplan zichtbaar is en één of meer symbolen geselecteerd zijn; niet tijdens typen in een veld. Tik: 1 cm; ingedrukt houden: 10→18 cm/s na 250 ms. Snelle tikken worden gebundeld tot één opslag; snap wordt genegeerd."
+      },
+      "quickPlacerEscape": {
+        "description": "Sluiten / snel verlaten"
+      },
+      "quickPlacerFloor": {
+        "description": "Verdieping wisselen"
+      },
+      "quickPlacerPlace": {
+        "description": "Plaatsen"
+      },
+      "quickPlacerSkip": {
+        "description": "Overslaan"
+      },
+      "focusCircuitLetter": {
+        "description": "Kring focussen"
+      }
+    }
+  },
+  "settings": {
+    "title": "Instellingen",
+    "language": "Taal",
+    "interface": {
+      "title": "Interface",
+      "language": "Taal",
+      "font": "Lettertype",
+      "fontFigtree": "Figtree",
+      "fontOpenSans": "Open Sans"
+    },
+    "navigation": {
+      "title": "Canvasnavigatie",
+      "leftDragPansCanvas": "Links slepen om te verschuiven (desktop)",
+      "leftDragPansCanvasHint": "Op laptop en desktop: slepen met de linkermuisknop om het canvas te verschuiven (zoals op touch). Houd Shift ingedrukt en sleep voor rechthoekselectie. Verschuiven met midden- en rechtermuisknop blijft werken."
+    },
+    "debug": {
+      "title": "Debug",
+      "eendraadHitboxDebug": "Toon hitboxen eendraadsschema (1draad)",
+      "eendraadHitboxDebugHint": "Visualiseer de hittzones die gebruikt worden voor drop-detectie op het eendraadsschema. Enkel in de UI, niet in export.",
+      "planPlacementDebug": "Toon situatietekening-debug (sitplan)",
+      "planPlacementDebugHint": "Visualiseer symboolcentra, selectiekaders, labelposities en muur-gebaseerde oriëntatiehulpen op het sitplan. Enkel in de UI, niet in export.",
+      "panelRelationDebug": "Toon relationele routeringsdebug voor panelen (panel canvas)",
+      "panelRelationDebugHint": "Toon beschikbare paden, routekosten, draadklassen en modulerollen. Gedetailleerde routing verschijnt in de devtools-console. Enkel in de UI, niet in export."
+    },
+    "installerInfo": {
+      "title": "Installateurgegevens (AREI)",
+      "hint": "Naam, adres en handtekening vereist op AREI-conforme plannen. Wordt voor alle projecten bewaard.",
+      "name": "Naam installateur",
+      "companyNumber": "Ondernemingsnr.",
+      "email": "E-mail",
+      "mobile": "Gsm",
+      "phone": "Telefoon",
+      "namePlaceholder": "Bedrijfs- of installateursnaam",
+      "address": "Adres",
+      "addressPlaceholder": "Straat, postcode, gemeente",
+      "signature": "Handtekening",
+      "uploadSignature": "Handtekening uploaden",
+      "clearSignature": "Wissen",
+      "logo": "Logo",
+      "uploadLogo": "Logo uploaden",
+      "clearLogo": "Wissen",
+      "showBrandingInSchematics": "Logo en handtekening tonen op schema's",
+      "logoOptional": "Optioneel. Afbeeldingen worden verkleind tot max. 500 px voor opslag.",
+      "save": "Opslaan",
+      "saving": "Opslaan…",
+      "saved": "Opgeslagen"
+    }
+  },
+  "project": {
+    "rename": "Project hernoemen",
+    "new": "Nieuw project",
+    "open": "Project openen",
+    "save": "Project opslaan",
+    "export": "Project exporteren",
+    "customer": "Klant",
+    "name": "Projectnaam",
+    "companyNumber": "Ondernemingsnummer",
+    "customerEmail": "E-mail",
+    "customerMobile": "Mobiel",
+    "customerPhone": "Telefoon",
+    "yearOfConstruction": "Bouwjaar",
+    "yearOfConstructionInvalid": "Voer een geldig jaar in tussen 1800 en 2100.",
+    "meterEanCode": "Meter EAN-code",
+    "meterEanCodePlaceholder": "bijv. 5412345678901234",
+    "inspectionAgency": "Keuringsorganisme",
+    "inspectionAgencyName": "Naam organisme",
+    "created": "Aangemaakt",
+    "updated": "Bijgewerkt",
+    "recent": "Recent",
+    "recentProjects": "Recente projecten",
+    "notificationBadgeTooltip": "Nieuwe projectmeldingen",
+    "notifications": {
+      "shared": "Nieuw project met je gedeeld",
+      "versions_one": "Nieuwe versie gemaakt door iemand anders",
+      "versions_other": "{{count}} nieuwe versies gemaakt door iemand anders",
+      "comments_one": "{{count}} nieuwe opmerking toegevoegd",
+      "comments_other": "{{count}} nieuwe opmerkingen toegevoegd"
+    },
+    "refresh": "Vernieuwen",
+    "noProjects": "Nog geen projecten",
+    "noProjectsDescription": "Begin door je eerste elektrische installatieproject aan te maken",
+    "createFirst": "Creëer je eerste project",
+    "deleteConfirmTitle": "Project verwijderen?",
+    "deleteConfirmMessage": "Weet je zeker dat je {name} wilt verwijderen? Deze actie kan niet ongedaan worden gemaakt.",
+    "deleteConfirmShort": "Weet je zeker dat je",
+    "deleteConfirmAction": "wilt verwijderen? Deze actie kan niet ongedaan worden gemaakt.",
+    "importDownloaded": "Gedownload project importeren",
+    "importDownloadedInvalidFile": "Selecteer een .zip- of .pdf-projectexport.",
+    "importFailedTitle": "Importeren mislukt",
+    "importFailedMessage": "Het project kon niet worden geïmporteerd.",
+    "importProjectLoadingTitle": "Project importeren…",
+    "importProjectLoadingBody": "Plattegrondafbeeldingen en projectgegevens worden verwerkt. Grote bestanden kunnen even duren.",
+    "importSchematicalsArchive": "Schematicals-archief importeren (dev)…",
+    "importSchematicalsFolder": "Schematicals-map importeren (dev)…",
+    "openExampleProject": "Voorbeeldproject openen",
+    "exampleTitle": "Probeer een voorbeeldproject",
+    "exampleDescription": "Zie hoe een afgewerkt project eruitziet.",
+    "view": "Bekijken",
+    "create": "Project aanmaken",
+    "download": "Project downloaden",
+    "manageAccess": "Toegang & versies",
+    "localOptions": "Lokaal projectopties",
+    "newProjectLocalWarningShort": "Cloudlimiet bereikt. Dit wordt een lokaal project.",
+    "newProjectLocalChosenWarning": "Dit wordt een lokaal project. Je kunt het later upgraden naar cloud.",
+    "newProjectOfflineLocalWarning": "Je bent offline. Dit project wordt op dit toestel opgeslagen. Zodra je weer online bent, synchroniseren we het naar de cloud als je plan dat toelaat.",
+    "newProjectCooldownLocalWarning": "Je gratis cloudslot is in afkoeling tot {{date}}. Dit project wordt lokaal aangemaakt.",
+    "createFailedTitle": "Project aanmaken mislukt",
+    "createFailedMessage": "Er ging iets mis. Probeer het opnieuw.",
+    "registrationRequiredCreateTitle": "Account nodig",
+    "registrationRequiredCreateMessage": "Maak een gratis account aan om eigen projecten te maken. Het demoproject blijft beschikbaar zonder account.",
+    "registrationRequiredCreateWithLocalProjects": "Maak een gratis account aan om nieuwe projecten te maken. Je bestaande lokale projecten blijven op dit toestel en zijn beschikbaar na registratie.",
+    "registrationRequiredCreateCta": "Registreren",
+    "moveToLocal": "Naar lokaal verplaatsen",
+    "openingTitle": "Laden…",
+    "openingBody": "Even geduld.",
+    "notFoundTitle": "Project niet gevonden",
+    "notFoundBody": "Ongeldige of verwijderde link.",
+    "notFoundBack": "Start"
+  },
+  "infoBlock": {
+    "madeWith": "Gemaakt met {{brand}}",
+    "pageNr": "Pagina",
+    "installerPropertiesTitle": "Installateurgegevens",
+    "installerOverride": "Installateurgegevens voor dit project overschrijven",
+    "installerOverrideHint": "Projectspecifieke installateurgegevens. Alleen zichtbaar in dit project.",
+    "installerGlobalHint": "Globale installateur uit Instellingen wordt gebruikt. Schakel overschrijven in voor projectspecifieke gegevens.",
+    "headerInstallation": "Installatieadres",
+    "headerInstaller": "Installateur",
+    "viewTitle": {
+      "oneWire": "Eendraadsschema",
+      "panel": "Verdelingsbord",
+      "sitplan": "Situatieplan"
+    }
+  },
+  "installation": {
+    "title": "Installatie",
+    "profile": "Profiel",
+    "profileHousehold": "Huishoudelijk",
+    "profileNonHousehold": "Niet-huishoudelijk",
+    "address": "Adres",
+    "street": "Straat",
+    "postalCode": "Postcode",
+    "city": "Gemeente",
+    "country": "Land",
+    "countryBelgium": "België",
+    "voltage": "Spanning",
+    "mainSupply": "Hoofdvoeding",
+    "voltage_2x230": "2×230V",
+    "voltage_3x230": "3×230V",
+    "voltage_3n400": "3N400V",
+    "voltage_1n400": "1N400V",
+    "voltage_1x230": "1×230V",
+    "lineToNeutral": "Fase-Nul (V)",
+    "lineToLine": "Fase-Fase (V)",
+    "notes": "Notities"
+  },
+  "panels": {
+    "title": "Borden",
+    "propertiesTitle": "Bord",
+    "add": "Bord toevoegen",
+    "name": "Naam",
+    "location": "Locatie",
+    "panelType": "Bordtype",
+    "secondaryPanelRole": "Secundair bord",
+    "parentSupply": "Ouder / voeding",
+    "supply": "Voeding",
+    "distribution": "Verdeelbord",
+    "mainPanel": "Hoofdbord",
+    "secondaryPanel": "Bord {{number}}",
+    "panelNumbering": "Bordnummering",
+    "panelNumberingHint": "Voegt B01, B02, … toe in volgorde vanaf het hoofdbord door de onderborden op het eendraadschema.",
+    "panelNetTypeLabels": "Nettype op schema",
+    "panelNetTypeLabelsHint": "Voegt voeding, spanning en aardverbinding toe in de kop van het eendraadschema wanneer een aardverbindingssysteem is ingesteld.",
+    "earthingSystemLabel": "Aardverbindingssysteem",
+    "earthingSystemCustom": "Eigen waarde — niet meer gesynchroniseerd met het hoofdbord tot u hetzelfde systeem opnieuw instelt.",
+    "earthingSystem": {
+      "none": "Geen",
+      "TT": "TT",
+      "TN-S": "TN-S",
+      "TN-C": "TN-C",
+      "TN-C-S": "TN-C-S",
+      "IT": "IT"
+    },
+    "diagramTitleNumbered": "{{code}} – {{name}}",
+    "diagramFedFrom": "Voeding vanaf {{source}}",
+    "diagramNetMain": "Net: {{net}} – {{frequency}} Hz",
+    "diagramNetSecondary": "Net: {{net}} – {{frequency}} Hz – {{earthing}}",
+    "diagramNetWithEarthing": "Net: {{net}} – {{earthing}}",
+    "diagramEarthingSystem": "Aardverbindingssysteem: {{earthing}}"
+  },
+  "panel": {
+    "deleteConfirmTitle": "Bord(en) verwijderen?",
+    "deleteLastMainTitle": "Laatste hoofdbord verwijderen?",
+    "deleteLastMainMessage": "Je gaat het laatste hoofdbord \"{{panelNames}}\" verwijderen.\n\nNa verwijdering moet je een nieuw verdeelbord plaatsen om een nieuw hoofdbord aan te maken voordat je andere componenten kunt toevoegen.\n\nWeet je zeker dat je wilt doorgaan?",
+    "deleteConfirmMessage": "De volgende bord(en) bevatten stroombanen, beveiligingstoestellen of sub-borden: {{panelNames}}\n\nDoor ze te verwijderen, verwijder je ook alle inhoud. Deze actie kan niet ongedaan worden gemaakt.\n\nWeet je zeker dat je wilt doorgaan?",
+    "deleteEmptyPanelMessage": "Weet je zeker dat je bord(en) {{panelNames}} wilt verwijderen?\n\nDit verwijdert ook alle bijbehorende frames en geneste borden. Deze actie kan niet ongedaan worden gemaakt."
+  },
+  "protections": {
+    "title": "Beveiligingstoestellen",
+    "add": "Beveiligingstoestel toevoegen",
+    "type": "Type",
+    "rating": "Nominale stroom",
+    "curve": "Uitschakelkarakteristiek",
+    "sensitivity": "Differentieelstroom IΔn",
+    "poles": "Polen",
+    "polesConfig": "Poolconfiguratie",
+    "residualCurrentType": "Type differentieel",
+    "breakingCapacity": "Kortsluitvermogen",
+    "poles_1P": "1P",
+    "poles_1P_N": "1P+N",
+    "poles_2P": "2P (L+N)",
+    "poles_3P": "3P",
+    "poles_3P_N": "3P+N",
+    "poles_4P": "4P (3L+N)",
+    "residualType_AC": "AC (sinusvormig)",
+    "residualType_A": "A (pulserend DC)",
+    "residualType_F": "F (gemengde frequentie)",
+    "residualType_B": "B (glad DC)",
+    "description": "Beschrijving",
+    "type_MCB": "Automaat",
+    "type_RCD": "Differentieelschakelaar",
+    "type_RCBO": "Differentieelautomaat",
+    "MCB": "Automaat",
+    "RCD": "Differentieelschakelaar",
+    "RCBO": "Differentieelautomaat",
+    "deleteLinkedPanelTitle": "Gekoppeld bord ook verwijderen?",
+    "deleteLinkedPanelMessage": "Hiermee verwijdert u het bord \"{{panelNames}}\" en alles daarachter op die voeding (stromen, toestellen, geneste borden). Doorgaan?"
+  },
+  "circuits": {
+    "title": "Stroombanen",
+    "add": "Stroombaan toevoegen",
+    "code": "Code",
+    "kind": "Type",
+    "cable": "Kabel",
+    "lighting": "Verlichting",
+    "sockets": "Contactdozen",
+    "fixed_appliance": "Vast toestel",
+    "mixed": "Gemengd",
+    "stove": "Fornuis",
+    "solar": "Zonnepanelen",
+    "battery": "Batterij",
+    "doorbell": "Deurbel",
+    "subpanel": "Subverdeler",
+    "hvac": "HVAC",
+    "boiler": "Boiler",
+    "heating": "Verwarming",
+    "ev": "EV-lader",
+    "empty": "Lege stroombaan",
+    "other": "Overig",
+    "derivedHint": "Voorgesteld op basis van stroombaan",
+    "noCircuits": "Geen stroombanen beschikbaar",
+    "addNew": "Nieuwe toevoegen...",
+    "addNewDialogTitle": "Nieuwe stroombaan toevoegen",
+    "addNewDialogDescription": "Maak een nieuwe stroombaan op de hoofdbus en wijs dit eindpunt eraan toe.",
+    "addNewConfirm": "Stroombaan toevoegen",
+    "addNewLabel": "Label",
+    "addNewLabelPlaceholder": "bv. A, B, Keuken",
+    "addNewLabelHint": "Laat leeg voor automatische labeling.",
+    "addNewPanel": "Bord"
+  },
+  "planDrop": {
+    "dialogTitle": "Toevoegen aan kring",
+    "shortHeadline": "Welke kring?",
+    "adjustHeadline": "Kring",
+    "applyCircuit": "Toepassen",
+    "done": "Klaar",
+    "panelLabel": "Verdeelbord",
+    "circuitHeading": "Kring",
+    "confirm": "Toevoegen aan kring",
+    "newCircuit": "Nieuwe kring",
+    "newCircuitCodeLabel": "Kringcode",
+    "emptyKind": "Leeg"
+  },
+  "endpoints": {
+    "title": "Eindpunten",
+    "add": "Eindpunt toevoegen",
+    "label": "Label",
+    "notes": "Notities",
+    "socket": "Contactdoos",
+    "switch": "Schakelaar",
+    "light_point": "Lichtpunt",
+    "fixed_appliance": "Vast toestel",
+    "accumulatingBoiler": "Accumulerende boiler",
+    "accumulationHeating": "Accumulatieverwarming",
+    "heatingWithFan": "Met ventilator",
+    "applianceType": "Toesteltype",
+    "notesPlaceholder": "Optionele notities voor dit eindpunt",
+    "deviceType": "Toesteltype",
+    "deviceTypeHelp": "Categorie van het elektrische toestel",
+    "switchType": "Schakelaartype",
+    "lightType": "Lichttype",
+    "socketType": "Contactdoostype",
+    "socketType_socket_gnd_child_short": "Geaard + kinderbescherming",
+    "socketType_socket_gnd_short": "Geaard",
+    "socketType_socket_child_short": "Kinderbescherming",
+    "socketType_socket_short": "Standaard",
+    "socketType_double_socket_gnd_child_short": "Dubbel, geaard + kind",
+    "socketType_double_socket_child_short": "Dubbel, kinderbescherming",
+    "socketOptions": "Contactdoosopties",
+    "socketSwitchOption": "Schakelaar",
+    "socketSwitchNone": "Geen",
+    "socketSwitchOverlay": "Contactdoos met tweepolige schakelaar",
+    "socketSwitchOverlayLock": "Contactdoos met tweepolige vergrendelingschakelaar",
+    "socketWaterproof": "Waterdicht",
+    "socketCount": "Aantal contactdozen",
+    "setSocketCount": "Aantal contactdozen instellen",
+    "lightCount": "Aantal lichtpunten",
+    "switchPoles": "Polen",
+    "switchPoles1": "1 pool",
+    "switchPoles2": "2 polen",
+    "switchPoles3": "3 polen",
+    "twoWayPoles": "Polen (wissel)",
+    "verklikkerlamp": "Verklikkerlamp",
+    "lightPointOptions": "Opties lichtpunt",
+    "lightPointSafety": "Veiligheidsstroombaan",
+    "lightPointAutonomous": "Autonoom",
+    "lightPointSwitch1p": "Schakelaar (1 pool)",
+    "lightPointOnWall": "Aan wand",
+    "lightPointSafetyShort": "Noodverlichting",
+    "lightPointDecentralShort": "Decentraal",
+    "lightPointSwitch1pShort": "Schakelaar",
+    "lightPointOnWallShort": "Aan wand",
+    "lightSpotBeamType": "Straaltype",
+    "lightSpotBeamNone": "Geen",
+    "lightSpotBeamStraight": "Rechte straal",
+    "lightSpotBeamDiverging": "Divergerende straal",
+    "lightFluorescentTubes": "Aantal buizen",
+    "hvac": {
+      "energySource": "Energiebron",
+      "type": "Type",
+      "function": "Functie",
+      "energy_electricity": "Elektriciteit",
+      "energy_gas_fan": "Gas (met ventilator)",
+      "energy_gas_atmospheric": "Gas (atmosferisch)",
+      "energy_liquid": "Vloeibare brandstof",
+      "energy_solid": "Vaste brandstof",
+      "energy_none": "Geen",
+      "type_heat_exchange": "Warmtewisselaar",
+      "type_cogeneration": "WKK / Cogeneratie",
+      "type_tap_spiral": "Tapwaterspiraal",
+      "type_boiler": "Boiler",
+      "type_none": "Geen",
+      "function_none": "Geen",
+      "function_heat": "Verwarming",
+      "function_cool": "Koeling",
+      "function_heat_cool": "Verwarmen / koelen"
+    },
+    "relay": {
+      "maxCurrentRating": "Max. nominale stroom",
+      "poles": "Polen",
+      "control": "Sturing",
+      "control_standard": "Standaard",
+      "control_timer": "Timer",
+      "control_clock": "Klok",
+      "control_impulse": "Impuls",
+      "control_thermostat": "Thermostaat",
+      "control_dimmer": "Dimmer"
+    },
+    "energyMeter": {
+      "poles": "Polen"
+    },
+    "trunkDevice": {
+      "title": "Apparaat op stam",
+      "label": "Label",
+      "position": "Positie op stam",
+      "positionBefore": "Vóór alle aftakkingen",
+      "positionAfter": "Na aftakking {{n}}",
+      "delete": "Verwijder van stam"
+    },
+    "domotica": {
+      "switchControlEnabled": "Stuuruitgang inschakelen",
+      "switchType": "Type stuurschakelaar",
+      "switchType_1p": "1P schakelaar",
+      "switchType_2p": "2P schakelaar",
+      "switchType_impulse": "Impuls / drukknop",
+      "switchCount": "Aantal stuurschakelaars",
+      "endpointCount": "Aantal endpoint-uitgangen",
+      "controlArea": "Sturing",
+      "control_programmed": "Program.",
+      "control_wireless": "Draadloos",
+      "control_detection": "Detectie",
+      "control_button": "Drukknop",
+      "mainType": "Hoofdtoestel",
+      "mainType_none": "Geen",
+      "mainType_socket": "Stopcontact",
+      "mainType_switch": "Schakelaar",
+      "mainSwitchType": "Schakelaar type"
+    },
+    "solarPanel": {
+      "wattage": "Vermogen (W)",
+      "voltage": "Spanning (V)"
+    },
+    "battery": {
+      "voltage": "Spanning (V)",
+      "capacity": "Capaciteit (kWh)",
+      "powerKw": "Vermogen (kW)"
+    },
+    "evCharger": {
+      "groupTitle": "Gegevens laadpaal"
+    },
+    "certification": {
+      "groupTitle": "Identificatie toestel (certificatie)",
+      "brand": "Merk",
+      "model": "Model",
+      "serialNumber": "Serienummer",
+      "power": "Vermogen"
+    },
+    "energyConversion": {
+      "groupTitle": "Energieomzetting"
+    },
+    "transformerOptions": {
+      "options": "Opties"
+    },
+    "transformer": {
+      "safetyType": "Veiligheidstransformator",
+      "safety_none": "Geen",
+      "safety_closed_short": "Gesloten",
+      "safety_open_short": "Open",
+      "shortCircuitProtected": "Kortsluitvast",
+      "protective": "Beschermingstransformator",
+      "overlayLabel": "Transformatorlabel"
+    },
+    "conversion": {
+      "pMaxPrimary": "Pmax U prim (VA)",
+      "pMaxSecondary": "Pmax U sec (VA)",
+      "dcOutputVoltage": "DC-uitgang (V)",
+      "dcInputMinVoltage": "DC min. ingang (V)"
+    }
+  },
+  "frames": {
+    "title": "Kader",
+    "notFound": "Kader niet gevonden",
+    "frameTitle": "Titel",
+    "titlePlaceholder": "Voer kadertitel in...",
+    "titlePosition": "Titelpositie",
+    "titlePositionInside": "Binnen",
+    "titlePositionOutside": "Buiten",
+    "fontSize": "Lettergrootte titel",
+    "contentInfo": "Dit kader groepeert {{count}} {{type}}-items",
+    "contentType_endpoint": "eindpunt",
+    "contentType_protection": "beveiliging",
+    "contentType_trunkDevice": "stamtoestel",
+    "contentType_ground": "aarding",
+    "contentType_mixed": "gemengd"
+  },
+  "views": {
+    "eendraad": "Eendraadschema",
+    "plan": "Situatieplan",
+    "panel": "Bord",
+    "both": "Beide",
+    "panelAndPlan": "Bord + Plan"
+  },
+  "panelCanvas": {
+    "selectPanel": "Selecteer bord",
+    "panelOptions": "Bordopties",
+    "allHierarchy": "Alles (hiërarchie)",
+    "noPanels": "Geen borden",
+    "feedFromTop": "Voeding van boven",
+    "feedFromBottom": "Voeding van onder",
+    "rows": "Rijen",
+    "columns": "Kolommen",
+    "showDomotica": "Toon domotica",
+    "moveToSupplyPanel": "Verplaats naar voedingsbord",
+    "moveToMainPanel": "Verplaats naar hoofdbord",
+    "hideFromPanel": "Verbergen in bordweergave",
+    "showHiddenDescription": "Selecteer een of meer toestellen om te tonen.",
+    "supplyPanel": "Voedingsbord",
+    "hideSupplyPanel": "Voedingsbord verbergen",
+    "rewireTool": "Herschakel gereedschap",
+    "rewireModeOn": "Herschakelmodus Deactiveren",
+    "rewireModeOff": "Herschakelmodus",
+    "autoArrange": "Modules automatisch ordenen",
+    "autoArrangeConfirm": "Dit zal de huidige bordindeling volledig vervangen. Doorgaan?",
+    "panelLayout": "Bordindeling"
+  },
+  "panelFilter": {
+    "title": "Bordfilter",
+    "allPanels": "Alle borden",
+    "syncWithPanelView": "Sync met Bordweergave"
+  },
+  "canvas": {
+    "grid": "Raster Tonen",
+    "snap": "Uitlijnen",
+    "projectedSnap": "Projectie-uitlijning",
+    "gridSize": "Rastergrootte",
+    "gridOpacity": "Rasterintensiteit",
+    "zoomIn": "Inzoomen",
+    "zoomOut": "Uitzoomen",
+    "fitToView": "Passend maken",
+    "resetZoom": "Zoom resetten",
+    "uploadFloorPlan": "Grondplan uploaden",
+    "controls": "Gebruik muiswiel om te zoomen • Rechtsklik en sleep om te pannen",
+    "controlsTouch": "Knijp om te zoomen • 2 vingers om te pannen",
+    "splitHorizontal": "Horizontaal splitsen",
+    "splitVertical": "Verticaal splitsen",
+    "floor": "Verdieping",
+    "groundFloor": "Gelijkvloers",
+    "firstFloor": "Eerste verdieping",
+    "dragSymbolsHere": "(Sleep symbolen hierheen)",
+    "noFloors": "Geen verdiepingen",
+    "eendraadNaming": {
+      "menuTitle": "Benaming",
+      "automaticNaming": "Auto-Label",
+      "automaticNamingDescription": "Kringen krijgen automatisch een label (A,B,C,...)",
+      "hideFeederLetters": "Geen Label zonder aansluitingen",
+      "hideFeederLettersDescription": "Kringen zonder aansluitingen krijgen geen label.",
+      "toggleLetterOnOneWire": "Hoofdletter op het ééndraadschema tonen of verbergen",
+      "endpointBranchLabelLocked": "Vertakkingslabels volgen automatische benaming (kringletter + volgnummer).",
+      "confirmOverwriteTitle": "Letters vervangen?",
+      "confirmOverwriteMessage": "Automatische benaming vervangt de huidige letters door A, B, C… volgens de rijen op elk bord. Doorgaan?",
+      "confirmOverwriteConfirm": "Doorgaan"
+    }
+  },
+  "planImport": {
+    "title": "Plan importeren",
+    "uploadDescription": "Upload een grondplan als achtergrond.",
+    "dragDropOrClick": "Sleep een afbeelding hierheen of klik om te selecteren",
+    "orPaste": "Of plak een afbeelding uit je klembord",
+    "supportedFormats": "Formaten: JPG, PNG, GIF, WebP, PDF, SVG, DXF, DWG",
+    "invalidFileType": "Selecteer een geldig afbeeldingsbestand",
+    "invalidPdfFile": "Selecteer een geldig PDF-bestand",
+    "invalidDxfFile": "Selecteer een geldig DXF-bestand",
+    "invalidDwgFile": "Selecteer een geldig DWG-bestand",
+    "invalidSvgFile": "Selecteer een geldig SVG-bestand",
+    "loading": "Laden...",
+    "cropDescription": "Optioneel bijsnijden. Sleep de blauwe box om aan te passen.",
+    "applyCrop": "Toepassen",
+    "resetCrop": "Resetten",
+    "skipCrop": "Overslaan",
+    "scaleDescription": "Trek een lijn voor de schaal. Klik en sleep een bekende afstand.",
+    "enterDistance": "Afstand in meters:",
+    "skipScale": "Overslaan",
+    "redraw": "Opnieuw",
+    "selectFloor": "Verdieping",
+    "existingFloor": "Bestaande verdieping",
+    "createNewFloor": "Nieuwe verdieping",
+    "selectFloorOption": "Selecteer...",
+    "floorNamePlaceholder": "Naam (bijv. Gelijkvloers, 1e verdieping)",
+    "floorNameRequired": "Voer een naam in",
+    "preview": "Voorvertoning",
+    "backgroundProcessing": "Achtergrondverwerking",
+    "backgroundProcessingDescription": "We detecteren en verwijderen automatisch witte achtergronden en keren kleuren om voor donkere modus.",
+    "processing": "Afbeelding verwerken...",
+    "whiteBackgroundDetected": "Witte achtergrond gedetecteerd",
+    "whiteBackgroundDetectedDescription": "De afbeelding heeft een witte achtergrond. We kunnen deze verwijderen en transparant maken zodat het beter werkt in donkere modus.",
+    "enableBackgroundProcessing": "Witte achtergrond verwijderen en donkere modus ondersteuning inschakelen",
+    "noWhiteBackground": "Geen witte achtergrond gedetecteerd. De afbeelding wordt gebruikt zoals deze is.",
+    "original": "Origineel",
+    "processed": "Verwerkt",
+    "pdfSelectPages": "Selecteer een of meer pagina's om te importeren. Je kan elke pagina apart bijsnijden.",
+    "selectAllPages": "Alle pagina's selecteren",
+    "clearAllPages": "Selectie wissen",
+    "pageLabel": "Pagina {{page}}",
+    "duplicateFloor": "Verdieping dupliceren",
+    "vectorPreferred": "Vector",
+    "rasterFallback": "Raster fallback",
+    "cropPage": "Pagina bijsnijden",
+    "resetPageCrop": "Bijsnede resetten",
+    "croppedBadge": "Bijgesneden",
+    "croppedPages": "Bijgesneden pagina's: {{count}}",
+    "pdfDestination": "Importbestemming",
+    "newFloorPerPage": "Maak een nieuwe verdieping per geselecteerde pagina",
+    "replaceSelectedFloor": "Vervang geselecteerde verdieping (alleen eerste geselecteerde pagina)",
+    "selectAtLeastOnePage": "Selecteer minstens één pagina",
+    "processingPdf": "PDF-pagina's laden...",
+    "scaleSettings": "Schaalinstellingen",
+    "setScale": "Schaal instellen",
+    "updateScale": "Schaal aanpassen",
+    "applyScaleToAllPages": "Pas deze schaal toe op alle geïmporteerde pagina's",
+    "scaleSetForPage": "Schaal ingesteld met pagina {{page}}",
+    "importing": "Importeren...",
+    "scaleModeTitle": "Hoe wil je de schaal toepassen?",
+    "scaleModeShared": "Schaal eenmalig instellen (eerste geselecteerde pagina) en hergebruiken voor alle geïmporteerde pagina's",
+    "scaleModePerPage": "Schaal per pagina afzonderlijk instellen",
+    "scaleModeSkip": "Schaal voorlopig overslaan",
+    "scaledPagesCount": "Geschaalde pagina's: {{count}} / {{total}}",
+    "skipScaleImport": "Schaal overslaan en importeren",
+    "saveFailedTitle": "Import niet opgeslagen",
+    "saveFailed": "Het plan is geïmporteerd, maar het project kon niet worden opgeslagen. Probeer opnieuw.",
+    "resetPageScale": "Schaal van deze pagina resetten",
+    "pdfDarkModeTitle": "Donkere modus ondersteuning",
+    "pdfDarkModeDescription": "Kies of geïmporteerde PDF-pagina's zich automatisch moeten aanpassen in donkere modus. Deze instelling geldt voor alle geselecteerde pagina's.",
+    "enablePdfDarkModeProcessing": "Donkere modus-aanpassing inschakelen voor alle geïmporteerde PDF-pagina's",
+    "previewPage": "Voorbeeldpagina",
+    "darkModePreview": "Donkere modus voorbeeld",
+    "cadColorModeTitle": "CAD-kleurmodus",
+    "cadColorModeDescription": "Kies of je de CAD-tekening in kleur of grijswaarden importeert. Beide voorbeelden passen zich aan de huidige lichte of donkere modus aan.",
+    "colorPreview": "Kleurvoorbeeld",
+    "enableCadGrayscale": "CAD-kleuren omzetten naar grijswaarden",
+    "grayscalePreview": "Grijswaardenvoorbeeld"
+  },
+  "planTools": {
+    "movePlanImage": "Planafbeelding verplaatsen",
+    "resetScale": "Schaal Aanpassen",
+    "uploadFloorPlanFirst": "Upload eerst een planafbeelding om dit gereedschap te gebruiken"
+  },
+  "planWiring": {
+    "tool": "Bedrading",
+    "toolDescription": "Teken bedradingsroutes tussen symbolen op de actieve verdieping"
+  },
+  "layout": {
+    "presetLabel": "Layout"
+  },
+  "floorPlanTools": {
+    "drawMode": "Tekenmodus",
+    "exitDrawMode": "Tekenmodus verlaten",
+    "drawWall": "Muren tekenen (vrije vorm)",
+    "drawWallRect": "Muren tekenen (rechthoek)",
+    "movePoint": "Muurpunt verplaatsen",
+    "insertDoor": "Deur invoegen",
+    "insertWindow": "Raam invoegen",
+    "drawStair": "Trap tekenen",
+    "graphicElements": "Grafische elementen",
+    "clipWall": "Muur knippen",
+    "insertPoint": "Punt invoegen",
+    "select": "Muren / punten selecteren"
+  },
+  "planGraphic": {
+    "sizeLocked": "Vaste grootte",
+    "resizable": "Schaalbaar",
+    "width": "Breedte (cm)",
+    "height": "Hoogte (cm)",
+    "rotation": "Rotatie (graden)",
+    "elements": {
+      "bathtub": "Bad",
+      "shower": "Douche",
+      "washbasin": "Wastafel",
+      "toilet": "Toilet",
+      "kitchenCabinet": "Kast",
+      "car": "Auto",
+      "rectangle": "Rechthoek"
+    }
+  },
+  "quickPlacer": {
+    "title": "SnelPlaatser",
+    "mode": {
+      "slow": "Traag",
+      "fast": "Snel",
+      "slowTooltip": "Sleep een rij naar het Situatieplan om dat bestaande symbool te herpositioneren.",
+      "fastTooltip": "Linksklik plaatst. Rechtsklik slaat over. Esc verlaat snelle modus. Toetsen 1-9 wisselen verdieping op volgorde."
+    },
+    "autoSkip": {
+      "short": "Autom. overslaan",
+      "full": "Aangepaste plaatsingen automatisch overslaan"
+    },
+    "noItems": "Geen items",
+    "itemCount": "{{count}} items",
+    "noNotes": "Geen notities",
+    "customPlacement": "Aangepaste plaatsing",
+    "defaultPlacement": "Standaard plaatsing",
+    "floor": "Verdieping",
+    "current": "Huidig",
+    "emptyState": "Er zijn geen symboolplaatsingen beschikbaar.",
+    "availableWhenPlanOpen": "SnelPlaatser is beschikbaar wanneer de Situatieplan-weergave open is."
+  },
+  "synergrid": {
+    "fillButton": "Vul met Synergrid-lijst",
+    "verified": "Synergrid C10/26 goedgekeurd",
+    "types": {
+      "solar": "Solar",
+      "storage": "Opslag",
+      "backup": "Back-up",
+      "wind": "Wind",
+      "chp": "WKK",
+      "combined": "Gecombineerd"
+    },
+    "phases": {
+      "single": "1-fase",
+      "three": "3-fase"
+    },
+    "picker": {
+      "title": "Synergrid C10/26 goedgekeurde lijst",
+      "subtitle": "Kies een item uit de officiele lijst en vul de eigenschappen ermee in.",
+      "searchPlaceholder": "Zoek merk, model of referentie",
+      "plugAndPlayOnly": "Alleen plug-and-play",
+      "loading": "Synergrid-lijst laden...",
+      "error": "Kon de Synergrid-lijst niet laden",
+      "empty": "Geen overeenkomende items",
+      "fill": "Vullen",
+      "resultCount": "{{count}} items",
+      "resultLimit": "eerste {{count}} getoond",
+      "resultVisible": "{{visible}} van {{count}} getoond",
+      "columns": {
+        "brand": "Merk",
+        "productSeries": "Productreeks",
+        "model": "Model",
+        "power": "Vermogen",
+        "phase": "Fase",
+        "type": "Type",
+        "approved": "Goedgekeurd",
+        "reference": "Referentie"
+      }
+    }
+  },
+  "inspectionAgencies": {
+    "fillButton": "Vul met erkende lijst",
+    "picker": {
+      "title": "Erkende keuringsorganismen",
+      "subtitle": "Kies een erkend organisme en vul de keuringsinfo in.",
+      "searchPlaceholder": "Zoek naam, plaats, KBO, e-mail of domein",
+      "loading": "Erkende organismen laden...",
+      "error": "Kon de erkende organismen niet laden",
+      "empty": "Geen overeenkomende organismen",
+      "fill": "Vullen",
+      "resultCount": "{{count}} organismen",
+      "columns": {
+        "name": "Naam",
+        "city": "Plaats",
+        "companyNumber": "KBO",
+        "email": "E-mail",
+        "phone": "Tel.",
+        "domains": "Domeinen"
+      }
+    }
+  },
+  "sitplanVisibility": {
+    "title": "Zichtbaarheid",
+    "showAll": "Alles tonen",
+    "groundPlans": "Grondplannen",
+    "opacity": "Doorzichtigheid",
+    "labels": "Labels",
+    "symbols": "Symbolen",
+    "symbolSize": "Symboolgrootte",
+    "wires": "Bedrading",
+    "wiresLighting": "Lichten en schakelaars",
+    "wiresSockets": "Stopcontacten",
+    "wiresOther": "Overige",
+    "wireStyle": "Stijl",
+    "wireStyleSpline": "Bochtig",
+    "wireStyleOrthogonal": "90 graden"
+  },
+  "symbols": {
+    "library": "Symbolenbibliotheek",
+    "recent": "Recent",
+    "favorites": "Favorieten",
+    "socket": "Contactdoos",
+    "socket_gnd": "Contactdoos met contact voor beschermingsgeleider",
+    "socket_child": "Contactdoos met kinderbescherming",
+    "socket_gnd_child": "Contactdoos met contact voor beschermingsgeleider en met kinderbescherming",
+    "double_socket_gnd_child": "Dubbele contactdoos met contact voor beschermingsgeleider en met kinderbescherming",
+    "double_socket_child": "Dubbele contactdoos met kinderbescherming",
+    "switch": "Schakelaar",
+    "switch_1p_twoway": "Wisselschakelaar",
+    "switch_2p_twoway": "Wisselschakelaar (2-polig)",
+    "switch_dimmer": "Dimmer",
+    "switch_1p_changeover": "Omschakelaar",
+    "switch_1p_pull": "Trekschakelaar",
+    "switch_impulse": "Impulsschakelaar",
+    "switch_cross": "Kruisschakelaar",
+    "motion_detector": "Bewegingsdetector",
+    "light_point": "Lichtpunt",
+    "light_spot": "Spot",
+    "light_led": "LED armatuur",
+    "light_fluorescent": "TL-buis",
+    "fixed_appliance_generic": "Toestel",
+    "oven": "Oven",
+    "washer": "Wasmachine",
+    "dryer": "Droogkast",
+    "dishwasher": "Vaatwasmachine",
+    "boiler": "Elektrische boiler",
+    "ev": "EV-laadpaal",
+    "freezer": "Vriezer",
+    "fridge": "Koelkast",
+    "microwave": "Microgolfoven",
+    "motor": "Motor",
+    "stove": "Fornuis",
+    "heating": "Verwarming",
+    "ventilation": "Ventilatie",
+    "door_lock": "Deurslot",
+    "furnace": "HVAC-bron",
+    "buzzer": "Zoemer",
+    "bell": "Bel",
+    "horn": "Hoorn",
+    "siren": "Sirene",
+    "panel_distribution": "Verdeelbord",
+    "relay": "Relais",
+    "domotica": "Domotica / slimme installatie",
+    "energy_meter": "Energiemeter",
+    "transformer": "Transformator",
+    "rectifier": "Gelijkrichter (AC → DC)",
+    "inverter": "Omvormer (DC → AC)",
+    "dc_dc_converter": "DC-DC-omzetter",
+    "solar_panel": "Zonnepaneel",
+    "battery": "Batterij",
+    "mcb": "Automaat",
+    "rcd": "Differentieelschakelaar",
+    "rcbo": "Differentieelautomaat",
+    "fuse": "Zekering",
+    "main_switch": "Hoofdschakelaar",
+    "spd": "Overspanningsbeveiliging",
+    "rotating_switch": "Draaischakelaar",
+    "earthing": "Aarding",
+    "earthing_separator": "Aardingsscheider"
+  },
+  "earthing": {
+    "deleteConfirmTitle": "Aarding verwijderen?"
+  },
+  "orphan": {
+    "banner": {
+      "dev": {
+        "one": "1 wees of in quarantaine geplaatst item gedetecteerd",
+        "many": "{{count}} wezen of items in quarantaine gedetecteerd"
+      },
+      "prod": {
+        "quarantinedOnly": "{{count}} verborgen item(s) hersteld wegens een gegevensprobleem.",
+        "detectedOnly": "{{count}} item(s) hebben een inconsistentie en worden mogelijk niet correct getoond.",
+        "both": "{{count}} item(s) hebben aandacht nodig wegens een gegevensprobleem."
+      },
+      "viewInspector": "Open Orphan Inspector",
+      "inspectOrRepair": "Inspecteren of herstellen"
+    },
+    "inspector": {
+      "title": "Orphan Inspector",
+      "detected": "Gedetecteerde problemen",
+      "quarantined": "In quarantaine (verborgen)",
+      "quarantinedHint": "Deze items worden bewaard maar niet op het schema getoond. Herstel om ze terug te zetten, of verwijder om definitief te wissen.",
+      "focus": "Focus",
+      "quarantine": "Quarantaine",
+      "fix": "Herstel",
+      "fixAll": "Alles herstellen",
+      "fixAllHint": "Voer alle beschikbare automatische fixes uit (zelfde als Herstel per rij).",
+      "restore": "Herstellen",
+      "remove": "Verwijderen",
+      "removePermanent": "Definitief verwijderen",
+      "fixQuarantineBranchesHintCircuit": "Herstel tak-/aftakkingsstructuur op deze in-quarantaine geplaatste stroombaan voor je hem terugzet.",
+      "fixQuarantineBranchesHintEndpoint": "Herstel tak-/aftakkingsstructuur op de stroombaan die nog op het schema staat (aanbevolen voor je dit eindpunt terugzet).",
+      "empty": "Geen wezen of items in quarantaine."
+    },
+    "labels": {
+      "unnamedCircuit": "[naamloze stroombaan]",
+      "unnamedProtection": "[naamloze beveiliging]"
+    },
+    "reason": {
+      "circuitRefMismatch": "Stroombaan onder verkeerde beveiliging",
+      "endpointNotInBranch": "Eindpunt niet op tak",
+      "branchRefsMissingEndpoint": "Tak verwijst naar ontbrekend eindpunt",
+      "frameContentOrphan": "Kader verwijst naar ontbrekende inhoud",
+      "subCircuitSelfReference": "Stroombaan staat als eigen sub-stroombaan vermeld",
+      "subCircuitIdMissingCircuit": "Stroombaan verwijst naar ontbrekende sub-stroombaan",
+      "endpointOnPanelCircuit": "Eindpunt op PANEL pseudo-stroombaan",
+      "endpointMultipleFloorPlacements": "Eindpunt staat op meerdere verdiepingen",
+      "endpointPlacementIntegrity": "Integriteitsfout in eindpunt-plaatsing",
+      "endpointMissingPlanPlacement": "Ontbreekt op plan",
+      "panelDistributionLabelDrift": "Paneelsymbool niet gesynchroniseerd",
+      "panelMissingOneWireSymbol": "Paneel mist eendraadsymbool",
+      "panelGridDuplicateModule": "Dubbele module op paneelcanvas",
+      "supplyTrunkMisplacedInMainGrid": "Voedingscomponent op verkeerd paneelgebied",
+      "branchMultiplierEndpointsSplit": "Vermenigvuldigingssymbolen gesplitst op één aftakking",
+      "danglingReference": "Dangling referentie",
+      "invalidGeometry": "Ongeldige geometrie"
+    },
+    "circuit": "Stroombaan",
+    "endpoint": "Eindpunt"
+  },
+  "validation": {
+    "title": "AREI Validatie",
+    "disclaimer": "Automatische controles om je installatie te helpen nakijken.",
+    "disclaimerTooltip": "De controles zijn gebaseerd op de beschikbare projectgegevens en omvatten niet alle AREI-vereisten.",
+    "errors": "Fouten",
+    "warnings": "Waarschuwingen",
+    "info": "Info",
+    "noIssues": "Deze controles vonden geen problemen. Dit garandeert geen volledige AREI-conformiteit.",
+    "allClear": "Alle beschikbare controles geslaagd",
+    "checking": "Controleren...",
+    "errorsFound": "{{count}} fout(en) gevonden",
+    "warningsFound": "{{count}} waarschuwing(en) gevonden",
+    "revalidate": "Opnieuw valideren",
+    "revalidateInProgress": "Bezig met opnieuw valideren…",
+    "goToIssue": "Ga naar probleem",
+    "moreInfo": "Meer info",
+    "lessInfo": "Minder info",
+    "linkedIssuesTooltip": "Deze problemen zijn gelinkt. Als je er een oplost, kan de andere ook verdwijnen.",
+    "noFilteredIssues": "Geen problemen met deze filters.",
+    "rules": {
+      "be.areibook1.2025": {
+        "diagram-sitplan-consistency": {
+          "shortTitle": "Plaatsing mist stroombaan-ID",
+          "message": "Plaatsing mist geldig stroombaanpunt-ID",
+          "details": "Elke sitplan plaatsing van een stopcontact/licht/regelunit moet een eindpunt hebben dat bij een stroombaan hoort met een taklabel (stroombaanletter + nummer). Schakelaars moeten gecontroleerde belastingen refereren.",
+          "remediation": "Zorg ervoor dat alle plaatsingen gekoppeld zijn aan eindpunten met geldige stroombaan-ID's (bijv. \"A1\", \"B3\")."
+        },
+        "hidden-situation-plan-symbols": {
+          "shortTitle": "Verborgen symbolen op situatieplan",
+          "message": "Symbolen van het eendraadsschema zijn verborgen op het situatieplan",
+          "details": "Symbolen op het eendraadsschema moeten zichtbaar blijven op het situatieplan.",
+          "remediation": "Open het situatieplan en maak de verborgen symbolen opnieuw zichtbaar."
+        },
+        "sources-consistency": {
+          "shortTitle": "Hoofdvoeding oorsprong ontbreekt",
+          "message": "Hoofdvoeding oorsprong moet worden opgegeven",
+          "details": "Als de hoofdvoeding een andere oorsprong heeft dan het net (bijv. pv_inverter), moet dit consistent worden weergegeven in de installatie.",
+          "remediation": "Geef de hoofdvoeding oorsprong op in de installatie-instellingen."
+        },
+        "nonhousehold-board-grounded-network": {
+          "shortTitle": "Geaard netsysteem niet getoond",
+          "message": "Het bord toont het geaarde netsysteem niet",
+          "details": "De markering van een niet-huishoudelijk bord moet het geaarde netsysteem vermelden.",
+          "remediation": "Open de bordeigenschappen, schakel Nettype op schema in en kies het toepasselijke TT-, TN- of IT-netsysteem."
+        },
+        "nonhousehold-board-numbering": {
+          "shortTitle": "Bordnummering niet getoond",
+          "message": "De volgnummers van de borden worden niet getoond",
+          "details": "Elk niet-huishoudelijk bord moet een individueel volgnummer dragen.",
+          "remediation": "Open de bordeigenschappen en schakel Bordnummering in."
+        },
+        "nonhousehold-circuit-cable-length": {
+          "shortTitle": "Kabellengte niet getoond",
+          "message": "De kabellengte van de stroombaan wordt niet getoond",
+          "details": "De documentatie van niet-huishoudelijke stroombanen moet de lengte van de elektrische leidingen bevatten.",
+          "remediation": "Selecteer de draad van de stroombaan, geef een positieve lengte op en maak de draadlengte zichtbaar op het eendraadsschema."
+        },
+        "overcurrent-upstream": {
+          "shortTitle": "Geen stroomopwaartse beveiliging",
+          "message": "Stroombaan mist stroomopwaartse overstroombeveiliging",
+          "details": "Elke stroombaan moet stroomopwaarts een passende overstroombeveiliging (automaat, differentieelautomaat of smeltzekering) hebben.",
+          "remediation": "Plaats stroomopwaarts van de stroombaan een automaat, differentieelautomaat of zekering om overstroombeveiliging te bieden."
+        },
+        "rcd-grouping": {
+          "shortTitle": "Te veel stroombanen per differentieel",
+          "message": "Te veel stroombanen onder één 30 mA differentieel",
+          "details": "Een 30 mA differentieel mag maximaal 8 stroombanen beschermen (stroombanen met differentieelautomaat-bescherming tellen niet mee) om ongewenst uitschakelen te beperken en lekstroomophoping te beperken.",
+          "remediation": "Verminder het aantal stroombanen onder deze differentieel of splits in meerdere differentiëlen. Stroombanen beschermd door een differentieelautomaat tellen niet mee."
+        },
+        "rcd-selectivity": {
+          "shortTitle": "Differentieel-selectiviteit fout",
+          "message": "Differentieel-selectiviteit: stroomopwaarts differentieel moet minder gevoelig zijn dan stroomafwaarts",
+          "details": "Het hoofddifferentieel (bv. 300 mA voor brandbeveiliging) moet stroomopwaarts staan van gevoeligere differentiëlen (bv. 30 mA voor persoonsbeveiliging). Plaats nooit een 30 mA stroomopwaarts van een 300 mA.",
+          "remediation": "Zorg dat het hoofddifferentieel 300 mA (of minder gevoelig) is en de differentiëlen in het bord 30 mA (gevoeliger), zodat de stroomopwaartse gevoeligheid (mA) groter is dan stroomafwaarts."
+        },
+        "bathroom-rcd-30ma": {
+          "shortTitle": "Badkamer: 30 mA diff. vereist",
+          "message": "Badkamer/natte ruimte: 30 mA differentieel of differentieelautomaat vereist",
+          "details": "Stroombanen die een ruimte met bad en/of douche voeden moeten beveiligd zijn door een differentieel met grote/zeer grote gevoeligheid (typisch 30 mA). Omdat we de ruimte niet altijd zeker kunnen bepalen, wordt deze check geactiveerd wanneer de stroombaan-notities badkamer/bad/douche-termen bevatten (in om het even welke taal).",
+          "remediation": "Leid deze stroombaan via een differentieel van 30 mA, of gebruik een differentieelautomaat met 30 mA. Als de stroombaan geen badkamer/natte ruimte voedt, pas dan de stroombaan-notities aan."
+        },
+        "max-endpoints-per-circuit": {
+          "shortTitle": "Te veel eindpunten op stroombaan",
+          "message": "Te veel eindpunten op stroombaan",
+          "details": "Elke stroombaan moet een maximaal aantal eindpunten hebben om een goede belastingsverdeling en beveiliging te waarborgen.",
+          "remediation": "Splits de stroombaan in meerdere stroombanen om het aantal eindpunten te verminderen."
+        },
+        "minimum-lighting-circuits": {
+          "shortTitle": "Te weinig verlichtingsstroombanen",
+          "message": "Minstens twee afzonderlijke verlichtingsstroombanen vereist",
+          "details": "Voor een typische woning vereist het AREI minstens twee afzonderlijke stroombanen voor verlichting (verlichtings- of gemengde kringen). Tel alleen bladkringen: een container met subkringen telt niet mee.",
+          "remediation": "Voeg een tweede verlichtings- of gemengde stroombaan toe zodat de verlichting over minstens twee kringen verdeeld is."
+        },
+        "cable-cross-section": {
+          "shortTitle": "Kabels zonder doorsnede",
+          "message": "Stroombaan heeft kabelsegmenten zonder doorsnede",
+          "details": "Alle kabelsegmenten moeten een geldige doorsnede hebben.",
+          "remediation": "Geef de doorsnede (sectionMm2) op voor alle kabelsegmenten in de stroombaan."
+        },
+        "breaker-vs-cross-section": {
+          "shortTitle": "Beveiliging te groot voor kabel",
+          "message": "Overstroombeveiliging vs kabeldoorsnede",
+          "details": "De nominale stroom van de automaat of differentieelautomaat mag de toelaatbare stroom voor de kabeldoorsnede niet overschrijden.",
+          "remediation": "Verlaag de nominale stroom van de overstroombeveiliging of verhoog de kabeldoorsnede om aan de AREI-limieten te voldoen."
+        },
+        "minimum-cross-section": {
+          "shortTitle": "Kabeldoorsnede onder minimum",
+          "message": "Kabeldoorsnede te klein voor stroombaan-type",
+          "details": "Elk stroombaan-type heeft een minimale vereiste kabeldoorsnede volgens AREI 5.2.1.",
+          "remediation": "Vergroot de kabeldoorsnede tot minstens de minimale waarde voor dit stroombaan-type."
+        },
+        "cascade-protection": {
+          "shortTitle": "Stroomafwaartse automaat te groot",
+          "message": "Stroomafwaartse beveiliging hoger geijkt dan stroomopwaartse",
+          "details": "Stroomafwaartse automaten mogen niet hoger zijn ingesteld dan hun stroomopwaartse beveiliging.",
+          "remediation": "Pas de nominale stromen aan zodat stroomafwaartse beveiligingen gelijk of lager geijkt zijn dan de stroomopwaartse automaat."
+        },
+        "main-rcd": {
+          "shortTitle": "Hoofddifferentieel ontbreekt of fout",
+          "message": "Hoofddifferentieel / differentieelautomaat op voedingsleiding moet aanwezig en correct gedimensioneerd zijn",
+          "details": "AREI Boek 1 vereist een hoofddifferentieel aan het begin van de installatie, typisch 300 mA type A met minstens 40 A nominale stroom.",
+          "remediation": "Plaats een hoofddifferentieel of differentieelautomaat op de voedingsleiding stroomopwaarts van het hoofdbord en zorg dat deze minstens 40 A, maximaal 300 mA en minstens type A is."
+        },
+        "board-global-isolation": {
+          "shortTitle": "Bord niet volledig afschakelbaar",
+          "message": "Bord mist een toestel dat alle actieve geleiders uitschakelt",
+          "details": "Elk schakel- en verdeelbord, inclusief onderverdeelborden, moet volledig afschakelbaar zijn van alle actieve geleiders via een lokale scheidingsschakelaar in het bord of via een stroomopwaartse voedingbeveiliging.",
+          "remediation": "Voeg een lokale hoofdschakelaar/scheidingsschakelaar toe in het bord, of zorg dat een stroomopwaarts voedingstoestel alle actieve geleiders van dit bord afschakelt."
+        },
+        "board-local-isolation-hint": {
+          "shortTitle": "Geen lokale scheidingsschakelaar",
+          "message": "Bord is enkel stroomopwaarts afschakelbaar",
+          "details": "Dit bord kan stroomopwaarts worden afgeschakeld, maar heeft geen lokale scheidingsschakelaar in het bord zelf. Bij keuring wordt lokale afschakelbaarheid vaak verwacht voor veiligheid en gebruiksgemak.",
+          "remediation": "Overweeg een lokale hoofdschakelaar/scheidingsschakelaar toe te voegen in dit bord."
+        },
+        "switch-load-reference": {
+          "shortTitle": "Schakelaar zonder lasten",
+          "message": "Schakelaar heeft geen gecontroleerde belastingen",
+          "details": "Elke schakelaar moet ten minste één gecontroleerde belasting (controlledEndpointIds) of expliciete \"controls\" referentie hebben.",
+          "remediation": "Voeg controlledEndpointIds toe aan de schakelaar om aan te geven welke belastingen deze bestuurt."
+        },
+        "switch-sequence": {
+          "shortTitle": "Ongeldige wissel/kruis-volgorde",
+          "message": "Wissel- en kruisschakelaars staan niet in een geldige volgorde op deze aftakking",
+          "details": "Traplichtschakeling vereist precies twee wisselschakelaars: wissel → wissel, of wissel → (kruisen) → wissel. Geen derde wissel en geen ketting daarna.",
+          "remediation": "Gebruik precies twee wissels: wissel → wissel, of wissel → kruis → … → kruis → wissel. Verwijder een extra wissel of een wissel tussen kruisen."
+        },
+        "electrical-domain": {
+          "shortTitle": "AC/DC domein mismatch",
+          "message": "Elektrisch domein komt niet overeen (AC/DC)",
+          "details": "Het domein van een draad moet overeenkomen met het verwachte invoerdomein van het aangesloten onderdeel. Alleen omzetters mogen verschillende domeinen verbinden.",
+          "remediation": "Stel het draaddomein in op het invoer/uitvoerdomein van het onderdeel, of gebruik een omzetter (transformator, gelijkrichter, omvormer, DC-DC) waar het domein verandert."
+        },
+        "dc-cross-section-heuristic": {
+          "shortTitle": "Waarschuwing DC-draaddoorsnede",
+          "message": "Geschatte DC-stroom kan te hoog zijn voor de draadsectie",
+          "details": "Deze waarschuwing gebruikt een conservatieve schatting op DC-segmenten (I ~= P/U) op basis van gekende vermogens van omzetters/toestellen en DC-spanningswaarden. Dit is informatief en moet gecontroleerd worden tegenover echte toestelgegevens en installatievoorwaarden.",
+          "remediation": "Controleer uitgangsvermogen van de omzetter en de werkelijke DC-spanning/stroom. Verhoog indien nodig de DC-draaddoorsnede, verlaag de verwachte belasting of pas de omzetter-/toestelconfiguratie aan."
+        },
+        "post-main-bus-pe-conductor": {
+          "shortTitle": "Geen PE-aders na hoofdbord",
+          "message": "AC-bekabeling na de hoofdbussen moet beschermingsader (G) bevatten",
+          "details": "De beschermingsaarde wordt aangesloten op de hoofdbussen. Voedingsbekabeling aan installatiezijde (vanaf de paneelgrens tot de bus) en stroomkringen vanaf de bus moeten aders met G gebruiken (bv. 3G, 4G), niet ongeaarde tellingen zoals 3 of 4. DC-bekabeling wordt niet gecontroleerd.",
+          "remediation": "Kies 3G, 4G of een andere …G-optie voor installatiezijdige draden. Voeding vóór de gestippelde paneelgrens mag zonder G blijven."
+        },
+        "heavy-appliance-dedicated-circuit": {
+          "shortTitle": "Zwaar toestel niet op eigen stroombaan",
+          "message": "Zware vaste toestellen moeten op een eigen toegekende stroombaan zitten",
+          "details": "Elektrische fornuizen, kookplaten, ovens, wasmachines, droogkasten en afwasmachines vereisen elk een toegekende stroombaan zonder bijkomende contactdozen, verlichting of andere verbruikers.",
+          "remediation": "Zet elk zwaar vast toestel op een eigen stroombaan, of splits de stroombaan zodat elk toestel een eigen beveiliging en kabel heeft."
+        },
+        "fixed-appliance-dedicated-hint": {
+          "shortTitle": "Vast toestel niet toegekend",
+          "message": "Vast toestel zit niet op een eigen toegekende stroombaan",
+          "details": "Vaste toestellen worden vaak op een eigen stroombaan geplaatst zodat kabeldoorsnede en beveiliging afgestemd zijn op het toestel en toekomstige vervangingen.",
+          "remediation": "Overweeg om het vaste toestel op een eigen stroombaan te plaatsen zonder bijkomende stopcontacten, verlichting of andere verbruikers."
+        },
+        "stove-sizing-hint": {
+          "shortTitle": "Fornuistroombaan dimensioneringstips",
+          "message": "Aanbevolen dimensionering fornuistroombaan",
+          "details": "In de praktijk wordt een volwaardig elektrisch fornuis vaak gevoed door een toegekende stroombaan rond 32A met 6mm² koper, ook al kunnen kleinere waarden wettelijk volstaan als ze afgestemd zijn op het toestel.",
+          "remediation": "Overweeg om de automaatwaarde en kabeldoorsnede van de fornuistroombaan te verhogen naar ongeveer 32A en 6mm², of controleer dat de huidige dimensionering overeenkomt met het werkelijke fornuisvermogen."
+        },
+        "rcd-required-by-circuit-type": {
+          "shortTitle": "30 mA diff. vereist",
+          "message": "Differentieel 30 mA vereist voor aangeduide huishoudelijke en EV-stroombanen",
+          "details": "Verlichting, algemene contactdozen, wasmachines, droogkasten, afwasmachines en EV-laadstroombanen vereisen differentieelbeveiliging van 30 mA volgens AREI 4.2.4.3(b) en 7.22.4.1.",
+          "remediation": "Leid deze stroombanen via een differentieel of differentieelautomaat met 30 mA gevoeligheid, in het bord of via een hoofddifferentieel van 30 mA."
+        },
+        "eendraad-orphans": {
+          "shortTitle": "Orphan of inconsistentie op éénlijnschema",
+          "message": "Stroombaan, eindpunt of kader is inconsistent met het éénlijnschema",
+          "details": "Sommige stroombanen, eindpunten of kaderinhouden zijn niet correct gekoppeld, waardoor ze niet in het éénlijnschema (eendraad) verschijnen of onder de verkeerde beveiliging staan. Eindpunten die op het situatieplan horen, kunnen ook geen enkele planplaatsing hebben. Pas subcircuit-toewijzingen, tak-eindpuntlijsten, kaderverwijzingen aan of voeg planplaatsingen toe.",
+          "remediation": "Zorg dat elke stroombaan onder slechts één beveiliging valt; voeg elk eindpunt toe aan een tak (of verwijder het); corrigeer of verwijder kaderverwijzingen naar ontbrekende items; voeg een situatieplan-plaatsing toe voor eindpunten die op het plan ontbreken."
+        },
+        "duplicate-panel-protection-label": {
+          "shortTitle": "Dubbele beveiligingsnaam op bord",
+          "message": "Twee of meer beveiligingen op dit bord hebben dezelfde naam",
+          "details": "Elke beveiliging op één bord (hoofdbusbalk, secundaire bus, voedingsstrook of inkomende voeding) moet een unieke naam hebben zodat stroombanen herkenbaar blijven op het éénlijnschema en paneeloverzicht. Dit is geen bedradingswees — het is een naamconflict.",
+          "remediation": "Hernoem één van de conflicterende beveiligingen, of schakel automatische naamgeving in zodat letters zonder duplicaten worden toegewezen."
+        }
+      }
+    },
+    "orphanDetection": {
+      "circuitRefMismatch": "Stroombaan {{circuitCode}} staat onder beveiliging \"{{listedUnderLabel}}\" maar verschijnt op het éénlijnschema onder stroombaan {{parentCircuitCode}} (beveiliging \"{{displayedUnderLabel}}\").",
+      "endpointNotInBranch": "Eindpunt \"{{endpointLabel}}\" op stroombaan {{circuitCode}} staat op geen enkele tak en verschijnt niet op het éénlijnschema.",
+      "branchRefsMissingEndpoint": "Tak \"{{branchLabel}}\" op stroombaan {{circuitCode}} verwijst naar ontbrekend eindpunt {{endpointId}}.",
+      "frameContentOrphans": "Kader \"{{frameTitle}}\" verwijst naar ontbrekende of ongeldige inhoud ({{contentId}}).",
+      "subCircuitSelfReference": "Stroombaan \"{{circuitCode}}\" vermeldt eigen id in subCircuitIds (ongeldig). Mogelijk niet zichtbaar op het eendraadsschema maar wel in keuzelijsten.",
+      "subCircuitIdMissingCircuit": "Stroombaan \"{{parentCircuitCode}}\" verwijst naar ontbrekende sub-stroombaan (id: {{missingCircuitId}}).",
+      "endpointOnPanelCircuit": "Eindpunt \"{{endpointLabel}}\" is verbonden met de PANEL pseudo-stroombaan en verschijnt niet correct op het éénlijnschema.",
+      "endpointMultipleFloorPlacements": "Eindpunt \"{{endpointLabel}}\" staat op {{floorCount}} verdiepingen, maar dit symbool mag maar één plaatsing hebben.",
+      "endpointPlacementIntegrity": "Eindpunt \"{{endpointLabel}}\" heeft ongeldige plaatsingsdata ({{violation}}).",
+      "endpointMissingPlanPlacement": "{{endpointLabel}} ({{circuitCode}}) — niet op plan.",
+      "panelDistributionLabelDrift": "Paneelsymbool \"{{endpointLabel}}\" komt niet overeen met bord \"{{panelName}}\" (stroombaan {{circuitCode}}).",
+      "panelMissingOneWireSymbol": "Paneel \"{{panelName}}\" bestaat maar heeft geen eendraad-voedingssymbool/koppeling.",
+      "panelGridDuplicateModule": "Paneelcanvas toont \"{{moduleLabel}}\" meer dan één keer; behoud de volledige module en verberg de zwakkere dubbelganger.",
+      "supplyTrunkMisplacedInMainGrid": "Voedingscomponent \"{{label}}\" staat op het hoofdraster (rij {{row}}, kolom {{col}}) maar hoort alleen in de voedingsstrook — paneelcanvas en eendraad voeding wijken af.",
+      "branchMultiplierEndpointsSplit": "Stroombaan {{circuitCode}}: aftakking \"{{branchLabel}}\" heeft {{absorbCount}} extra vermenigvuldigingssymbool(len) als aparte eindpunten; horen één eindpunt met meerdere plaatsingen te zijn. Gebruik Repareren in de weesinspectie."
+    },
+    "primitives": {
+      "duplicatePanelProtectionLabels": {
+        "message": "Beveiligingsnaam \"{{label}}\" wordt {{count}} keer gebruikt op dit bord",
+        "details": "Dubbele beveiligingsnamen op hetzelfde bord (hoofdbus, secundaire bus of voeding) maken stroombanen moeilijk herkenbaar. Hernoem één beveiliging of schakel automatische naamgeving in."
+      },
+      "hasUpstreamOvercurrent": {
+        "message": "Stroombaan {{circuitCode}} mist stroomopwaartse overstroombeveiliging",
+        "details": "Elke stroombaan moet stroomopwaarts een passende overstroombeveiliging (automaat, differentieelautomaat of smeltzekering) hebben."
+      },
+      "countUnderThreshold": {
+        "message": "Aantal {{count}} overschrijdt drempel {{threshold}}",
+        "details": "Het aantal {{count}} overschrijdt de maximaal toegestane drempel van {{threshold}}."
+      },
+      "hasValue": {
+        "message": "Ontbrekend vereist {{fieldName}}",
+        "details": "Het vereiste veld {{fieldName}} ontbreekt of is ongedefinieerd."
+      },
+      "switchHasControlledLoads": {
+        "message": "Schakelaar {{switchLabel}} heeft geen gecontroleerde belastingen",
+        "details": "Elke schakelaar moet ten minste één belasting (licht, stopcontact of apparaat) besturen."
+      },
+      "branchSwitchSequence": {
+        "wrongTwoWayCount": {
+          "message": "Aftakking {{branchLabel}} op stroombaan {{circuitCode}}: precies twee wisselschakelaars nodig",
+          "details": "Deze aftakking heeft één of meer dan twee wissels in de trapketting. Gebruik precies twee: wissel → wissel, of wissel → kruisen → wissel."
+        },
+        "twoWayChaining": {
+          "message": "Aftakking {{branchLabel}} op stroombaan {{circuitCode}}: extra wissel in de ketting",
+          "details": "Plaats geen wissel tussen kruisen of na het patroon. Geldige volgorde: wissel → (alleen kruisen) → wissel."
+        },
+        "crossWithoutLeadingTwoWay": {
+          "message": "Aftakking {{branchLabel}} op stroombaan {{circuitCode}}: kruisschakelaar heeft een wissel nodig ervoor",
+          "details": "Begin met een wissel, dan eventuele kruisen, dan de tweede wissel."
+        },
+        "crossWithoutTrailingTwoWay": {
+          "message": "Aftakking {{branchLabel}} op stroombaan {{circuitCode}}: kruisschakelaar heeft een wissel nodig erna",
+          "details": "Sluit af met een wissel na de kruisen, vóór de verbruiker."
+        }
+      },
+      "placementHasValidIdentifier": {
+        "message": "Plaatsing voor \"{{endpointLabel}}\" mist geldig stroombaan-ID",
+        "details": "De sitplan-plaatsing voor \"{{endpointLabel}}\" moet gekoppeld zijn aan een eindpunt met een geldige stroombaanletter en puntnummer (bijv. \"A1\"). Controleer of dit symbool op een stroombaan staat in het eendraadschema."
+      },
+      "hiddenSituationPlanSymbolsAreVisible": {
+        "message_one": "{{count}} symbool van het eendraadsschema is verborgen op het situatieplan",
+        "message_other": "{{count}} symbolen van het eendraadsschema zijn verborgen op het situatieplan",
+        "details": "Verborgen symbolen van het eendraadsschema ontbreken op het situatieplan. Maak ze opnieuw zichtbaar voordat je de tekeningen gebruikt."
+      },
+      "cableHasCrossSection": {
+        "message": "Stroombaan heeft kabelsegmenten zonder doorsnede",
+        "details": "Alle kabelsegmenten moeten een geldige doorsnede hebben."
+      },
+      "breakerSizeMatchesCrossSection": {
+        "message": "Stroombaan {{circuitCode}}: beveiliging {{breakerRating}}A overschrijdt maximum {{maxRating}}A voor {{section}}mm² kabel",
+        "details": "Voor stroombaan {{circuitCode}} is de automaatwaarde {{breakerRating}}A hoger dan de toelaatbare stroom voor een {{section}}mm² koperen kabel (maximum {{maxRating}}A). Verlaag de automaat of vergroot de kabeldoorsnede."
+      },
+      "minimumCrossSection": {
+        "message": "Stroombaan {{circuitCode}}: kabeldoorsnede {{section}}mm² is kleiner dan minimum {{required}}mm²",
+        "details": "Stroombaan {{circuitCode}} gebruikt een {{section}}mm² kabel, maar het AREI-minimum voor dit stroombaan-type is {{required}}mm²."
+      },
+      "dcCrossSectionHeuristic": {
+        "message": "Stroombaan {{circuitCode}}: waarschuwing voor DC-dimensionering — geschatte {{estimatedCurrentA}}A overschrijdt ~{{sectionAmpacity}}A bij {{section}}mm²",
+        "details": "Heuristische berekening voor het DC-deel van stroombaan {{circuitCode}}: I ≈ P/U = {{estimatedPowerW}}W / {{estimatedVoltage}}V = {{estimatedCurrentA}}A. De kleinste doorsnede van de DC-bedrading is {{section}}mm² (vereenvoudigde referentiewaarde ~{{sectionAmpacity}}A). Spanningsbron: {{voltageSourceLabel}}. Dit is een waarschuwing, geen harde AREI-fout; controleer de specificaties van de omzetter en toestellen.",
+        "voltageSources": {
+          "fallback-48V": "standaardwaarde 48V (geen expliciete DC-spanning gevonden)",
+          "conversion-device": "spanningsinstelling van de omzetter",
+          "endpoint-device": "spanningsinstelling van de batterij of zonnepanelen"
+        }
+      },
+      "cascadeProtectionRatings": {
+        "message": "Stroomafwaartse beveiliging hoger geijkt dan stroomopwaartse automaat",
+        "details": "Een stroomafwaartse automaat of differentieelautomaat mag niet hoger geijkt zijn dan de stroomopwaartse beveiliging."
+      },
+      "supplyHasMainBreaker": {
+        "message": "Hoofdvoeding heeft geen beveiliging",
+        "details": "De voedingsleiding moet een hoofdautomaat of hoofdschakelaar hebben stroomopwaarts van het hoofdverdeelbord."
+      },
+      "hasSupplyOrigin": {
+        "message": "Hoofdvoeding oorsprong moet worden opgegeven",
+        "details": "De hoofdvoeding oorsprong (net, generator, pv_inverter, etc.) moet worden opgegeven in de installatie-instellingen."
+      },
+      "nonHouseholdPanelShowsGroundedNetwork": {
+        "message": "Bord {{panelName}} toont het geaarde netsysteem niet",
+        "details": "Niet-huishoudelijke borden moeten hun geaarde netsysteem vermelden. Schakel het nettypelabel in en kies het toepasselijke TT-, TN- of IT-netsysteem in de bordeigenschappen."
+      },
+      "nonHouseholdPanelNumberingIsShown": {
+        "message": "Bordnummering wordt niet getoond",
+        "details": "Niet-huishoudelijke borden moeten een individueel volgnummer dragen. Schakel bordnummering in bij de bordeigenschappen."
+      },
+      "nonHouseholdCircuitShowsCableLength": {
+        "message": "Stroombaan {{circuitCode}} toont geen kabellengte",
+        "details": "Stroombaanschema's van niet-huishoudelijke installaties moeten de lengtes van de elektrische leidingen bevatten. Geef een positieve draadlengte op en maak ze zichtbaar op het eendraadsschema."
+      },
+      "rcdHasTooManyCircuits": {
+        "message": "Differentieel heeft te veel stroombanen ({{circuitCount}} > {{threshold}})",
+        "details": "Stroombanen onder één 30 mA differentieel moeten een maximum ({{threshold}}) respecteren om ongewenst uitschakelen te beperken. Stroombanen met differentieelautomaat-bescherming zijn uitgesloten."
+      },
+      "rcdSelectivity": {
+        "message": "Differentieel-selectiviteit: stroomopwaarts differentieel moet minder gevoelig zijn dan stroomafwaarts (bv. 300 mA hoofd, 30 mA sub)",
+        "details": "Het hoofddifferentieel (bv. 300 mA) moet stroomopwaarts staan van gevoeligere differentiëlen (bv. 30 mA). Plaats nooit een 30 mA stroomopwaarts van een 300 mA."
+      },
+      "wetRoomRequires30mAFromCircuitNotes": {
+        "message": "Stroombaan {{circuitCode}} lijkt een badkamer (notities) te voeden, maar heeft geen 30 mA differentieel/differentieelautomaat",
+        "details": "Deze regel werd geactiveerd omdat de stroombaan-notities badkamer/bad/douche-termen bevatten (match: {{matched}}). Het AREI vereist dat stroombanen die een ruimte met bad en/of douche voeden beveiligd zijn met een differentieel met hoge/zeer hoge gevoeligheid (typisch 30 mA). Plaats stroomopwaarts een 30 mA differentieel of gebruik een differentieelautomaat met 30 mA voor deze stroombaan."
+      },
+      "circuitHasTooManyEndpoints": {
+        "message": "Stroombaan {{circuitCode}} heeft te veel contactdoos-equivalente punten ({{endpointCount}} > {{threshold}})",
+        "details": "Contactdoos- of gemengde stroombaan {{circuitCode}} heeft {{endpointCount}} contactdoos-equivalente punten; het maximum is {{threshold}}."
+      },
+      "installationHasMinimumLightingCircuits": {
+        "message": "Installatie heeft {{count}} verlichtingsstroomba(a)n(en); minstens {{threshold}} vereist",
+        "details": "Het AREI (5.3.5.2) vereist minstens {{threshold}} afzonderlijke stroombanen voor verlichting in een typische woning. Deze installatie heeft er {{count}} (verlichtings- of gemengde bladkringen)."
+      },
+      "domainMismatch": {
+        "message": "DC-stroombaan kan niet worden aangesloten op AC-onderdeel.",
+        "details": "Het domein van een draad moet overeenkomen met het verwachte invoer/uitvoerdomein van het aangesloten onderdeel. Alleen omzetters (transformator, gelijkrichter, omvormer, DC-DC) mogen verschillende domeinen verbinden."
+      },
+      "mainRcdCompliance": {
+        "missing": {
+          "message": "Hoofdvoeding heeft geen stroomopwaartse differentieel of differentieelautomaat",
+          "details": "Het AREI vereist een hoofddifferentieel aan het begin van de installatie. Plaats een hoofddifferentieel of differentieelautomaat op de voedingsleiding stroomopwaarts van het hoofdbord."
+        },
+        "rating": {
+          "message": "Hoofddifferentieel / differentieelautomaat heeft een nominale stroom van {{ratingA}}A, lager dan de aanbevolen minimum 40A voor residentiële hoofdbeveiligingen",
+          "details": "Het hoofddifferentieel aan het begin van de installatie moet een nominale stroom van minstens 40 A hebben. Verhoog de nominale stroom of pas het installatiedesign aan."
+        },
+        "sensitivity": {
+          "message": "Hoofddifferentieel / differentieelautomaat heeft een gevoeligheid van {{sensitivityMa}} mA, hoger dan het maximum van 300 mA",
+          "details": "Het hoofddifferentieel aan het begin van de installatie moet een aanspreekstroom hebben die 300 mA niet overschrijdt. Gebruik een toestel van 300 mA (of lager)."
+        },
+        "type": {
+          "message": "Hoofddifferentieel / differentieelautomaat moet minstens type A zijn, geen zuiver AC-type",
+          "details": "Volgens de recente AREI-wijzigingen moet het hoofddifferentieel aan het begin van de installatie minstens type A zijn (gevoelig voor pulserende gelijkstroom). Vervang AC-only toestellen door type A, F of B."
+        }
+      },
+      "panelHasGlobalIsolation": {
+        "message": "Bord {{panelName}} heeft geen toestel dat alle actieve geleiders uitschakelt",
+        "details": "Elk verdeelbord moet afschakelbaar zijn via een scheidingsinrichting die alle actieve geleiders uitschakelt, lokaal in het bord of stroomopwaarts via de voeding."
+      },
+      "panelHasLocalIsolationHint": {
+        "message": "Bord {{panelName}} is enkel stroomopwaarts afschakelbaar, zonder lokale scheidingsschakelaar",
+        "details": "Het bord kan via een stroomopwaarts voedingstoestel worden afgeschakeld, maar er is geen lokale hoofdschakelaar/scheidingsschakelaar in dit bord. Lokale afschakelbaarheid verbetert veiligheid en onderhoud."
+      },
+      "circuitHasRcdProtection": {
+        "missing": {
+          "message": "Stroombaan {{circuitCode}} vereist differentieel- of differentieelautomaatbeveiliging (30 mA), maar er werd geen upstream toestel gevonden",
+          "details": "Verlichting, algemene contactdozen, wasmachines, droogkasten, afwasmachines en EV-laadstroombanen vereisen differentieelbeveiliging van 30 mA. Voeg stroomopwaarts een differentieel of differentieelautomaat toe of leid de stroombaan via een bestaand 30 mA-toestel."
+        },
+        "sensitivity": {
+          "message": "Stroombaan {{circuitCode}} is beveiligd door differentieel(s), maar geen enkel toestel heeft 30 mA gevoeligheid",
+          "details": "Verlichting, algemene contactdozen, wasmachines, droogkasten, afwasmachines en EV-laadstroombanen vereisen differentieelbeveiliging van 30 mA. Pas de gevoeligheid stroomopwaarts aan of leid de stroombaan via een 30 mA-toestel."
+        }
+      },
+      "stoveCircuitSizingHint": {
+        "message": "Fornuistroombaan {{circuitCode}} gebruikt {{section}}mm² en {{breakerRating}}A; overweeg minstens {{recommendedSection}}mm² en {{recommendedBreaker}}A voor een volwaardig fornuis",
+        "details": "Dit is een ontwerpsuggestie: in België wordt een volwaardig elektrisch fornuis typisch gevoed door een toegekende stroombaan van ongeveer {{recommendedBreaker}}A met {{recommendedSection}}mm² koper. Kleinere waarden kunnen conform zijn als ze afgestemd zijn op het toestel, maar beperken mogelijke toekomstige vervangingen."
+      },
+      "heavyApplianceDedicatedCircuit": {
+        "message": "Zware vaste toestel(len) {{applianceLabels}} op stroombaan {{circuitCode}} moeten op een eigen stroombaan zitten zonder andere verbruikers",
+        "details": "Elektrische fornuizen, kookplaten, ovens, wasmachines, droogkasten en afwasmachines vereisen elk een toegekende stroombaan zonder bijkomende contactdozen, verlichting of andere verbruikers."
+      },
+      "fixedApplianceDedicatedCircuitHint": {
+        "message": "Vast toestel(len) {{applianceLabels}} op stroombaan {{circuitCode}} delen de stroombaan met andere verbruikers",
+        "details": "Vaste toestellen worden vaak op een eigen stroombaan geplaatst zodat kabeldoorsnede en beveiliging afgestemd zijn op het toestel en toekomstige vervangingen. Overweeg om deze toestellen op een eigen stroombaan te plaatsen zonder bijkomende stopcontacten, verlichting of andere verbruikers."
+      }
+    },
+    "citations": {
+      "AREI": {
+        "code": "AREI",
+        "title": "Algemeen Reglement op de Elektrische Installaties"
+      },
+      "Condui": {
+        "code": "Condui"
+      },
+      "INTERNAL": {
+        "code": "Intern"
+      }
+    }
+  },
+  "placement": {
+    "properties": "Plaatsing eigenschappen",
+    "rotation": "Rotatie",
+    "rotateCW": "Draai rechtsom",
+    "rotateCCW": "Draai linksom",
+    "cw": "Rechtsom",
+    "ccw": "Linksom",
+    "position": "Positie",
+    "scale": "Schaal",
+    "layer": "Laag",
+    "notFound": "Plaatsing niet gevonden"
+  },
+  "circuit": {
+    "code": "Stroombaan"
+  },
+  "export": {
+    "dialog": {
+      "title": "Exporteren naar PDF",
+      "selectCanvases": "Selecteer canvas om te exporteren",
+      "eendraad": "1draad (Enkellijndiagram)",
+      "panel": "Bord (Bordweergave)",
+      "sitplan": "Sitplan (Plattegrond)",
+      "pageCount": "Aantal pagina's",
+      "pagesForEendraad": "{{count}} pagina's voor 1draad",
+      "pagesForPanel": "{{count}} pagina's voor bord",
+      "pagesForSitplan": "{{count}} pagina's voor sitplan",
+      "totalPages": "Totaal: {{count}} pagina's",
+      "installDates": "Installatiedata opnemen",
+      "exportButton": "Exporteren",
+      "cancelButton": "Annuleren"
+    },
+    "progress": {
+      "title": "PDF exporteren...",
+      "processing": "Verwerken: {{pageId}}",
+      "complete": "{{percent}}% voltooid",
+      "cancel": "Annuleren"
+    },
+    "error": {
+      "title": "Export mislukt",
+      "message": "PDF exporteren mislukt. Probeer het opnieuw.",
+      "details": "Export voltooid maar sommige pagina's zijn mislukt:\n{{errors}}"
+    }
+  },
+  "panelRelationOverview": "Overzicht van paneelrelaties",
+  "properties": {
+    "title": "Eigenschappen",
+    "projectProperties": "Projecteigenschappen",
+    "viewSettings": "Weergave-instellingen",
+    "gridSize": "Rastergrootte",
+    "multiSelectDifferent": "Meerdere items geselecteerd met verschillende eigenschappen. Bewerken van eigenschappen is uitgeschakeld.",
+    "multiSelectSame": "Meerdere items geselecteerd. Groepsbewerking komt binnenkort.",
+    "selectedCount": "{{count}} item(s) geselecteerd",
+    "mixedValue": "Gemengd",
+    "multiSelectUnsupported": "Deze items kunnen niet samen worden bewerkt."
+  },
+  "stairs": {
+    "width": "Trapbreedte",
+    "stepDepth": "Aantrede",
+    "cornerStyle": "Hoekstijl",
+    "cornerStyleRound": "Afgerond",
+    "cornerStyleSharp": "Scherp",
+    "defaultPointBehavior": "Standaard puntgedrag",
+    "pointBehaviorTurn": "Treden",
+    "pointBehaviorPlatform": "Platform",
+    "selectedPointOverride": "Override voor geselecteerd punt",
+    "selectedPointsOverride": "Overrides voor geselecteerde punten",
+    "selectedPointOverrideHelp": "Override per punt. Gebruik platform om een bordes te maken en de treden op de aangrenzende stukken te onderdrukken.",
+    "clearPointOverride": "Standaard van trap gebruiken",
+    "pointOverrideCount": "{{count}} punt(en) overschrijven dit gedrag.",
+    "mixedPointModes": "Gemengde waarden",
+    "drawUpArrows": "Pijlen voor stijgrichting tonen",
+    "invertUpArrow": "Pijlrichting omkeren"
+  },
+  "contextMenu": {
+    "addElement": "Element toevoegen",
+    "addNote": "Notitie toevoegen",
+    "addFrame": "Kader toevoegen",
+    "editProperties": "Eigenschappen bewerken",
+    "duplicate": "Dupliceren",
+    "moveProtectionToNewPanel": "Verplaatsen naar nieuw verdeelbord",
+    "copy": "Kopiëren",
+    "cut": "Knippen",
+    "paste": "Plakken",
+    "delete": "Verwijderen",
+    "deleteAll": "Alles verwijderen",
+    "assignToCircuit": "Toewijzen aan stroombaan",
+    "alignLeft": "Links uitlijnen",
+    "alignRight": "Rechts uitlijnen",
+    "alignTop": "Boven uitlijnen",
+    "alignBottom": "Onder uitlijnen",
+    "alignCenter": "Centreren",
+    "distributeHorizontal": "Horizontaal verdelen",
+    "distributeVertical": "Verticaal verdelen",
+    "lockPosition": "Positie vergrendelen",
+    "unlockPosition": "Positie ontgrendelen",
+    "sendToBack": "Naar achteren",
+    "bringToFront": "Naar voren",
+    "moveToFloor": "Verplaatsen naar verdieping...",
+    "copyToFloor": "Kopiëren naar verdieping...",
+    "copyToFloorDescription": "Kies de doelverdiepingen voor de huidige selectie op het grondplan.",
+    "copyOpeningsAlong": "Openingen mee kopiëren",
+    "copyToFloorSummaryPerFloor": "{{walls}} muren, {{stairs}} trappen en {{openings}} openingen per verdieping",
+    "copyToFloorSummaryTotal": "Kopiëren naar {{floors}} verdieping(en): {{total}} items in totaal",
+    "isolateCircuit": "Stroombaan isoleren",
+    "showAll": "Alles tonen",
+    "addMore": "Meer toevoegen...",
+    "hideInThisView": "Verbergen in deze weergave",
+    "showHidden": "Verborgen tonen...",
+    "mergePoints": "Punten samenvoegen"
+  },
+  "multiplier": {
+    "setTotalCount": "Stel het totaal aantal symbolen in het sitplan in",
+    "totalCount": "Totaal aantal",
+    "invalidNumber": "Voer een geheel getal in",
+    "mustBeAtLeastCurrent": "Het getal moet minstens het huidige aantal zijn",
+    "maxCount": "Maximum is 99"
+  },
+  "floorSelection": {
+    "selectFloor": "Selecteer verdieping",
+    "createNew": "Nieuwe verdieping aanmaken",
+    "noFloors": "Geen verdiepingen bestaan. Maak de eerste verdieping aan:",
+    "floorName": "Verdieping naam",
+    "floorNamePlaceholder": "bijv. Gelijkvloers, Eerste verdieping",
+    "add": "Toevoegen",
+    "delete": "Verwijderen",
+    "addFloor": "Verdieping toevoegen",
+    "deleteFloor": "Verdieping verwijderen",
+    "selected": "Actief",
+    "moveUp": "Omhoog",
+    "moveDown": "Omlaag",
+    "deleteConfirmTitle": "Verdieping verwijderen?",
+    "deleteConfirmMessage": "Weet u zeker dat u {{name}} wilt verwijderen? Placements op deze verdieping worden naar een andere verdieping verplaatst. Dit kan niet ongedaan worden gemaakt.",
+    "cannotDeleteLast": "Er moet minstens een verdieping blijven bestaan.",
+    "referenceOverlayShow": "Deze verdieping licht tonen als referentie tijdens tekenen op een andere verdieping",
+    "referenceOverlayHide": "Referentie voor deze verdieping verbergen"
+  },
+  "hiddenItemsDialog": {
+    "description": "Selecteer één of meer items om opnieuw op het plan te tonen.",
+    "confirm": "Tonen",
+    "selectAll": "Alles selecteren",
+    "none": "Er zijn geen verborgen items in deze weergave.",
+    "unnamedItem": "Naamloos item",
+    "protectionFallback": "Beveiligingstoestel",
+    "trunkDeviceFallback": "Apparaat op stam",
+    "domoticaFallback": "Domotica-module"
+  },
+  "tally": {
+    "title": "Materiaallijst",
+    "categoryProtection": "Beveiligingstoestellen",
+    "categoryEnergyMeters": "Energiemeters",
+    "categorySockets": "Stopcontacten",
+    "categorySwitches": "Schakelaars",
+    "categoryImpulse": "Impulsschakelaars",
+    "categoryLights": "Lichtpunten",
+    "categoryRelays": "Relais",
+    "categoryDomotica": "Domotica / Smarthome",
+    "categoryStove": "Fornuisverdeler",
+    "categoryPanels": "Borden",
+    "categoryWires": "Draden",
+    "wireLengthTotal": "{{length}} totaal",
+    "devicesCount": "toestellen",
+    "typesCount": "types",
+    "exportCsv": "Exporteren naar CSV",
+    "supplyWarningTitle": "Op voedingsdraad — kan voorgeïnstalleerd of niet wijzigbaar zijn",
+    "supplyPathSegment": "Voeding",
+    "groundPathSegment": "Aarding",
+    "panelGrid": "rijen × modules",
+    "panelNoGrid": "Bord (geen rooster)",
+    "stoveJunctionBox": "Fornuisverdeler",
+    "empty": "Geen toestellen om te tonen. Voeg borden, stroombanen en eindpunten toe.",
+    "selectSymbol": "Dit symbool selecteren",
+    "specOptionsHeading": "Opties",
+    "specLinesAria": "Opties voor dit toesteltype",
+    "specSocketOutletCount": "{{count}}×",
+    "socketOptionTwoPoleSwitch": "Tweepolige schakelaar",
+    "socketOptionTwoPoleSwitchLock": "Tweepolige vergrendelbare schakelaar",
+    "directCircuit": "Direct",
+    "csvCategory": "Categorie",
+    "csvSummary": "Samenvatting",
+    "csvCount": "Aantal",
+    "csvPanel": "Bord",
+    "csvPath": "Pad",
+    "csvDetails": "Details"
+  },
+  "wires": {
+    "title": "Draad eigenschappen",
+    "type": "Type",
+    "conductors": "Geleiders",
+    "thickness": "Dikte",
+    "fireClass": "Brandklasse",
+    "inTube": "Buis",
+    "onWall": "Op wand",
+    "inWall": "In wand",
+    "inGround": "Grond",
+    "inAir": "Lucht",
+    "routeNone": "Geen",
+    "routeLabel": "Draadroute",
+    "notFound": "Draadsegment niet gevonden",
+    "onlyVertical": "Eigenschappen zijn alleen beschikbaar voor verticale draden",
+    "noCircuit": "Draadsegment is niet gekoppeld aan een stroombaan",
+    "circuitNotFound": "Stroombaan niet gevonden",
+    "trySelectingAgain": "Probeer de draad opnieuw te selecteren. Draadsegmenten worden opnieuw gegenereerd, dus de selectie kan verloren zijn gegaan.",
+    "other": "Anders",
+    "customTypePlaceholder": "Eigen type naam",
+    "supplyTitle": "Voedingsdraad eigenschappen",
+    "supplySegmentUpstream": "Voedingszijde (tot scheiding)",
+    "supplySegmentCrossing": "Paneelgrens",
+    "supplySegmentDownstream": "Hoofdpaneel (tot bus)",
+    "earthingTitle": "Aardingsdraad eigenschappen",
+    "earthingConductorsNote": "Aardingsdraad is altijd een enkele geleider met aarding (1G).",
+    "noInstallation": "Installatie niet gevonden",
+    "hideLabel": "Draadlabel verbergen",
+    "showFireClassLabel": "Brandklasse tonen op ééndraad",
+    "hideFireClassLabel": "Brandklasse verbergen op ééndraad",
+    "length": "Lengte",
+    "lengthPlaceholder": "Lengte in meters",
+    "lengthWithUnit": "{{value}} m",
+    "domainDc": "DC",
+    "showWireLengthLabel": "Draadlengte tonen op ééndraad",
+    "hideWireLengthLabel": "Draadlengte verbergen op ééndraad",
+    "busStubNoProperties": "Deze draad heeft geen bewerkbare eigenschappen",
+    "domainTag": "Elektrisch domein (AC/DC)",
+    "domainMismatchTitle": "Kan hier niet aansluiten",
+    "domainMismatchDrop": "{{component}} vereist {{domain}} invoer, maar de draad hier is {{wireDomain}}.",
+    "deleteRectifierWithDcDevicesTitle": "Gelijkrichter en DC-toestellen verwijderen?",
+    "deleteRectifierWithDcDevicesMessage": "Deze gelijkrichter voedt {{count}} DC-only toestel(len) (zonnepanelen / batterijen). Door hem te verwijderen, worden deze toestellen ook verwijderd. Wil je doorgaan?"
+  },
+  "plan": {
+    "doorProperties": "Deur",
+    "windowProperties": "Raam",
+    "openingWidth": "Breedte",
+    "cm": "cm",
+    "doorHinge": "Scharnier",
+    "doorHingeLeft": "Links",
+    "doorHingeRight": "Rechts",
+    "doorHingeNone": "Geen",
+    "doorHingeDouble": "Dubbel",
+    "doorOpening": "Opening",
+    "doorOpeningIn": "Naar binnen",
+    "doorOpeningOut": "Naar buiten",
+    "doorOpeningAngle": "Openingshoek (graden)",
+    "resetScale": {
+      "confirmRescaleTitle": "Nieuwe afbeeldingsschaal toepassen?",
+      "confirmRescaleIntro": "Je hebt de schaal van de planafbeelding gewijzigd (~{{factor}}x). Kies wat je wilt doen:",
+      "optionRescale": "Herschaal muren/openingen (en bijhorende symbolen) mee met de nieuwe schaal.",
+      "optionKeep": "Behoud de muren zoals ze zijn, maar pas de nieuwe afbeeldingsschaal toe.",
+      "optionCancel": "Annuleer en laat alles ongewijzigd.",
+      "confirmRescaleConfirm": "Muren herschalen",
+      "confirmRescaleCancel": "Muren behouden"
+    }
+  },
+  "junctionPanel": {
+    "label": "Verdeelbordnaam",
+    "labelPlaceholder": "Naam (zelfde naam = zelfde bord op sitplan)",
+    "pickExisting": "Bestaande kiezen…",
+    "noExisting": "Geen bestaande namen",
+    "labelHelp": "Zelfde naam op meerdere symbolen = één bord op sitplan. Wijzig de naam om een tweede bord toe te voegen."
+  },
+  "ground": {
+    "trunkDevice": "Aardingsdraad apparaat"
+  },
+  "supply": {
+    "trunkDevice": "Voedingsdraad apparaat",
+    "mainProtectionLabel": "Hoofd",
+    "nameLabelOnDiagramHint": "Indien zichtbaar: verschijnt boven het symbool op de horizontale voedingsdraad."
+  },
+  "installDates": {
+    "tool": "Installatiedatum",
+    "toolDescription": "Markeer geselecteerde 1draad-items per datum",
+    "installDate": "Installatiedatum",
+    "installDateHint": "Laat leeg om het bouwjaar van het project te gebruiken.",
+    "color": "Kleur installatiedatum",
+    "chooseExactDate": "Exacte datum kiezen",
+    "clearExplicitDate": "Expliciete datum wissen",
+    "month": "Maand",
+    "day": "Dag",
+    "menuSection": "Datums",
+    "showLabelsOutsideMode": "Datumlabels",
+    "showLabelsOutsideModeDescription": "Toon buiten datummodus.",
+    "forceMonochrome": "Monochroom",
+    "forceMonochromeDescription": "Gebruik een neutrale kleur.",
+    "oldInstallation": "Oude Installatie",
+    "propagatePanelTitle": "Ook alle onderliggende toestellen wijzigen?",
+    "propagatePanelMessage": "Kies of deze installatiedatum vanuit het bord moet doorlopen.",
+    "propagateCircuitTitle": "Ook onderliggende toestellen wijzigen?",
+    "propagateCircuitMessage": "Kies of deze installatiedatum moet doorlopen naar de verbruikers van de kring.",
+    "propagateProtections": "Ja - alleen beveiligingen",
+    "propagateAll": "Ja - alles",
+    "propagateConsumers": "Ja - verbruikers ook"
+  },
+  "wallProperties": {
+    "title": "Muureigenschappen",
+    "drawingTitle": "Nieuwe muur",
+    "thickness": "Dikte (cm)",
+    "thicknessHint": "Dikte in centimeter. Laat leeg om de standaard muurdikte van het grondplan te gebruiken.",
+    "length": "Lengte",
+    "delete": "Muur verwijderen",
+    "confirmDelete": "Deze muur verwijderen?",
+    "appearanceTitle": "Uiterlijk muur",
+    "appearanceHint": "Globale kleuren voor alle muren op het grondplan. Stel aparte kleuren in voor licht en donker thema.",
+    "modeLight": "Licht thema",
+    "modeDark": "Donker thema",
+    "fillColor": "Vulling muur",
+    "strokeColor": "Omtrek muur",
+    "paletteLabel": "Snel palet",
+    "paletteColor": "Paletkleur toepassen"
+  }
+}
