@@ -9,6 +9,8 @@ files and working environment under their own control.
 
 The Community edition works without sign-in or a managed Condui service. Projects are stored in the
 browser on the device running the application and can be downloaded as portable project archives.
+These archives are fully compatible in both directions with the hosted, paid Condui edition: the
+same project can be opened and edited in either edition and moved between them without conversion.
 
 ## What you can do
 
@@ -35,9 +37,10 @@ project. Download and back up the project archive separately if you want to edit
 Community installations are operated by the person or organization running them. There is no managed
 backup, uptime guarantee, automatic server maintenance, or data recovery service.
 
-## Run with Docker
+## Run as a container
 
-Docker is the simplest way to run a production-style local instance.
+The supplied `Dockerfile` builds a standard OCI-compatible Linux container image. Docker is the
+simplest tested way to run a production-style local instance:
 
 ```bash
 docker compose up --build
@@ -47,6 +50,13 @@ Open <http://localhost:8080> after the container has started. Stop it with:
 
 ```bash
 docker compose down
+```
+
+Other OCI-compatible tools can use the same image definition. For example, with Podman:
+
+```bash
+podman build -t condui-community:local .
+podman run --rm -p 8080:8080 condui-community:local
 ```
 
 The container serves the application and the local file-conversion endpoints it needs. It does not
