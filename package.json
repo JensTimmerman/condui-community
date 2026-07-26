@@ -2,6 +2,7 @@
   "name": "condui-community",
   "private": true,
   "version": "0.2.0",
+  "license": "PolyForm-Perimeter-1.0.1",
   "type": "module",
   "workspaces": [
     "apps/app"

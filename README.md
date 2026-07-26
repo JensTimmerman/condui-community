@@ -1,8 +1,5 @@
 # Condui Community
 
-> Publication draft. Condui Community is not published yet. A licence must be selected and the
-> licensing section below must be completed before this repository is made public.
-
 Condui Community is the local, self-hosted edition of Condui, a tool for creating and maintaining
 Belgian electrical installation diagrams. It is intended for people who want to keep their project
 files and working environment under their own control.
@@ -104,18 +101,19 @@ important.
 
 ## Licence and permitted use
 
-**The publication licence has not been selected yet. Do not publish this repository until a `LICENSE`
-file has been added.**
+Condui Community is source-available under the
+[PolyForm Perimeter License 1.0.1](LICENSE). In practical terms:
 
-The final `LICENSE` file, not this README, will determine whether personal use, professional use,
-modification, redistribution, commercial use, or offering a hosted service is permitted. Any short
-plain-language summary added here later must remain subordinate to that licence.
+- you may use it personally or professionally, including for paid electrical work;
+- you may study, modify, fork, and redistribute the Community source;
+- you must include the licence and required notices when you redistribute it;
+- you may build independent tools that read and write the documented Condui project format;
+- you may not sell, rebrand, host, or otherwise offer Condui Community or a modified version as a
+  competing product or service, even if that substitute is offered for free; and
+- the Condui name and visual identity are not licensed for use on a fork or competing product.
 
-Until a public licence is added, this draft and the private source repository remain all rights
-reserved and do not grant permission to copy, redistribute, or use the source.
-
-The Condui name and visual identity are separate from the source-code licence. Any trademark policy
-will be documented before publication.
+This summary is informational. The [`LICENSE`](LICENSE) file contains the authoritative terms. Contact
+Studio Oplos VOF if you need permission beyond those terms.
 
 ## Contributions and support
 

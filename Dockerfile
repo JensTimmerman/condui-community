@@ -11,6 +11,8 @@ FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
 ENV PORT=8080
 WORKDIR /workspace
+LABEL org.opencontainers.image.title="Condui Community" \
+      org.opencontainers.image.licenses="PolyForm-Perimeter-1.0.1"
 COPY --from=build /workspace/node_modules ./node_modules
 COPY --from=build /workspace/apps/app/dist ./apps/app/dist
 COPY --from=build /workspace/apps/app/community ./apps/app/community
