@@ -35,6 +35,7 @@ import { getVoltagePolesConfig } from '@/lib/protectionDefaults'
 import {
   getProtectionTypeChangePatch,
   isProtectionLabelPartVisible,
+  toggleProtectionLabelVisibility,
   type ProtectionLabelKey,
 } from '@/lib/protectionLabels'
 import { getDerivedCircuitKind } from '@/lib/circuitKind'
@@ -78,14 +79,12 @@ export function TrunkDeviceProperties({ deviceId }: { deviceId: string }) {
     ensureJunctionPanelPlacementForLabel,
     addJunctionPanelPlacement,
     removeJunctionPanelPlacement,
-    getTrunkDeviceById,
   } = useProjectStore(
     useShallow((state: ProjectState) => ({
       currentProject: state.currentProject,
       ensureJunctionPanelPlacementForLabel: state.ensureJunctionPanelPlacementForLabel,
       addJunctionPanelPlacement: state.addJunctionPanelPlacement,
       removeJunctionPanelPlacement: state.removeJunctionPanelPlacement,
-      getTrunkDeviceById: state.getTrunkDeviceById,
     })),
   )
   const activeFloorId = useUIStore((state) => state.activeFloorId)
@@ -96,9 +95,8 @@ export function TrunkDeviceProperties({ deviceId }: { deviceId: string }) {
     () => getProtectionTypeDropdownOptions(t, 'supplyTrunk'),
     [t]
   )
-  const result = useMemo(
-    () => getTrunkDeviceById(deviceId),
-    [deviceId, getTrunkDeviceById],
+  const result = useProjectStore(
+    useShallow((state: ProjectState) => state.getTrunkDeviceById(deviceId)),
   )
   const updateTrunkDevice = useProjectStore((state: ProjectState) => state.updateTrunkDevice)
   const updateSupplyTrunkDevice = useProjectStore((state: ProjectState) => state.updateSupplyTrunkDevice)
@@ -656,21 +654,11 @@ export function TrunkDeviceProperties({ deviceId }: { deviceId: string }) {
       {/* Protection-specific properties (when type === 'protection') */}
       {device.type === 'protection' &&
         (() => {
-          const symbolLabelDisplay = device.symbolLabelDisplay ?? {}
           const isProtectionLabelVisible = (key: ProtectionLabelKey) =>
             isProtectionLabelPartVisible(device, key)
-          const toggleProtectionLabel = (
-            key: ProtectionLabelKey,
-          ) => {
-            const next = !isProtectionLabelVisible(key)
+          const toggleProtectionLabel = (key: ProtectionLabelKey) => {
             handleUpdate({
-              symbolLabelDisplay: {
-                ...symbolLabelDisplay,
-                visibility: {
-                  ...(symbolLabelDisplay.visibility ?? {}),
-                  [key]: next,
-                },
-              },
+              symbolLabelDisplay: toggleProtectionLabelVisibility(device, key),
             })
           }
           const effectiveProtectionType =

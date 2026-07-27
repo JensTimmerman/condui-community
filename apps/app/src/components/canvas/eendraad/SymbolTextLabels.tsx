@@ -1,6 +1,10 @@
 import { Group, Rect, Text } from 'react-konva'
 import type { SymbolLabelDisplayConfig } from '@/types/schema'
 import { getSymbolLabelLayout, getSymbolLabelPosition } from '@/lib/symbolLabels'
+import {
+  getCollisionSafeCenteredLabelLeftX,
+  getCollisionSafeLabelWidth,
+} from '@/lib/eendraad/endpointNoteLabelCollision'
 
 export interface SymbolTextLabelItem {
   key: string
@@ -34,6 +38,10 @@ interface SymbolTextLabelsProps {
    * block vertically centered on the symbol (y=0).
    */
   sideLabelBlockAlign?: 'auto' | 'center'
+  /** Minimum left edge for bottom-positioned lines; wider lines shift right to respect it. */
+  bottomMinimumLeftX?: number
+  /** Maximum right edge for bottom-positioned lines; overflowing text uses an ellipsis. */
+  bottomMaximumRightX?: number
   /** When set, this label block is pointer-interactive and selects the owning symbol (same as clicking the symbol). */
   onLabelClick?: (e: unknown) => void
 }
@@ -54,6 +62,8 @@ export function SymbolTextLabels({
   lineSpacing = 2,
   sequenceJoiner = ' ',
   sideLabelBlockAlign = 'auto',
+  bottomMinimumLeftX,
+  bottomMaximumRightX,
   onLabelClick,
 }: SymbolTextLabelsProps) {
   if (items.length === 0 && (!lines || lines.length === 0)) return null
@@ -100,7 +110,25 @@ export function SymbolTextLabels({
   const lineWidths = resolvedLines.map((line) =>
     measureTextWidth(line, fontFamily, fontSize),
   )
+  const centeredLineLeftXs = lineWidths.map((lineWidth) =>
+    getCollisionSafeCenteredLabelLeftX(
+      lineWidth,
+      position === 'bottom' ? bottomMinimumLeftX : undefined,
+    ),
+  )
+  const renderedLineWidths = lineWidths.map((lineWidth, index) =>
+    getCollisionSafeLabelWidth(
+      lineWidth,
+      centeredLineLeftXs[index] ?? 0,
+      position === 'bottom' ? bottomMaximumRightX : undefined,
+    ),
+  )
   const maxLineWidth = Math.max(0, ...lineWidths)
+  const labelLeftX = Math.min(0, ...centeredLineLeftXs)
+  const labelRightX = Math.max(
+    0,
+    ...centeredLineLeftXs.map((leftX, index) => leftX + (renderedLineWidths[index] ?? 0)),
+  )
   const labelHitPad = 4
 
   if (position === 'right' || position === 'left') {
@@ -157,9 +185,9 @@ export function SymbolTextLabels({
     >
       {onLabelClick && (
         <Rect
-          x={-maxLineWidth / 2 - labelHitPad}
+          x={labelLeftX - labelHitPad}
           y={lineBaseY - labelHitPad}
-          width={maxLineWidth + labelHitPad * 2}
+          width={labelRightX - labelLeftX + labelHitPad * 2}
           height={contentHeight + labelHitPad * 2}
           fill="transparent"
         />
@@ -167,13 +195,18 @@ export function SymbolTextLabels({
       {resolvedLines.map((line, index) => (
         <LabelLine
           key={`${position}-${layout}-${index}`}
-          x={-(lineWidths[index] ?? 0) / 2}
+          x={centeredLineLeftXs[index] ?? 0}
           y={lineBaseY + index * lineHeight}
           text={line}
           fontSize={fontSize}
           fontFamily={fontFamily}
           textColor={textColor}
           frame={resolvedLineFrames?.[index] ?? false}
+          maximumWidth={
+            (renderedLineWidths[index] ?? 0) < (lineWidths[index] ?? 0)
+              ? renderedLineWidths[index]
+              : undefined
+          }
         />
       ))}
     </Group>
@@ -195,6 +228,7 @@ function LabelLine({
   fontFamily,
   textColor,
   frame,
+  maximumWidth,
 }: {
   x: number
   y: number
@@ -203,8 +237,10 @@ function LabelLine({
   fontFamily: string
   textColor: string
   frame: boolean
+  maximumWidth?: number
 }) {
   const textWidth = measureTextWidth(text, fontFamily, fontSize)
+  const renderedTextWidth = maximumWidth ?? textWidth
   const textHeight = fontSize
   const strokeInset = LABEL_FRAME_STROKE / 2
   return (
@@ -213,7 +249,7 @@ function LabelLine({
         <Rect
           x={x - LABEL_FRAME_PAD_X + strokeInset}
           y={y - LABEL_FRAME_PAD_Y + strokeInset + LABEL_FRAME_Y_NUDGE}
-          width={textWidth + LABEL_FRAME_PAD_X * 2 - LABEL_FRAME_STROKE}
+          width={renderedTextWidth + LABEL_FRAME_PAD_X * 2 - LABEL_FRAME_STROKE}
           height={textHeight + LABEL_FRAME_PAD_Y * 2 - LABEL_FRAME_STROKE}
           stroke={textColor}
           strokeWidth={LABEL_FRAME_STROKE}
@@ -224,6 +260,9 @@ function LabelLine({
         x={x}
         y={y}
         text={text}
+        width={maximumWidth}
+        wrap={maximumWidth == null ? undefined : 'none'}
+        ellipsis={maximumWidth != null}
         fontSize={fontSize}
         fontFamily={fontFamily}
         fill={textColor}

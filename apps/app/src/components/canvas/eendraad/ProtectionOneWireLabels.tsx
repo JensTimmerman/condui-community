@@ -29,8 +29,8 @@ export interface ProtectionOneWireLabelsProps {
   source: ProtectionLike
   /** When `source.symbolLabelDisplay.position` is unset */
   defaultPosition: SymbolLabelPosition
-  /** Force a vertical stack when horizontal sequence labels would collide. */
-  forceStackLayout?: boolean
+  /** Split type and residual-current details when the combined line would collide. */
+  splitResidualLine?: boolean
   textColor: string
   fontFamily: string
   fontSize?: number
@@ -51,9 +51,10 @@ export function ProtectionOneWireLabels({
   symbolSize = SYMBOL_SIZE,
   symbolWidth,
   symbolHeight,
+  splitResidualLine = false,
   onLabelClick,
 }: ProtectionOneWireLabelsProps) {
-  const wireLines = getProtectionOneWireLabelLines(source)
+  const wireLines = getProtectionOneWireLabelLines(source, { splitResidualLine })
   if (wireLines.length === 0) return null
 
   return (

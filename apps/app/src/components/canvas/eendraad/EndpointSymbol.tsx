@@ -87,6 +87,10 @@ interface EndpointSymbolProps {
   draggable?: boolean
   /** Convert Konva drag events to the cursor position in canvas coordinates. */
   getCanvasPositionFromEvent?: (e: unknown) => Point | null
+  /** Clamp bottom label text away from the branch wire when needed. */
+  bottomLabelMinimumLeftX?: number
+  /** Truncate bottom label text before it enters the next circuit column. */
+  bottomLabelMaximumRightX?: number
 }
 
 export const EndpointSymbol = memo(function EndpointSymbol({
@@ -98,6 +102,8 @@ export const EndpointSymbol = memo(function EndpointSymbol({
   shouldSuppressKonvaDragEnd,
   draggable = false,
   getCanvasPositionFromEvent,
+  bottomLabelMinimumLeftX,
+  bottomLabelMaximumRightX,
 }: EndpointSymbolProps) {
   const setSelection = useSetSelection()
   const isSelected = useEndpointSelected(endpoint)
@@ -888,6 +894,12 @@ export const EndpointSymbol = memo(function EndpointSymbol({
               fontFamily={fontFamily}
               fontSize={8}
               symbolSize={SYMBOL_SIZE}
+              bottomMinimumLeftX={
+                endpointLabelPosition === 'bottom' ? bottomLabelMinimumLeftX : undefined
+              }
+              bottomMaximumRightX={
+                endpointLabelPosition === 'bottom' ? bottomLabelMaximumRightX : undefined
+              }
             />
           )}
 

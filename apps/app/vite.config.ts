@@ -8,6 +8,19 @@ import { pwaManifest } from './pwa.config.mjs'
 const repoRoot = path.resolve(__dirname, '../..')
 const appRoot = __dirname
 
+export function normalizeCommunityModuleIds(
+  moduleIds: Iterable<string>,
+  root = repoRoot,
+): string[] {
+  const normalizedRoot = root.replaceAll('\\', '/').replace(/\/+$/, '')
+  const rootPrefix = `${normalizedRoot}/`
+  return [...moduleIds]
+    .map((id) => id.replaceAll('\\', '/'))
+    .filter((id) => id.startsWith(rootPrefix))
+    .map((id) => id.slice(rootPrefix.length))
+    .sort()
+}
+
 const aliases = {
   '@/hooks/useExportDialog': './src/editions/community/useCommunityExportDialog.tsx',
   '@/hooks/useAuthSession': './src/editions/community/communityAuthSession.ts',
@@ -81,12 +94,7 @@ export default defineConfig({
         return code === source ? null : code
       },
       generateBundle() {
-        const normalizedRoot = repoRoot.split(path.sep).join('/')
-        const modules = [...this.getModuleIds()]
-          .map((id) => id.split(path.sep).join('/'))
-          .filter((id) => /^[A-Za-z]:\//.test(id) && id.startsWith(normalizedRoot))
-          .map((id) => id.slice(normalizedRoot.length + 1))
-          .sort()
+        const modules = normalizeCommunityModuleIds(this.getModuleIds())
         fs.writeFileSync(
           path.resolve(appRoot, '.community-module-audit.local.json'),
           `${JSON.stringify({ modules: [...new Set(modules)] }, null, 2)}\n`,

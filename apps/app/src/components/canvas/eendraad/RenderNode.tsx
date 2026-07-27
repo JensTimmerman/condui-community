@@ -374,6 +374,12 @@ const RenderNode = memo(function RenderNode({
           // this by selection so only selected endpoints are actually draggable.
           draggable={canDragEndpoint}
           getCanvasPositionFromEvent={getCanvasPositionFromEvent}
+          bottomLabelMinimumLeftX={
+            node.visual?.type === 'symbol' ? node.visual.bottomLabelMinimumLeftX : undefined
+          }
+          bottomLabelMaximumRightX={
+            node.visual?.type === 'symbol' ? node.visual.bottomLabelMaximumRightX : undefined
+          }
         />
       )
     }
@@ -394,6 +400,9 @@ const RenderNode = memo(function RenderNode({
           position={{ x: node.bounds.x, y: node.bounds.y }}
           isHorizontal={isSupplyTrunkDevice}
           showDeviceLabelLeft={isSubPanelSupplyTrunkDevice}
+          splitProtectionResidualLine={
+            isSupplyTrunkDevice && resolvedSupplyProtectionCollisionIds.has(node.id)
+          }
           getCanvasPositionFromEvent={getCanvasPositionFromEvent}
           onDragMove={
             isDraggableTrunkDevice && onElementDragMove

@@ -3,6 +3,7 @@ import type {
   ProtectionType,
   PolesConfig,
   ResidualCurrentType,
+  SymbolLabelDisplayConfig,
   TrunkDevice,
 } from '@/types/schema'
 import { polesConfigToDisplay } from '@/constants/poleConfig'
@@ -203,6 +204,20 @@ export function isProtectionLabelPartVisible(
   return DEFAULT_VISIBILITY[key]
 }
 
+/** Return the next persisted display config for a single visibility-button click. */
+export function toggleProtectionLabelVisibility(
+  source: ProtectionLike,
+  key: ProtectionLabelKey,
+): SymbolLabelDisplayConfig {
+  return {
+    ...source.symbolLabelDisplay,
+    visibility: {
+      ...(source.symbolLabelDisplay?.visibility ?? {}),
+      [key]: !isProtectionLabelPartVisible(source, key),
+    },
+  }
+}
+
 function getRawProtectionLabelParts(source: ProtectionLike): ProtectionLabelPart[] {
   const kind = getProtectionElectricalKind(source)
   const curve =
@@ -269,10 +284,11 @@ export function getVisibleProtectionLabelParts(source: ProtectionLike): Protecti
   )
 }
 
-function buildResidualTopWireLine(
+function buildResidualTopWireLines(
   source: ProtectionLike,
   byKey: Map<ProtectionLabelKey, ProtectionLabelPart>,
-): ProtectionOneWireLabelLine | null {
+  splitResidualLine: boolean,
+): ProtectionOneWireLabelLine[] {
   const kind = getProtectionElectricalKind(source)
   const storedType =
     (source as ProtectionDevice).residualCurrentType ??
@@ -290,11 +306,10 @@ function buildResidualTopWireLine(
   if (maPart) {
     chunks.push(`${RESIDUAL_CURRENT_DELTA}${maPart.text}`)
   }
-  if (chunks.length === 0) return null
-  return {
-    text: chunks.join('  '),
-    role: 'residual',
-  }
+  if (chunks.length === 0) return []
+  return splitResidualLine
+    ? chunks.map((text) => ({ text, role: 'residual' }))
+    : [{ text: chunks.join('  '), role: 'residual' }]
 }
 
 function buildSpecsWireLine(
@@ -319,7 +334,10 @@ function buildSpecsWireLine(
 /**
  * Stacked one-wire lines for protections (RCD/RCBO: type+△IΔn, breaking, poles/curve/A).
  */
-export function getProtectionOneWireLabelLines(source: ProtectionLike): ProtectionOneWireLabelLine[] {
+export function getProtectionOneWireLabelLines(
+  source: ProtectionLike,
+  options: { splitResidualLine?: boolean } = {},
+): ProtectionOneWireLabelLine[] {
   const kind = getProtectionElectricalKind(source)
   const visible = getVisibleProtectionLabelParts(source)
   if (visible.length === 0) return []
@@ -328,8 +346,7 @@ export function getProtectionOneWireLabelLines(source: ProtectionLike): Protecti
   const lines: ProtectionOneWireLabelLine[] = []
 
   if (kind === 'RCD' || kind === 'RCBO') {
-    const residualLine = buildResidualTopWireLine(source, byKey)
-    if (residualLine) lines.push(residualLine)
+    lines.push(...buildResidualTopWireLines(source, byKey, options.splitResidualLine === true))
 
     const breaking = byKey.get('protectionShortCircuit')
     if (breaking) {

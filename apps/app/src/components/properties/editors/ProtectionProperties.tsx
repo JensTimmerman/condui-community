@@ -18,6 +18,7 @@ import { getVoltagePolesConfig } from '@/lib/protectionDefaults'
 import {
   getProtectionTypeChangePatch,
   isProtectionLabelPartVisible,
+  toggleProtectionLabelVisibility,
   type ProtectionLabelKey,
 } from '@/lib/protectionLabels'
 import { isProtectionOnSupplyPanel } from '@/components/canvas/panel/panelGridLayout'
@@ -88,29 +89,12 @@ export function ProtectionProperties({
     !excludedFromAutoNamingLock &&
     !isProtectionOnSupplyPanel(panelForProtection, protectionId)
 
-  const symbolLabelDisplay = protection.symbolLabelDisplay ?? {}
-
-  const updateProtectionLabelDisplay = (
-    updates: Partial<NonNullable<ProtectionDevice['symbolLabelDisplay']>>
-  ) => {
-    onUpdate(protectionId, {
-      symbolLabelDisplay: {
-        ...symbolLabelDisplay,
-        ...updates,
-      },
-    })
-  }
-
   const isProtectionLabelVisible = (key: ProtectionLabelKey) =>
     isProtectionLabelPartVisible(protection, key)
 
   const toggleProtectionLabel = (key: ProtectionLabelKey) => {
-    const next = !isProtectionLabelVisible(key)
-    updateProtectionLabelDisplay({
-      visibility: {
-        ...(symbolLabelDisplay.visibility ?? {}),
-        [key]: next,
-      },
+    onUpdate(protectionId, {
+      symbolLabelDisplay: toggleProtectionLabelVisibility(protection, key),
     })
   }
 

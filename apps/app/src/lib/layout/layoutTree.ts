@@ -11,6 +11,10 @@
 import type { Panel, Circuit, ProtectionDevice, Endpoint, CableSpec, TrunkDevice } from '@/types/schema'
 import { getSubPanelMainBusFeedDevice } from '@/lib/panel/subPanelFeed'
 import { resolvePanelSupplyLinkForProtection } from '@/lib/eendraad/panelSupplyLink'
+import {
+  getEndpointNoteMaximumRightX,
+  getEndpointNoteMinimumLeftX,
+} from '@/lib/eendraad/endpointNoteLabelCollision'
 import type { ProjectWithOptionalV2Electrical } from '@/lib/projectV2/electrical'
 import {
   DOMOTICA_BASE_HEIGHT,
@@ -60,6 +64,10 @@ export interface SymbolVisual {
   symbolId: string
   label?: string
   opacity?: number
+  /** For a bottom label, keep its left edge clear of a nearby branch wire. */
+  bottomLabelMinimumLeftX?: number
+  /** For a bottom label, truncate before crossing the circuit's right boundary. */
+  bottomLabelMaximumRightX?: number
 }
 
 export interface WireVisual {
@@ -1501,9 +1509,12 @@ function buildMcbNode(
 function buildBranchNode(
   panelLayout: BottomUpPanelLayout,
   branch: BranchLayout,
-  _circuitId: string
+  circuitId: string
 ): LayoutNode | null {
   const children: LayoutNode[] = []
+  const circuitLayout = panelLayout.circuits.find((candidate) => candidate.circuit.id === circuitId)
+  const constrainSingleEndpointLabel =
+    branch.endpoints.length === 1 && branch.endpoints[0]?.type !== 'switch'
 
   // Find branch visual element
   const branchElement = panelLayout.elements.find(
@@ -1552,6 +1563,17 @@ function buildBranchNode(
           type: 'symbol',
           symbolId: endpoint.symbol || getDefaultSymbolForEndpointType(endpoint.type),
           label: endpoint.label,
+          bottomLabelMinimumLeftX:
+            constrainSingleEndpointLabel
+              ? getEndpointNoteMinimumLeftX(endpointElement.position.x, branch.branchX)
+              : undefined,
+          bottomLabelMaximumRightX:
+            constrainSingleEndpointLabel && circuitLayout
+              ? getEndpointNoteMaximumRightX(
+                  endpointElement.position.x,
+                  circuitLayout.x + circuitLayout.width,
+                )
+              : undefined,
         },
         hitZone: isDomoticaParent
           ? {

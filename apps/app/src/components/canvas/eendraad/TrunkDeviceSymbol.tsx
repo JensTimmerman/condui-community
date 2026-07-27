@@ -41,6 +41,8 @@ interface TrunkDeviceSymbolProps {
   isHorizontal?: boolean
   /** Show the device's own label on the left for special vertical feeder contexts. */
   showDeviceLabelLeft?: boolean
+  /** Split a wide residual-current line to avoid adjacent supply-label collisions. */
+  splitProtectionResidualLine?: boolean
   /** Drop target uses cursor position on drag end (same as protection / endpoint). */
   getCanvasPositionFromEvent?: (e: unknown) => Point | null
   onDragMove?: (newPos: Point) => void
@@ -58,6 +60,7 @@ export function TrunkDeviceSymbol({
   position,
   isHorizontal,
   showDeviceLabelLeft = false,
+  splitProtectionResidualLine = false,
   getCanvasPositionFromEvent,
   onDragMove,
   onDragEnd,
@@ -412,6 +415,7 @@ export function TrunkDeviceSymbol({
           symbolSize={SYMBOL_SIZE}
           symbolWidth={renderedSymbolSize.width}
           symbolHeight={renderedSymbolSize.height}
+          splitResidualLine={splitProtectionResidualLine}
           onLabelClick={handleClick}
         />
       )}
