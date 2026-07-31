@@ -42,6 +42,11 @@ The root document contains these portable domains:
 | `disciplines.electrical` | Installation, panels, devices, plan wiring, and one-wire annotations. |
 | `validation` | Optional quarantined data retained for recovery and diagnostics. |
 
+Within `disciplines.electrical`, a protection record with `directPanelFeeder: true` is a
+structural one-wire carrier for a secondary panel connected directly to a busbar. It
+retains the feeder circuit and `subPanelId`, but readers must not interpret it as a
+physical protection device or render a protection symbol.
+
 Some current documents also require the reserved compatibility containers `collaboration`, `comments`, and `chronology`. Local implementations must preserve unknown members in these containers and use the neutral values produced by `createEmptyProjectV2` or the official migration code rather than constructing them by hand. They must not infer local permissions or enable features from their contents.
 
 These containers are named only because removing or rewriting them can make loading or round trips lossy. Their internal service-side interpretation is outside the portable format.

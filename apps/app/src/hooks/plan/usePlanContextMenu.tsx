@@ -585,13 +585,13 @@ export function usePlanContextMenu(
                           const message = hasContent
                             ? t('panel.deleteConfirmMessage', {
                                 panelNames,
-                                defaultValue:
-                                  'The following panel(s) contain circuits, protections, or sub-panels: {{panelNames}}\n\nDeleting them will also delete all their contents. This action cannot be undone.\n\nAre you sure you want to continue?',
+                              defaultValue:
+                                  'The following panel(s) contain circuits, protections, or sub-panels: {{panelNames}}\n\nDeleting them will also delete all their contents. You can undo this action.\n\nAre you sure you want to continue?',
                               })
                             : t('panel.deleteEmptyPanelMessage', {
                                 panelNames,
-                                defaultValue:
-                                  'Are you sure you want to delete panel(s): {{panelNames}}?\n\nThis will also remove any associated frames and nested panels. This action cannot be undone.',
+                              defaultValue:
+                                  'Are you sure you want to delete panel(s): {{panelNames}}?\n\nThis will also remove any associated frames and nested panels. You can undo this action.',
                               })
                           openDialog({
                             type: 'confirm',

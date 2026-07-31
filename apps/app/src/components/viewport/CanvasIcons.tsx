@@ -1,5 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import type { CanvasType } from '@/types/ui'
+import { scopeSvgMarkupClasses } from '../../lib/ui/scopedSvgMarkup'
 import eendraadSvg from '../../../public/icons/canvas-eendraad.svg?raw'
 import panelSvg from '../../../public/icons/canvas-panel.svg?raw'
 import planSvg from '../../../public/icons/canvas-plan.svg?raw'
@@ -12,7 +13,7 @@ function SvgIcon({ svg, className = 'w-6 h-6' }: { svg: string; className?: stri
   return (
     <span
       className={`ui-svg-icon inline-block shrink-0 ${className}`}
-      dangerouslySetInnerHTML={{ __html: svg }}
+      dangerouslySetInnerHTML={{ __html: scopeSvgMarkupClasses(svg) }}
     />
   )
 }

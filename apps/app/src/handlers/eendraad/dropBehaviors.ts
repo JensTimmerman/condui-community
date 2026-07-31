@@ -462,6 +462,28 @@ const protectionBehavior: DropBehavior = {
       protectionType,
       getNextAvailableCircuitCode(project, panel.id)
     )
+    const targetedCircuit =
+      target.type === 'circuit' && target.circuitId
+        ? callbacks.getCircuitById(target.circuitId)
+        : null
+    const targetedProtection =
+      targetedCircuit && target.circuitId
+        ? findProtectionByCircuitIdInProject(projectPanels(project), target.circuitId)
+        : null
+    if (
+      targetedCircuit &&
+      targetedProtection?.directPanelFeeder &&
+      targetedProtection.subPanelId
+    ) {
+      callbacks.updateProtection(targetedProtection.id, {
+        type: protectionType,
+        label: autoCircuitCode,
+        ...getProtectionCreationProps(project, protectionType),
+        directPanelFeeder: undefined,
+      })
+      callbacks.updateCircuit(targetedCircuit.id, { code: autoCircuitCode })
+      return
+    }
 
     const circuitId = generateId()
     const protectionId = generateId()
@@ -1369,7 +1391,11 @@ const panelBehavior: DropBehavior = {
     }
     const feederCircuit = feederProtection?.circuits?.[0]
     const canAttachToTargetFeeder =
-      !!feederProtection && !!feederCircuit && !feederProtection.subPanelId
+      !!feederProtection &&
+      !!feederCircuit &&
+      !feederProtection.subPanelId &&
+      typeof target.secondaryBusInsertIndex !== 'number' &&
+      target.type !== 'rcd'
 
     if (canAttachToTargetFeeder && feederProtection) {
       callbacks.updateProtection(feederProtection.id, { subPanelId: newPanelId })
@@ -1403,6 +1429,44 @@ const panelBehavior: DropBehavior = {
       }
 
       callbacks.addCircuit(parentPanel.id, mcbCircuit, protectionId)
+
+      if (target.type === 'rcd' && target.protectionId) {
+        callbacks.addCircuitToProtection(parentPanel.id, target.protectionId, mcbCircuit)
+        if (typeof target.secondaryBusInsertIndex === 'number') {
+          const targetRcd = callbacks.getProtectionById(target.protectionId)
+          if (targetRcd?.circuits) {
+            const ordered = targetRcd.circuits.filter(
+              (circuit) => circuit.id !== mcbCircuit.id
+            )
+            ordered.splice(
+              clamp(target.secondaryBusInsertIndex, 0, ordered.length),
+              0,
+              mcbCircuit
+            )
+            callbacks.updateProtection(targetRcd.id, { circuits: ordered })
+          }
+        }
+      } else if (
+        target.type === 'circuit' &&
+        target.circuitId &&
+        typeof target.secondaryBusInsertIndex === 'number'
+      ) {
+        callbacks.moveCircuitToSecondaryBus(
+          parentPanel.id,
+          target.circuitId,
+          mcbCircuit.id,
+          target.secondaryBusInsertIndex
+        )
+      } else if (
+        target.type === 'mainBus' &&
+        typeof target.mainBusInsertIndex === 'number'
+      ) {
+        const beforeCount = target.mainBusItemCount ?? 0
+        const desiredIndex = clamp(target.mainBusInsertIndex, 0, beforeCount)
+        for (let index = beforeCount; index > desiredIndex; index -= 1) {
+          callbacks.moveCircuitOnMainBus(parentPanel.id, mcbCircuit.id, 'left')
+        }
+      }
     }
 
     callbacks.setSelection({ type: 'panel', ids: [newPanelId] })

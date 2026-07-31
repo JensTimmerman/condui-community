@@ -92,6 +92,71 @@ export function routePanelSceneConnector(
   return [fromX, fromY, fromX, gapY, toX, gapY, toX, toY]
 }
 
+/**
+ * Visible frame-to-frame links for topology-only panel feeders.
+ * These extend into both panel frames because there is intentionally no DIN module to terminate on.
+ */
+export function buildDirectPanelFeederConnectors(
+  surfaces: PanelSceneSurface[],
+  project: ProjectWithOptionalV2Electrical
+): PanelSceneConnector[] {
+  const surfaceByPanelId = new Map(
+    surfaces
+      .filter((surface): surface is PanelSceneSurface & { panel: Panel } => surface.panel != null)
+      .map((surface) => [surface.panel.id, surface] as const)
+  )
+  const connectors: PanelSceneConnector[] = []
+  const seenLinks = new Set<string>()
+
+  const visit = (panel: Panel): void => {
+    const sourceSurface = surfaceByPanelId.get(panel.id)
+    if (sourceSurface) {
+      for (const protection of panel.protections) {
+        const targetPanelId = protection.directPanelFeeder ? protection.subPanelId : undefined
+        if (!targetPanelId) continue
+        const targetSurface = surfaceByPanelId.get(targetPanelId)
+        const linkKey = `${panel.id}:${targetPanelId}`
+        if (!targetSurface || seenLinks.has(linkKey)) continue
+        seenLinks.add(linkKey)
+
+        const sourceCenterY =
+          sourceSurface.y + sourceSurface.mainPanelY + sourceSurface.panelFrameHeight / 2
+        const targetCenterY =
+          targetSurface.y + targetSurface.mainPanelY + targetSurface.panelFrameHeight / 2
+        const targetIsAbove = targetCenterY < sourceCenterY
+        const sourceX = sourceSurface.x + sourceSurface.width / 2
+        const targetX = targetSurface.x + targetSurface.width / 2
+        const sourceY = targetIsAbove
+          ? sourceSurface.y + sourceSurface.mainPanelY + PANEL_SCENE_FRAME_MARGIN
+          : sourceSurface.y +
+            sourceSurface.mainPanelY +
+            sourceSurface.panelFrameHeight -
+            PANEL_SCENE_FRAME_MARGIN
+        const targetY = targetIsAbove
+          ? targetSurface.y +
+            targetSurface.mainPanelY +
+            targetSurface.panelFrameHeight -
+            PANEL_SCENE_FRAME_MARGIN
+          : targetSurface.y + targetSurface.mainPanelY + PANEL_SCENE_FRAME_MARGIN
+
+        connectors.push({
+          points: routePanelSceneConnector(
+            sourceX,
+            sourceY,
+            targetX,
+            targetY,
+            (sourceY + targetY) / 2
+          ),
+        })
+      }
+    }
+    for (const subPanel of panel.subPanels ?? []) visit(subPanel)
+  }
+
+  for (const panel of getElectricalPanelsFromProject(project)) visit(panel)
+  return connectors
+}
+
 export type GetPanelGridModulesFn = (panelId: string) => Array<{
   ref: PanelGridModuleRef
   inSupplyPanel?: boolean

@@ -502,10 +502,12 @@
   },
   "panel": {
     "deleteConfirmTitle": "Supprimer le(s) tableau(x) ?",
-    "deleteLastMainTitle": "Supprimer le dernier tableau principal ?",
-    "deleteLastMainMessage": "Vous êtes sur le point de supprimer le dernier tableau principal \"{{panelNames}}\".\n\nAprès la suppression, vous devrez placer un nouveau tableau de distribution pour créer un nouveau tableau principal avant de pouvoir ajouter d'autres composants.\n\nÊtes-vous sûr de vouloir continuer ?",
-    "deleteConfirmMessage": "Le(s) tableau(x) suivant(s) contiennent des circuits, des dispositifs de protection ou des sous-tableaux : {{panelNames}}\n\nEn les supprimant, vous supprimerez également tout leur contenu. Cette action ne peut pas être annulée.\n\nÊtes-vous sûr de vouloir continuer ?",
-    "deleteEmptyPanelMessage": "Êtes-vous sûr de vouloir supprimer le(s) tableau(x) : {{panelNames}} ?\n\nCela supprimera également tous les cadres associés et les tableaux imbriqués. Cette action ne peut pas être annulée."
+    "deleteBlockedTitle": "Impossible de supprimer le tableau principal",
+    "deleteLastMainTitle": "Impossible de supprimer le dernier tableau principal",
+    "deleteLastMainMessage": "Au moins un tableau principal doit être conservé. Le tableau principal « {{panelNames}} » ne peut pas être supprimé.",
+    "deleteMainConfirmMessage": "Supprimer le(s) tableau(x) principal(aux) {{panelNames}} ?\n\nLes tableaux sélectionnés, leurs circuits, dispositifs de protection, sous-tableaux et cadres associés seront supprimés. Vous pouvez annuler cette action.",
+    "deleteConfirmMessage": "Le(s) tableau(x) suivant(s) contiennent des circuits, des dispositifs de protection ou des sous-tableaux : {{panelNames}}\n\nEn les supprimant, vous supprimerez également tout leur contenu. Vous pouvez annuler cette action.\n\nÊtes-vous sûr de vouloir continuer ?",
+    "deleteEmptyPanelMessage": "Êtes-vous sûr de vouloir supprimer le(s) tableau(x) : {{panelNames}} ?\n\nCela supprimera également tous les cadres associés et les tableaux imbriqués. Vous pouvez annuler cette action."
   },
   "protections": {
     "title": "Dispositifs de Protection",
@@ -529,8 +531,10 @@
     "residualType_F": "F (fréquence mixte)",
     "residualType_B": "B (continu lisse)",
     "description": "Description",
-    "deleteLinkedPanelTitle": "Supprimer aussi le tableau relié ?",
-    "deleteLinkedPanelMessage": "Cela supprime aussi le tableau \"{{panelNames}}\" et tout ce qui suit sur cette alimentation (circuits, appareils, tableaux imbriqués). Continuer ?"
+    "deleteLinkedPanelTitle": "Supprimer la protection ?",
+    "deleteLinkedPanelMessage": "Tableau relié : {{panelNames}}",
+    "deleteLinkedPanelAction": "Supprimer aussi le tableau",
+    "deleteProtectionAction": "Supprimer seulement la protection"
   },
   "circuits": {
     "title": "Circuits",
@@ -1563,13 +1567,22 @@
       "title": "Exporter en PDF",
       "selectCanvases": "Sélectionner les canevas à exporter",
       "eendraad": "1draad (Schéma unifilaire)",
+      "eendraadShort": "Eendraad",
       "panel": "Tableau (Vue tableau)",
+      "panelShort": "Tableau",
       "sitplan": "Sitplan (Plan d'étage)",
+      "sitplanShort": "Plan",
+      "options": "Options",
+      "theme": "Thème",
+      "themeLight": "Clair",
+      "themeDark": "Sombre",
       "pageCount": "Nombre de pages",
       "pagesForEendraad": "{{count}} pages pour 1draad",
       "pagesForPanel": "{{count}} pages pour tableau",
       "pagesForSitplan": "{{count}} pages pour sitplan",
       "totalPages": "Total : {{count}} pages",
+      "total": "Total",
+      "editablePremiumTooltip": "Déverrouillez ce projet ou passez à Premium pour intégrer les données de projet modifiables.",
       "installDates": "Inclure les dates d'installation",
       "exportButton": "Exporter",
       "cancelButton": "Annuler"

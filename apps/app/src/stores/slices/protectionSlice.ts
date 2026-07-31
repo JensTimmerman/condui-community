@@ -64,6 +64,66 @@ import type { Circuit, Panel, PanelGridModuleRef, ProtectionDevice } from '@/typ
 import { ensurePanelPlacement } from '@/utils/panelPlacement'
 import { countPanels, generateId, getNextAvailableCircuitCode } from '@/utils/project'
 
+function panelTreeHasSurvivingFeeder(
+  panels: Panel[],
+  subPanelId: string,
+  deletedProtectionIds: ReadonlySet<string>
+): boolean {
+  for (const panel of panels) {
+    if (
+      panel.protections.some(
+        (protection) =>
+          !deletedProtectionIds.has(protection.id) && protection.subPanelId === subPanelId
+      )
+    ) {
+      return true
+    }
+    if (panelTreeHasSurvivingFeeder(panel.subPanels, subPanelId, deletedProtectionIds)) {
+      return true
+    }
+  }
+  return false
+}
+
+function preserveDeletedProtectionPanelLinks(
+  panels: Panel[],
+  deletedProtectionIds: ReadonlySet<string>
+): void {
+  const preservedPanelIds = new Set<string>()
+
+  const preserveInPanel = (panel: Panel): void => {
+    for (let index = 0; index < panel.protections.length; index += 1) {
+      const protection = panel.protections[index]
+      const subPanelId = protection?.subPanelId
+      if (
+        !protection ||
+        !deletedProtectionIds.has(protection.id) ||
+        !subPanelId ||
+        preservedPanelIds.has(subPanelId) ||
+        panelTreeHasSurvivingFeeder(panels, subPanelId, deletedProtectionIds)
+      ) {
+        continue
+      }
+
+      const carrier: ProtectionDevice = {
+        id: generateId(),
+        type: 'OTHER',
+        label: '',
+        circuits: protection.circuits ?? [],
+        subPanelId,
+        directPanelFeeder: true,
+      }
+      panel.protections.splice(index + 1, 0, carrier)
+      preservedPanelIds.add(subPanelId)
+      index += 1
+    }
+
+    for (const subPanel of panel.subPanels) preserveInPanel(subPanel)
+  }
+
+  for (const panel of panels) preserveInPanel(panel)
+}
+
 export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
   // Protection actions
   addProtection: (panelId, protection) =>
@@ -237,7 +297,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
       }
     }),
 
-  deleteProtection: (id) =>
+  deleteProtection: (id, options) =>
     set((state) => {
       if (state.currentProject) {
         const panels = getMutableElectricalPanelsForProject(state.currentProject)
@@ -257,6 +317,10 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
 
         migrateSubCircuitContentToParent(protectionToDelete, panels)
         const linkedSubPanelId = protectionToDelete.subPanelId
+        const deletedProtectionIds = new Set([id])
+        if (options?.preserveLinkedPanels && linkedSubPanelId) {
+          preserveDeletedProtectionPanelLinks(panels, deletedProtectionIds)
+        }
 
         let affectedPanelId: string | null = null
         const removeProtection = (panel: Panel): boolean => {
@@ -275,7 +339,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
         for (const panel of panels) {
           if (removeProtection(panel)) {
             state.isDirty = true
-            if (linkedSubPanelId) {
+            if (linkedSubPanelId && !options?.preserveLinkedPanels) {
               deleteLinkedSubPanelsIfOrphaned(state.currentProject, [linkedSubPanelId])
             }
             if (affectedPanelId) {
@@ -288,7 +352,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
       }
     }),
 
-  deleteProtections: (ids) =>
+  deleteProtections: (ids, options) =>
     set((state) => {
       if (state.currentProject) {
         const panels = getMutableElectricalPanelsForProject(state.currentProject)
@@ -335,6 +399,10 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
         }
         for (const panel of panels) collectLinkedSubPanels(panel)
 
+        if (options?.preserveLinkedPanels && linkedSubPanelIds.size > 0) {
+          preserveDeletedProtectionPanelLinks(panels, idsSet)
+        }
+
         // Remove all matching protections in a single pass
         const removeProtections = (panel: Panel) => {
           panel.protections = panel.protections.filter((p) => !idsSet.has(p.id))
@@ -345,7 +413,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
         for (const panel of panels) {
           removeProtections(panel)
         }
-        if (linkedSubPanelIds.size > 0) {
+        if (linkedSubPanelIds.size > 0 && !options?.preserveLinkedPanels) {
           deleteLinkedSubPanelsIfOrphaned(state.currentProject, linkedSubPanelIds)
         }
         pruneEendraadFrames(state.currentProject, { removedMemberIds: ids })

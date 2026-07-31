@@ -113,6 +113,10 @@ export const LAYOUT_CONSTANTS = {
   SECONDARY_BUS_EXTENSION: 15, // Extension left and right for secondary bus bars (wider start/end pads)
   /** Dedicated first column for a panel that shares a secondary bus with nested protections. */
   SECONDARY_BUS_PANEL_COLUMN_WIDTH: 70,
+  /** Extra vertical clearance above nested protections for a panel on the same secondary bus. */
+  SECONDARY_BUS_PANEL_VERTICAL_OFFSET: 110,
+  /** Feeder length from a nested, panel-only protection to its panel symbol. */
+  NESTED_PANEL_FEEDER_VERTICAL_OFFSET: 110,
   /** Vertical gap between last endpoint branch and secondary bus when circuit has both endpoints and subcircuits */
   SECONDARY_BUS_ABOVE_ENDPOINTS_GAP: 50,
   BRANCH_LINE_WIDTH: 2, // Thin line for branches
@@ -620,12 +624,20 @@ export function isPanelOnlySubPanelFeeder(
   const hasConsumerEndpoints = circuit.endpoints.some(
     (endpoint) => endpoint.symbol !== 'panel_distribution'
   )
-  return (
+  const hasOnlyPanelAttachment =
     !hasConsumerEndpoints &&
     (circuit.branches?.length ?? 0) === 0 &&
     (circuit.subCircuitIds?.length ?? 0) === 0 &&
     (circuit.trunkDevices?.length ?? 0) === 0
-  )
+  if (!hasOnlyPanelAttachment) return false
+
+  if (protection.directPanelFeeder) return true
+
+  // A normal one-circuit MCB feeding a new secondary panel is a real,
+  // visible protection. Only suppress the extra structural circuit that is
+  // carried by the same protection after a feeder protection was deleted.
+  const protectionCircuits = protection.circuits ?? []
+  return protectionCircuits.length > 1 && protectionCircuits[0]?.id !== circuit.id
 }
 
 export function hasPanelAttachmentOnSecondaryBus(
@@ -659,7 +671,10 @@ export function hasPanelAttachmentOnSecondaryBus(
 function findParentRcd(panel: Panel, circuit: Circuit): ProtectionDevice | null {
   const first = getPanelLookups(panel).firstRcdByCircuitId.get(circuit.id)
   if (!first) return null
-  if ((first.circuits?.length ?? 0) <= 1) return null
+  const groupedCircuits = (first.circuits ?? []).filter(
+    (candidate) => !isPanelOnlySubPanelFeeder(first, candidate)
+  )
+  if (groupedCircuits.length <= 1) return null
   return first
 }
 
@@ -682,12 +697,18 @@ function calculateTrunks(
   const trunks: TrunkLayout[] = []
   const rcdMap = new Map<string, ProtectionDevice>()
 
-  // Find all RCDs that act as grouping devices (0 or 2+ circuits).
-  // Single-circuit RCDs are treated as direct protections (like MCB) and don't get trunks.
+  // Find all RCDs that act as grouping devices (empty or 2+ real circuits).
+  // A panel-only feeder transferred onto an RCD/RCBO after its own protection is
+  // deleted is a visual attachment, not another protected circuit. It must not
+  // turn the remaining direct protection into a grouping trunk.
   for (const protection of panel.protections) {
+    const circuits = protection.circuits ?? []
+    const groupedCircuits = circuits.filter(
+      (circuit) => !isPanelOnlySubPanelFeeder(protection, circuit)
+    )
     if (
       (protection.type === 'RCD' || protection.type === 'RCBO') &&
-      (protection.circuits?.length ?? 0) !== 1
+      (circuits.length === 0 || groupedCircuits.length > 1)
     ) {
       rcdMap.set(protection.id, protection)
     }
@@ -2839,25 +2860,54 @@ export function calculateBottomUpLayout(
               circuit
             )
             // A feeder can terminate directly at a panel, or share a secondary bus
-            // with nested protections. In the latter case, lift the panel to the
-            // top of those protection columns so its cable label has the same
-            // vertical room as the neighboring conductors.
+            // with nested protections. In the latter case, the unprotected panel
+            // is another direct bus attachment and belongs beside those protections,
+            // not at the top of their consumer branches.
             const symbolX = topmostBranch.trunkX // Centered on vertical trunk
-            const nestedBranchYs = panelSharesSecondaryBus
-              ? (circuit.subCircuitIds ?? []).flatMap((nestedCircuitId) =>
-                  mainPanelLayout.branches
-                    .filter((branch) => branch.circuitId === nestedCircuitId)
-                    .map((branch) => branch.branchY)
-                )
+            const nestedCircuitIds = new Set(circuit.subCircuitIds ?? [])
+            const nestedProtectionYs = panelSharesSecondaryBus
+              ? mainPanelLayout.elements
+                  .filter(
+                    (element) =>
+                      element.type === 'protection' &&
+                      !!element.circuitId &&
+                      nestedCircuitIds.has(element.circuitId)
+                  )
+                  .map((element) => element.position.y)
               : []
+            const sourcePanelEndpointY = panelEndpoint
+              ? mainPanelLayout.elements.find((element) => element.endpointId === panelEndpoint.id)
+                  ?.position.y
+              : undefined
+            const feederProtectionElement = mainPanelLayout.elements.find(
+              (element) =>
+                element.type === 'protection' &&
+                element.protectionId === link.protection.id &&
+                element.circuitId === circuit.id
+            )
+            const feederCircuitIsNested = mainPanelLayout.panel.protections.some((protection) =>
+              (protection.circuits ?? []).some((candidate) =>
+                (candidate.subCircuitIds ?? []).includes(circuit.id)
+              )
+            )
+            const isEmptyPanelFeeder =
+              !!link.protection.subPanelId &&
+              circuit.endpoints.length === 0 &&
+              (circuit.branches?.length ?? 0) === 0 &&
+              (circuit.subCircuitIds?.length ?? 0) === 0 &&
+              (circuit.trunkDevices?.length ?? 0) === 0
+            const nestedPanelOnlyFeederY =
+              feederProtectionElement && feederCircuitIsNested && isEmptyPanelFeeder
+                ? feederProtectionElement.position.y -
+                  LAYOUT_CONSTANTS.NESTED_PANEL_FEEDER_VERTICAL_OFFSET
+                : undefined
             const symbolY =
-              nestedBranchYs.length > 0
-                ? Math.min(...nestedBranchYs)
-                : panelSharesSecondaryBus
-                  ? topmostBranch.branchY -
-                    LAYOUT_CONSTANTS.MCB_Y_OFFSET -
-                    LAYOUT_CONSTANTS.BRANCH_START_OFFSET
-                  : getCircuitLineTopY(circuitBranches, mcbY, true)
+              panelSharesSecondaryBus && nestedProtectionYs.length > 0
+                ? Math.min(...nestedProtectionYs) -
+                  LAYOUT_CONSTANTS.SECONDARY_BUS_PANEL_VERTICAL_OFFSET
+                : (nestedPanelOnlyFeederY ??
+                  sourcePanelEndpointY ??
+                  getCircuitLineTopY(circuitBranches, mcbY, true))
 
             mainPanelLayout.elements.push({
               id: `subpanel-symbol-${link.protection.id}`,

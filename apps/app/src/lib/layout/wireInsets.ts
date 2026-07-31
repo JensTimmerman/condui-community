@@ -85,7 +85,8 @@ export const WIRE_INSETS: Record<string, WireInsets> = {
 
   energy_meter: { top: 8, bottom: 8, left: 6, right: 6 },
 
-  panel_distribution: { top: 0, bottom: 5, left: 0, right: 0 },
+  // Stop a feeder from below at the enlarged one-wire panel body's lower edge.
+  panel_distribution: { top: 0, bottom: 6.5, left: 0, right: 0 },
 
   relay: { top: 6, bottom: 6, left: 8.5, right: 8.5 },
   // Domotica wires are fully controlled by custom geometry (deriveWires/layoutTree); no automatic insets.

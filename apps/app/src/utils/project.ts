@@ -54,6 +54,30 @@ export const DEFAULT_EENDRAAD_INSTALLATION_OPTIONS = {
   circuitNotesOrientation: 'vertical',
 } as const satisfies Pick<Installation, 'eendraadAutomaticNaming' | 'circuitNotesOrientation'>
 
+/** Keep the standard pair of earthing separators available for every main-panel ground path. */
+export function ensureDefaultEarthingSeparators(installation: Installation): boolean {
+  const devices = installation.groundTrunkDevices ?? []
+  const existingCount = devices.filter((device) => device.type === 'earthing_separator').length
+  if (existingCount >= 2) return false
+
+  const earthingLabel = i18n.t('symbols.earthing_separator', { defaultValue: 'PE' })
+  let nextPosition =
+    devices.reduce((max, device) => Math.max(max, device.trunkPosition ?? -1), -1) + 1
+
+  for (let index = existingCount; index < 2; index += 1) {
+    devices.push({
+      id: generateId(),
+      type: 'earthing_separator',
+      symbol: 'earthing_separator',
+      label: earthingLabel,
+      trunkPosition: nextPosition,
+    })
+    nextPosition += 1
+  }
+  installation.groundTrunkDevices = devices
+  return true
+}
+
 /** Default installation used when none is provided to createEmptyProject. */
 function getDefaultInstallation(): Installation {
   const installation: Installation = {
@@ -106,13 +130,10 @@ function addDefaultTrunkDevicesAndPanelGrid(
   const polesConfig = polesConfigFromVoltageSystem(system)
   const poleCols = supplyPoleCount(system)
 
-  const ground1Id = generateId()
-  const ground2Id = generateId()
   const supplyMcb1Id = generateId()
   const supplyMeterId = generateId()
   const supplyRcboId = generateId()
 
-  const earthingLabel = i18n.t('symbols.earthing_separator', { defaultValue: 'PE' })
   const supplyProtectionLabel = i18n.t('panels.supply', { defaultValue: 'Supply' })
   const mainProtectionLabel = i18n.t('supply.mainProtectionLabel', { defaultValue: 'Main' })
   const mcbDefaults = getDefaultTrunkDeviceProtectionProps('MCB', polesConfig)
@@ -120,11 +141,6 @@ function addDefaultTrunkDevicesAndPanelGrid(
   const hiddenSupplyProtectionNameLabel = {
     symbolLabelDisplay: { visibility: { supplyProtectionNameLabel: false } },
   } as const
-
-  const groundTrunkDevices: TrunkDevice[] = [
-    { id: ground1Id, type: 'earthing_separator', symbol: 'earthing_separator', label: earthingLabel, trunkPosition: 0 },
-    { id: ground2Id, type: 'earthing_separator', symbol: 'earthing_separator', label: earthingLabel, trunkPosition: 1 },
-  ]
 
   // Shared (utility-side) supply trunk devices: ordered from supply origin toward the bus.
   const sharedSupplyTrunkDevices: TrunkDevice[] = [
@@ -165,7 +181,7 @@ function addDefaultTrunkDevicesAndPanelGrid(
     },
   ]
 
-  installation.groundTrunkDevices = groundTrunkDevices
+  ensureDefaultEarthingSeparators(installation)
   if (!installation.mainSupply) installation.mainSupply = { cable: { kind: 'XVB', conductors: 3, sectionMm2: 6, hasPE: true }, origin: 'grid' }
   installation.mainSupply.supplyTrunkDevices = sharedSupplyTrunkDevices
 

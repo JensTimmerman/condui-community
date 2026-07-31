@@ -58,6 +58,11 @@ import {
   moveEndpointSelectionBetweenCircuits,
   moveEndpointSelectionOnCircuit,
 } from '@/lib/eendraad/moveEndpointSelection'
+import {
+  movePanelAttachmentOnRcdBus,
+  movePanelAttachmentOnSecondaryBus,
+  movePanelAttachmentToMainBus,
+} from '@/lib/eendraad/panelAttachmentMove'
 
 type PreviewProject = ProjectWithOptionalV2Electrical
 
@@ -655,6 +660,35 @@ function simulateProtectionDrop(
   // Map symbol.id → ProtectionType used by runtime dropBehaviors.
   const protectionType = PROTECTION_SYMBOL_ID_TO_TYPE[symbol.id] ?? 'MCB'
   const defaults = getProtectionCreationProps(project, protectionType)
+  const targetedCircuit =
+    target.type === 'circuit' && target.circuitId
+      ? findCircuitInProject(project, target.circuitId)
+      : null
+  const targetedProtection =
+    target.type === 'circuit' && target.circuitId
+      ? findProtectionByCircuitIdInProject(project, target.circuitId)
+      : null
+  if (
+    targetedCircuit &&
+    targetedProtection?.directPanelFeeder &&
+    targetedProtection.subPanelId
+  ) {
+    const circuitCode = resolveInitialProtectionBusLabel(
+      protectionType,
+      getNextAvailableCircuitCode(project, panel.id)
+    )
+    Object.assign(targetedProtection, {
+      type: protectionType,
+      label: circuitCode,
+      ...defaults,
+      directPanelFeeder: undefined,
+    })
+    targetedCircuit.code = circuitCode
+    changeSet.affectedPanelIds.push(panel.id)
+    changeSet.affectedCircuitIds.push(targetedCircuit.id)
+    changeSet.createdProtectionIds.push(targetedProtection.id)
+    return
+  }
 
   const circuitId = generateId()
   const circuitCode = resolveInitialProtectionBusLabel(
@@ -718,6 +752,12 @@ function simulateProtectionDrop(
       // Include parent so preview wires (e.g. secondary bus bar) for that circuit are drawn
       if (!changeSet.affectedCircuitIds.includes(target.circuitId)) {
         changeSet.affectedCircuitIds.push(target.circuitId)
+      }
+
+      const parentProtection = findProtectionByCircuitIdInProject(project, target.circuitId)
+      if (parentProtection?.subPanelId) {
+        protection.subPanelId = parentProtection.subPanelId
+        parentProtection.subPanelId = undefined
       }
     }
   }
@@ -1618,7 +1658,13 @@ export function simulateDropOnProject(
       feederProtection = findProtectionByCircuitIdInProject(cloned, target.circuitId)
     }
     const feederCircuit = feederProtection?.circuits?.[0]
-    if (feederProtection && feederCircuit && !feederProtection.subPanelId) {
+    if (
+      feederProtection &&
+      feederCircuit &&
+      !feederProtection.subPanelId &&
+      typeof target.secondaryBusInsertIndex !== 'number' &&
+      target.type !== 'rcd'
+    ) {
       feederProtection.subPanelId = newPanelId
       changeSet.affectedCircuitIds.push(feederCircuit.id)
       return changeSet
@@ -1628,17 +1674,18 @@ export function simulateDropOnProject(
     const mcbDefaults = getDefaultProtectionProps('MCB', voltagePoles)
     const protectionId = generateId()
     const circuitId = generateId()
+    const feederCode = getNextAvailableCircuitCode(cloned, parentPanel.id)
     const protection: ProtectionDevice = {
       id: protectionId,
       type: 'MCB',
-      label: '',
+      label: feederCode,
       circuits: [],
       subPanelId: newPanelId,
       ...mcbDefaults,
     }
     const circuit: Circuit = {
       id: circuitId,
-      code: getNextAvailableCircuitCode(cloned, parentPanel.id),
+      code: feederCode,
       kind: 'other',
       cable: createDefaultAcCircuitCable({ sectionMm2: 6 }),
       endpoints: [],
@@ -1648,9 +1695,96 @@ export function simulateDropOnProject(
     protection.circuits = [circuit]
     changeSet.createdProtectionIds.push(protectionId)
     changeSet.affectedCircuitIds.push(circuitId)
+
+    if (target.type === 'rcd' && target.protectionId) {
+      const targetRcd = findProtectionByIdInProject(cloned, target.protectionId)
+      if (targetRcd) {
+        const ordered = (targetRcd.circuits ?? []).filter(
+          (candidate) => candidate.id !== circuit.id
+        )
+        ordered.splice(
+          clamp(target.secondaryBusInsertIndex ?? ordered.length, 0, ordered.length),
+          0,
+          circuit
+        )
+        targetRcd.circuits = ordered
+      }
+    } else if (
+      target.type === 'circuit' &&
+      target.circuitId &&
+      typeof target.secondaryBusInsertIndex === 'number'
+    ) {
+      simulateMoveCircuitToSecondaryBus(
+        cloned,
+        target.circuitId,
+        circuit.id,
+        target.secondaryBusInsertIndex
+      )
+    } else if (
+      target.type === 'mainBus' &&
+      typeof target.mainBusInsertIndex === 'number'
+    ) {
+      const beforeCount = target.mainBusItemCount ?? 0
+      const desiredIndex = clamp(target.mainBusInsertIndex, 0, beforeCount)
+      for (let index = beforeCount; index > desiredIndex; index -= 1) {
+        simulateMoveCircuitOnMainBus(parentPanel, circuit.id, 'left')
+      }
+    }
     return changeSet
   }
 
   // Fallback: for now we only simulate core behaviors; unsupported symbols return null.
   return null
+}
+
+export function simulatePanelAttachmentMoveOnProject(
+  project: PreviewProject,
+  moving: { panelId: string },
+  target: DropTarget
+): EendraadPreviewChangeSet | null {
+  const cloned = cloneProject(project)
+  const result =
+    target.type === 'circuit' &&
+    target.circuitId &&
+    typeof target.secondaryBusInsertIndex === 'number'
+      ? movePanelAttachmentOnSecondaryBus(
+          mutableProjectPanels(cloned),
+          moving.panelId,
+          target.circuitId,
+          target.secondaryBusInsertIndex
+        )
+      : target.type === 'rcd' &&
+          target.protectionId &&
+          typeof target.secondaryBusInsertIndex === 'number'
+        ? movePanelAttachmentOnRcdBus(
+            mutableProjectPanels(cloned),
+            moving.panelId,
+            target.protectionId,
+            target.secondaryBusInsertIndex
+          )
+        : target.type === 'mainBus' &&
+            target.panelId &&
+            typeof target.mainBusInsertIndex === 'number'
+          ? movePanelAttachmentToMainBus(
+              mutableProjectPanels(cloned),
+              moving.panelId,
+              target.panelId,
+              target.mainBusInsertIndex
+            )
+          : null
+  if (!result) return null
+
+  return {
+    project: cloned,
+    affectedPanelIds: [result.sourcePanelId],
+    affectedCircuitIds: [result.parentCircuitId, result.feederCircuitId].filter(
+      (id): id is string => !!id
+    ),
+    createdEndpointIds: [],
+    createdProtectionIds: [],
+    createdTrunkDeviceIds: [],
+    movedTrunkDeviceIds: [],
+    createdSupplyTrunkDeviceIds: [],
+    createdGroundTrunkDeviceIds: [],
+  }
 }

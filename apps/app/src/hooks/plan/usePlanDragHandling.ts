@@ -20,6 +20,13 @@ import { getElectricalInstallationFromProject, getElectricalPanelsFromProject } 
 
 interface UsePlanDragHandlingResult {
   isDraggingRef: React.MutableRefObject<boolean>
+  /**
+   * Move the exact placements participating in the active drag before changing floors.
+   * An empty map means no drag was active; null means the transfer was rejected.
+   */
+  moveActiveDragToFloor: (floorId: string) => Map<string, Point> | null
+  updateCrossFloorDragPreview: (positions: Map<string, Point>) => void
+  finishCrossFloorDrag: () => void
   dragInitialPositionsRef: React.MutableRefObject<Map<string, Point>>
   dragLabelOffsetsRef: React.MutableRefObject<Map<string, { dx: number; dy: number }>>
   labelRecalcKey: number
@@ -104,10 +111,13 @@ export function usePlanDragHandling(
     getFloorById,
     updatePlacement,
     updatePlacementsBatch,
+    movePlanPlacementsToFloor,
     updateJunctionPanelPlacement,
     updateEarthingPlacement,
   } = useProjectStore()
   const isDraggingRef = useRef(false)
+  const crossFloorContinuationRef = useRef(false)
+  const activeDragPlacementIdsRef = useRef<Set<string>>(new Set())
   const dragInitialPositionsRef = useRef<Map<string, Point>>(new Map())
   const dragLabelOffsetsRef = useRef<Map<string, { dx: number; dy: number }>>(new Map())
   /** Latest drag positions during multi-drag; ref so drag-end always has last pointer-move values. */
@@ -126,6 +136,36 @@ export function usePlanDragHandling(
     resetPlanDragVisualFlush()
     usePlanDragVisualStore.getState().clear()
   }, [])
+
+  const moveActiveDragToFloor = useCallback(
+    (floorId: string): Map<string, Point> | null => {
+      if (!isDraggingRef.current) return new Map()
+      const placementIds = Array.from(activeDragPlacementIdsRef.current)
+      if (placementIds.length === 0) return null
+
+      const previewPositions = usePlanDragVisualStore.getState().positions
+      const positions = new Map<string, Point>()
+      const moves = placementIds.map((id) => {
+        const pos =
+          dragPositionsCommitRef.current.get(id) ??
+          previewPositions.get(id) ??
+          dragInitialPositionsRef.current.get(id)
+        if (pos) positions.set(id, pos)
+        return {
+          id,
+          pos,
+        }
+      })
+      if (positions.size !== placementIds.length) return null
+      crossFloorContinuationRef.current = true
+      if (floorId !== activeFloorId && !movePlanPlacementsToFloor(moves, floorId)) {
+        crossFloorContinuationRef.current = false
+        return null
+      }
+      return positions
+    },
+    [activeFloorId, movePlanPlacementsToFloor],
+  )
 
   const initDragLabelOffset = useCallback(
     (placementId: string, pos: Point, positions: Map<string, { x: number; y: number }>) => {
@@ -146,6 +186,29 @@ export function usePlanDragHandling(
     return { x: pos.x + baseSymbolSizePx / 2 + 8, y: pos.y }
   }, [baseSymbolSizePx])
 
+  const updateCrossFloorDragPreview = useCallback(
+    (positions: Map<string, Point>) => {
+      dragPositionsCommitRef.current = new Map(positions)
+      const labels = new Map<string, { x: number; y: number }>()
+      positions.forEach((position, placementId) => {
+        labels.set(placementId, calculateDragLabelPosition(placementId, position))
+      })
+      usePlanDragVisualStore.getState().patch({ positions: new Map(positions), labels })
+    },
+    [calculateDragLabelPosition],
+  )
+
+  const finishCrossFloorDrag = useCallback(() => {
+    crossFloorContinuationRef.current = false
+    isDraggingRef.current = false
+    activeDragPlacementIdsRef.current.clear()
+    dragInitialPositionsRef.current.clear()
+    dragPositionsCommitRef.current.clear()
+    dragLabelOffsetsRef.current.clear()
+    clearDragVisuals()
+    setLabelRecalcKey((prev) => prev + 1)
+  }, [clearDragVisuals])
+
   const createMultiSelectDragHandlers = useCallback((labelPositions: Map<string, { x: number; y: number }>, baseSymbolSizePx: number) => {
     return {
       onMultiSelectDragStart: (_draggedEndpointId: string) => {
@@ -154,7 +217,10 @@ export function usePlanDragHandling(
         if (selection.type !== 'endpoint' && !isPlacementSelection) return
 
         isDraggingRef.current = true
+        crossFloorContinuationRef.current = false
         dragInitialPositionsRef.current.clear()
+        dragPositionsCommitRef.current.clear()
+        activeDragPlacementIdsRef.current.clear()
 
         if (isPlacementSelection && activeFloorId) {
           const floorPlacements = getPlacementsByFloor(activeFloorId)
@@ -187,6 +253,8 @@ export function usePlanDragHandling(
             }
           })
         }
+        activeDragPlacementIdsRef.current = new Set(dragInitialPositionsRef.current.keys())
+        dragPositionsCommitRef.current = new Map(dragInitialPositionsRef.current)
         seedDragLabels(labelPositions)
       },
       onMultiSelectDrag: (draggedEndpointId: string, newPos: Point) => {
@@ -268,6 +336,7 @@ export function usePlanDragHandling(
         })
       },
       onMultiSelectDragEnd: () => {
+        if (crossFloorContinuationRef.current) return
         const toCommit = dragPositionsCommitRef.current
         const floorPlacements = activeFloorId ? getPlacementsByFloor(activeFloorId) : []
         const batch: Array<{ id: string; updates: Partial<Placement> }> = []
@@ -344,6 +413,9 @@ export function usePlanDragHandling(
           }
         }
         isDraggingRef.current = false
+        activeDragPlacementIdsRef.current.clear()
+        dragInitialPositionsRef.current.clear()
+        dragPositionsCommitRef.current.clear()
         dragLabelOffsetsRef.current.clear()
         clearDragVisuals()
         setLabelRecalcKey((prev) => prev + 1)
@@ -355,6 +427,10 @@ export function usePlanDragHandling(
     return {
       onDragStart: () => {
         isDraggingRef.current = true
+        crossFloorContinuationRef.current = false
+        activeDragPlacementIdsRef.current = new Set([placement.id])
+        dragInitialPositionsRef.current = new Map([[placement.id, { ...placement.pos }]])
+        dragPositionsCommitRef.current = new Map([[placement.id, { ...placement.pos }]])
         // Capture current label offset so it stays on the same side during drag
         initDragLabelOffset(placement.id, placement.pos, labelPositions)
         seedDragLabels(labelPositions)
@@ -395,6 +471,7 @@ export function usePlanDragHandling(
           }
         }
         const positionPatch = new Map<string, Point>([[placement.id, currentPos]])
+        dragPositionsCommitRef.current = positionPatch
         schedulePlanDragVisualFlush({
           positions: positionPatch,
           labels: labelPatch,
@@ -402,6 +479,7 @@ export function usePlanDragHandling(
         })
       },
       onDragEnd: (finalPos: Point) => {
+        if (crossFloorContinuationRef.current) return
         // Run orientation first so store is updated before we clear state; one re-render shows both.
         if (activeFloorId) {
           const floor = getFloorById(activeFloorId)
@@ -445,6 +523,9 @@ export function usePlanDragHandling(
         }
 
         isDraggingRef.current = false
+        activeDragPlacementIdsRef.current.clear()
+        dragInitialPositionsRef.current.clear()
+        dragPositionsCommitRef.current.clear()
         dragLabelOffsetsRef.current.clear()
         clearDragVisuals()
         setLabelRecalcKey((prev) => prev + 1)
@@ -459,7 +540,10 @@ export function usePlanDragHandling(
         if (selection.ids.length === 0 || !activeFloorId) return
 
         isDraggingRef.current = true
+        crossFloorContinuationRef.current = false
         dragInitialPositionsRef.current.clear()
+        dragPositionsCommitRef.current.clear()
+        activeDragPlacementIdsRef.current.clear()
 
         const selectionIdSet = new Set(selection.ids)
         const floorPlacements = getPlacementsByFloor(activeFloorId)
@@ -529,6 +613,8 @@ export function usePlanDragHandling(
           initDragLabelOffset(placement.id, placement.pos, labelPositions)
         })
 
+        activeDragPlacementIdsRef.current = new Set(dragInitialPositionsRef.current.keys())
+        dragPositionsCommitRef.current = new Map(dragInitialPositionsRef.current)
         seedDragLabels(labelPositions)
       },
       onSelectionFrameDragMove: (delta: Point) => {
@@ -546,6 +632,7 @@ export function usePlanDragHandling(
         })
       },
       onSelectionFrameDragEnd: (overrideDeltaInPlanSpace?: Point) => {
+        if (crossFloorContinuationRef.current) return
         const initialPositions = dragInitialPositionsRef.current
         const floorPlacements = activeFloorId ? getPlacementsByFloor(activeFloorId) : []
         // Use pointer-based delta when provided (correct plan space); otherwise fall back to Konva delta
@@ -634,6 +721,9 @@ export function usePlanDragHandling(
           }
         }
         isDraggingRef.current = false
+        activeDragPlacementIdsRef.current.clear()
+        dragInitialPositionsRef.current.clear()
+        dragPositionsCommitRef.current.clear()
         dragLabelOffsetsRef.current.clear()
         clearDragVisuals()
         setLabelRecalcKey((prev) => prev + 1)
@@ -643,6 +733,9 @@ export function usePlanDragHandling(
 
   return {
     isDraggingRef,
+    moveActiveDragToFloor,
+    updateCrossFloorDragPreview,
+    finishCrossFloorDrag,
     dragInitialPositionsRef,
     dragLabelOffsetsRef,
     labelRecalcKey,

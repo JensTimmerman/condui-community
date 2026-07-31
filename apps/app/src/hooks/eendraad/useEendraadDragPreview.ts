@@ -17,7 +17,12 @@ export interface DragPreviewState {
    * the source circuit and inserted on the hovered trunk (same device id).
    */
   relocatingTrunkDevice?: { id: string; sourceCircuitId: string }
-  movingEndpointSelection?: { draggedEndpointId: string; sourceCircuitId: string; endpointIds: string[] }
+  movingEndpointSelection?: {
+    draggedEndpointId: string
+    sourceCircuitId: string
+    endpointIds: string[]
+  }
+  movingPanelAttachment?: { panelId: string }
 }
 
 /**
@@ -28,7 +33,7 @@ export function useEendraadDragPreview(
   options?: {
     draggingProtectionIdRef?: MutableRefObject<string | null>
     getProtectionById?: (id: string) => ProtectionDevice | null | undefined
-  },
+  }
 ) {
   const [dragPreview, setDragPreview] = useState<DragPreviewState | null>(null)
 
@@ -46,14 +51,15 @@ export function useEendraadDragPreview(
       }
 
       const draggingProtectionId = options?.draggingProtectionIdRef?.current
+      const prefersMainBus = !!draggingProtectionId || symbol.id === 'panel_distribution'
       const rawDropTarget = detectDropTarget(
         position,
         symbol.id === 'earthing_separator'
           ? undefined
           : {
               preferMainBusOverGroundWire: true,
-              preferMainBusOverSupplyWire: !!draggingProtectionId,
-            },
+              preferMainBusOverSupplyWire: prefersMainBus,
+            }
       )
 
       // Normalize generic panel-frame hits (type:null with panelId) for protection
@@ -104,7 +110,7 @@ export function useEendraadDragPreview(
             protectionDropTargetHitsSource(
               draggingProtectionId,
               dropTarget,
-              options.getProtectionById,
+              options.getProtectionById
             )
           ) {
             setDragPreview(null)
@@ -127,7 +133,7 @@ export function useEendraadDragPreview(
         }
       }
     },
-    [detectDropTarget, options?.draggingProtectionIdRef, options?.getProtectionById],
+    [detectDropTarget, options?.draggingProtectionIdRef, options?.getProtectionById]
   )
 
   return {

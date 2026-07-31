@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { scopeSvgMarkupClasses } from '../../lib/ui/scopedSvgMarkup'
 import drawModeSvg from '../../../public/icons/ui-draw-mode.svg?raw'
 import drawRectSvg from '../../../public/icons/ui-draw-rect.svg?raw'
 import movePointSvg from '../../../public/icons/ui-move-point.svg?raw'
@@ -31,7 +32,7 @@ function SvgIcon({ svg, className = 'w-6 h-6' }: { svg: string; className?: stri
   return (
     <span
       className={`ui-svg-icon inline-block shrink-0 ${className}`}
-      dangerouslySetInnerHTML={{ __html: svg }}
+      dangerouslySetInnerHTML={{ __html: scopeSvgMarkupClasses(svg) }}
     />
   )
 }

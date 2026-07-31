@@ -36,9 +36,11 @@ import {
 import { useUIStore } from '@/stores/uiStore'
 import type { Circuit } from '@/types/schema'
 import { ensurePanelPlacement } from '@/utils/panelPlacement'
-import { generateId } from '@/utils/project'
+import { ensureDefaultEarthingSeparators, generateId } from '@/utils/project'
 import { supportsExtendedInstallationProfiles } from '@/lib/editionInstallationProfileCapabilities'
 import { DEFAULT_INSTALLATION_PROFILE } from '@/lib/installationProfile'
+import { promotePanelToRootSupply } from '@/lib/panel/panelSupplyMove'
+import { isLastMainPanel } from '@/utils/eendraad'
 
 export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
     // Panel actions
@@ -154,6 +156,9 @@ export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
 
           const installation = getMutableElectricalInstallationForProject(state.currentProject)
           if (!installation) return
+          if (!parentPanel && panel.isMain !== false) {
+            ensureDefaultEarthingSeparators(installation)
+          }
           ensureInstallationFeedTopology(
             installation,
             getMutableElectricalPanelsForProject(state.currentProject)
@@ -254,6 +259,19 @@ export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
           if (panelContainsDescendant(panel, targetOwner.panel.id)) return
         }
 
+        if (target.type === 'supply') {
+          const mutablePanels = getMutableElectricalPanelsForProject(project)
+          const mutableInstallation = getMutableElectricalInstallationForProject(project)
+          if (!mutableInstallation) return
+          const result = promotePanelToRootSupply(
+            mutablePanels,
+            mutableInstallation,
+            panelId,
+          )
+          if (result) state.isDirty = true
+          return
+        }
+
         const detachedPanel = removePanelFromHierarchy(panels, panelId)
         if (!detachedPanel) return
 
@@ -262,19 +280,14 @@ export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
           previousFeeder.protection.subPanelId = undefined
         }
 
-        if (target.type === 'supply') {
+        const targetOwner = findCircuitOwner(panels, target.circuitId)
+        if (!targetOwner?.protection) {
           detachedPanel.isMain = true
           panels.push(detachedPanel)
         } else {
-          const targetOwner = findCircuitOwner(panels, target.circuitId)
-          if (!targetOwner?.protection) {
-            detachedPanel.isMain = true
-            panels.push(detachedPanel)
-          } else {
-            detachedPanel.isMain = false
-            targetOwner.panel.subPanels.push(detachedPanel)
-            targetOwner.protection.subPanelId = detachedPanel.id
-          }
+          detachedPanel.isMain = false
+          targetOwner.panel.subPanels.push(detachedPanel)
+          targetOwner.protection.subPanelId = detachedPanel.id
         }
 
         const topology = ensureInstallationFeedTopology(installation, panels)
@@ -668,9 +681,9 @@ export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
       set((state) => {
         if (state.currentProject) {
           const targetPanel = findPanelById(getMutableElectricalPanelsForProject(state.currentProject), id)
-          if (targetPanel?.isMain) {
-
-            logger.warn('[projectStore] deletePanel blocked for main panel', {
+          const panels = getMutableElectricalPanelsForProject(state.currentProject)
+          if (targetPanel?.isMain && isLastMainPanel(panels, id)) {
+            logger.warn('[projectStore] deletePanel blocked for last main panel', {
               panelId: id,
               panelName: targetPanel.name,
             })

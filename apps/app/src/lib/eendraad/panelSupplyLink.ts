@@ -40,6 +40,21 @@ export function findPanelOwnDistributionEndpoint(panel: Panel): Endpoint | undef
   )
 }
 
+function findImplicitDirectPanelFeederCircuit(
+  protection: ProtectionDevice,
+): Circuit | undefined {
+  const circuits = protection.circuits ?? []
+  const nestedIds = new Set(circuits.flatMap((circuit) => circuit.subCircuitIds ?? []))
+  return circuits.find(
+    (circuit) =>
+      nestedIds.has(circuit.id) &&
+      circuit.endpoints.length === 0 &&
+      (circuit.branches?.length ?? 0) === 0 &&
+      (circuit.subCircuitIds?.length ?? 0) === 0 &&
+      (circuit.trunkDevices?.length ?? 0) === 0,
+  )
+}
+
 export function resolvePanelSupplyLinkForProtection(
   project: ProjectWithOptionalV2Electrical,
   sourcePanel: Panel,
@@ -55,6 +70,7 @@ export function resolvePanelSupplyLinkForProtection(
   const circuits = protection.circuits ?? []
   const feederCircuit =
     circuits.find((circuit) => findPanelDistributionEndpointInCircuit(circuit, targetPanel)) ??
+    findImplicitDirectPanelFeederCircuit(protection) ??
     circuits[0]
   const sourcePanelEndpoint = findPanelDistributionEndpointInCircuit(feederCircuit, targetPanel)
   const targetPanelEndpoint = findPanelOwnDistributionEndpoint(targetPanel)

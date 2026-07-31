@@ -164,6 +164,11 @@ export type PlanKeyboardOptions = {
   pointerOverPlanRef?: MutableRefObject<boolean>
   /** When true, digit keys 1–9 are not used for floor switching (e.g. opening width editor). */
   suppressDigitFloorShortcuts?: boolean
+  /**
+   * Called immediately before a digit-key floor switch. Returning false keeps the current floor.
+   * The plan drag controller uses this to move held symbols before the canvas changes floors.
+   */
+  onBeforeSwitchFloor?: (floorId: string) => boolean
   /** Disable edit-only shortcuts such as Delete while keeping view-level shortcuts elsewhere active. */
   disabled?: boolean
   /** Canvas-owned deletion for local wall point/segment selection state. */
@@ -193,6 +198,11 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
   const { getEndpointById } = useProjectStore()
   const { openDialog } = useDialogStore()
   const onDeleteFloorPlanSelection = options?.onDeleteFloorPlanSelection
+  const pointerOverPlanRef = options?.pointerOverPlanRef
+  const suppressDigitFloorShortcuts = options?.suppressDigitFloorShortcuts
+  const onBeforeSwitchFloor = options?.onBeforeSwitchFloor
+  const keyboardDisabled = options?.disabled
+  const toolShortcuts = options?.toolShortcuts
 
   usePlanSymbolNudgeKeyboard({
     activeFloorId,
@@ -227,17 +237,17 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
 
     const handleKeyDown = (e: KeyboardEvent) => {
       const typing = isKeyboardTypingTarget(e.target)
-      if (options?.disabled) return
+      if (keyboardDisabled) return
       const floors = getCurrentProjectFloors()
-      const pointerOverPlan = options?.pointerOverPlanRef?.current === true
+      const pointerOverPlan = pointerOverPlanRef?.current === true
       const decisionContext = {
         pointerOverPlan,
-        suppressDigitFloorShortcuts: !!options?.suppressDigitFloorShortcuts,
+        suppressDigitFloorShortcuts: !!suppressDigitFloorShortcuts,
         floorIds: floors.map((floor) => floor.id),
-        toolShortcuts: options?.toolShortcuts
+        toolShortcuts: toolShortcuts
           ? {
-              canToggleQuickPlacerAndWiring: options.toolShortcuts.canToggleQuickPlacerAndWiring,
-              canToggleDrawMode: options.toolShortcuts.canToggleDrawMode,
+              canToggleQuickPlacerAndWiring: toolShortcuts.canToggleQuickPlacerAndWiring,
+              canToggleDrawMode: toolShortcuts.canToggleDrawMode,
             }
           : undefined,
       }
@@ -276,8 +286,8 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
           eventTarget: describeKeyEventTarget(e.target),
           activeElement: describeKeyEventTarget(document.activeElement),
           pointerOverPlan,
-          hasPointerOverPlanRef: !!options?.pointerOverPlanRef,
-          suppressDigitFloorShortcuts: !!options?.suppressDigitFloorShortcuts,
+          hasPointerOverPlanRef: !!pointerOverPlanRef,
+          suppressDigitFloorShortcuts: !!suppressDigitFloorShortcuts,
           floorCount: floors.length,
           defaultPreventedBefore: e.defaultPrevented,
         })
@@ -295,19 +305,26 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
         }
         case 'toggleQuickPlacer':
           e.preventDefault()
-          options?.toolShortcuts?.onToggleQuickPlacer()
+          toolShortcuts?.onToggleQuickPlacer()
           return
         case 'toggleWiring':
           e.preventDefault()
-          options?.toolShortcuts?.onToggleWiring()
+          toolShortcuts?.onToggleWiring()
           return
         case 'toggleDrawMode':
           e.preventDefault()
-          options?.toolShortcuts?.onToggleDrawMode()
+          toolShortcuts?.onToggleDrawMode()
           return
         case 'switchFloor': {
           e.preventDefault()
           const floor = floors[decision.index]
+          if (onBeforeSwitchFloor?.(decision.floorId) === false) {
+            logger.warn('[PlanKeyboard] floor switch blocked: active drag could not be transferred', {
+              fromFloorId: activeFloorId,
+              toFloorId: decision.floorId,
+            })
+            return
+          }
           useUIStore.getState().setActiveFloor(decision.floorId)
           if (isPlanKeyboardDebugEnabled()) {
             logger.info('[PlanKeyboard] setActiveFloor', {
@@ -628,12 +645,12 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
                     ? t('panel.deleteConfirmMessage', {
                         panelNames,
                         defaultValue:
-                          'The following panel(s) contain circuits, protections, or sub-panels: {{panelNames}}\n\nDeleting them will also delete all their contents. This action cannot be undone.\n\nAre you sure you want to continue?',
+                          'The following panel(s) contain circuits, protections, or sub-panels: {{panelNames}}\n\nDeleting them will also delete all their contents. You can undo this action.\n\nAre you sure you want to continue?',
                       })
                     : t('panel.deleteEmptyPanelMessage', {
                         panelNames,
                         defaultValue:
-                          'Are you sure you want to delete panel(s): {{panelNames}}?\n\nThis will also remove any associated frames and nested panels. This action cannot be undone.',
+                          'Are you sure you want to delete panel(s): {{panelNames}}?\n\nThis will also remove any associated frames and nested panels. You can undo this action.',
                       })
 
                 openDialog({
@@ -796,10 +813,11 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
     getEndpointById,
     t,
     openDialog,
-    options?.pointerOverPlanRef,
-    options?.suppressDigitFloorShortcuts,
-    options?.disabled,
+    pointerOverPlanRef,
+    suppressDigitFloorShortcuts,
+    onBeforeSwitchFloor,
+    keyboardDisabled,
     onDeleteFloorPlanSelection,
-    options?.toolShortcuts,
+    toolShortcuts,
   ])
 }

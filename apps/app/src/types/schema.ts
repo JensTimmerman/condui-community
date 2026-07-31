@@ -149,6 +149,8 @@ export interface ProtectionDevice {
   notes?: string
   circuits?: Circuit[] // Circuits protected by this device (e.g., RCD with multiple circuits)
   subPanelId?: string // For MCBs that connect to sub-panels
+  /** Structural carrier for a secondary panel connected directly to a busbar; no protection symbol is rendered. */
+  directPanelFeeder?: boolean
   /** ISO installation date. Preferred over the legacy year override. */
   installationDate?: string
   /** Explicitly keeps automatic/version-derived installation dates off this entity. */

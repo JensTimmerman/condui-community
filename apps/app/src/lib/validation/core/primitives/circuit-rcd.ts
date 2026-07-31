@@ -63,7 +63,7 @@ function findRootPanelForPanel(panels: Panel[], targetPanelId: string): Panel | 
 
 function findFeederCircuitIdsForPanel(panels: Panel[], targetPanelId: string): string[] {
   const link = resolvePanelSupplyLinkForPanel({ panels }, targetPanelId)
-  return link?.protection.circuits?.map((circuit) => circuit.id) ?? []
+  return link?.feederCircuit ? [link.feederCircuit.id] : []
 }
 
 function getSupplyProtectionsForCircuit(

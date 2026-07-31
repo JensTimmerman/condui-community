@@ -1,4 +1,4 @@
-import { getPanelFeedProjection } from '@/lib/feedTopology'
+import { ensureInstallationFeedTopology, getPanelFeedProjection } from '@/lib/feedTopology'
 import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
@@ -23,6 +23,7 @@ export type SupplyTrunkModuleRef = {
 }
 
 export type PanelRewireOperation =
+  | { kind: 'promotePanelToRootSupply'; panelId: string }
   | { kind: 'moveSharedSupplyDevice'; targetSupplyId: string; direction: 'left' | 'right' }
   | {
       kind: 'promoteProtectionToSharedSupply'
@@ -73,6 +74,20 @@ export function isSharedSupplyTrunkRef(
 ): ref is SupplyTrunkModuleRef {
   if (!isSupplyTrunkRef(ref)) return false
   return getSharedSupplyRefKeysForPanel(project, panel).has(panelGridModuleRefKey(ref))
+}
+
+export function isSharedSupplyTailRef(
+  project: ProjectWithOptionalV2Electrical,
+  ref: PanelGridModuleRef
+): ref is SupplyTrunkModuleRef {
+  if (!isSupplyTrunkRef(ref)) return false
+  const installation = getElectricalInstallationFromProject(project)
+  if (!installation) return false
+  const topology = ensureInstallationFeedTopology(
+    installation,
+    getElectricalPanelsFromProject(project)
+  )
+  return topology.sharedFeed.trunkDevices?.at(-1)?.id === ref.id
 }
 
 export function isModuleRefOnSupplyStrip(panel: Panel | null, ref: PanelGridModuleRef): boolean | null {
@@ -174,13 +189,78 @@ function trunkDeviceFromProtection(
   }
 }
 
+function isMainBusProtection(panel: Panel, protection: ProtectionDevice): boolean {
+  const circuitIds = new Set((protection.circuits ?? []).map((circuit) => circuit.id))
+  if (circuitIds.size === 0) return true
+  return !panel.protections.some(
+    (candidate) =>
+      candidate.id !== protection.id &&
+      (candidate.circuits ?? []).some((circuit) =>
+        (circuit.subCircuitIds ?? []).some((id) => circuitIds.has(id))
+      )
+  )
+}
+
+/**
+ * The one module that represents the incoming/main-bus side of a secondary
+ * panel. When this is null, the panel has no protection and its frame is the
+ * promotion target.
+ */
+export function getPanelRootPromotionTargetRef(panel: Panel): PanelGridModuleRef | null {
+  if (panel.isMain === true) return null
+
+  const panelCircuit = panel.circuits.find((circuit) => circuit.code === 'PANEL')
+  const incomingProtection = [...(panelCircuit?.trunkDevices ?? [])]
+    .sort((a, b) => (a.trunkPosition ?? 0) - (b.trunkPosition ?? 0))
+    .find((device) => device.type === 'protection')
+  if (incomingProtection && panelCircuit) {
+    return {
+      kind: 'trunkDevice',
+      id: incomingProtection.id,
+      scope: 'circuit',
+      circuitId: panelCircuit.id,
+    }
+  }
+
+  const firstProtection =
+    panel.protections.find((protection) => isMainBusProtection(panel, protection)) ??
+    panel.protections[0]
+  return firstProtection
+    ? { kind: 'protection', id: firstProtection.id }
+    : null
+}
+
+function getPanelRootPromotionOperation(
+  panel: Panel,
+  currentProject: ProjectWithOptionalV2Electrical,
+  origin: PanelGridModuleRef,
+  target: PanelGridModuleRef | null
+): PanelRewireOperation | null {
+  if (panel.isMain === true || !isSharedSupplyTailRef(currentProject, origin)) return null
+
+  const canonicalTarget = getPanelRootPromotionTargetRef(panel)
+  if (canonicalTarget === null) {
+    if (target !== null) return null
+  } else if (
+    target === null ||
+    panelGridModuleRefKey(target) !== panelGridModuleRefKey(canonicalTarget)
+  ) {
+    return null
+  }
+
+  return { kind: 'promotePanelToRootSupply', panelId: panel.id }
+}
+
 export function getPanelRewireOperation(
   panel: Panel | null,
   currentProject: ProjectWithOptionalV2Electrical | null,
   origin: PanelGridModuleRef,
-  target: PanelGridModuleRef,
+  target: PanelGridModuleRef | null,
 ): PanelRewireOperation | null {
   if (!panel || !currentProject) return null
+  const panelPromotion = getPanelRootPromotionOperation(panel, currentProject, origin, target)
+  if (panelPromotion) return panelPromotion
+  if (!target) return null
   if (panelGridModuleRefKey(origin) === panelGridModuleRefKey(target)) return null
 
   const originStrip = isModuleRefOnSupplyStrip(panel, origin)
@@ -267,7 +347,7 @@ export function validatePanelRewireOperation(
   panel: Panel | null,
   currentProject: ProjectWithOptionalV2Electrical | null,
   origin: PanelGridModuleRef,
-  target: PanelGridModuleRef,
+  target: PanelGridModuleRef | null,
 ): boolean {
   return getPanelRewireOperation(panel, currentProject, origin, target) != null
 }

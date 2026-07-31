@@ -43,6 +43,7 @@ import type { PanelWirePathRegion, WirePathSegment } from './panelWireRouter'
 import { RewireTool } from './RewireTool'
 import { RewirePreviewWire } from './RewirePreviewWire'
 import {
+  buildDirectPanelFeederConnectors,
   buildFullPanelScene,
   PANEL_SCENE_FRAME_MARGIN,
   PANEL_SCENE_SHARED_SUPPLY_ID,
@@ -59,7 +60,11 @@ import {
   getElectricalPanelsFromProject,
   getMutableElectricalPanelsForProject,
 } from '@/lib/projectV2/electrical'
-import { getPanelRewireOperation, validatePanelRewireOperation } from '@/lib/panel/panelRewire'
+import {
+  getPanelRewireOperation,
+  isSharedSupplyTailRef,
+  validatePanelRewireOperation,
+} from '@/lib/panel/panelRewire'
 import {
   createDefaultAcCircuitCable,
   DEFAULT_AC_CIRCUIT_WIRE_LABEL_FLAGS,
@@ -243,7 +248,7 @@ function applyPanelRewireOperation({
   panel: Panel | null
   currentProject: Project | null
   origin: PanelGridModuleRef
-  target: PanelGridModuleRef
+  target: PanelGridModuleRef | null
   rewireModules: (originCircuitId: string, targetCircuitId: string) => void
   placeSupplyModuleAfterInsert: (
     targetPanel: Panel,
@@ -258,6 +263,14 @@ function applyPanelRewireOperation({
   if (!panel || !currentProject) return false
   const operation = getPanelRewireOperation(panel, currentProject, origin, target)
   if (!operation) return false
+
+  if (operation.kind === 'promotePanelToRootSupply') {
+    useProjectStore
+      .getState()
+      .movePanelSupply(operation.panelId, { type: 'supply' })
+    useUIStore.getState().setSelection({ type: 'panel', ids: [operation.panelId] })
+    return true
+  }
 
   if (operation.kind === 'moveSharedSupplyDevice') {
     useProjectStore.getState().moveSupplyTrunkDevice(operation.targetSupplyId, operation.direction)
@@ -706,13 +719,20 @@ export function HierarchyPanelCanvas({
     if (!fullScene || !currentProject) return null
     return applyPanelSceneFilter(fullScene, panelSceneFilter, currentProject, hierarchyFeedFromTop)
   }, [fullScene, panelSceneFilter, currentProject, hierarchyFeedFromTop])
+  const directPanelFeederConnectors = useMemo(
+    () =>
+      scene && currentProject
+        ? buildDirectPanelFeederConnectors(scene.surfaces, currentProject)
+        : [],
+    [currentProject, scene]
+  )
   const panelWirePathRegions = useMemo(
     () => buildPanelWirePathRegions(scene?.surfaces ?? []),
     [scene]
   )
   const panelWirePathLinks = useMemo(
-    () => buildPanelWirePathLinks(scene?.connectors ?? []),
-    [scene]
+    () => buildPanelWirePathLinks([...(scene?.connectors ?? []), ...directPanelFeederConnectors]),
+    [directPanelFeederConnectors, scene]
   )
 
   const selectedPanelIds = useMemo(
@@ -771,27 +791,53 @@ export function HierarchyPanelCanvas({
   const canUseHierarchyRewireSurface = useCallback(
     (originSurfaceId: string | null, candidate: HierarchySurface) => {
       if (!originSurfaceId) return false
-      return getSurfaceRewireId(candidate) === originSurfaceId
+      const candidateSurfaceId = getSurfaceRewireId(candidate)
+      if (candidateSurfaceId === originSurfaceId) return true
+      return (
+        currentProject != null &&
+        rewireOriginRef != null &&
+        isSharedSupplyTailRef(currentProject, rewireOriginRef) &&
+        candidate.kind === 'panel' &&
+        candidate.panel?.isMain !== true
+      )
     },
-    [getSurfaceRewireId]
+    [currentProject, getSurfaceRewireId, rewireOriginRef]
   )
 
   const resolveHierarchyRewirePanel = useCallback(
     (originSurfaceId: string | null, targetSurfaceId: string | null): Panel | null => {
       if (!scene || !originSurfaceId || !targetSurfaceId) return null
-      if (originSurfaceId !== targetSurfaceId) return null
-
-      if (originSurfaceId === PANEL_SCENE_SHARED_SUPPLY_ID) {
+      if (
+        originSurfaceId === PANEL_SCENE_SHARED_SUPPLY_ID &&
+        targetSurfaceId === PANEL_SCENE_SHARED_SUPPLY_ID
+      ) {
         return panelOptions.find((opt) => opt.isRoot && opt.panel.isMain)?.panel ?? null
       }
 
       const surface = scene.surfaces.find(
-        (candidate) => getSurfaceRewireId(candidate) === originSurfaceId
+        (candidate) => getSurfaceRewireId(candidate) === targetSurfaceId
       )
       if (surface?.kind !== 'panel' || !surface.panel) return null
+      if (
+        originSurfaceId !== targetSurfaceId &&
+        !(
+          currentProject != null &&
+          rewireOriginRef != null &&
+          isSharedSupplyTailRef(currentProject, rewireOriginRef) &&
+          surface.panel.isMain !== true
+        )
+      ) {
+        return null
+      }
       return surface.panel
     },
-    [getSurfaceRewireId, scene, panelOptions]
+    [
+      currentProject,
+      getSurfaceRewireId,
+      panelOptions,
+      rewireOriginRef,
+      scene,
+    ]
   )
 
   const resetHierarchyRewireState = useCallback(() => {
@@ -852,10 +898,57 @@ export function HierarchyPanelCanvas({
         if (foundTarget) break
       }
 
-      setRewireTargetRef(foundTarget?.ref ?? null)
-      setRewireTargetSurfaceId(foundTarget?.surfaceId ?? null)
+      let foundFrameSurfaceId: string | null = null
       if (!foundTarget) {
-        setRewireTargetValid(true)
+        for (const surface of scene.surfaces) {
+          if (
+            surface.kind !== 'panel' ||
+            !surface.panel ||
+            !canUseHierarchyRewireSurface(rewireOriginSurfaceId, surface)
+          ) {
+            continue
+          }
+          const left = surface.x - HIERARCHY_PANEL_FRAME_HIT_MARGIN
+          const right = surface.x + surface.width + HIERARCHY_PANEL_FRAME_HIT_MARGIN
+          const top =
+            surface.y +
+            surface.mainPanelY -
+            Math.max(
+              HIERARCHY_PANEL_FRAME_HIT_MARGIN,
+              HIERARCHY_PANEL_FRAME_TITLE_HIT_HEIGHT
+            )
+          const bottom =
+            surface.y +
+            surface.mainPanelY +
+            surface.panelFrameHeight +
+            HIERARCHY_PANEL_FRAME_HIT_MARGIN
+          if (
+            canvasPos.x < left ||
+            canvasPos.x > right ||
+            canvasPos.y < top ||
+            canvasPos.y > bottom
+          ) {
+            continue
+          }
+          const surfaceId = getSurfaceRewireId(surface)
+          if (
+            validatePanelRewireOperation(
+              surface.panel,
+              currentProject,
+              rewireOriginRef,
+              null
+            )
+          ) {
+            foundFrameSurfaceId = surfaceId
+            break
+          }
+        }
+      }
+
+      setRewireTargetRef(foundTarget?.ref ?? null)
+      setRewireTargetSurfaceId(foundTarget?.surfaceId ?? foundFrameSurfaceId)
+      if (!foundTarget) {
+        setRewireTargetValid(foundFrameSurfaceId !== null)
         return
       }
 
@@ -883,7 +976,7 @@ export function HierarchyPanelCanvas({
       !rewireMode ||
       !rewireOriginRef ||
       !rewireOriginSurfaceId ||
-      !rewireTargetRef ||
+      !rewireTargetSurfaceId ||
       !rewireTargetValid
     ) {
       resetHierarchyRewireState()
@@ -971,6 +1064,32 @@ export function HierarchyPanelCanvas({
       finalTargetY = targetPlacement.surface.y + targetPlacement.y
     }
 
+    const targetPanel = resolveHierarchyRewirePanel(
+      rewireOriginSurfaceId,
+      rewireTargetSurfaceId
+    )
+    const operation = targetPanel
+      ? getPanelRewireOperation(
+          targetPanel,
+          currentProject,
+          rewireOriginRef,
+          rewireTargetRef
+        )
+      : null
+    const promotionPanelId =
+      operation?.kind === 'promotePanelToRootSupply' ? operation.panelId : null
+    if (promotionPanelId && !targetPlacement) {
+      const targetSurface = scene.surfaces.find(
+        (surface) =>
+          surface.kind === 'panel' &&
+          surface.panel?.id === promotionPanelId
+      )
+      if (targetSurface) {
+        finalTargetX = targetSurface.x + targetSurface.width / 2
+        finalTargetY = targetSurface.y + targetSurface.mainPanelY
+      }
+    }
+
     const useBottomGap =
       finalTargetY > originY + originPlacement.height &&
       rewireOriginSurfaceId === rewireTargetSurfaceId
@@ -999,12 +1118,18 @@ export function HierarchyPanelCanvas({
           finalTargetY,
         ]
 
-    const stroke =
-      rewireTargetRef && targetPlacement ? (rewireTargetValid ? '#10b981' : '#ef4444') : '#f59e0b'
+    const stroke = promotionPanelId
+      ? '#2563eb'
+      : rewireTargetRef && targetPlacement
+        ? rewireTargetValid
+          ? '#10b981'
+          : '#ef4444'
+        : '#f59e0b'
 
     return {
       points,
       stroke,
+      promotionPanelId,
     }
   }, [
     getSurfaceRewireId,
@@ -1015,6 +1140,8 @@ export function HierarchyPanelCanvas({
     rewireTargetRef,
     rewireTargetSurfaceId,
     rewireTargetValid,
+    currentProject,
+    resolveHierarchyRewirePanel,
     scene,
   ])
 
@@ -2677,6 +2804,20 @@ export function HierarchyPanelCanvas({
                     cornerRadius={4}
                     listening={false}
                   />
+                  {hierarchyRewirePreviewWire?.promotionPanelId === surface.panel?.id && (
+                    <Rect
+                      x={0}
+                      y={surface.mainPanelY}
+                      width={surface.width}
+                      height={surface.panelFrameHeight}
+                      fill="rgba(37,99,235,0.08)"
+                      stroke="#2563eb"
+                      strokeWidth={3}
+                      dash={[10, 5]}
+                      cornerRadius={4}
+                      listening={false}
+                    />
+                  )}
                   {surface.supplyPanelVisible && (
                     <Rect
                       x={0}
@@ -2863,6 +3004,18 @@ export function HierarchyPanelCanvas({
                 />
               )}
             </Group>
+          ))}
+          {directPanelFeederConnectors.map((connector, index) => (
+            <Line
+              key={`direct-panel-feeder-${index}`}
+              points={connector.points}
+              stroke={colors.supplyWire}
+              strokeWidth={2}
+              dash={[8, 4]}
+              lineCap="round"
+              lineJoin="round"
+              listening={false}
+            />
           ))}
           {(() => {
             const panelSurfaces = scene?.surfaces.filter(

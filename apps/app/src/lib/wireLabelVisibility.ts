@@ -1,5 +1,8 @@
 import type { WireSegment } from '@/types/schema'
-import { isMainSupplyVerticalWireSegment } from '@/lib/wireTextLabel'
+import {
+  isHorizontalSupplyTrunkSegment,
+  isMainSupplyVerticalWireSegment,
+} from '@/lib/wireTextLabel'
 import { resolveShowFireClassLabel, resolveShowWireLengthLabel } from '@/lib/wires/circuitWireDefaults'
 
 export function isSupplyWireSegmentForLabel(wireSegment: WireSegment): boolean {
@@ -15,6 +18,16 @@ export function isBusBarProtectionStubSegment(wireSegment: WireSegment): boolean
     wireSegment.type === 'vertical' &&
     wireSegment.toElementType === 'protection' &&
     (wireSegment.fromElementType === 'mainBus' || wireSegment.fromElementType === 'secondaryBus')
+  )
+}
+
+export function isRouteIndicatorVisibleForSegment(wireSegment: WireSegment): boolean {
+  const isVertical = wireSegment.startPoint.x === wireSegment.endPoint.x
+  return (
+    isVertical &&
+    wireSegment.type === 'vertical' &&
+    !isHorizontalSupplyTrunkSegment(wireSegment) &&
+    !isBusBarProtectionStubSegment(wireSegment)
   )
 }
 

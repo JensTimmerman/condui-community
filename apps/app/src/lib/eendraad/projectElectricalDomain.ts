@@ -35,7 +35,10 @@ import {
   replaceEendraadFramesForProject,
 } from '@/lib/projectV2/annotations'
 import { findParentCircuitInfo } from '@/lib/eendraad/findParentCircuitInfo'
-import { resolvePanelSupplyLinkForPanel } from '@/lib/eendraad/panelSupplyLink'
+import {
+  findPanelOwnDistributionEndpoint,
+  resolvePanelSupplyLinkForPanel,
+} from '@/lib/eendraad/panelSupplyLink'
 import { syncPlugInPropsForDcEndpoints } from '@/lib/eendraad/endpointInsertAfter'
 import { relabelDomoticaChildRows } from '@/lib/eendraad/domoticaOutputOrdering'
 import {
@@ -419,7 +422,16 @@ export function findCircuitOwner(
 export function deletePanelFromProject(project: ElectricalDomainProject, panelId: string): boolean {
   const panels = getElectricalPanelsFromProject(project)
   const targetPanel = findPanelById(panels, panelId)
-  if (!targetPanel || targetPanel.isMain) return false
+  if (!targetPanel) return false
+  if (targetPanel.isMain) {
+    const countMainPanels = (panelList: Panel[]): number =>
+      panelList.reduce(
+        (count, panel) =>
+          count + (panel.isMain ? 1 : 0) + countMainPanels(panel.subPanels ?? []),
+        0,
+      )
+    if (countMainPanels(panels) <= 1) return false
+  }
 
   const collectPanelIds = (id: string): string[] => {
     const panel = findPanelById(panels, id)
@@ -491,7 +503,17 @@ export function deletePanelFromProject(project: ElectricalDomainProject, panelId
     return false
   }
 
-  return removePanel(panels, panelId)
+  const removed = removePanel(panels, panelId)
+  if (removed) {
+    const installation = getElectricalInstallationFromProject(project)
+    if (installation?.feedTopology) {
+      installation.feedTopology.rootFeeds = installation.feedTopology.rootFeeds.filter(
+        (feed) => !panelIdSet.has(feed.panelId),
+      )
+      ensureInstallationFeedTopology(installation, panels)
+    }
+  }
+  return removed
 }
 
 export function findProtectionById(panel: Panel, id: string): ProtectionDevice | undefined {
@@ -937,6 +959,11 @@ export function trunkDeviceCanAppearInPanelGrid(device: TrunkDevice): boolean {
   return device.type === 'protection' || device.type === 'energy_meter' || device.type === 'conversion'
 }
 
+/** Structural direct-panel feeder carriers are topology-only, never physical DIN modules. */
+export function protectionCanAppearInPanelGrid(protection: ProtectionDevice): boolean {
+  return protection.directPanelFeeder !== true
+}
+
 /** Build the ordered list of all modules that are eligible for the panel grid. */
 export function getDefaultPanelGridModuleRefs(
   panel: Panel,
@@ -958,6 +985,7 @@ export function getDefaultPanelGridModuleRefs(
     }
   }
   for (const protection of panel.protections) {
+    if (!protectionCanAppearInPanelGrid(protection)) continue
     refs.push({ kind: 'protection', id: protection.id })
     if (protection.circuits) {
       for (const circuit of protection.circuits) {
@@ -994,7 +1022,13 @@ export function panelGridModuleIsVisibleByDefault(
   installation: Installation | undefined,
   allPanels: Panel[]
 ): boolean {
-  if (ref.kind === 'protection') return true
+  if (ref.kind === 'protection') {
+    for (const candidatePanel of allPanels) {
+      const protection = findProtectionById(candidatePanel, ref.id)
+      if (protection) return protectionCanAppearInPanelGrid(protection)
+    }
+    return false
+  }
   if (ref.kind === 'domotica') return false
 
   let device: TrunkDevice | undefined
@@ -1085,7 +1119,8 @@ export function isModuleRefValid(ref: PanelGridModuleRef, project: ElectricalDom
   const installation = getElectricalInstallationFromProject(project)
   if (ref.kind === 'protection') {
     for (const panel of panels) {
-      if (findProtectionById(panel, ref.id)) return true
+      const protection = findProtectionById(panel, ref.id)
+      if (protection) return protectionCanAppearInPanelGrid(protection)
     }
     return false
   }
@@ -1452,15 +1487,31 @@ export function migrateSubCircuitContentToParent(protection: ProtectionDevice, p
     const parentInfo = findParentCircuitInfo(circuit.id, panels)
     if (!parentInfo) continue // not a subcircuit — nothing to migrate
 
-    migrateCircuitContentToParent(circuit, parentInfo.parentCircuit)
-
-    // Transfer subPanelId back to parent protection (if applicable)
     if (protection.subPanelId && parentInfo.parentProtection) {
       parentInfo.parentProtection.subPanelId = protection.subPanelId
+      const targetPanel = findPanelById(panels, protection.subPanelId)
+      const ownPanelEndpoint = targetPanel
+        ? findPanelOwnDistributionEndpoint(targetPanel)
+        : undefined
+      if (
+        ownPanelEndpoint &&
+        !circuit.endpoints.some((endpoint) => endpoint.symbol === 'panel_distribution')
+      ) {
+        circuit.endpoints.push({
+          ...ownPanelEndpoint,
+          id: generateId(),
+          placements: [],
+        })
+      }
+      parentInfo.parentProtection.circuits ??= []
+      if (!parentInfo.parentProtection.circuits.some((candidate) => candidate.id === circuit.id)) {
+        parentInfo.parentProtection.circuits.push(circuit)
+      }
+      continue
     }
+
+    migrateCircuitContentToParent(circuit, parentInfo.parentCircuit)
   }
 }
 
 export { supplyFeedListForPanelAndScope as getSupplyFeedListForTarget }
-
-

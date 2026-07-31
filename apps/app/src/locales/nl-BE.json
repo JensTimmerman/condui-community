@@ -502,10 +502,12 @@
   },
   "panel": {
     "deleteConfirmTitle": "Bord(en) verwijderen?",
-    "deleteLastMainTitle": "Laatste hoofdbord verwijderen?",
-    "deleteLastMainMessage": "Je gaat het laatste hoofdbord \"{{panelNames}}\" verwijderen.\n\nNa verwijdering moet je een nieuw verdeelbord plaatsen om een nieuw hoofdbord aan te maken voordat je andere componenten kunt toevoegen.\n\nWeet je zeker dat je wilt doorgaan?",
-    "deleteConfirmMessage": "De volgende bord(en) bevatten stroombanen, beveiligingstoestellen of sub-borden: {{panelNames}}\n\nDoor ze te verwijderen, verwijder je ook alle inhoud. Deze actie kan niet ongedaan worden gemaakt.\n\nWeet je zeker dat je wilt doorgaan?",
-    "deleteEmptyPanelMessage": "Weet je zeker dat je bord(en) {{panelNames}} wilt verwijderen?\n\nDit verwijdert ook alle bijbehorende frames en geneste borden. Deze actie kan niet ongedaan worden gemaakt."
+    "deleteBlockedTitle": "Hoofdbord kan niet worden verwijderd",
+    "deleteLastMainTitle": "Laatste hoofdbord kan niet worden verwijderd",
+    "deleteLastMainMessage": "Er moet minstens één hoofdbord blijven. Hoofdbord \"{{panelNames}}\" kan niet worden verwijderd.",
+    "deleteMainConfirmMessage": "Hoofdbord(en) {{panelNames}} verwijderen?\n\nDe geselecteerde borden, hun stroombanen, beveiligingstoestellen, sub-borden en bijbehorende frames worden verwijderd. Je kunt dit ongedaan maken.",
+    "deleteConfirmMessage": "De volgende bord(en) bevatten stroombanen, beveiligingstoestellen of sub-borden: {{panelNames}}\n\nDoor ze te verwijderen, verwijder je ook alle inhoud. Je kunt dit ongedaan maken.\n\nWeet je zeker dat je wilt doorgaan?",
+    "deleteEmptyPanelMessage": "Weet je zeker dat je bord(en) {{panelNames}} wilt verwijderen?\n\nDit verwijdert ook alle bijbehorende frames en geneste borden. Je kunt dit ongedaan maken."
   },
   "protections": {
     "title": "Beveiligingstoestellen",
@@ -535,8 +537,10 @@
     "MCB": "Automaat",
     "RCD": "Differentieelschakelaar",
     "RCBO": "Differentieelautomaat",
-    "deleteLinkedPanelTitle": "Gekoppeld bord ook verwijderen?",
-    "deleteLinkedPanelMessage": "Hiermee verwijdert u het bord \"{{panelNames}}\" en alles daarachter op die voeding (stromen, toestellen, geneste borden). Doorgaan?"
+    "deleteLinkedPanelTitle": "Beveiliging verwijderen?",
+    "deleteLinkedPanelMessage": "Gekoppeld bord: {{panelNames}}",
+    "deleteLinkedPanelAction": "Bord ook verwijderen",
+    "deleteProtectionAction": "Alleen beveiliging verwijderen"
   },
   "circuits": {
     "title": "Stroombanen",
@@ -1583,13 +1587,22 @@
       "title": "Exporteren naar PDF",
       "selectCanvases": "Selecteer canvas om te exporteren",
       "eendraad": "1draad (Enkellijndiagram)",
+      "eendraadShort": "Eendraad",
       "panel": "Bord (Bordweergave)",
+      "panelShort": "Bord",
       "sitplan": "Sitplan (Plattegrond)",
+      "sitplanShort": "Situatieplan",
+      "options": "Opties",
+      "theme": "Thema",
+      "themeLight": "Licht",
+      "themeDark": "Donker",
       "pageCount": "Aantal pagina's",
       "pagesForEendraad": "{{count}} pagina's voor 1draad",
       "pagesForPanel": "{{count}} pagina's voor bord",
       "pagesForSitplan": "{{count}} pagina's voor sitplan",
       "totalPages": "Totaal: {{count}} pagina's",
+      "total": "Totaal",
+      "editablePremiumTooltip": "Ontgrendel dit project of upgrade naar Premium om bewerkbare projectdata in te sluiten.",
       "installDates": "Installatiedata opnemen",
       "exportButton": "Exporteren",
       "cancelButton": "Annuleren"

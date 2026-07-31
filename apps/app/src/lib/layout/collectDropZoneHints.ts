@@ -476,7 +476,7 @@ function shouldIncludeHintNode(
 function accumulateHintContext(node: LayoutNode, ctx: HintWalkContext): HintWalkContext {
   if (node.type === 'mcb' && node.domainRef) {
     const protection = node.domainRef as ProtectionDevice
-    const circuitId = protection.circuits?.[0]?.id
+    const circuitId = node.circuitIdForWires ?? protection.circuits?.[0]?.id
     if (circuitId) {
       return { ...ctx, circuitId }
     }

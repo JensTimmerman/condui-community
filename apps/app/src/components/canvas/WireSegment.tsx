@@ -14,7 +14,12 @@ import { useProjectStore } from '@/stores/projectStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useThemeColors } from '@/lib/theme/hooks'
 import { useIsPreviewSelected } from '@/contexts/SelectionPreviewContext'
-import { useCanvasFontFamily, useEffectiveCanvasZoom, useIsWireSelected, useSetSelection } from '@/editions/community/communityHooks'
+import {
+  useCanvasFontFamily,
+  useEffectiveCanvasZoom,
+  useIsWireSelected,
+  useSetSelection,
+} from '@/editions/community/communityHooks'
 import type { WireSegment } from '@/types/schema'
 import { WireTextLabel } from '@/components/canvas/eendraad/WireTextLabel'
 import { SELECTION_COLOR } from '@/components/canvas/eendraad/canvasSymbols'
@@ -34,6 +39,7 @@ import {
 import {
   isBusBarProtectionStubSegment,
   isFireClassLabelVisibleForSegment,
+  isRouteIndicatorVisibleForSegment,
   isWireLabelVisibleForSegment,
   isWireLengthLabelVisibleForSegment,
 } from '@/lib/wireLabelVisibility'
@@ -49,18 +55,18 @@ import {
   getWireLabelOffsetAlongWire,
   getWireLabelOrientationForSegment,
   getSupplyWireLabelAnchor,
-  isHorizontalSupplyTrunkSegment,
 } from '@/lib/wireTextLabel'
 import type { WireTranslateFn } from '@/lib/wires/wireFingerprint'
+import { shouldShowDomainChangeMarker } from '@/lib/wires/domainChangeMarker'
 
 type WireSegmentPointerEvent = KonvaEventObject<MouseEvent | TouchEvent>
 
 /** E-shape line geometry for wall route (in-wall): vertical left, 3 horizontals right. Drawn once, reused above/below; on-wall = 180° rotation. */
 const WALL_ROUTE_LINES: Array<[number, number, number, number]> = [
-  [0, -6, 0, 6],   // vertical
-  [0, -6, 6, -6],  // top horizontal
-  [0, 0, 6, 0],    // middle
-  [0, 6, 6, 6],    // bottom
+  [0, -6, 0, 6], // vertical
+  [0, -6, 6, -6], // top horizontal
+  [0, 0, 6, 0], // middle
+  [0, 6, 6, 6], // bottom
 ]
 
 interface WireSegmentProps {
@@ -68,7 +74,10 @@ interface WireSegmentProps {
   onSelect?: (wireSegmentId: string) => void
 }
 
-export const WireSegmentComponent = memo(function WireSegmentComponent({ wireSegment, onSelect }: WireSegmentProps) {
+export const WireSegmentComponent = memo(function WireSegmentComponent({
+  wireSegment,
+  onSelect,
+}: WireSegmentProps) {
   const { t } = useTranslation()
   const setSelection = useSetSelection()
   const isSelected = useIsWireSelected(wireSegment.id)
@@ -78,7 +87,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({ wireSeg
   const colors = useThemeColors()
   const fontFamily = useCanvasFontFamily()
   const isPreviewSelected = useIsPreviewSelected('wire', wireSegment.id)
-  const { getTrunkDeviceById } = useProjectStore()
+  const { getEndpointById, getTrunkDeviceById } = useProjectStore()
   const translateWire = t as unknown as WireTranslateFn
   const [acSymbolImage, setAcSymbolImage] = useState<HTMLImageElement | null>(null)
   const [dcSymbolImage, setDcSymbolImage] = useState<HTMLImageElement | null>(null)
@@ -115,130 +124,140 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({ wireSeg
     HOVER_OUTLINE_DASH_PX_MAX
   )
 
-  const wireMeta = useCallback(() => ({
-    id: wireSegment.id,
-    // Persist only segment kinds relevant for re-matching in properties.
-    type: (wireSegment.type === 'secondaryBus' ? 'mainBus' : wireSegment.type),
-    domain: wireSegment.domain,
-    circuitId: wireSegment.circuitId,
-    panelId: wireSegment.panelId,
-    isSupply: (wireSegment.type === 'vertical' && !wireSegment.circuitId && !wireSegment.fromElementType) || !!wireSegment.isSupplyTrunk,
-    isGround: wireSegment.fromElementType === 'ground',
-    ...(wireSegment.supplyWireRole && { supplyWireRole: wireSegment.supplyWireRole }),
-    ...(wireSegment.supplyFeedScope && { supplyFeedScope: wireSegment.supplyFeedScope }),
-    ...(wireSegment.isSupplyTrunk &&
-      wireSegment.supplySegmentIndex !== undefined && {
-        supplySegmentIndex: wireSegment.supplySegmentIndex,
+  const wireMeta = useCallback(
+    () => ({
+      id: wireSegment.id,
+      // Persist only segment kinds relevant for re-matching in properties.
+      type: wireSegment.type === 'secondaryBus' ? 'mainBus' : wireSegment.type,
+      domain: wireSegment.domain,
+      circuitId: wireSegment.circuitId,
+      panelId: wireSegment.panelId,
+      isSupply:
+        (wireSegment.type === 'vertical' &&
+          !wireSegment.circuitId &&
+          !wireSegment.fromElementType) ||
+        !!wireSegment.isSupplyTrunk,
+      isGround: wireSegment.fromElementType === 'ground',
+      ...(wireSegment.supplyWireRole && { supplyWireRole: wireSegment.supplyWireRole }),
+      ...(wireSegment.supplyFeedScope && { supplyFeedScope: wireSegment.supplyFeedScope }),
+      ...(wireSegment.isSupplyTrunk &&
+        wireSegment.supplySegmentIndex !== undefined && {
+          supplySegmentIndex: wireSegment.supplySegmentIndex,
+        }),
+      ...(wireSegment.circuitId && {
+        fromElementType: wireSegment.fromElementType,
+        fromElementId: wireSegment.fromElementId,
+        toElementType: wireSegment.toElementType,
+        toElementId: wireSegment.toElementId,
       }),
-    ...(wireSegment.circuitId && {
-      fromElementType: wireSegment.fromElementType,
-      fromElementId: wireSegment.fromElementId,
-      toElementType: wireSegment.toElementType,
-      toElementId: wireSegment.toElementId,
+      ...(wireSegment.feederProtectionId && { feederProtectionId: wireSegment.feederProtectionId }),
+      ...(wireSegment.showWireLabelOnBusStub && { showWireLabelOnBusStub: true as const }),
+      ...(wireSegment.domoticaOutputGroup &&
+        typeof wireSegment.domoticaOutputIndex === 'number' && {
+          domoticaOutputGroup: wireSegment.domoticaOutputGroup,
+          domoticaOutputIndex: wireSegment.domoticaOutputIndex,
+        }),
     }),
-    ...(wireSegment.feederProtectionId && { feederProtectionId: wireSegment.feederProtectionId }),
-    ...(wireSegment.showWireLabelOnBusStub && { showWireLabelOnBusStub: true as const }),
-    ...(wireSegment.domoticaOutputGroup &&
-      typeof wireSegment.domoticaOutputIndex === 'number' && {
-        domoticaOutputGroup: wireSegment.domoticaOutputGroup,
-        domoticaOutputIndex: wireSegment.domoticaOutputIndex,
-      }),
-  }), [
-    wireSegment.id,
-    wireSegment.type,
-    wireSegment.domain,
-    wireSegment.circuitId,
-    wireSegment.panelId,
-    wireSegment.isSupplyTrunk,
-    wireSegment.supplyWireRole,
-    wireSegment.supplyFeedScope,
-    wireSegment.supplySegmentIndex,
-    wireSegment.fromElementType,
-    wireSegment.fromElementId,
-    wireSegment.toElementType,
-    wireSegment.toElementId,
-    wireSegment.feederProtectionId,
-    wireSegment.domoticaOutputGroup,
-    wireSegment.domoticaOutputIndex,
-    wireSegment.showWireLabelOnBusStub,
-  ])
+    [
+      wireSegment.id,
+      wireSegment.type,
+      wireSegment.domain,
+      wireSegment.circuitId,
+      wireSegment.panelId,
+      wireSegment.isSupplyTrunk,
+      wireSegment.supplyWireRole,
+      wireSegment.supplyFeedScope,
+      wireSegment.supplySegmentIndex,
+      wireSegment.fromElementType,
+      wireSegment.fromElementId,
+      wireSegment.toElementType,
+      wireSegment.toElementId,
+      wireSegment.feederProtectionId,
+      wireSegment.domoticaOutputGroup,
+      wireSegment.domoticaOutputIndex,
+      wireSegment.showWireLabelOnBusStub,
+    ]
+  )
 
-  const handleClick = useCallback((e: unknown) => {
-    const event = e as WireSegmentPointerEvent
-    // Bus bars are not selectable
-    if (isBusBar) {
-      return
-    }
-    event.cancelBubble = true
-
-    // Debug logging: inspect exact geometry & metadata for the clicked wire
-    // to investigate layout issues (e.g. short stubs above trunk devices).
-    // This only runs on user click, so it won't spam the console.
-
-    logger.info('[Eendraad Wire Debug]', {
-      id: wireSegment.id,
-      type: wireSegment.type,
-      startPoint: wireSegment.startPoint,
-      endPoint: wireSegment.endPoint,
-      circuitId: wireSegment.circuitId,
-      panelId: wireSegment.panelId,
-      fromElementType: wireSegment.fromElementType,
-      fromElementId: wireSegment.fromElementId,
-      toElementType: wireSegment.toElementType,
-      toElementId: wireSegment.toElementId,
-      domain: wireSegment.domain,
-      isSupplyTrunk: wireSegment.isSupplyTrunk,
-      supplySegmentIndex: wireSegment.supplySegmentIndex,
-    })
-    logger.info('[Wire Selection Debug][manual click]', {
-      id: wireSegment.id,
-      type: wireSegment.type,
-      domain: wireSegment.domain,
-      circuitId: wireSegment.circuitId,
-      panelId: wireSegment.panelId,
-      fromElementType: wireSegment.fromElementType,
-      fromElementId: wireSegment.fromElementId,
-      toElementType: wireSegment.toElementType,
-      toElementId: wireSegment.toElementId,
-      startPoint: wireSegment.startPoint,
-      endPoint: wireSegment.endPoint,
-      selectionMetadata: wireMeta(),
-    })
-
-    if ('shiftKey' in event.evt && event.evt.shiftKey) {
-      // Add to selection
-      const { selection } = useUIStore.getState()
-      if (selection.type === 'wire' && !selection.ids.includes(wireSegment.id)) {
-        setSelection({
-          type: 'wire',
-          ids: [...selection.ids, wireSegment.id],
-          wireMetadata: [...(selection.wireMetadata || []), wireMeta()],
-        })
-      } else if (selection.type !== 'wire') {
-        setSelection({ type: 'wire', ids: [wireSegment.id], wireMetadata: [wireMeta()] })
+  const handleClick = useCallback(
+    (e: unknown) => {
+      const event = e as WireSegmentPointerEvent
+      // Bus bars are not selectable
+      if (isBusBar) {
+        return
       }
-    } else if (
-      ('altKey' in event.evt && event.evt.altKey) ||
-      ('ctrlKey' in event.evt && event.evt.ctrlKey) ||
-      ('metaKey' in event.evt && event.evt.metaKey)
-    ) {
-      // Remove from selection
-      const { selection } = useUIStore.getState()
-      if (selection.type === 'wire' && selection.ids.includes(wireSegment.id)) {
-        const newIds = selection.ids.filter(id => id !== wireSegment.id)
-        if (newIds.length === 0) {
-          useUIStore.getState().clearSelection()
-        } else {
-          setSelection({ type: 'wire', ids: newIds })
+      event.cancelBubble = true
+
+      // Debug logging: inspect exact geometry & metadata for the clicked wire
+      // to investigate layout issues (e.g. short stubs above trunk devices).
+      // This only runs on user click, so it won't spam the console.
+
+      logger.info('[Eendraad Wire Debug]', {
+        id: wireSegment.id,
+        type: wireSegment.type,
+        startPoint: wireSegment.startPoint,
+        endPoint: wireSegment.endPoint,
+        circuitId: wireSegment.circuitId,
+        panelId: wireSegment.panelId,
+        fromElementType: wireSegment.fromElementType,
+        fromElementId: wireSegment.fromElementId,
+        toElementType: wireSegment.toElementType,
+        toElementId: wireSegment.toElementId,
+        domain: wireSegment.domain,
+        isSupplyTrunk: wireSegment.isSupplyTrunk,
+        supplySegmentIndex: wireSegment.supplySegmentIndex,
+      })
+      logger.info('[Wire Selection Debug][manual click]', {
+        id: wireSegment.id,
+        type: wireSegment.type,
+        domain: wireSegment.domain,
+        circuitId: wireSegment.circuitId,
+        panelId: wireSegment.panelId,
+        fromElementType: wireSegment.fromElementType,
+        fromElementId: wireSegment.fromElementId,
+        toElementType: wireSegment.toElementType,
+        toElementId: wireSegment.toElementId,
+        startPoint: wireSegment.startPoint,
+        endPoint: wireSegment.endPoint,
+        selectionMetadata: wireMeta(),
+      })
+
+      if ('shiftKey' in event.evt && event.evt.shiftKey) {
+        // Add to selection
+        const { selection } = useUIStore.getState()
+        if (selection.type === 'wire' && !selection.ids.includes(wireSegment.id)) {
+          setSelection({
+            type: 'wire',
+            ids: [...selection.ids, wireSegment.id],
+            wireMetadata: [...(selection.wireMetadata || []), wireMeta()],
+          })
+        } else if (selection.type !== 'wire') {
+          setSelection({ type: 'wire', ids: [wireSegment.id], wireMetadata: [wireMeta()] })
+        }
+      } else if (
+        ('altKey' in event.evt && event.evt.altKey) ||
+        ('ctrlKey' in event.evt && event.evt.ctrlKey) ||
+        ('metaKey' in event.evt && event.evt.metaKey)
+      ) {
+        // Remove from selection
+        const { selection } = useUIStore.getState()
+        if (selection.type === 'wire' && selection.ids.includes(wireSegment.id)) {
+          const newIds = selection.ids.filter((id) => id !== wireSegment.id)
+          if (newIds.length === 0) {
+            useUIStore.getState().clearSelection()
+          } else {
+            setSelection({ type: 'wire', ids: newIds })
+          }
+        }
+      } else {
+        setSelection({ type: 'wire', ids: [wireSegment.id], wireMetadata: [wireMeta()] })
+        if (onSelect) {
+          onSelect(wireSegment.id)
         }
       }
-    } else {
-      setSelection({ type: 'wire', ids: [wireSegment.id], wireMetadata: [wireMeta()] })
-      if (onSelect) {
-        onSelect(wireSegment.id)
-      }
-    }
-  }, [wireSegment, setSelection, onSelect, isBusBar, wireMeta])
+    },
+    [wireSegment, setSelection, onSelect, isBusBar, wireMeta]
+  )
 
   const handleMouseEnter = useCallback(() => {
     if (!isBusBar) setIsHovered(true)
@@ -254,8 +273,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({ wireSeg
     wireSegment.endPoint.x,
     wireSegment.endPoint.y,
   ]
-  const showHoverHighlight =
-    !isBusBar && isHovered && !isSelected && !isPreviewSelected
+  const showHoverHighlight = !isBusBar && isHovered && !isSelected && !isPreviewSelected
 
   // Calculate hit area (expand for easier clicking)
   const hitAreaPadding = 5
@@ -266,8 +284,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({ wireSeg
   const wireLabelOffsetAlongWire = getWireLabelOffsetAlongWire(wireSegment)
   const showCableLabel =
     (!isBusBarProtectionStub || wireSegment.showWireLabelOnBusStub) && isWireLabelVisible
-  const showVerticalRouteIndicators =
-    isVertical && wireSegment.type === 'vertical' && !isHorizontalSupplyTrunkSegment(wireSegment)
+  const showVerticalRouteIndicators = isRouteIndicatorVisibleForSegment(wireSegment)
   const secondaryBusReferenceLabel = wireSegment.secondaryBusReferenceLabel?.trim()
   const secondaryBusReferenceFontSize = 8
   const secondaryBusReferenceTextWidth = secondaryBusReferenceLabel
@@ -286,25 +303,35 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({ wireSeg
       : route === 'air'
         ? 'air'
         : route === 'wall'
-          ? (inWall ? 'inWall' : 'onWall')
+          ? inWall
+            ? 'inWall'
+            : 'onWall'
           : undefined
   const centeredIndicatorY = (wireSegment.endPoint.y - wireSegment.startPoint.y) / 2 + 10
   const fromTrunkDevice = wireSegment.fromElementId
     ? getTrunkDeviceById(wireSegment.fromElementId)
     : undefined
-  const fromDeviceSymbol = fromTrunkDevice ? getSymbolById(fromTrunkDevice.device.symbol) : null
+  const fromEndpoint =
+    wireSegment.fromElementType === 'endpoint' && wireSegment.fromElementId
+      ? getEndpointById(wireSegment.fromElementId)
+      : undefined
+  const fromDeviceSymbolId = fromTrunkDevice?.device.symbol ?? fromEndpoint?.symbol
+  const fromDeviceSymbol = fromDeviceSymbolId ? getSymbolById(fromDeviceSymbolId) : null
   const fromDeviceDomainInfo = fromDeviceSymbol ? getDomainForSymbol(fromDeviceSymbol.id) : null
   const isFromConversionDevice =
-    !!fromDeviceDomainInfo &&
-    fromDeviceDomainInfo.inputDomain !== fromDeviceDomainInfo.outputDomain
-  const showDomainChangeLabel = fromTrunkDevice?.device.showDomainChangeLabel !== false
+    !!fromDeviceDomainInfo && fromDeviceDomainInfo.inputDomain !== fromDeviceDomainInfo.outputDomain
+  const showDomainChangeLabel = fromTrunkDevice
+    ? fromTrunkDevice.device.showDomainChangeLabel !== false
+    : true
   const domainLabelText: 'AC' | 'DC' = wireSegment.domain === 'DC' ? 'DC' : 'AC'
-  const shouldDrawDomainLabelOnWire =
-    isVertical &&
-    wireSegment.type === 'vertical' &&
-    isFromConversionDevice &&
-    showDomainChangeLabel &&
-    !!fromTrunkDevice
+  const isTrunkConversionOutput = !!fromTrunkDevice
+  const isBranchConversionOutput = !!fromEndpoint
+  const shouldDrawDomainLabelOnWire = shouldShowDomainChangeMarker(
+    wireSegment,
+    fromTrunkDevice ? 'trunkDevice' : fromEndpoint ? 'endpoint' : undefined,
+    isFromConversionDevice,
+    showDomainChangeLabel
+  )
 
   const isDark = theme?.mode === 'dark'
   useEffect(() => {
@@ -322,9 +349,10 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({ wireSeg
   }, [isDark, shouldDrawDomainLabelOnWire])
 
   const domainIconImage = domainLabelText === 'DC' ? dcSymbolImage : acSymbolImage
-  const domainLabelOffsetX = isWireLabelVisible ? 10 : 0
-  const domainLabelX = wireSegment.startPoint.x + 10 + domainLabelOffsetX
-  const domainLabelY = wireSegment.startPoint.y -4
+  const domainLabelOffsetX = isTrunkConversionOutput && isWireLabelVisible ? 10 : 0
+  const domainLabelX =
+    wireSegment.startPoint.x + (isBranchConversionOutput ? 7 : 10) + domainLabelOffsetX
+  const domainLabelY = wireSegment.startPoint.y - 4
   const domainIconSize = 11
 
   let hitArea: { x: number; y: number; width: number; height: number } | null = null
@@ -350,14 +378,12 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({ wireSeg
   }
 
   return (
-  <Group name={`wire-${wireSegment.id}`}>
+    <Group name={`wire-${wireSegment.id}`}>
       {/* Main wire line */}
       <Line
         points={wireLinePoints}
         stroke={isSelected ? selectedColor : isPreviewSelected ? previewColor : lineColor}
-        strokeWidth={
-          isSelected || isPreviewSelected ? wireSelectionStroke : lineWidth
-        }
+        strokeWidth={isSelected || isPreviewSelected ? wireSelectionStroke : lineWidth}
         lineCap={lineCap}
         lineJoin="round"
         onClick={isBusBar ? undefined : handleClick}
@@ -368,11 +394,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({ wireSeg
       />
 
       {!isExporting && secondaryBusReferenceLabel && isHorizontal && (
-        <Group
-          x={wireSegment.endPoint.x}
-          y={wireSegment.endPoint.y + 10}
-          listening={false}
-        >
+        <Group x={wireSegment.endPoint.x} y={wireSegment.endPoint.y + 10} listening={false}>
           <Line
             points={[
               secondaryBusArrowRightX,
@@ -492,11 +514,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({ wireSeg
       {/* Route indicators (tube, wall, air, ground) — vertical circuit wires only */}
       {showVerticalRouteIndicators && (
         <>
-          <Group
-            x={wireSegment.startPoint.x}
-            y={wireSegment.startPoint.y - 10}
-            rotation={0}
-          >
+          <Group x={wireSegment.startPoint.x} y={wireSegment.startPoint.y - 10} rotation={0}>
             {/* In Tube indicator - Circle (75% size, shifted right so right edge stays at wire) */}
             {wireSegment.inTube && (
               <Circle
@@ -514,17 +532,48 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({ wireSeg
               const thickness = 1.5
               if (effectiveRoute === 'ground') {
                 return (
-                  <Group x={-6.5} y={wireSegment.inTube ? centeredIndicatorY - 7 : centeredIndicatorY} scaleX={0.75} scaleY={0.75} rotation={-90}>
-                    <Line points={[-8, -4, 8, -4]} stroke={colors.wireColor} strokeWidth={thickness} lineCap="round" listening={false} />
-                    <Line points={[-4, 0, 4, 0]} stroke={colors.wireColor} strokeWidth={thickness} lineCap="round" listening={false} />
-                    <Line points={[-2, 4, 2, 4]} stroke={colors.wireColor} strokeWidth={thickness} lineCap="round" listening={false} />
+                  <Group
+                    x={-6.5}
+                    y={wireSegment.inTube ? centeredIndicatorY - 7 : centeredIndicatorY}
+                    scaleX={0.75}
+                    scaleY={0.75}
+                    rotation={-90}
+                  >
+                    <Line
+                      points={[-8, -4, 8, -4]}
+                      stroke={colors.wireColor}
+                      strokeWidth={thickness}
+                      lineCap="round"
+                      listening={false}
+                    />
+                    <Line
+                      points={[-4, 0, 4, 0]}
+                      stroke={colors.wireColor}
+                      strokeWidth={thickness}
+                      lineCap="round"
+                      listening={false}
+                    />
+                    <Line
+                      points={[-2, 4, 2, 4]}
+                      stroke={colors.wireColor}
+                      strokeWidth={thickness}
+                      lineCap="round"
+                      listening={false}
+                    />
                   </Group>
                 )
               }
               if (effectiveRoute === 'air') {
                 return (
                   <>
-                    <Circle x={0} y={centeredIndicatorY} radius={3.5} stroke={colors.wireColor} strokeWidth={thickness*0.75} listening={false} />
+                    <Circle
+                      x={0}
+                      y={centeredIndicatorY}
+                      radius={3.5}
+                      stroke={colors.wireColor}
+                      strokeWidth={thickness * 0.75}
+                      listening={false}
+                    />
                   </>
                 )
               }
@@ -540,12 +589,19 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({ wireSeg
                 const minMargin = 3
                 const marginFromEnds = Math.max(
                   minMargin,
-                  Math.min(idealMargin, segmentLength / 2 - minMargin),
+                  Math.min(idealMargin, segmentLength / 2 - minMargin)
                 )
                 const bottomSymbolY = 10 - marginFromEnds
                 const topSymbolY = 10 - (segmentLength - marginFromEnds)
                 const wallLines = WALL_ROUTE_LINES.map((points, i) => (
-                  <Line key={i} points={points} stroke={colors.wireColor} strokeWidth={thickness} lineCap="round" listening={false} />
+                  <Line
+                    key={i}
+                    points={points}
+                    stroke={colors.wireColor}
+                    strokeWidth={thickness}
+                    lineCap="round"
+                    listening={false}
+                  />
                 ))
                 return (
                   <>
@@ -577,33 +633,33 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({ wireSeg
               return null
             })()}
           </Group>
+        </>
+      )}
 
-          {/* Domain-change marker for conversion output wires */}
-          {shouldDrawDomainLabelOnWire && domainIconImage && (
-            <>
-              <Text
-                x={domainLabelX - domainIconSize / 2}
-                y={domainLabelY - 9}
-                width={domainIconSize}
-                text={domainLabelText}
-                fontSize={6}
-                fontFamily={fontFamily}
-                fill={colors.wireColor}
-                align="center"
-                listening={false}
-              />
-              <Image
-                image={domainIconImage}
-                x={domainLabelX}
-                y={domainLabelY}
-                width={domainIconSize}
-                height={domainIconSize}
-                offsetX={domainIconSize / 2}
-                offsetY={domainIconSize / 2}
-                listening={false}
-              />
-            </>
-          )}
+      {/* Domain-change marker immediately after a trunk or branch conversion device. */}
+      {shouldDrawDomainLabelOnWire && domainIconImage && (
+        <>
+          <Text
+            x={domainLabelX - domainIconSize / 2}
+            y={domainLabelY - 9}
+            width={domainIconSize}
+            text={domainLabelText}
+            fontSize={6}
+            fontFamily={fontFamily}
+            fill={colors.wireColor}
+            align="center"
+            listening={false}
+          />
+          <Image
+            image={domainIconImage}
+            x={domainLabelX}
+            y={domainLabelY}
+            width={domainIconSize}
+            height={domainIconSize}
+            offsetX={domainIconSize / 2}
+            offsetY={domainIconSize / 2}
+            listening={false}
+          />
         </>
       )}
     </Group>
@@ -615,19 +671,19 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({ wireSeg
  */
 export const WireSegments = memo(function WireSegments({
   panelId,
-  wireSegments
+  wireSegments,
 }: {
   panelId: string
   wireSegments: WireSegment[]
 }) {
   const panelWires = useMemo(
-    () => wireSegments.filter(ws => ws.panelId === panelId),
-    [panelId, wireSegments],
+    () => wireSegments.filter((ws) => ws.panelId === panelId),
+    [panelId, wireSegments]
   )
 
   return (
     <>
-      {panelWires.map(wireSegment => (
+      {panelWires.map((wireSegment) => (
         <WireSegmentComponent key={wireSegment.id} wireSegment={wireSegment} />
       ))}
     </>

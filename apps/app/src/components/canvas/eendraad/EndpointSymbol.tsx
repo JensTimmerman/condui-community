@@ -87,6 +87,8 @@ interface EndpointSymbolProps {
   draggable?: boolean
   /** Convert Konva drag events to the cursor position in canvas coordinates. */
   getCanvasPositionFromEvent?: (e: unknown) => Point | null
+  /** Whether this endpoint is the final symbol on its horizontal branch. */
+  isEndpointAtBranchEnd?: boolean
   /** Clamp bottom label text away from the branch wire when needed. */
   bottomLabelMinimumLeftX?: number
   /** Truncate bottom label text before it enters the next circuit column. */
@@ -102,6 +104,7 @@ export const EndpointSymbol = memo(function EndpointSymbol({
   shouldSuppressKonvaDragEnd,
   draggable = false,
   getCanvasPositionFromEvent,
+  isEndpointAtBranchEnd = true,
   bottomLabelMinimumLeftX,
   bottomLabelMaximumRightX,
 }: EndpointSymbolProps) {
@@ -161,12 +164,12 @@ export const EndpointSymbol = memo(function EndpointSymbol({
   const domoticaProps = endpoint.domoticaProps
   const isTransformer = endpoint.symbol === 'transformer'
   const conversionProps = endpoint.energyConversionProps
-  const endpointLabelPosition =
+  const prefersRightEndpointLabel =
     endpoint.symbol === 'solar_panel' ||
     endpoint.symbol === 'battery' ||
     endpoint.symbol === 'ev'
-      ? 'right'
-      : 'bottom'
+  const endpointLabelPosition =
+    prefersRightEndpointLabel && isEndpointAtBranchEnd ? 'right' : 'bottom'
   const conversionLabelParts = getVisibleConversionLabelParts(endpoint)
   const certificationLabelParts = getVisibleCertificationLabelParts(endpoint)
   const endpointNoteText = getVisibleEndpointNoteText(endpoint)
@@ -880,7 +883,7 @@ export const EndpointSymbol = memo(function EndpointSymbol({
             />
           )}
 
-          {/* Conversion + endpoint notes (solar/battery/EV: right; others: bottom) */}
+          {/* Conversion + endpoint notes (branch-tip solar/battery/EV: right; others: bottom) */}
           {symbolSideLabelItems.length > 0 && (
             <SymbolTextLabels
               items={symbolSideLabelItems.map((part) => ({ key: part.key, text: part.text }))}

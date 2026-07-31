@@ -39,6 +39,7 @@ import InstallDateOverlay from './eendraad/InstallDateOverlay'
 import { NoteSymbol } from './eendraad/NoteSymbol'
 import { SYMBOL_SIZE } from './eendraad/canvasSymbols'
 import { linkedSubPanelDisplayNamesForProtectionIds } from '@/lib/panel/linkedSubPanelDeleteWarning'
+import { createLinkedProtectionDeleteDialog } from '@/lib/panel/linkedProtectionDeleteDialog'
 import { panelHasContent, isLastMainPanel } from '@/utils/eendraad'
 import { endpointSupportsMultiplier } from '@/utils/endpointMultipliers'
 import { openAddMoreDialogForEndpoint } from '@/components/endpoints/AddMoreCountDialog'
@@ -98,6 +99,7 @@ import { ensureInstallationFeedTopology } from '@/lib/feedTopology'
 import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
+  getMutableElectricalPanelsForProject,
 } from '@/lib/projectV2/electrical'
 import {
   canDuplicateEendraadSelection,
@@ -108,6 +110,12 @@ import {
   hasEendraadAnnotationDeleteTarget,
   resolveEendraadAnnotationDeleteTarget,
 } from '@/lib/eendraad/deleteSelection'
+import { isEendraadDeleteKey } from '@/lib/eendraad/deleteKeyboardKey'
+import {
+  movePanelAttachmentOnRcdBus,
+  movePanelAttachmentOnSecondaryBus,
+  movePanelAttachmentToMainBus,
+} from '@/lib/eendraad/panelAttachmentMove'
 import {
   repositionDuplicatedProtectionToDropTarget,
   protectionDropTargetHitsSource,
@@ -131,6 +139,7 @@ import { resolvePlacementForFloorMove } from '@/lib/eendraad/floorMoveFromEendra
 import { ZOOM_100 } from '@/constants/canvasConstants'
 import type { BottomUpPanelLayout } from '@/lib/layout/bottomUpLayout'
 import { getChangedPreviewWireSegments } from '@/lib/layout/eendraadPreviewWires'
+import { resolvePanelAttachmentPreviewGeometry } from '@/lib/layout/panelAttachmentPreview'
 import { resolveProtectionNestPreviewCircuitId } from '@/lib/layout/eendraadPreviewTarget'
 import {
   DOMOTICA_BRANCH_LEAD,
@@ -353,9 +362,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
     storageMode: currentProjectStorageMode,
   })
   const isDemoProject = isDemoProjectId(currentProject?.project.id)
-  const canUseInstallDates =
-    canEditProject &&
-    (isDemoProject || installationDates)
+  const canUseInstallDates = canEditProject && (isDemoProject || installationDates)
   const installDatesVisible =
     canUseInstallDates &&
     (eendraadDateMarkingMode || eendraadDateMarkingVisibility.installDatesVisible)
@@ -613,15 +620,11 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
       return null
     }
     const hitTestOptions: FindDropTargetOptions = {
-      ...(dragPreview.relocatingTrunkDevice
-        ? { ignoreCircuitTrunkDeviceSymbolHits: true }
-        : {}),
+      ...(dragPreview.relocatingTrunkDevice ? { ignoreCircuitTrunkDeviceSymbolHits: true } : {}),
       ...(activePlacementSymbol?.id !== 'earthing_separator'
         ? { preferMainBusOverGroundWire: true }
         : {}),
-      ...(draggingProtectionIdRef.current
-        ? { preferMainBusOverSupplyWire: true }
-        : {}),
+      ...(draggingProtectionIdRef.current ? { preferMainBusOverSupplyWire: true } : {}),
     }
     const { debug } = findDropTargetWithDebug(layoutTree, dragPreview.position, hitTestOptions)
     const matched = debug.path.find((step) => step.matched && step.nodeId)
@@ -677,15 +680,18 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
           x: (bounds.left + bounds.right) / 2,
           y: (bounds.top + bounds.bottom) / 2,
         },
-        symbol,
+        symbol
       )
     }
 
-    window.addEventListener('eendra:e2e-show-nested-protection-preview', showNestedProtectionPreview)
+    window.addEventListener(
+      'eendra:e2e-show-nested-protection-preview',
+      showNestedProtectionPreview
+    )
     return () =>
       window.removeEventListener(
         'eendra:e2e-show-nested-protection-preview',
-        showNestedProtectionPreview,
+        showNestedProtectionPreview
       )
   }, [handleDragOver, layoutTree])
 
@@ -1084,10 +1090,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   }, [selectedDateToolTargets, selectedDateToolYear])
 
   const dateToolHasExplicitDate = useMemo(
-    () =>
-      selectedDateToolTargets.some(
-        (target) => getExplicitInstallYear(target.entity) != null
-      ),
+    () => selectedDateToolTargets.some((target) => getExplicitInstallYear(target.entity) != null),
     [selectedDateToolTargets]
   )
 
@@ -1435,12 +1438,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
     if (explicitTargets.length === 0) return
     applyInstallYearTargets(explicitTargets, undefined)
     setClosedDateToolSelectionKey(dateToolSelectionKey)
-  }, [
-    applyInstallYearTargets,
-    canUseInstallDates,
-    dateToolSelectionKey,
-    selectedDateToolTargets,
-  ])
+  }, [applyInstallYearTargets, canUseInstallDates, dateToolSelectionKey, selectedDateToolTargets])
 
   const updateInstallDateColor = useCallback(
     (year: number, color: string) => {
@@ -1594,9 +1592,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
       const { target: rawTarget } = findDropTargetWithDebug(
         layoutTree,
         position,
-        symbol.id === 'earthing_separator'
-          ? undefined
-          : { preferMainBusOverGroundWire: true },
+        symbol.id === 'earthing_separator' ? undefined : { preferMainBusOverGroundWire: true }
       )
 
       // Augment drop target with wire-domain information from the actual wire segments under the cursor.
@@ -1648,42 +1644,49 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
       // Execute drop behavior
       const { openDialog } = useDialogStore.getState()
       const runDropBehavior = () =>
-        executeDropBehavior(symbol, dropTarget, currentProject, t, {
-          addPanel,
-          addProtection,
-          addCircuit,
-          addCircuitToProtection,
-          addEndpoint,
-          addPlacement,
-          setSelection,
-          dropCanvasPosition: position,
-          getFloorById: (floorId: string) => {
-            const floor = getFloorById(floorId)
-            return floor ? { id: floor.id, layers: floor.layers } : null
+        executeDropBehavior(
+          symbol,
+          dropTarget,
+          currentProject,
+          t,
+          {
+            addPanel,
+            addProtection,
+            addCircuit,
+            addCircuitToProtection,
+            addEndpoint,
+            addPlacement,
+            setSelection,
+            dropCanvasPosition: position,
+            getFloorById: (floorId: string) => {
+              const floor = getFloorById(floorId)
+              return floor ? { id: floor.id, layers: floor.layers } : null
+            },
+            getCircuitById: (circuitId: string) => getCircuitById(circuitId) || null,
+            getProtectionById: (protectionId: string) => getProtectionById(protectionId) || null,
+            addTrunkDevice,
+            addSupplyTrunkDevice,
+            addGroundTrunkDevice,
+            ensureJunctionPanelPlacementForLabel,
+            updateCircuit,
+            updateProtection,
+            updateInstallation,
+            moveCircuitOnMainBus,
+            moveCircuitToSecondaryBus,
+            deleteEndpoint,
+            addEendraadNote,
+            onDropRejected: (message) => {
+              openDialog({
+                type: 'info',
+                title: t('wires.domainMismatchTitle', { defaultValue: 'Cannot connect here' }),
+                message,
+                confirmLabel: t('common.ok', { defaultValue: 'OK' }),
+                variant: 'warning',
+              })
+            },
           },
-          getCircuitById: (circuitId: string) => getCircuitById(circuitId) || null,
-          getProtectionById: (protectionId: string) => getProtectionById(protectionId) || null,
-          addTrunkDevice,
-          addSupplyTrunkDevice,
-          addGroundTrunkDevice,
-          ensureJunctionPanelPlacementForLabel,
-          updateCircuit,
-          updateProtection,
-          updateInstallation,
-          moveCircuitOnMainBus,
-          moveCircuitToSecondaryBus,
-          deleteEndpoint,
-          addEendraadNote,
-          onDropRejected: (message) => {
-            openDialog({
-              type: 'info',
-              title: t('wires.domainMismatchTitle', { defaultValue: 'Cannot connect here' }),
-              message,
-              confirmLabel: t('common.ok', { defaultValue: 'OK' }),
-              variant: 'warning',
-            })
-          },
-        }, false)
+          false
+        )
       const didPlaceSymbol = withSingleUndoEntry(
         () => {
           const before = useProjectStore.getState().currentProject
@@ -1812,6 +1815,21 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   // the same ghost wires/rectangles as when adding a new symbol from the library.
   const handleElementDragMove = useCallback(
     (elementId: string, elementType: string, newPos: Point) => {
+      if (elementType === 'panelAttachment') {
+        const symbolMeta = getSymbolById('panel_distribution')
+        if (!symbolMeta) return
+        handleDragOver(newPos, symbolMeta)
+        setDragPreview((preview) =>
+          preview
+            ? {
+                ...preview,
+                movingPanelAttachment: { panelId: elementId },
+              }
+            : preview
+        )
+        return
+      }
+
       if (elementType === 'endpoint') {
         const endpoint = getEndpointById(elementId)
         if (!endpoint || !endpoint.symbol) return
@@ -1960,16 +1978,14 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
 
         if (multiKind === 'endpoint') {
           const endpointTarget = augmentCircuitVerticalWireDomain(rawMultiTarget, position)
-          if (
-            classified.endpointIds.some((id) => store.getEndpointById(id)?.domoticaChildProps)
-          ) {
+          if (classified.endpointIds.some((id) => store.getEndpointById(id)?.domoticaChildProps)) {
             return false
           }
           const plan = planEndpointSelectionMove(
             classified.endpointIds,
             endpointTarget,
             (id) => store.findCircuitForEndpoint(id)?.circuit,
-            (id) => store.getCircuitById(id),
+            (id) => store.getCircuitById(id)
           )
           if (!plan) return false
           return withSingleUndoEntry(
@@ -1983,7 +1999,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
               setSelection({ type: 'endpoint', ids: plan.movedEndpointIds })
               return true
             },
-            { sessionLabel: 'move endpoint selection on installation plan' },
+            { sessionLabel: 'move endpoint selection on installation plan' }
           )
         }
 
@@ -1996,7 +2012,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                 preferMainBusOverGroundWire: true,
                 preferMainBusOverSupplyWire: true,
               }),
-            (panelId) => store.getPanelById(panelId),
+            (panelId) => store.getPanelById(panelId)
           )
           if (!target?.panelId) return false
           const selectedProtections = classified.protectionIds
@@ -2011,13 +2027,12 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
             })
             .filter((item): item is { id: string; circuitId: string } => !!item)
           if (selectedProtections.length !== classified.protectionIds.length) return false
-          const movable = collapseProtectionMoveRoots(
-            selectedProtections,
-            (circuitId) => store.getCircuitById(circuitId),
+          const movable = collapseProtectionMoveRoots(selectedProtections, (circuitId) =>
+            store.getCircuitById(circuitId)
           )
           if (
             movable.some((item) =>
-              protectionDropTargetHitsSource(item.id, target, (id) => store.getProtectionById(id)),
+              protectionDropTargetHitsSource(item.id, target, (id) => store.getProtectionById(id))
             )
           ) {
             return false
@@ -2037,11 +2052,9 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
             target.type === 'circuit' &&
             target.circuitId &&
             movable.some((item) =>
-              circuitClosureContains(
-                item.circuitId,
-                target.circuitId!,
-                (circuitId) => store.getCircuitById(circuitId),
-              ),
+              circuitClosureContains(item.circuitId, target.circuitId!, (circuitId) =>
+                store.getCircuitById(circuitId)
+              )
             )
           ) {
             return false
@@ -2052,27 +2065,27 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
               if (target.type === 'mainBus') {
                 const baseIndex = target.mainBusInsertIndex ?? 0
                 movable.forEach((item, index) => {
-                  useProjectStore.getState().moveCircuitToMainBus(
-                    target.panelId!,
-                    item.circuitId,
-                    baseIndex + index,
-                  )
+                  useProjectStore
+                    .getState()
+                    .moveCircuitToMainBus(target.panelId!, item.circuitId, baseIndex + index)
                 })
               } else {
                 const baseIndex = target.secondaryBusInsertIndex ?? 0
                 movable.forEach((item, index) => {
-                  useProjectStore.getState().moveCircuitToSecondaryBus(
-                    target.panelId!,
-                    target.circuitId!,
-                    item.circuitId,
-                    baseIndex + index,
-                  )
+                  useProjectStore
+                    .getState()
+                    .moveCircuitToSecondaryBus(
+                      target.panelId!,
+                      target.circuitId!,
+                      item.circuitId,
+                      baseIndex + index
+                    )
                 })
               }
               setSelection({ type: 'protection', ids: classified.protectionIds })
               return true
             },
-            { sessionLabel: 'move protection selection on installation plan' },
+            { sessionLabel: 'move protection selection on installation plan' }
           )
         }
 
@@ -2099,7 +2112,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
               previewProject,
               { id: item.id, sourceCircuitId: item.sourceCircuitId },
               itemTarget,
-              symbol,
+              symbol
             )
           })
           if (!preflightOk) return false
@@ -2119,13 +2132,81 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
               setSelection({ type: 'trunkDevice', ids: movable.map((item) => item.id) })
               return true
             },
-            { sessionLabel: 'move trunk device selection on installation plan' },
+            { sessionLabel: 'move trunk device selection on installation plan' }
           )
         }
 
         // The target accepts none of the selected families. Do not fall through and
         // accidentally move only the symbol under the pointer.
         return false
+      }
+
+      if (elementType === 'panelAttachment') {
+        if (!currentProject || !layoutTree) return false
+        // Resolve from the release position first. The last drag-preview state
+        // may lag one pointer event or may have selected an overlapping supply
+        // hit zone, which made a visibly valid main-bus drop snap back.
+        const releaseTarget = findDropTargetWithDebug(layoutTree, position, {
+          preferMainBusOverGroundWire: true,
+          preferMainBusOverSupplyWire: true,
+        }).target
+        const target =
+          releaseTarget.type === 'mainBus' ||
+          releaseTarget.type === 'circuit' ||
+          releaseTarget.type === 'rcd'
+            ? releaseTarget
+            : (dragPreview?.dropTarget ?? releaseTarget)
+        const canMoveToSecondary =
+          target.type === 'circuit' &&
+          !!target.circuitId &&
+          typeof target.secondaryBusInsertIndex === 'number'
+        const canMoveToMain =
+          target.type === 'mainBus' &&
+          !!target.panelId &&
+          typeof target.mainBusInsertIndex === 'number'
+        const canMoveToRcd =
+          target.type === 'rcd' &&
+          !!target.protectionId &&
+          typeof target.secondaryBusInsertIndex === 'number'
+        if (!canMoveToSecondary && !canMoveToMain && !canMoveToRcd) {
+          return false
+        }
+
+        return withSingleUndoEntry(
+          () => {
+            let moved = false
+            useProjectStore.setState((state: ProjectState) => {
+              if (!state.currentProject) return
+              const panels = getMutableElectricalPanelsForProject(state.currentProject)
+              const result = canMoveToSecondary
+                ? movePanelAttachmentOnSecondaryBus(
+                    panels,
+                    elementId,
+                    target.circuitId!,
+                    target.secondaryBusInsertIndex!
+                  )
+                : canMoveToRcd
+                  ? movePanelAttachmentOnRcdBus(
+                      panels,
+                      elementId,
+                      target.protectionId!,
+                      target.secondaryBusInsertIndex!
+                    )
+                  : movePanelAttachmentToMainBus(
+                      panels,
+                      elementId,
+                      target.panelId!,
+                      target.mainBusInsertIndex!
+                    )
+              if (!result) return
+              state.isDirty = true
+              moved = true
+            })
+            if (moved) setSelection({ type: 'panel', ids: [elementId] })
+            return moved
+          },
+          { sessionLabel: 'move distribution board on secondary bus' }
+        )
       }
 
       if (elementType === 'endpoint') {
@@ -3380,7 +3461,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!canDeleteItems) return
-      if (!(e.key === 'Delete' || e.code === 'Delete')) {
+      if (!isEendraadDeleteKey(e)) {
         return
       }
 
@@ -3747,8 +3828,10 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
           items.push({
             label: t('contextMenu.deleteAll'),
             onClick: () => {
-              const runBulkDelete = () => {
-                if (protectionIds.length > 0) deleteProtections(protectionIds)
+              const runBulkDelete = (preserveLinkedPanels = false) => {
+                if (protectionIds.length > 0) {
+                  deleteProtections(protectionIds, { preserveLinkedPanels })
+                }
                 if (endpointIds.length > 0) deleteEndpoints(endpointIds)
                 if (noteIds.length > 0) deleteEendraadNotes(noteIds)
                 if (frameIds.length > 0) deleteFrames(frameIds)
@@ -3773,12 +3856,13 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                 }
                 if (panelIds.length > 0) {
                   const lastMainPanels = panelIds.filter((id) => id && isLastMainPanelCallback(id))
-                  const panelsWithContent = panelIds
+                  const selectedPanels = panelIds
                     .map((id) => (id ? getPanelById(id) : null))
                     .filter(
-                      (panel): panel is Panel =>
-                        panel !== null && panel !== undefined && panelHasContent(panel)
+                      (panel): panel is Panel => panel !== null && panel !== undefined
                     )
+                  const mainPanels = selectedPanels.filter((panel) => panel.isMain)
+                  const panelsWithContent = selectedPanels.filter(panelHasContent)
                   if (lastMainPanels.length > 0) {
                     const panelNames = lastMainPanels
                       .map((id) => (id ? getPanelById(id)?.name : null))
@@ -3787,22 +3871,36 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                     openDialog({
                       type: 'info',
                       title: t('panel.deleteBlockedTitle', 'Cannot delete main panel'),
-                      message: t(
-                        'panel.deleteLastMainMessage',
-                        `Main panel "${panelNames}" cannot be deleted.`
-                      ),
+                      message: t('panel.deleteLastMainMessage', {
+                        panelNames,
+                        defaultValue: `Main panel "${panelNames}" cannot be deleted.`,
+                      }),
                       variant: 'warning',
                       confirmLabel: t('common.ok', 'OK'),
+                    })
+                  } else if (mainPanels.length > 0) {
+                    const panelNames = selectedPanels.map((panel) => panel.name).join(', ')
+                    openDialog({
+                      type: 'confirm',
+                      title: t('panel.deleteConfirmTitle', 'Delete Panels?'),
+                      message: t('panel.deleteMainConfirmMessage', {
+                        panelNames,
+                        defaultValue: `Delete main panel(s) "${panelNames}"? The selected panels and their contents will be removed. You can undo this action.`,
+                      }),
+                      variant: 'warning',
+                      confirmLabel: t('common.delete'),
+                      cancelLabel: t('common.cancel'),
+                      onConfirm: doDeletePanels,
                     })
                   } else if (panelsWithContent.length > 0) {
                     const panelNames = panelsWithContent.map((p: Panel) => p.name).join(', ')
                     openDialog({
                       type: 'confirm',
                       title: t('panel.deleteConfirmTitle', 'Delete Panels?'),
-                      message: t(
-                        'panel.deleteConfirmMessage',
-                        `The following panel(s) contain circuits, protections, or sub-panels: ${panelNames}\n\nDeleting them will also delete all their contents. This action cannot be undone.\n\nAre you sure you want to continue?`
-                      ),
+                      message: t('panel.deleteConfirmMessage', {
+                        panelNames,
+                        defaultValue: `The following panel(s) contain circuits, protections, or sub-panels: ${panelNames}\n\nDeleting them will also delete all their contents. You can undo this action.\n\nAre you sure you want to continue?`,
+                      }),
                       variant: 'warning',
                       confirmLabel: t('common.delete'),
                       cancelLabel: t('common.cancel'),
@@ -3821,17 +3919,14 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
               )
               const executeBulkDelete = () => {
                 if (linkedPanelNames.length > 0) {
-                  openDialog({
-                    type: 'confirm',
-                    title: t('protections.deleteLinkedPanelTitle'),
-                    message: t('protections.deleteLinkedPanelMessage', {
+                  openDialog(
+                    createLinkedProtectionDeleteDialog({
+                      t,
                       panelNames: linkedPanelNames.join(', '),
-                    }),
-                    variant: 'warning',
-                    confirmLabel: t('common.delete'),
-                    cancelLabel: t('common.cancel'),
-                    onConfirm: runBulkDelete,
-                  })
+                      onDeletePanel: () => runBulkDelete(false),
+                      onDeleteProtection: () => runBulkDelete(true),
+                    })
+                  )
                 } else {
                   runBulkDelete()
                 }
@@ -3983,21 +4078,37 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                   openDialog({
                     type: 'info',
                     title: t('panel.deleteBlockedTitle', 'Cannot delete main panel'),
-                    message: t(
-                      'panel.deleteLastMainMessage',
-                      `Main panel "${panel.name}" cannot be deleted.`
-                    ),
+                    message: t('panel.deleteLastMainMessage', {
+                      panelNames: panel.name,
+                      defaultValue: `Main panel "${panel.name}" cannot be deleted.`,
+                    }),
                     variant: 'warning',
                     confirmLabel: t('common.ok', 'OK'),
+                  })
+                } else if (panel.isMain) {
+                  openDialog({
+                    type: 'confirm',
+                    title: t('panel.deleteConfirmTitle', 'Delete Panel?'),
+                    message: t('panel.deleteMainConfirmMessage', {
+                      panelNames: panel.name,
+                      defaultValue: `Delete main panel "${panel.name}"? The panel and its contents will be removed. You can undo this action.`,
+                    }),
+                    variant: 'warning',
+                    confirmLabel: t('common.delete'),
+                    cancelLabel: t('common.cancel'),
+                    onConfirm: () => {
+                      deletePanel(resolvedElementId!)
+                      clearSelection()
+                    },
                   })
                 } else if (panelHasContent(panel)) {
                   openDialog({
                     type: 'confirm',
                     title: t('panel.deleteConfirmTitle', 'Delete Panel?'),
-                    message: t(
-                      'panel.deleteConfirmMessage',
-                      `The panel "${panel.name}" contains circuits, protections, or sub-panels.\n\nDeleting it will also delete all its contents. This action cannot be undone.\n\nAre you sure you want to continue?`
-                    ),
+                    message: t('panel.deleteConfirmMessage', {
+                      panelNames: panel.name,
+                      defaultValue: `The panel "${panel.name}" contains circuits, protections, or sub-panels.\n\nDeleting it will also delete all its contents. You can undo this action.\n\nAre you sure you want to continue?`,
+                    }),
                     variant: 'warning',
                     confirmLabel: t('common.delete'),
                     cancelLabel: t('common.cancel'),
@@ -4010,10 +4121,10 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                   openDialog({
                     type: 'confirm',
                     title: t('panel.deleteConfirmTitle', 'Delete Panel?'),
-                    message: t(
-                      'panel.deleteEmptyPanelMessage',
-                      `Are you sure you want to delete panel "${panel.name}"?\n\nThis will also remove any associated frames and nested panels. This action cannot be undone.`
-                    ),
+                    message: t('panel.deleteEmptyPanelMessage', {
+                      panelNames: panel.name,
+                      defaultValue: `Are you sure you want to delete panel "${panel.name}"?\n\nThis will also remove any associated frames and nested panels. You can undo this action.`,
+                    }),
                     variant: 'warning',
                     confirmLabel: t('common.delete'),
                     cancelLabel: t('common.cancel'),
@@ -4137,8 +4248,8 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
               icon: getContextMenuIcon('delete'),
               onClick: () => {
                 const protectionId = resolvedElementId!
-                const runDelete = () => {
-                  deleteProtection(protectionId)
+                const runDelete = (preserveLinkedPanels = false) => {
+                  deleteProtection(protectionId, { preserveLinkedPanels })
                   clearSelection()
                 }
                 const linkedNames = linkedSubPanelDisplayNamesForProtectionIds(
@@ -4147,17 +4258,14 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                   [protectionId]
                 )
                 if (linkedNames.length > 0) {
-                  openDialog({
-                    type: 'confirm',
-                    title: t('protections.deleteLinkedPanelTitle'),
-                    message: t('protections.deleteLinkedPanelMessage', {
+                  openDialog(
+                    createLinkedProtectionDeleteDialog({
+                      t,
                       panelNames: linkedNames.join(', '),
-                    }),
-                    variant: 'warning',
-                    confirmLabel: t('common.delete'),
-                    cancelLabel: t('common.cancel'),
-                    onConfirm: runDelete,
-                  })
+                      onDeletePanel: () => runDelete(false),
+                      onDeleteProtection: () => runDelete(true),
+                    })
+                  )
                 } else {
                   runDelete()
                 }
@@ -4695,7 +4803,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                 const previewWiresForPanel = getChangedPreviewWireSegments(
                   previewGraph.wireSegments,
                   wireSegments,
-                  panelId,
+                  panelId
                 )
 
                 // Collect nodes for newly created symbols (endpoints, protections, trunk devices).
@@ -4760,8 +4868,89 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                 const dashPattern = [8, 4]
                 const previewSupplySeparator = getChangedSupplySeparatorForPanelLayout(
                   previewPanelLayout,
-                  currentPanelLayout,
+                  currentPanelLayout
                 )
+                if (dragPreview?.movingPanelAttachment) {
+                  const panelPreviewTarget =
+                    dragPreview.dropTarget?.type === 'mainBus' && dragPreview.dropTarget.panelId
+                      ? {
+                          type: 'mainBus' as const,
+                          panelId: dragPreview.dropTarget.panelId,
+                        }
+                      : dragPreview.dropTarget?.type === 'circuit' &&
+                          dragPreview.dropTarget.panelId &&
+                          dragPreview.dropTarget.circuitId
+                        ? {
+                            type: 'circuit' as const,
+                            panelId: dragPreview.dropTarget.panelId,
+                            circuitId: dragPreview.dropTarget.circuitId,
+                          }
+                        : dragPreview.dropTarget?.type === 'rcd' &&
+                            dragPreview.dropTarget.panelId &&
+                            dragPreview.dropTarget.protectionId
+                          ? {
+                              type: 'rcd' as const,
+                              panelId: dragPreview.dropTarget.panelId,
+                              protectionId: dragPreview.dropTarget.protectionId,
+                            }
+                          : null
+                  const geometry = panelPreviewTarget
+                    ? resolvePanelAttachmentPreviewGeometry(
+                        wireSegments,
+                        panelPreviewTarget,
+                        dragPreview.position.x
+                      )
+                    : null
+
+                  // Never fall through to the generic changed-wire preview for a
+                  // panel move. A panel reflow can change almost every wire and
+                  // would render a second, ghost copy of the entire bus layout.
+                  if (!geometry || panelPreviewTarget?.panelId !== panelId) return null
+
+                  const { busSegment, busY, ghostX, symbolY } = geometry
+                  return (
+                    <Group
+                      key={`preview-panel-attachment-${panelId}`}
+                      name={`preview-panel-attachment-${panelId}`}
+                      opacity={0.88}
+                      listening={false}
+                    >
+                      <Line
+                        points={[
+                          busSegment.startPoint.x,
+                          busSegment.startPoint.y,
+                          busSegment.endPoint.x,
+                          busSegment.endPoint.y,
+                        ]}
+                        stroke={previewStroke}
+                        strokeWidth={8}
+                        opacity={0.6}
+                        lineCap="round"
+                        listening={false}
+                      />
+                      <Line
+                        points={[ghostX, busY, ghostX, symbolY + 14]}
+                        stroke={previewStroke}
+                        strokeWidth={4}
+                        dash={dashPattern}
+                        lineCap="round"
+                        listening={false}
+                      />
+                      <Rect
+                        x={ghostX - 13}
+                        y={symbolY}
+                        width={26}
+                        height={14}
+                        stroke={previewStroke}
+                        strokeWidth={2}
+                        dash={dashPattern}
+                        cornerRadius={3}
+                        fill="rgba(59,130,246,0.12)"
+                        listening={false}
+                      />
+                    </Group>
+                  )
+                }
 
                 if (
                   previewWiresForPanel.length === 0 &&
@@ -4809,7 +4998,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
 
                 const nestCircuitIdForPreview = resolveProtectionNestPreviewCircuitId(
                   dropTarget,
-                  nestCircuitIdAtCursor,
+                  nestCircuitIdAtCursor
                 )
 
                 const isProtectionNestOnCircuitPreview =
@@ -4844,7 +5033,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                     (node) =>
                       (node.type === 'mcb' || node.type === 'rcd') &&
                       !!node.domainId &&
-                      previewGraph.createdProtectionIds.includes(node.domainId),
+                      previewGraph.createdProtectionIds.includes(node.domainId)
                   )
                   if (!createdProtectionNode) return 0
 
@@ -4871,8 +5060,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                   if (!currentMatch.nest) return 0
 
                   const currentNestBounds = getHitZoneBounds(currentMatch.nest, 'core')
-                  const currentAttachX =
-                    (currentNestBounds.left + currentNestBounds.right) / 2
+                  const currentAttachX = (currentNestBounds.left + currentNestBounds.right) / 2
                   return currentAttachX - createdProtectionNode.bounds.x
                 })()
 
@@ -5792,7 +5980,7 @@ function getSupplySeparatorForPanelLayout(
 
 function getChangedSupplySeparatorForPanelLayout(
   previewPanelLayout: BottomUpPanelLayout,
-  currentPanelLayout: BottomUpPanelLayout | undefined,
+  currentPanelLayout: BottomUpPanelLayout | undefined
 ): { id: string; x: number; y: number } | null {
   const preview = getSupplySeparatorForPanelLayout(previewPanelLayout)
   if (!preview || !currentPanelLayout) return preview

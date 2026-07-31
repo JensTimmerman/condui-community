@@ -26,12 +26,25 @@ import { isMainPanelDistributionEndpoint, resolvePanelForDistributionEndpoint } 
 import { healPlanWiring } from '@/lib/plan/planWiring'
 import { getBuildingFloorsFromProject } from '@/lib/projectV2/buildingFloors'
 import {
+  getMutablePlanWiringFromProject,
+  syncPlanWiringFromCompatibility,
+} from '@/lib/projectV2/planWiring'
+import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
   getMutableElectricalInstallationForProject,
   getMutableElectricalPanelsForProject,
 } from '@/lib/projectV2/electrical'
-import type { Circuit, Endpoint, JunctionPanelPlacement, Panel, PanelGridModuleRef, ProtectionDevice } from '@/types/schema'
+import type {
+  Circuit,
+  Endpoint,
+  Installation,
+  JunctionPanelPlacement,
+  Panel,
+  PanelGridModuleRef,
+  Placement,
+  ProtectionDevice,
+} from '@/types/schema'
 import { findCircuitForEndpointInPanel, generateId, getNextAvailableCircuitCode } from '@/utils/project'
 
 export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
@@ -991,6 +1004,92 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
         }
         state.isDirty = true
       }),
+
+    movePlanPlacementsToFloor: (moves, floorId) => {
+      let applied = false
+      set((state) => {
+        const project = state.currentProject
+        if (!project || moves.length === 0) return
+        if (!getBuildingFloorsFromProject(project).some((floor) => floor.id === floorId)) return
+
+        const uniqueMoves = new Map(moves.map((move) => [move.id, move]))
+        const installation = getMutableElectricalInstallationForProject(project)
+        const panels = getMutableElectricalPanelsForProject(project)
+        const resolved: Array<{
+          kind: 'endpoint' | 'junctionPanel' | 'earthing'
+          placement: Placement | JunctionPanelPlacement | NonNullable<Installation['earthingPlacements']>[number]
+          pos?: Placement['pos']
+        }> = []
+
+        for (const move of uniqueMoves.values()) {
+          const junctionPanelPlacement = installation?.junctionPanelPlacements?.find(
+            (placement) => placement.id === move.id
+          )
+          if (junctionPanelPlacement) {
+            resolved.push({
+              kind: 'junctionPanel',
+              placement: junctionPanelPlacement,
+              pos: move.pos,
+            })
+            continue
+          }
+
+          const earthingPlacement = installation?.earthingPlacements?.find(
+            (placement) => placement.id === move.id
+          )
+          if (earthingPlacement) {
+            resolved.push({ kind: 'earthing', placement: earthingPlacement, pos: move.pos })
+            continue
+          }
+
+          let endpointPlacement: Placement | undefined
+          for (const panel of panels) {
+            if (endpointPlacement) break
+            for (const endpoint of getAllEndpoints(panel)) {
+              endpointPlacement = endpoint.placements.find((placement) => placement.id === move.id)
+              if (endpointPlacement) break
+            }
+          }
+          if (!endpointPlacement) return
+          resolved.push({ kind: 'endpoint', placement: endpointPlacement, pos: move.pos })
+        }
+
+        // Preserve a manual wire when both of its placement endpoints travel together. Routes
+        // with only one moved endpoint are removed by healing below instead of becoming stale.
+        const movedPlacementIds = new Set(uniqueMoves.keys())
+        const planWiring = getMutablePlanWiringFromProject(project)
+        planWiring?.routes.forEach((route) => {
+          const fromPlacementId = route.from.placementId
+          const toPlacementId = route.to.placementId
+          if (
+            fromPlacementId &&
+            toPlacementId &&
+            movedPlacementIds.has(fromPlacementId) &&
+            movedPlacementIds.has(toPlacementId)
+          ) {
+            route.floorId = floorId
+          }
+        })
+
+        resolved.forEach(({ kind, placement, pos }) => {
+          const patch = { floorId, ...(pos ? { pos } : {}) }
+          if (kind === 'endpoint') {
+            Object.assign(
+              placement,
+              withCustomPlacementFlag(placement as Placement, patch)
+            )
+          } else {
+            Object.assign(placement, patch)
+          }
+        })
+
+        healPlanWiring(project)
+        syncPlanWiringFromCompatibility(project)
+        state.isDirty = true
+        applied = true
+      })
+      return applied
+    },
 
     deletePlacement: (id) =>
       set((state) => {

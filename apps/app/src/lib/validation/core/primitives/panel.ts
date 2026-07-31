@@ -114,7 +114,8 @@ function findUpstreamFeederProtectionForPanel(
   rootPanels: Panel[],
   panelId: string
 ): ProtectionDevice | undefined {
-  return resolvePanelSupplyLinkForPanel({ panels: rootPanels }, panelId)?.protection
+  const protection = resolvePanelSupplyLinkForPanel({ panels: rootPanels }, panelId)?.protection
+  return protection?.directPanelFeeder ? undefined : protection
 }
 
 function hasPanelLocalIsolation(

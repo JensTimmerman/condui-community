@@ -13,6 +13,27 @@ export function forEachCircuitOnPanel(panel: Panel, fn: (circuit: Circuit) => vo
 }
 
 /**
+ * Resolve the prefix used for sequential endpoint-branch labels.
+ *
+ * Nested circuits can legitimately have an empty circuit code while already
+ * carrying a branch label such as `C1`. In that case, preserve that established
+ * prefix so newly added sibling branches become `C2`, `C3`, and so on.
+ */
+export function getEndpointBranchLabelPrefix(circuit: Circuit): string {
+  if (circuit.code === 'PANEL') return ''
+  const circuitCode = (circuit.code ?? '').trim()
+  if (circuitCode) return circuitCode
+
+  for (const branch of circuit.branches ?? []) {
+    const match = (branch.label ?? '').trim().match(/^(.+?)(\d+)$/)
+    const prefix = match?.[1]?.trim()
+    if (prefix) return prefix
+  }
+
+  return ''
+}
+
+/**
  * True if branch labels or endpoint labels on those branches differ from `{code}{1..n}`
  * in `circuit.branches` array order.
  */
@@ -41,8 +62,7 @@ export function endpointBranchLabelsWouldChange(circuit: Circuit, circuitCodeFor
  * manual protection labels, not sequential branch numbering.
  */
 export function syncSequentialEndpointBranchLabelsToCircuit(circuit: Circuit): void {
-  if (circuit.code === 'PANEL') return
-  const code = (circuit.code ?? '').trim()
+  const code = getEndpointBranchLabelPrefix(circuit)
   if (!code) return
   const branches = circuit.branches
   if (!branches?.length) return

@@ -38,6 +38,11 @@ import CustomDropdown from '@/components/common/CustomDropdown'
 import { getSitplanNotesFromProject } from '@/lib/projectV2/annotations'
 import { getCompatibilityFloorsFromProject } from '@/lib/projectV2/buildingFloors'
 import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
+import {
+  isRasterPlanImportFile,
+  isSupportedPlanImportFile,
+  PLAN_IMPORT_FILE_ACCEPT,
+} from './planImportFiles'
 
 // Component to show processed image with dark mode preview
 function ProcessedImagePreview({ processedDataUrl, isDarkMode }: { processedDataUrl: string; isDarkMode: boolean }) {
@@ -65,6 +70,7 @@ function ProcessedImagePreview({ processedDataUrl, isDarkMode }: { processedData
 interface ImportPlanImageDialogProps {
   isOpen: boolean
   onClose: () => void
+  initialFile?: File | null
 }
 
 type ImportStep = 'upload' | 'crop' | 'scale' | 'background' | 'floor' | 'pdfPages' | 'pdfCrop' | 'pdfScale' | 'pdfBackground'
@@ -111,7 +117,7 @@ async function parseRasterImageFile(file: File): Promise<{
   }
 }
 
-function ImportPlanImageDialog({ isOpen, onClose }: ImportPlanImageDialogProps) {
+function ImportPlanImageDialog({ isOpen, onClose, initialFile = null }: ImportPlanImageDialogProps) {
   const { t } = useTranslation()
   const { currentProject, addFloor, updateFloor, getFloorById } = useProjectStore()
   const { activeFloorId, setActiveFloor } = useUIStore()
@@ -157,6 +163,7 @@ function ImportPlanImageDialog({ isOpen, onClose }: ImportPlanImageDialogProps) 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const dropZoneRef = useRef<HTMLDivElement>(null)
   const pasteHandlerRef = useRef<((e: ClipboardEvent) => void) | null>(null)
+  const handledInitialFileRef = useRef<File | null>(null)
 
   const floors = useMemo(
     () => (currentProject ? getCompatibilityFloorsFromProject(currentProject) : []),
@@ -260,6 +267,10 @@ function ImportPlanImageDialog({ isOpen, onClose }: ImportPlanImageDialogProps) 
   // Handle file selection
   const handleFileSelect = useCallback((selectedFile: File) => {
     const lowerName = selectedFile.name.toLowerCase()
+    if (!isSupportedPlanImportFile(selectedFile)) {
+      alert(t('planImport.invalidFileType'))
+      return
+    }
     const isPdf = selectedFile.type === 'application/pdf' || lowerName.endsWith('.pdf')
     const isDxf = lowerName.endsWith('.dxf')
     const isDwg = lowerName.endsWith('.dwg')
@@ -338,7 +349,7 @@ function ImportPlanImageDialog({ isOpen, onClose }: ImportPlanImageDialogProps) 
       return
     }
 
-    if (selectedFile.type.startsWith('image/')) {
+    if (isRasterPlanImportFile(selectedFile)) {
       setFile(selectedFile)
       const reader = new FileReader()
       reader.onload = (e) => {
@@ -350,8 +361,17 @@ function ImportPlanImageDialog({ isOpen, onClose }: ImportPlanImageDialogProps) 
       return
     }
 
-    alert(t('planImport.invalidFileType'))
   }, [t])
+
+  useEffect(() => {
+    if (!isOpen) {
+      handledInitialFileRef.current = null
+      return
+    }
+    if (!initialFile || handledInitialFileRef.current === initialFile) return
+    handledInitialFileRef.current = initialFile
+    handleFileSelect(initialFile)
+  }, [handleFileSelect, initialFile, isOpen])
 
   // Handle drag and drop
   useEffect(() => {
@@ -1315,7 +1335,7 @@ function ImportPlanImageDialog({ isOpen, onClose }: ImportPlanImageDialogProps) 
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*,application/pdf,image/svg+xml,.pdf,.dxf,.dwg,.svg"
+                accept={PLAN_IMPORT_FILE_ACCEPT}
                 className="hidden"
                 data-testid="e2e-import-plan-file-input"
                 onChange={(e) => {

@@ -13,7 +13,7 @@ import type { ProjectState } from '@/stores/projectStore'
 import { getPanelSymbolLabel } from '@/lib/panel/panelDiagramLabels'
 import { useEditionFeatureAvailability } from '@/hooks/useEditionFeatureAvailability'
 import { TrunkDeviceSymbol } from './TrunkDeviceSymbol'
-import { PANEL_SYMBOL_WIDTH } from './canvasSymbols'
+import { EENDRAAD_PANEL_SYMBOL_WIDTH } from './canvasSymbols'
 import { useThemeColors } from '@/lib/theme/hooks'
 import { useCanvasFontFamily } from '@/editions/community/communityHooks'
 import type { BottomUpPanelLayout } from '@/lib/layout/bottomUpLayout'
@@ -23,26 +23,7 @@ import { isPanelOnlySubPanelFeeder as isPanelOnlySubPanelFeederCircuit } from '@
 import type { Point } from '@/types/ui'
 import { getSupplyProtectionLabelCollisionInfo } from '@/lib/eendraad/supplyProtectionLabelCollisions'
 import { findPanelDistributionEndpointInCircuit } from '@/lib/eendraad/panelSupplyLink'
-
-/**
- * Helper function to count circuits directly in a panel (not including sub-panels)
- * Excludes the supply circuit feeding the panel itself
- */
-function countPanelCircuits(panel: Panel): number {
-  let count = panel.circuits.length
-
-  // Add circuits from protections
-  for (const protection of panel.protections) {
-    if (protection.circuits) {
-      count += protection.circuits.length
-    }
-  }
-
-  // Don't count circuits from sub-panels - only this panel's own circuits
-
-  // Subtract 1 to exclude the supply circuit feeding this panel
-  return Math.max(0, count - 1)
-}
+import { countPanelCircuits } from '@/utils/plan/placementHelpers'
 
 function isPanelOnlySubPanelFeeder(
   protection: ProtectionDevice,
@@ -69,17 +50,12 @@ interface RenderNodeProps {
   getPanelById?: (id: string) => Panel | undefined // For panel lookup
   supplyProtectionCollisionIds?: Set<string>
   /** Records Alt/Option at drag start; return true to cancel Konva drag (pointer duplicate). */
-  onElementDragStart?: (
-    id: string,
-    type: string,
-    altKey: boolean,
-    nativeEvt: MouseEvent,
-  ) => boolean
+  onElementDragStart?: (id: string, type: string, altKey: boolean, nativeEvt: MouseEvent) => boolean
   shouldSuppressKonvaDragEnd?: () => boolean
   /** Live drag handler used during internal 1‑draad drags (for preview). */
   onElementDragMove?: (id: string, type: string, newPos: Point) => void
   /** Drag end handler used to execute the actual move on drop. */
-  onElementDragEnd?: (id: string, type: string, newPos: Point) => void
+  onElementDragEnd?: (id: string, type: string, newPos: Point) => boolean | void
   onGroundDragEnd?: (newPos: Point) => void
   /** Convert Konva drag event to canvas position (pointer). Used so drop target uses cursor position. */
   getCanvasPositionFromEvent?: (e: unknown) => Point | null
@@ -186,7 +162,7 @@ const RenderNode = memo(function RenderNode({
       const targetPanel =
         protection.subPanelId && getPanelById ? getPanelById(protection.subPanelId) : undefined
       const renderProtectionSymbol = !(
-        node.id.includes('-nest-') &&
+        (node.id.includes('-nest-') || protection.directPanelFeeder === true) &&
         isPanelOnlySubPanelFeeder(protection, node.circuitIdForWires, targetPanel)
       )
       return (
@@ -203,8 +179,7 @@ const RenderNode = memo(function RenderNode({
               }
               onDragStart={
                 onElementDragStart
-                  ? (altKey, evt) =>
-                      onElementDragStart(protection.id, 'protection', altKey, evt)
+                  ? (altKey, evt) => onElementDragStart(protection.id, 'protection', altKey, evt)
                   : undefined
               }
               shouldSuppressKonvaDragEnd={shouldSuppressKonvaDragEnd}
@@ -215,14 +190,16 @@ const RenderNode = memo(function RenderNode({
               }
             />
           )}
-          {!renderProtectionSymbol && !node.id.includes('-nest-') && (
-            <ProtectionSymbol
-              protection={protection}
-              position={{ x: node.bounds.x, y: node.bounds.y }}
-              renderSymbol={false}
-              onDragEnd={() => {}}
-            />
-          )}
+          {!renderProtectionSymbol &&
+            !node.id.includes('-nest-') &&
+            !protection.directPanelFeeder && (
+              <ProtectionSymbol
+                protection={protection}
+                position={{ x: node.bounds.x, y: node.bounds.y }}
+                renderSymbol={false}
+                onDragEnd={() => {}}
+              />
+            )}
           {node.children.map((child, i) => (
             <RenderNode
               key={`${child.id}-${i}`}
@@ -316,7 +293,7 @@ const RenderNode = memo(function RenderNode({
             ).sort((a, b) => a - b)
             return trunkXs.find((x) => x > node.bounds.x + 1) ?? null
           })()
-          const labelStartX = node.bounds.x + PANEL_SYMBOL_WIDTH / 2 + 5
+          const labelStartX = node.bounds.x + EENDRAAD_PANEL_SYMBOL_WIDTH / 2 + 5
           const maxLabelWidth =
             nextColumnX != null
               ? Math.max(40, nextColumnX - labelStartX - 8)
@@ -336,6 +313,23 @@ const RenderNode = memo(function RenderNode({
               circuitCount={circuitCount}
               symbolLabelDisplay={subPanel.symbolLabelDisplay}
               maxLabelWidth={maxLabelWidth}
+              onDragStart={
+                onElementDragStart
+                  ? (altKey, event) =>
+                      onElementDragStart(subPanel.id, 'panelAttachment', altKey, event)
+                  : undefined
+              }
+              onDragMove={
+                onElementDragMove
+                  ? (position) => onElementDragMove(subPanel.id, 'panelAttachment', position)
+                  : undefined
+              }
+              onDragEnd={
+                onElementDragEnd
+                  ? (position) => onElementDragEnd(subPanel.id, 'panelAttachment', position)
+                  : undefined
+              }
+              getCanvasPositionFromEvent={getCanvasPositionFromEvent}
             />
           )
         }
@@ -374,6 +368,9 @@ const RenderNode = memo(function RenderNode({
           // this by selection so only selected endpoints are actually draggable.
           draggable={canDragEndpoint}
           getCanvasPositionFromEvent={getCanvasPositionFromEvent}
+          isEndpointAtBranchEnd={
+            node.visual?.type === 'symbol' ? node.visual.isEndpointAtBranchEnd : undefined
+          }
           bottomLabelMinimumLeftX={
             node.visual?.type === 'symbol' ? node.visual.bottomLabelMinimumLeftX : undefined
           }

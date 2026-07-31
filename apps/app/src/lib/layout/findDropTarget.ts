@@ -1,19 +1,19 @@
 /**
  * Find drop target by walking the LayoutNode tree
- * 
+ *
  * Two-pass hit testing with center-aware bounds:
- * 
+ *
  * 1. Symbol nodes (MCB, RCD, endpoint, supply, ground) use CENTER-based positioning
  *    (the Konva Image uses offsetX/offsetY to center at position). Their effective
  *    bounds are [x - w/2, y - h/2] to [x + w/2, y + h/2].
- * 
+ *
  * 2. Non-symbol nodes (busBar, branch, trunk, label) use TOP-LEFT positioning.
  *    Their effective bounds are [x, y] to [x + w, y + h].
- * 
+ *
  * Two-pass priority:
  *   Pass 1 (core): Find deepest node whose CORE bounds contain the cursor.
  *   Pass 2 (padded): If pass 1 found nothing, find deepest node whose PADDED bounds contain cursor.
- * 
+ *
  * This ensures that hovering ON the bus returns mainBus (core match), even though
  * an MCB's padded zone extends near the bus area.
  */
@@ -21,10 +21,7 @@
 import type { LayoutNode, LayoutTree } from './layoutTree'
 import type { Endpoint, ProtectionDevice } from '@/types/schema'
 import type { Point } from '@/types/ui'
-import {
-  DOMOTICA_MAX_ENDPOINT_OUTPUTS,
-  DOMOTICA_MIN_ENDPOINT_OUTPUTS,
-} from '@/lib/domoticaLayout'
+import { DOMOTICA_MAX_ENDPOINT_OUTPUTS, DOMOTICA_MIN_ENDPOINT_OUTPUTS } from '@/lib/domoticaLayout'
 
 /** Options for findDropTarget / findDropTargetWithDebug (all optional). */
 export interface FindDropTargetOptions {
@@ -48,7 +45,15 @@ export interface FindDropTargetOptions {
 }
 
 export interface DropTarget {
-  type: 'circuit' | 'protection' | 'endpoint' | 'mainBus' | 'rcd' | 'supplyWire' | 'groundWire' | null
+  type:
+    | 'circuit'
+    | 'protection'
+    | 'endpoint'
+    | 'mainBus'
+    | 'rcd'
+    | 'supplyWire'
+    | 'groundWire'
+    | null
   circuitId?: string
   protectionId?: string
   endpointId?: string
@@ -190,12 +195,7 @@ export function getHitZoneBounds(node: LayoutNode, mode: 'core' | 'padded' = 'co
  */
 function isPointInCore(node: LayoutNode, point: Point): boolean {
   const eff = getHitZoneBounds(node, 'core')
-  return (
-    point.x >= eff.left &&
-    point.x <= eff.right &&
-    point.y >= eff.top &&
-    point.y <= eff.bottom
-  )
+  return point.x >= eff.left && point.x <= eff.right && point.y >= eff.top && point.y <= eff.bottom
 }
 
 /**
@@ -203,12 +203,7 @@ function isPointInCore(node: LayoutNode, point: Point): boolean {
  */
 function isPointInPadded(node: LayoutNode, point: Point): boolean {
   const eff = getHitZoneBounds(node, 'padded')
-  return (
-    point.x >= eff.left &&
-    point.x <= eff.right &&
-    point.y >= eff.top &&
-    point.y <= eff.bottom
-  )
+  return point.x >= eff.left && point.x <= eff.right && point.y >= eff.top && point.y <= eff.bottom
 }
 
 /**
@@ -218,7 +213,7 @@ function isPointInPadded(node: LayoutNode, point: Point): boolean {
  */
 function findCircuitNestDropInPanel(
   panelNode: LayoutNode,
-  position: Point,
+  position: Point
 ): { target: DropTarget; node: LayoutNode } | null {
   const bestMatch: {
     current: { node: LayoutNode; circuitId: string; score: number } | null
@@ -259,7 +254,7 @@ function findCircuitNestDropInPanel(
 function findSecondaryBusDropInPanel(
   panelNode: LayoutNode,
   position: Point,
-  ctx: WalkContext,
+  ctx: WalkContext
 ): { target: DropTarget; node: LayoutNode } | null {
   const bestMatch: {
     current: { target: DropTarget; node: LayoutNode; distance: number } | null
@@ -277,8 +272,7 @@ function findSecondaryBusDropInPanel(
     ) {
       const bounds = getHitZoneBounds(node, 'padded')
       const inX = position.x >= bounds.left && position.x <= bounds.right
-      const inY =
-        position.y >= bounds.top - extraY && position.y <= bounds.bottom + extraY
+      const inY = position.y >= bounds.top - extraY && position.y <= bounds.bottom + extraY
       if (inX && inY) {
         const midY = (bounds.top + bounds.bottom) / 2
         const verticalDistance = Math.abs(position.y - midY)
@@ -305,16 +299,16 @@ function findSecondaryBusDropInPanel(
 export function findDropTarget(
   tree: LayoutTree,
   position: Point,
-  options?: FindDropTargetOptions,
+  options?: FindDropTargetOptions
 ): DropTarget {
   // First, find which panel contains this position
   const panelNode = findPanelAtPosition(tree, position)
   if (!panelNode || !panelNode.domainId) {
     return { type: null }
   }
-  
+
   const ctx: WalkContext = { panelId: panelNode.domainId }
-  
+
   // Pass 1: core bounds only (highest priority — cursor is directly ON the element)
   const coreResult = findTarget(panelNode, position, ctx, 'core', options)
   if (coreResult) {
@@ -330,7 +324,7 @@ export function findDropTarget(
         'core',
         options,
         preferMainBusOverGround,
-        preferMainBusOverSupply,
+        preferMainBusOverSupply
       )
       // At a secondary panel's incoming corner the vertical supply wire can be a core hit
       // while the horizontal bus is represented by its padded hit zone.
@@ -345,7 +339,7 @@ export function findDropTarget(
     }
     return coreResult
   }
-  
+
   // Pass 2: padded bounds (cursor is NEAR an element)
   const paddedResult = findTarget(panelNode, position, ctx, 'padded', options)
   if (paddedResult) {
@@ -361,7 +355,7 @@ export function findDropTarget(
         'padded',
         options,
         preferMainBusOverGround,
-        preferMainBusOverSupply,
+        preferMainBusOverSupply
       )
       if (mainBusResult?.type === 'mainBus') return mainBusResult
     }
@@ -372,7 +366,7 @@ export function findDropTarget(
   // protection move-drags release on the wire below/above the bar still resolve.
   const secondaryBusResult = findSecondaryBusDropInPanel(panelNode, position, ctx)
   if (secondaryBusResult) return secondaryBusResult.target
-  
+
   // Nothing matched
   return { type: null, panelId: panelNode.domainId }
 }
@@ -383,30 +377,23 @@ export function findDropTarget(
 export function findDropTargetWithDebug(
   tree: LayoutTree,
   position: Point,
-  options?: FindDropTargetOptions,
+  options?: FindDropTargetOptions
 ): { target: DropTarget; debug: DebugInfo } {
   const debugPath: DebugStep[] = []
-  
+
   // First, find which panel contains this position
   const panelNode = findPanelAtPosition(tree, position)
   if (!panelNode || !panelNode.domainId) {
     return {
       target: { type: null },
-      debug: { path: debugPath }
+      debug: { path: debugPath },
     }
   }
-  
+
   const ctx: WalkContext = { panelId: panelNode.domainId }
-  
+
   // Pass 1: core bounds only (highest priority — cursor is directly ON the element)
-  const coreResult = findTargetWithDebug(
-    panelNode,
-    position,
-    ctx,
-    'core',
-    debugPath,
-    options,
-  )
+  const coreResult = findTargetWithDebug(panelNode, position, ctx, 'core', debugPath, options)
   if (coreResult) {
     const preferMainBusOverGround =
       coreResult.target.type === 'groundWire' && options?.preferMainBusOverGroundWire
@@ -422,7 +409,7 @@ export function findDropTargetWithDebug(
         mainBusDebugPath,
         options,
         preferMainBusOverGround,
-        preferMainBusOverSupply,
+        preferMainBusOverSupply
       )
       if (!mainBusResult && preferMainBusOverSupply) {
         mainBusDebugPath.length = 0
@@ -434,7 +421,7 @@ export function findDropTargetWithDebug(
           mainBusDebugPath,
           options,
           false,
-          true,
+          true
         )
       }
       if (mainBusResult?.target.type === 'mainBus') {
@@ -469,22 +456,15 @@ export function findDropTargetWithDebug(
       target: coreResult.target,
       debug: {
         panelId: panelNode.domainId,
-        path: debugPath
-      }
+        path: debugPath,
+      },
     }
   }
-  
+
   // Pass 2: padded bounds (cursor is NEAR an element)
   // Clear the path and start fresh for padded pass
   debugPath.length = 0
-  const paddedResult = findTargetWithDebug(
-    panelNode,
-    position,
-    ctx,
-    'padded',
-    debugPath,
-    options,
-  )
+  const paddedResult = findTargetWithDebug(panelNode, position, ctx, 'padded', debugPath, options)
   if (paddedResult) {
     const preferMainBusOverGround =
       paddedResult.target.type === 'groundWire' && options?.preferMainBusOverGroundWire
@@ -500,7 +480,7 @@ export function findDropTargetWithDebug(
         mainBusDebugPath,
         options,
         preferMainBusOverGround,
-        preferMainBusOverSupply,
+        preferMainBusOverSupply
       )
       if (mainBusResult?.target.type === 'mainBus') {
         return {
@@ -513,8 +493,8 @@ export function findDropTargetWithDebug(
       target: paddedResult.target,
       debug: {
         panelId: panelNode.domainId,
-        path: debugPath
-      }
+        path: debugPath,
+      },
     }
   }
 
@@ -534,14 +514,14 @@ export function findDropTargetWithDebug(
       debug: { panelId: panelNode.domainId, path: debugPath },
     }
   }
-  
+
   // Nothing matched
   return {
     target: { type: null, panelId: panelNode.domainId },
     debug: {
       panelId: panelNode.domainId,
-      path: debugPath
-    }
+      path: debugPath,
+    },
   }
 }
 
@@ -554,7 +534,7 @@ const TRUNK_WIRE_SEGMENT_PAD = 14
 export function findCircuitTrunkSegmentIndexUnderPoint(
   tree: LayoutTree,
   position: Point,
-  circuitId: string,
+  circuitId: string
 ): number | undefined {
   const prefix = `circuit-trunk-${circuitId}-segment-`
   // Holder so nested `visit` assignments are visible to control flow (plain `let best` + closure can infer `never` at return).
@@ -607,7 +587,7 @@ export function findCircuitTrunkSegmentIndexUnderPoint(
 export function ensureCircuitTrunkWireSegmentOnDropTarget(
   tree: LayoutTree,
   position: Point,
-  target: DropTarget,
+  target: DropTarget
 ): DropTarget {
   if (
     target.type !== 'circuit' ||
@@ -629,10 +609,7 @@ export function ensureCircuitTrunkWireSegmentOnDropTarget(
  * deepest-node hit test may then return the child endpoint instead of the
  * output slot, which makes drag-move fall back to generic endpoint movement.
  */
-export function findDomoticaOutputDropTarget(
-  tree: LayoutTree,
-  position: Point,
-): DropTarget | null {
+export function findDomoticaOutputDropTarget(tree: LayoutTree, position: Point): DropTarget | null {
   const bestMatch: { current: { target: DropTarget; score: number } | null } = { current: null }
 
   const visit = (node: LayoutNode, ctx: WalkContext) => {
@@ -711,11 +688,11 @@ function findPanelAtPosition(tree: LayoutTree, position: Point): LayoutNode | nu
 
 /**
  * Depth-first search for deepest matching target.
- * 
+ *
  * Always recurses into all children (no parent-bounds gating) because child
  * nodes can be spatially outside their parent's visual bounds (MCBs above bus,
  * endpoints above MCBs, etc.).
- * 
+ *
  * @param mode - 'core' checks only core bounds, 'padded' checks padded bounds
  */
 function findTarget(
@@ -725,11 +702,11 @@ function findTarget(
   mode: 'core' | 'padded',
   options?: FindDropTargetOptions,
   ignoreGroundWireHits = false,
-  ignoreSupplyWireHits = false,
+  ignoreSupplyWireHits = false
 ): DropTarget | null {
   // Accumulate context from this node (e.g., circuitId from MCB)
   const childCtx = accumulateContext(node, ctx)
-  
+
   // ALWAYS check children first (depth-first: deeper = higher priority).
   // For core hits, endpoint symbols should outrank wire hit zones. Domotica
   // output wires can sit underneath child symbols; if the wire wins first,
@@ -743,11 +720,11 @@ function findTarget(
       mode,
       options,
       ignoreGroundWireHits,
-      ignoreSupplyWireHits,
+      ignoreSupplyWireHits
     )
     if (match) return match
   }
-  
+
   // Check if THIS node is a valid target
   if (node.hitZone?.type) {
     if (ignoreGroundWireHits && node.hitZone.type === 'groundWire') {
@@ -759,15 +736,13 @@ function findTarget(
     if (options?.ignoreCircuitTrunkDeviceSymbolHits && node.type === 'trunkDevice') {
       return null
     }
-    const hit = mode === 'core'
-      ? isPointInCore(node, position)
-      : isPointInPadded(node, position)
-    
+    const hit = mode === 'core' ? isPointInCore(node, position) : isPointInPadded(node, position)
+
     if (hit) {
       return buildDropTarget(node, ctx, position)
     }
   }
-  
+
   return null
 }
 
@@ -782,26 +757,24 @@ function findTargetWithDebug(
   debugPath: DebugStep[],
   options?: FindDropTargetOptions,
   ignoreGroundWireHits = false,
-  ignoreSupplyWireHits = false,
+  ignoreSupplyWireHits = false
 ): { target: DropTarget } | null {
   // Accumulate context from this node (e.g., circuitId from MCB)
   const childCtx = accumulateContext(node, ctx)
-  
+
   // Track this node in debug path
-  const inBounds = mode === 'core'
-    ? isPointInCore(node, position)
-    : isPointInPadded(node, position)
-  
+  const inBounds = mode === 'core' ? isPointInCore(node, position) : isPointInPadded(node, position)
+
   const step: DebugStep = {
     nodeId: node.id,
     nodeType: node.type,
     domainId: node.domainId,
     hitZoneType: node.hitZone?.type ?? undefined,
     inBounds,
-    matched: false
+    matched: false,
   }
   debugPath.push(step)
-  
+
   // ALWAYS check children first (depth-first: deeper = higher priority)
   const children = getHitTestChildren(node, mode)
   for (const child of children) {
@@ -813,14 +786,14 @@ function findTargetWithDebug(
       debugPath,
       options,
       ignoreGroundWireHits,
-      ignoreSupplyWireHits,
+      ignoreSupplyWireHits
     )
     if (match) {
       // A match was found deeper in the tree, return it
       return match
     }
   }
-  
+
   // Check if THIS node is a valid target
   if (node.hitZone?.type && inBounds) {
     if (ignoreGroundWireHits && node.hitZone.type === 'groundWire') {
@@ -835,7 +808,7 @@ function findTargetWithDebug(
     step.matched = true
     return { target: buildDropTarget(node, ctx, position) }
   }
-  
+
   return null
 }
 
@@ -905,13 +878,9 @@ function accumulateContext(node: LayoutNode, ctx: WalkContext): WalkContext {
   if (node.type === 'panel') {
     const supplyDevicePositions = collectSupplyDevicePositions(node)
     const groundDevicePositions = collectGroundDevicePositions(node)
-    const mainBusNode = node.children.find(c => c.type === 'busBar')
+    const mainBusNode = node.children.find((c) => c.type === 'busBar')
 
-    if (
-      mainBusNode ||
-      supplyDevicePositions.length > 0 ||
-      groundDevicePositions.length > 0
-    ) {
+    if (mainBusNode || supplyDevicePositions.length > 0 || groundDevicePositions.length > 0) {
       return {
         ...ctx,
         ...(mainBusNode ? { mainBusNode } : {}),
@@ -934,7 +903,7 @@ function accumulateContext(node: LayoutNode, ctx: WalkContext): WalkContext {
 
 /**
  * Convert a matched LayoutNode to a DropTarget using accumulated context.
- * 
+ *
  * Position-aware insertion: when inside a branch, uses cursor X position
  * relative to endpoint positions to determine the precise insertion point.
  * This enables dropping a symbol on the wire between endpoint A and B to
@@ -960,8 +929,8 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
           DOMOTICA_MIN_ENDPOINT_OUTPUTS,
           Math.min(
             DOMOTICA_MAX_ENDPOINT_OUTPUTS,
-            Math.trunc(endpointRef.domoticaProps?.endpointCount ?? DOMOTICA_MIN_ENDPOINT_OUTPUTS),
-          ),
+            Math.trunc(endpointRef.domoticaProps?.endpointCount ?? DOMOTICA_MIN_ENDPOINT_OUTPUTS)
+          )
         )
         const endpointSlots = endpointRef.domoticaProps?.endpointChildEndpointIds ?? []
         const currentSlotsAreFull = Array.from({ length: endpointCount }).every((_, index) => {
@@ -973,13 +942,22 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
             ? { group: 'endpoint', index: endpointCount, expands: true }
             : { group: 'endpoint', index: 0 }
         target.insertAfterEndpointId = node.domainId
-        target.branchEndpoints = ctx.branchEndpoints?.length ? ctx.branchEndpoints : (node.domainId ? [node.domainId] : [])
+        target.branchEndpoints = ctx.branchEndpoints?.length
+          ? ctx.branchEndpoints
+          : node.domainId
+            ? [node.domainId]
+            : []
       } else {
         // Use full branch list from context when inside a branch; fallback to single id
-        target.branchEndpoints = ctx.branchEndpoints?.length ? ctx.branchEndpoints : (node.domainId ? [node.domainId] : [])
+        target.branchEndpoints = ctx.branchEndpoints?.length
+          ? ctx.branchEndpoints
+          : node.domainId
+            ? [node.domainId]
+            : []
         if (position && endpointRef?.domoticaChildProps) {
           const visualBounds = getEffectiveBounds(node)
-          target.domoticaChildDropIntent = position.x > visualBounds.right ? 'insertAfter' : 'replace'
+          target.domoticaChildDropIntent =
+            position.x > visualBounds.right ? 'insertAfter' : 'replace'
           target.insertAfterEndpointId = node.domainId
         } else if (position && ctx.branchEndpointPositions?.length) {
           // Position-aware insertion: use cursor X to find which wire segment we're on
@@ -992,7 +970,7 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
       }
       break
     }
-      
+
     case 'mcb': {
       target.protectionId = node.domainId
       // MCB's domainRef is ProtectionDevice, which has circuits[]
@@ -1000,11 +978,11 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
       target.circuitId = protection?.circuits?.[0]?.id
       break
     }
-      
+
     case 'rcd':
       target.protectionId = node.domainId
       break
-      
+
     case 'busBar':
       // Main bus — type is already 'mainBus'
       if (position) {
@@ -1013,19 +991,22 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
         target.mainBusItemCount = itemCount
       }
       break
-      
+
     case 'secondaryBus':
       // Secondary buses:
       // - RCD trunk secondary bus (under an RCD): hitZone.type = 'rcd'
       // - Nested-circuit secondary bus (above a parent MCB): hitZone.type = 'circuit'
       target.circuitId = ctx.circuitId
-      if (position && node.hitZone?.type === 'circuit') {
+      if (node.hitZone?.type === 'rcd') {
+        target.protectionId = node.domainId
+      }
+      if (position && (node.hitZone?.type === 'circuit' || node.hitZone?.type === 'rcd')) {
         const { insertIndex, itemCount } = computeSecondaryBusInsertIndex(node, position.x)
         target.secondaryBusInsertIndex = insertIndex
         target.secondaryBusItemCount = itemCount
       }
       break
-      
+
     case 'branch':
       target.circuitId = ctx.circuitId // Inherited from parent MCB
       target.branchEndpoints = collectBranchEndpoints(node)
@@ -1093,7 +1074,10 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
       // walk context (secondaryBusNode) rather than the parent hitZone type so
       // the parent can remain a pure container.
       if (target.type === 'circuit' && position && ctx.secondaryBusNode) {
-        const { insertIndex, itemCount } = computeSecondaryBusInsertIndex(ctx.secondaryBusNode, position.x)
+        const { insertIndex, itemCount } = computeSecondaryBusInsertIndex(
+          ctx.secondaryBusNode,
+          position.x
+        )
         target.secondaryBusInsertIndex = insertIndex
         target.secondaryBusItemCount = itemCount
       }
@@ -1105,12 +1089,15 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
         node.id?.startsWith('circuit-nest-') &&
         ctx.secondaryBusNode
       ) {
-        const { insertIndex, itemCount } = computeSecondaryBusInsertIndex(ctx.secondaryBusNode, position.x)
+        const { insertIndex, itemCount } = computeSecondaryBusInsertIndex(
+          ctx.secondaryBusNode,
+          position.x
+        )
         target.secondaryBusInsertIndex = insertIndex
         target.secondaryBusItemCount = itemCount
       }
       break
-      
+
     case 'trunkDevice':
       // Trunk device nodes — check if this is a supply trunk device, ground trunk device, or circuit trunk device
       if (node.id?.startsWith('supplyTrunkDevice-')) {
@@ -1125,14 +1112,11 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
       }
       break
   }
-  
+
   // For supply wire targets, compute insertion index based on cursor X
   if (target.type === 'supplyWire' && position) {
     target.supplyFeedScope = node.hitZone?.supplyFeedScope
-    if (
-      node.type === 'trunkDevice' &&
-      typeof node.hitZone?.supplyInsertIndex === 'number'
-    ) {
+    if (node.type === 'trunkDevice' && typeof node.hitZone?.supplyInsertIndex === 'number') {
       target.supplyDeviceInsertIndex =
         position.x < node.bounds.x
           ? node.hitZone.supplyInsertIndex + 1
@@ -1143,7 +1127,7 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
       target.supplyDeviceInsertIndex = computeSupplyInsertIndex(position, ctx)
     }
   }
-  
+
   // For ground wire targets, compute insertion index based on cursor Y
   if (target.type === 'groundWire' && position) {
     target.groundDeviceInsertIndex = computeGroundInsertIndex(position.y, ctx)
@@ -1157,7 +1141,7 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
       expands: node.hitZone.outputExpands,
     }
   }
-  
+
   return target
 }
 
@@ -1165,13 +1149,16 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
  * Collect supply trunk device positions from a panel node's children.
  * Returns positions sorted by X (left to right) with their array index.
  */
-function collectSupplyDevicePositions(panelNode: LayoutNode): { index: number; x: number; y: number }[] {
+function collectSupplyDevicePositions(
+  panelNode: LayoutNode
+): { index: number; x: number; y: number }[] {
   const positions: { index: number; x: number; y: number }[] = []
   let index = 0
   for (const child of panelNode.children) {
     if (
       child.type === 'trunkDevice' &&
-      (child.id?.startsWith('supplyTrunkDevice-') || child.id?.startsWith('subpanelSupplyTrunkDevice-'))
+      (child.id?.startsWith('supplyTrunkDevice-') ||
+        child.id?.startsWith('subpanelSupplyTrunkDevice-'))
     ) {
       positions.push({ index, x: child.bounds.x, y: child.bounds.y })
       index++
@@ -1265,7 +1252,7 @@ function computeGroundInsertIndex(cursorY: number, ctx: WalkContext): number {
  */
 function collectBranchEndpoints(node: LayoutNode): string[] {
   const endpointIds: string[] = []
-  
+
   if (node.type === 'branch') {
     for (const child of node.children) {
       if (child.type === 'endpoint' && child.domainId) {
@@ -1277,19 +1264,19 @@ function collectBranchEndpoints(node: LayoutNode): string[] {
       endpointIds.push(node.domainId)
     }
   }
-  
+
   return endpointIds
 }
 
 /**
  * Collect endpoint IDs with their X positions from a branch node.
  * Sorted by X position (left-to-right = trunk-to-tip).
- * 
+ *
  * Endpoint nodes use CENTER-based positioning, so bounds.x is the center X.
  */
 function collectBranchEndpointPositions(node: LayoutNode): { id: string; x: number }[] {
   const positions: { id: string; x: number }[] = []
-  
+
   if (node.type === 'branch') {
     for (const child of node.children) {
       if (child.type === 'endpoint' && child.domainId) {
@@ -1297,18 +1284,18 @@ function collectBranchEndpointPositions(node: LayoutNode): { id: string; x: numb
       }
     }
   }
-  
+
   return positions.sort((a, b) => a.x - b.x)
 }
 
 /**
  * Determine insertAfterEndpointId based on cursor X position relative to
  * endpoint positions on the branch.
- * 
+ *
  * Returns the ID of the last endpoint whose center is to the LEFT of the
  * cursor (cursorX >= endpoint.x), or undefined if the cursor is before
  * all endpoints (insert at the beginning of the chain).
- * 
+ *
  * This ensures:
  * - Dropping on wire between A and B → insertAfter = A (between A and B)
  * - Dropping on wire before first endpoint → insertAfter = undefined (at start)
@@ -1319,10 +1306,10 @@ function findInsertAfterByPosition(
   branchEndpointPositions: { id: string; x: number }[]
 ): string | undefined {
   if (!branchEndpointPositions.length) return undefined
-  
+
   // Ensure sorted order by X.
   const sorted = [...branchEndpointPositions].sort((a, b) => a.x - b.x)
-  
+
   let insertAfterId: string | undefined = undefined
   for (const ep of sorted) {
     if (cursorX >= ep.x) {
@@ -1331,7 +1318,7 @@ function findInsertAfterByPosition(
       break
     }
   }
-  
+
   return insertAfterId
 }
 
@@ -1382,7 +1369,13 @@ function computeSecondaryBusInsertIndex(
 ): { insertIndex: number; itemCount: number } {
   // Prefer real child MCB nodes (RCD trunk secondary bus).
   let childXs = busNode.children
-    .filter((child) => child.type === 'mcb')
+    .filter(
+      (child) =>
+        child.type === 'mcb' ||
+        (child.type === 'endpoint' &&
+          child.visual?.type === 'symbol' &&
+          child.visual.symbolId === 'panel_distribution')
+    )
     .map((child) => child.bounds.x)
     .sort((a, b) => a - b)
 

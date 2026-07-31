@@ -5,6 +5,11 @@ import {
   getCollisionSafeCenteredLabelLeftX,
   getCollisionSafeLabelWidth,
 } from '@/lib/eendraad/endpointNoteLabelCollision'
+import {
+  countSymbolLabelVisualLines,
+  getSymbolLabelVerticalMetrics,
+} from '@/lib/symbolLabelMetrics'
+import { measureSymbolLabelTextWidth } from '@/lib/symbolLabelTextWidth'
 
 export interface SymbolTextLabelItem {
   key: string
@@ -91,15 +96,13 @@ export function SymbolTextLabels({
         ? items.map((item) => item.frame ?? false)
         : undefined)
 
-  const contentHeight = resolvedLines.length * lineHeight
+  const verticalMetrics = getSymbolLabelVerticalMetrics(resolvedLines, lineHeight)
+  const contentHeight = verticalMetrics.totalHeight
   const centeredBlockTop = -contentHeight / 2
   const topAlignedBlockTop = -halfSymbolHeight
   // Anchor to symbol center only for side labels; bottom/top stay fully below/above, top-aligned.
-  const useSideAnchor =
-    anchorLineIndex != null && (position === 'left' || position === 'right')
-  const anchorBlockTop = useSideAnchor
-    ? -anchorLineIndex * lineHeight - fontSize / 2
-    : null
+  const useSideAnchor = anchorLineIndex != null && (position === 'left' || position === 'right')
+  const anchorBlockTop = useSideAnchor ? -anchorLineIndex * lineHeight - fontSize / 2 : null
   const blockTop =
     anchorBlockTop ??
     (position === 'left' || position === 'right'
@@ -108,26 +111,26 @@ export function SymbolTextLabels({
         : topAlignedBlockTop
       : centeredBlockTop)
   const lineWidths = resolvedLines.map((line) =>
-    measureTextWidth(line, fontFamily, fontSize),
+    measureSymbolLabelTextWidth(line, fontFamily, fontSize)
   )
   const centeredLineLeftXs = lineWidths.map((lineWidth) =>
     getCollisionSafeCenteredLabelLeftX(
       lineWidth,
-      position === 'bottom' ? bottomMinimumLeftX : undefined,
-    ),
+      position === 'bottom' ? bottomMinimumLeftX : undefined
+    )
   )
   const renderedLineWidths = lineWidths.map((lineWidth, index) =>
     getCollisionSafeLabelWidth(
       lineWidth,
       centeredLineLeftXs[index] ?? 0,
-      position === 'bottom' ? bottomMaximumRightX : undefined,
-    ),
+      position === 'bottom' ? bottomMaximumRightX : undefined
+    )
   )
   const maxLineWidth = Math.max(0, ...lineWidths)
   const labelLeftX = Math.min(0, ...centeredLineLeftXs)
   const labelRightX = Math.max(
     0,
-    ...centeredLineLeftXs.map((leftX, index) => leftX + (renderedLineWidths[index] ?? 0)),
+    ...centeredLineLeftXs.map((leftX, index) => leftX + (renderedLineWidths[index] ?? 0))
   )
   const labelHitPad = 4
 
@@ -138,13 +141,7 @@ export function SymbolTextLabels({
         : -(halfSymbolWidth + offsetFromSymbol)
     const hitX = position === 'right' ? -labelHitPad : -(maxLineWidth + labelHitPad)
     return (
-      <Group
-        x={x}
-        y={0}
-        listening={!!onLabelClick}
-        onClick={onLabelClick}
-        onTap={onLabelClick}
-      >
+      <Group x={x} y={0} listening={!!onLabelClick} onClick={onLabelClick} onTap={onLabelClick}>
         {onLabelClick && (
           <Rect
             x={hitX}
@@ -158,12 +155,13 @@ export function SymbolTextLabels({
           <LabelLine
             key={`${position}-${layout}-${index}`}
             x={position === 'right' ? 0 : -(lineWidths[index] ?? 0)}
-            y={blockTop + index * lineHeight}
+            y={blockTop + (verticalMetrics.lineOffsets[index] ?? 0)}
             text={line}
             fontSize={fontSize}
             fontFamily={fontFamily}
             textColor={textColor}
             frame={resolvedLineFrames?.[index] ?? false}
+            lineSpacing={lineSpacing}
           />
         ))}
       </Group>
@@ -176,13 +174,7 @@ export function SymbolTextLabels({
       : halfSymbolHeight + offsetFromSymbol
   const lineBaseY = 0
   return (
-    <Group
-      x={0}
-      y={y}
-      listening={!!onLabelClick}
-      onClick={onLabelClick}
-      onTap={onLabelClick}
-    >
+    <Group x={0} y={y} listening={!!onLabelClick} onClick={onLabelClick} onTap={onLabelClick}>
       {onLabelClick && (
         <Rect
           x={labelLeftX - labelHitPad}
@@ -196,12 +188,14 @@ export function SymbolTextLabels({
         <LabelLine
           key={`${position}-${layout}-${index}`}
           x={centeredLineLeftXs[index] ?? 0}
-          y={lineBaseY + index * lineHeight}
+          y={lineBaseY + (verticalMetrics.lineOffsets[index] ?? 0)}
           text={line}
           fontSize={fontSize}
           fontFamily={fontFamily}
           textColor={textColor}
           frame={resolvedLineFrames?.[index] ?? false}
+          lineSpacing={lineSpacing}
+          centerMultiline
           maximumWidth={
             (renderedLineWidths[index] ?? 0) < (lineWidths[index] ?? 0)
               ? renderedLineWidths[index]
@@ -228,6 +222,8 @@ function LabelLine({
   fontFamily,
   textColor,
   frame,
+  lineSpacing,
+  centerMultiline = false,
   maximumWidth,
 }: {
   x: number
@@ -237,11 +233,15 @@ function LabelLine({
   fontFamily: string
   textColor: string
   frame: boolean
+  lineSpacing: number
+  centerMultiline?: boolean
   maximumWidth?: number
 }) {
-  const textWidth = measureTextWidth(text, fontFamily, fontSize)
+  const textWidth = measureSymbolLabelTextWidth(text, fontFamily, fontSize)
   const renderedTextWidth = maximumWidth ?? textWidth
-  const textHeight = fontSize
+  const isMultiline = text.includes('\n')
+  const visualLineCount = countSymbolLabelVisualLines(text)
+  const textHeight = visualLineCount * (fontSize + lineSpacing) - lineSpacing
   const strokeInset = LABEL_FRAME_STROKE / 2
   return (
     <>
@@ -260,31 +260,16 @@ function LabelLine({
         x={x}
         y={y}
         text={text}
-        width={maximumWidth}
+        width={maximumWidth ?? (centerMultiline && isMultiline ? textWidth : undefined)}
         wrap={maximumWidth == null ? undefined : 'none'}
         ellipsis={maximumWidth != null}
+        lineHeight={isMultiline ? (fontSize + lineSpacing) / fontSize : undefined}
         fontSize={fontSize}
         fontFamily={fontFamily}
         fill={textColor}
-        align="left"
+        align={centerMultiline && isMultiline ? 'center' : 'left'}
         listening={false}
       />
     </>
   )
-}
-
-let measureCanvas: HTMLCanvasElement | null = null
-function measureTextWidth(text: string, fontFamily: string, fontSize: number): number {
-  if (typeof document === 'undefined') {
-    return text.length * fontSize * 0.6
-  }
-  if (!measureCanvas) {
-    measureCanvas = document.createElement('canvas')
-  }
-  const context = measureCanvas.getContext('2d')
-  if (!context) {
-    return text.length * fontSize * 0.6
-  }
-  context.font = `${fontSize}px ${fontFamily}`
-  return Math.ceil(context.measureText(text).width)
 }

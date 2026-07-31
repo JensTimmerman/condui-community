@@ -9,6 +9,13 @@ import {
 } from '@/components/canvas/eendraad/canvasSymbols'
 import type { Endpoint } from '@/types/schema'
 
+/** Keeps consecutive inverter/solar labels readable when they are rendered below the branch. */
+export const SOLAR_SEQUENCE_ENDPOINT_SPACING = 50
+
+function isSolarSequenceEndpoint(endpoint: Endpoint | undefined): boolean {
+  return endpoint?.symbol === 'inverter' || endpoint?.symbol === 'solar_panel'
+}
+
 /** X offset from branch.branchX for each endpoint (includes appliance-after-socket gap). */
 export function getEndpointXOffsets(
   branchEndpoints: Endpoint[],
@@ -17,15 +24,21 @@ export function getEndpointXOffsets(
   applianceAfterSocketGap: number
 ): number[] {
   const result: number[] = []
-  let x = leadIn
+  let x = isSolarSequenceEndpoint(branchEndpoints[0])
+    ? Math.max(leadIn, SOLAR_SEQUENCE_ENDPOINT_SPACING)
+    : leadIn
   for (let i = 0; i < branchEndpoints.length; i++) {
     result.push(x)
     const ep = branchEndpoints[i]
     const next = branchEndpoints[i + 1]
     if (next) {
+      const resolvedEndpointSpacing =
+        isSolarSequenceEndpoint(ep) && isSolarSequenceEndpoint(next)
+          ? Math.max(endpointSpacing, SOLAR_SEQUENCE_ENDPOINT_SPACING)
+          : endpointSpacing
       const extra =
         ep?.type === 'socket' && next?.type === 'fixed_appliance' ? applianceAfterSocketGap : 0
-      x += endpointSpacing + extra
+      x += resolvedEndpointSpacing + extra
     }
   }
   return result

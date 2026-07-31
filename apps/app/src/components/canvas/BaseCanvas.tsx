@@ -214,6 +214,8 @@ interface BaseCanvasProps {
   /** Run immediately before fit-to-view when there is a selection (e.g. plan canvas switches floor). */
   onPrepareFitToView?: () => void
   onDrop?: (position: Point, symbolData: unknown, meta?: CanvasDropMeta) => void
+  /** Receives files dropped directly on this canvas. Only canvases that opt in accept file drops. */
+  onFilesDrop?: (files: File[]) => void
   children?: React.ReactNode
   backgroundColor?: string
   gridInTransformedLayer?: boolean // If true, grid moves with pan/zoom (for Plan canvas)
@@ -315,6 +317,7 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
     onViewTransformCommit,
     onPrepareFitToView,
     onDrop,
+    onFilesDrop,
     children,
     backgroundColor: _backgroundColor = '#ffffff',
     gridInTransformedLayer = false,
@@ -2270,6 +2273,12 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
     (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault()
       e.stopPropagation()
+      const isFileDrag = Array.from(e.dataTransfer.types).includes('Files')
+      if (isFileDrag && !onFilesDrop) {
+        e.dataTransfer.dropEffect = 'none'
+        setIsDragOver(false)
+        return
+      }
       e.dataTransfer.dropEffect = 'copy'
       setIsDragOver(true)
 
@@ -2302,7 +2311,7 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
         }
       }
     },
-    [libraryDragSymbol, onDragOver, zoom, pan]
+    [libraryDragSymbol, onDragOver, onFilesDrop, zoom, pan]
   )
 
   const handleDragLeave = useCallback(
@@ -2328,6 +2337,12 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
       // Clear drag preview when drop happens
       if (onDragOver) {
         onDragOver({ x: -Infinity, y: -Infinity }, null)
+      }
+
+      const droppedFiles = Array.from(e.dataTransfer.files)
+      if (droppedFiles.length > 0) {
+        onFilesDrop?.(droppedFiles)
+        return
       }
 
       if (!onDrop) {
@@ -2387,7 +2402,7 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
         logger.error('BaseCanvas: Failed to parse drop data:', error, 'Raw data:', symbolDataStr)
       }
     },
-    [libraryDragSymbol, onDrop, onDragOver, zoom, pan]
+    [libraryDragSymbol, onDrop, onDragOver, onFilesDrop, zoom, pan]
   )
 
   // Helper function to recursively get bounds of a node and all its children

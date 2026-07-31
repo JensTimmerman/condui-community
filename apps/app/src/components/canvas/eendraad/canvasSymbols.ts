@@ -25,16 +25,22 @@ import {
 export const SYMBOL_SIZE = 20
 
 // Panel symbol dimensions (respects 88.2:48 aspect ratio from SVG)
-export const PANEL_SYMBOL_WIDTH = 22  // Width scaled to fit nicely in diagram
+export const PANEL_SYMBOL_WIDTH = 22 // Width scaled to fit nicely in diagram
 export const PANEL_SYMBOL_HEIGHT = 12 // Height maintains proper aspect ratio (1.84:1)
+/** One-wire panels need a little more visual weight than ordinary endpoint symbols. */
+export const EENDRAAD_PANEL_SYMBOL_SCALE = 1.25
+export const EENDRAAD_PANEL_SYMBOL_WIDTH = PANEL_SYMBOL_WIDTH * EENDRAAD_PANEL_SYMBOL_SCALE
+export const EENDRAAD_PANEL_SYMBOL_HEIGHT = PANEL_SYMBOL_HEIGHT * EENDRAAD_PANEL_SYMBOL_SCALE
 
 // Outline/highlight dimensions (independent of symbol size)
 // These control the size of hover and selection outlines
-export const PROTECTION_OUTLINE_SIZE = 20   // For protection devices (MCB, RCD, RCBO)
-export const ENDPOINT_OUTLINE_SIZE = 20   // For endpoints (62.5% of original symbol size for visual design)
-export const GROUND_OUTLINE_SIZE = 20       // For ground symbols
-export const PANEL_OUTLINE_WIDTH = 24       // For panel symbols (width)
-export const PANEL_OUTLINE_HEIGHT = 14      // For panel symbols (height)
+export const PROTECTION_OUTLINE_SIZE = 20 // For protection devices (MCB, RCD, RCBO)
+export const ENDPOINT_OUTLINE_SIZE = 20 // For endpoints (62.5% of original symbol size for visual design)
+export const GROUND_OUTLINE_SIZE = 20 // For ground symbols
+export const PANEL_OUTLINE_WIDTH = 24 // For panel symbols (width)
+export const PANEL_OUTLINE_HEIGHT = 14 // For panel symbols (height)
+export const EENDRAAD_PANEL_OUTLINE_WIDTH = PANEL_OUTLINE_WIDTH * EENDRAAD_PANEL_SYMBOL_SCALE
+export const EENDRAAD_PANEL_OUTLINE_HEIGHT = PANEL_OUTLINE_HEIGHT * EENDRAAD_PANEL_SYMBOL_SCALE
 // Extra visual scale factor for panels/junction panels on plan so they stand out
 export const PLAN_PANEL_VISUAL_SCALE = 1.6
 
@@ -84,24 +90,46 @@ export const PANEL_SVG_VIEWBOX_WIDTH = 88.2
 export const PANEL_SVG_BODY_WIDTH = 79.4
 
 // Panel circuit indicator lines configuration (authored against PANEL_OUTLINE_WIDTH on plan)
-export const PANEL_CIRCUIT_LINE_START_Y = -2  // Top of the lines (relative to symbol center)
-export const PANEL_CIRCUIT_LINE_END_Y = 1     // Bottom of the lines (relative to symbol center)
-export const PANEL_CIRCUIT_LINE_SPACING = 24     // Total horizontal width at outline scale (plan sitplanScale)
+export const PANEL_CIRCUIT_LINE_START_Y = -2 // Top of the lines (relative to symbol center)
+export const PANEL_CIRCUIT_LINE_END_Y = 1 // Bottom of the lines (relative to symbol center)
+export const PANEL_CIRCUIT_LINE_SPACING = 24 // Total horizontal width at outline scale (plan sitplanScale)
 export const PANEL_CIRCUIT_LINE_STROKE_WIDTH = 1
-export const PANEL_MAX_CIRCUIT_LINES = 8         // Maximum number of lines to display
+export const PANEL_MAX_CIRCUIT_LINES = 8 // Maximum number of lines to display
 
 /** Visible panel body width for a rendered symbol width (inner rect in the SVG). */
 export function getPanelBodyWidth(symbolWidth: number): number {
   return symbolWidth * (PANEL_SVG_BODY_WIDTH / PANEL_SVG_VIEWBOX_WIDTH)
 }
 
+/** Circuit tick span as a proportion of the visible body in the site-plan symbol. */
+export const PANEL_CIRCUIT_LINE_BODY_SPAN_RATIO =
+  PANEL_CIRCUIT_LINE_SPACING /
+  (getPanelBodyWidth(PANEL_SYMBOL_WIDTH) * PLAN_PANEL_VISUAL_SCALE)
+
 /** Circuit tick layout for the 1-wire panel symbol at its native render size. */
 export function getEendraadPanelCircuitLineMetrics() {
   return {
-    lineSpacing: getPanelBodyWidth(PANEL_SYMBOL_WIDTH),
+    // Match the site-plan symbol's tick spread relative to its visible body.
+    lineSpacing:
+      getPanelBodyWidth(EENDRAAD_PANEL_SYMBOL_WIDTH) * PANEL_CIRCUIT_LINE_BODY_SPAN_RATIO,
     lineStartY: PANEL_CIRCUIT_LINE_START_Y,
     lineEndY: PANEL_CIRCUIT_LINE_END_Y,
     strokeWidth: PANEL_CIRCUIT_LINE_STROKE_WIDTH,
+  }
+}
+
+/** Vector body geometry for the one-wire panel symbol. */
+export function getEendraadPanelBodyGeometry() {
+  const offsetY = EENDRAAD_PANEL_SYMBOL_HEIGHT / 4
+  return {
+    x:
+      -EENDRAAD_PANEL_SYMBOL_WIDTH / 2 +
+      EENDRAAD_PANEL_SYMBOL_WIDTH * (4.4 / PANEL_SVG_VIEWBOX_WIDTH),
+    y: -offsetY + EENDRAAD_PANEL_SYMBOL_HEIGHT * (15.6 / 48),
+    width: getPanelBodyWidth(EENDRAAD_PANEL_SYMBOL_WIDTH),
+    height: EENDRAAD_PANEL_SYMBOL_HEIGHT * (16.9 / 48),
+    strokeWidth: PANEL_CIRCUIT_LINE_STROKE_WIDTH,
+    cornerRadius: PANEL_CIRCUIT_LINE_STROKE_WIDTH * 0.4,
   }
 }
 
@@ -114,8 +142,8 @@ export function getSocketExtraWidth(socketCount: number): number {
 }
 
 // Waterproof "h" indicator on socket symbols (eendraad) — top-right corner
-export const SOCKET_WATERPROOF_H_OFFSET_RIGHT = 3    // gap from right edge of symbol (with align="right", this is the inset)
-export const SOCKET_WATERPROOF_H_OFFSET_TOP = -7   // gap from top edge of symbol
+export const SOCKET_WATERPROOF_H_OFFSET_RIGHT = 3 // gap from right edge of symbol (with align="right", this is the inset)
+export const SOCKET_WATERPROOF_H_OFFSET_TOP = -7 // gap from top edge of symbol
 export const SOCKET_WATERPROOF_H_FONT_SIZE = 8
 
 // Waterproof "h" indicator on light point symbols (eendraad) — centered above symbol
@@ -125,15 +153,15 @@ export const LIGHT_POINT_WATERPROOF_H_OFFSET_TOP = -7
 // @deprecated Use getThemeColors() from '@/lib/theme/colors' instead
 // These are kept for backward compatibility
 export const SYMBOL_COLOR_LIGHT = '#1f2937' // gray-800
-export const SYMBOL_COLOR_DARK = '#e5e7eb'   // gray-200
-export const TEXT_COLOR_LIGHT = '#1f2937'    // gray-800
-export const TEXT_COLOR_DARK = '#e5e7eb'    // gray-200
-export const BUS_COLOR_LIGHT = '#1f2937'     // gray-800
-export const BUS_COLOR_DARK = '#6b7280'      // gray-500
+export const SYMBOL_COLOR_DARK = '#e5e7eb' // gray-200
+export const TEXT_COLOR_LIGHT = '#1f2937' // gray-800
+export const TEXT_COLOR_DARK = '#e5e7eb' // gray-200
+export const BUS_COLOR_LIGHT = '#1f2937' // gray-800
+export const BUS_COLOR_DARK = '#6b7280' // gray-500
 export const SECONDARY_TEXT_COLOR_LIGHT = '#6b7280' // gray-500
-export const SECONDARY_TEXT_COLOR_DARK = '#9ca3af'  // gray-400
-export const FRAME_COLOR_LIGHT = '#9ca3af'          // gray-400
-export const FRAME_COLOR_DARK = '#4b5563'           // gray-600
+export const SECONDARY_TEXT_COLOR_DARK = '#9ca3af' // gray-400
+export const FRAME_COLOR_LIGHT = '#9ca3af' // gray-400
+export const FRAME_COLOR_DARK = '#4b5563' // gray-600
 
 // HVAC overlays (relative positioning within symbol)
 // Energy source overlays should move down by ~33% of symbol height from center.
@@ -198,9 +226,12 @@ export function getFrameColor(isDark: boolean): string {
  * @param outlineSize - Size of the outline (independent of symbol size)
  * @returns Object with x, y, width, height for a centered rectangle
  */
-export function getOutlineRectProps(
-  outlineSize: number
-): { x: number; y: number; width: number; height: number } {
+export function getOutlineRectProps(outlineSize: number): {
+  x: number
+  y: number
+  width: number
+  height: number
+} {
   return {
     x: -outlineSize / 2,
     y: -outlineSize / 2,
@@ -459,7 +490,7 @@ export function getPaddedRectSelectionOutlineProps(
   y: number,
   width: number,
   height: number,
-  pad: number,
+  pad: number
 ) {
   const w = canvasSizeWithScreenMinimum(zoom, width + pad * 2)
   const h = canvasSizeWithScreenMinimum(zoom, height + pad * 2)
@@ -483,7 +514,7 @@ export function getPaddedRectHoverOutlineProps(
   y: number,
   width: number,
   height: number,
-  pad: number,
+  pad: number
 ) {
   const w = canvasSizeWithScreenMinimum(zoom, width + pad * 2)
   const h = canvasSizeWithScreenMinimum(zoom, height + pad * 2)
@@ -508,9 +539,7 @@ export const getPaddedRectPreviewOutlineProps = getPaddedRectHoverOutlineProps
  * This should match the outline size so hover detection aligns with the visible outline
  * @param outlineSize - Size of the hit area (use PROTECTION_OUTLINE_SIZE, ENDPOINT_OUTLINE_SIZE, etc.)
  */
-export function getHitAreaProps(
-  outlineSize: number
-) {
+export function getHitAreaProps(outlineSize: number) {
   const rect = getOutlineRectProps(outlineSize)
   return {
     ...rect,
@@ -526,7 +555,7 @@ export function getTouchAwareHitAreaProps(
   outlineSize: number,
   zoom: number,
   isSelected: boolean,
-  touchPrimary: boolean,
+  touchPrimary: boolean
 ) {
   const rect = getOutlineRectProps(outlineSize)
   const adjusted = applyTouchHitPadding(rect, zoom, isSelected, touchPrimary)
@@ -543,11 +572,7 @@ export function getTouchAwareHitAreaProps(
  * @param height - Height of the hit area
  * @param offsetY - Vertical offset for the symbol (default 0)
  */
-export function getRectHitAreaProps(
-  width: number,
-  height: number,
-  offsetY: number = 0
-) {
+export function getRectHitAreaProps(width: number, height: number, offsetY: number = 0) {
   const rect = getRectOutlineProps(width, height, offsetY)
   return {
     ...rect,
@@ -562,7 +587,7 @@ export function getTouchAwareRectHitAreaProps(
   offsetY: number,
   zoom: number,
   isSelected: boolean,
-  touchPrimary: boolean,
+  touchPrimary: boolean
 ) {
   const rect = getRectOutlineProps(width, height, offsetY)
   const adjusted = applyTouchHitPadding(rect, zoom, isSelected, touchPrimary)

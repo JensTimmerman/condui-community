@@ -910,7 +910,8 @@ function deriveMcbWires(
   const connStart = { x: mcbX, y: connectFromY }
   const connEnd = { x: mcbX, y: mcbY }
   const panelOnlyFeederStub =
-    mcbNode.id.includes('-nest-') && isPanelOnlySubPanelFeeder(protection, circuit)
+    (mcbNode.id.includes('-nest-') || protection?.directPanelFeeder === true) &&
+    isPanelOnlySubPanelFeeder(protection, circuit)
 
   // Find branches, trunk devices, direct endpoint children (sub-panel symbols), and parent wire end for this circuit
   const branchNodes = mcbNode.children.filter((c) => c.type === 'branch')
@@ -1669,13 +1670,25 @@ function deriveBranchWires(
     })
   }
   // Segments between each consecutive pair of endpoints
+  let currentBranchDomain = getTrunkDomainAfterNode(trunkDomainAtBranch, firstNode)
   for (let i = 0; i < endpointNodes.length - 1; i++) {
     const fromNode = endpointNodes[i]!
     const toNode = endpointNodes[i + 1]!
 
     const fromPt = { x: fromNode.bounds.x, y: branchY }
     const toPt = { x: toNode.bounds.x, y: branchY }
-    const betweenBranchWireProps = inheritedBranchWireProps
+    const betweenSectionRef: CircuitSectionRef = {
+      fromElementType: 'endpoint',
+      fromElementId: fromNode.domainId,
+      toElementType: 'endpoint',
+      toElementId: toNode.domainId,
+      domain: currentBranchDomain,
+    }
+    const betweenBranchWireProps = getCircuitWirePropertiesForDomain(
+      circuit,
+      currentBranchDomain,
+      betweenSectionRef
+    )
     segments.push({
       id: generateId(),
       type: 'branch',
@@ -1683,7 +1696,7 @@ function deriveBranchWires(
       endPoint: applyNodeWireInset(toPt, fromPt, toNode),
       cable: betweenBranchWireProps.cable,
       panelId: panel.id,
-      domain: trunkDomainAtBranch,
+      domain: currentBranchDomain,
       circuitId: circuit.id,
       fromElementId: fromNode.domainId,
       fromElementType: 'endpoint',
@@ -1694,6 +1707,7 @@ function deriveBranchWires(
       inWall: betweenBranchWireProps.inWall,
       hideWireLabel: betweenBranchWireProps.hideWireLabel,
     })
+    currentBranchDomain = getTrunkDomainAfterNode(currentBranchDomain, toNode)
   }
 
   return segments

@@ -240,6 +240,12 @@ import {
 
 import { PlanGridSizeControl } from './plan/PlanGridSizeControl'
 import { PlanScaleRulerCanvasLayer } from './plan/PlanScaleRulerCanvasLayer'
+import { isSupportedPlanImportFile } from '@/components/plan/planImportFiles'
+import {
+  captureCrossFloorDragClientOffsets,
+  resolveCrossFloorDragPositions,
+  type ClientPoint,
+} from '@/lib/plan/crossFloorDragContinuation'
 
 interface PlanCanvasProps {
   onMultiFingerSwipe?: (
@@ -251,6 +257,12 @@ interface PlanCanvasProps {
 }
 
 type PlanCanvasInputEvent = KonvaEventObject<MouseEvent | TouchEvent | PointerEvent | DragEvent>
+
+type CrossFloorDragSession = {
+  floorId: string
+  clientOffsets: Map<string, ClientPoint>
+  lastPositions: Map<string, Point>
+}
 
 const QUICK_PLACER_FLOOR_KEYS = '123456789'
 
@@ -463,6 +475,9 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
   const canvasRef = useRef<BaseCanvasHandle>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const pointerOverPlanRef = useRef(false)
+  const lastPlanPointerClientRef = useRef<ClientPoint | null>(null)
+  const crossFloorDragSessionRef = useRef<CrossFloorDragSession | null>(null)
+  const [pendingImportFile, setPendingImportFile] = useState<File | null>(null)
 
   // Register canvas for export
   // Always return stage if available - export will handle switching floors as needed
@@ -4034,12 +4049,116 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
   )
   const {
     isDraggingRef,
+    moveActiveDragToFloor,
+    updateCrossFloorDragPreview,
+    finishCrossFloorDrag,
     labelRecalcKey,
     setLabelRecalcKey,
     createMultiSelectDragHandlers,
     createSingleDragHandlers,
     createSelectionFrameDragHandlers,
   } = dragHandling
+
+  const handleBeforeFloorSwitch = useCallback(
+    (floorId: string): boolean => {
+      if (!isDraggingRef.current || floorId === activeFloorId) return true
+      const cursorClient = lastPlanPointerClientRef.current
+      if (!cursorClient) return false
+
+      const positions = moveActiveDragToFloor(floorId)
+      if (!positions) return false
+      if (positions.size === 0) return true
+
+      crossFloorDragSessionRef.current = {
+        floorId,
+        clientOffsets: captureCrossFloorDragClientOffsets(
+          positions,
+          cursorClient,
+          planToClient
+        ),
+        lastPositions: new Map(positions),
+      }
+      return true
+    },
+    [activeFloorId, isDraggingRef, moveActiveDragToFloor, planToClient]
+  )
+
+  const updateCrossFloorDragFromClient = useCallback(
+    (cursorClient: ClientPoint): Map<string, Point> | null => {
+      const session = crossFloorDragSessionRef.current
+      const uiState = useUIStore.getState()
+      if (!session || session.floorId !== uiState.activeFloorId) return null
+      const rect = containerRef.current?.getBoundingClientRect()
+      if (!rect) return null
+      const positions = resolveCrossFloorDragPositions(
+        session.clientOffsets,
+        cursorClient,
+        (clientX, clientY) => ({
+          x: (clientX - rect.left - uiState.planView.pan.x) / uiState.planView.zoom,
+          y: (clientY - rect.top - uiState.planView.pan.y) / uiState.planView.zoom,
+        }),
+        snapPlacementPosition
+      )
+      if (!positions) return null
+      session.lastPositions = positions
+      updateCrossFloorDragPreview(positions)
+      return positions
+    },
+    [snapPlacementPosition, updateCrossFloorDragPreview]
+  )
+
+  useEffect(
+    function continueDragAcrossFloorAndViewportChanges() {
+      const session = crossFloorDragSessionRef.current
+      const cursorClient = lastPlanPointerClientRef.current
+      if (!session || !cursorClient || session.floorId !== activeFloorId) return
+      updateCrossFloorDragFromClient(cursorClient)
+    },
+    [activeFloorId, planView.pan.x, planView.pan.y, planView.zoom, updateCrossFloorDragFromClient]
+  )
+
+  useEffect(
+    function trackAndFinishCrossFloorDrag() {
+      const rememberPointer = (event: PointerEvent) => {
+        const cursorClient = { x: event.clientX, y: event.clientY }
+        lastPlanPointerClientRef.current = cursorClient
+        if (crossFloorDragSessionRef.current) {
+          updateCrossFloorDragFromClient(cursorClient)
+        }
+      }
+      const finishPointerDrag = (event: PointerEvent) => {
+        const session = crossFloorDragSessionRef.current
+        if (!session) return
+        const cursorClient = { x: event.clientX, y: event.clientY }
+        lastPlanPointerClientRef.current = cursorClient
+        const positions = updateCrossFloorDragFromClient(cursorClient) ?? session.lastPositions
+        crossFloorDragSessionRef.current = null
+
+        // Let the now-cancelled Konva drag-end event run while the continuation guard is still
+        // active, then make the pointer-driven positions authoritative.
+        queueMicrotask(() => {
+          useProjectStore.getState().movePlanPlacementsToFloor(
+            Array.from(positions, ([id, pos]) => ({ id, pos })),
+            session.floorId
+          )
+          finishCrossFloorDrag()
+        })
+      }
+
+      window.addEventListener('pointerdown', rememberPointer, true)
+      window.addEventListener('pointermove', rememberPointer, true)
+      window.addEventListener('pointerup', finishPointerDrag, true)
+      window.addEventListener('pointercancel', finishPointerDrag, true)
+      return () => {
+        window.removeEventListener('pointerdown', rememberPointer, true)
+        window.removeEventListener('pointermove', rememberPointer, true)
+        window.removeEventListener('pointerup', finishPointerDrag, true)
+        window.removeEventListener('pointercancel', finishPointerDrag, true)
+      }
+    },
+    [finishCrossFloorDrag, updateCrossFloorDragFromClient]
+  )
+
   const planDragPositions = usePlanDragPositionsMap()
   const planWirePreview = useMemo(
     function () {
@@ -5332,6 +5451,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
   usePlanKeyboard(activeFloorId, {
     pointerOverPlanRef,
     suppressDigitFloorShortcuts: quickPlacerVisible && quickPlacerMode === 'fast',
+    onBeforeSwitchFloor: handleBeforeFloorSwitch,
     disabled: !canDeleteItems,
     onDeleteFloorPlanSelection: deleteSelectedWallGeometry,
     toolShortcuts: planToolShortcuts,
@@ -5521,6 +5641,21 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
       snapPlacementPosition,
     ]
   )
+
+  const handlePlanFilesDrop = useCallback(
+    (files: File[]) => {
+      const supportedFile = files.find(isSupportedPlanImportFile)
+      if (!supportedFile) return
+      setPendingImportFile(supportedFile)
+      applyIsImportDialogOpen(true)
+    },
+    [applyIsImportDialogOpen]
+  )
+
+  const closeImportDialog = useCallback(() => {
+    applyIsImportDialogOpen(false)
+    setPendingImportFile(null)
+  }, [applyIsImportDialogOpen])
 
   const openContextAssignCircuitPanel = useCallback(
     (endpointIds: string[], planAnchor: Point) => {
@@ -6261,6 +6396,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
           onPanChange={handlePanChange}
           onViewTransformCommit={handleViewTransformCommit}
           onDrop={canPlaceSymbols ? handleDrop : undefined}
+          onFilesDrop={canPlaceSymbols ? handlePlanFilesDrop : undefined}
           onFindElementsInRectangle={handleFindElementsInRectangle}
           onGetContextMenuItems={
             canDeleteItems || canEditFloorPlan || canPlaceSymbols
@@ -7676,7 +7812,10 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
                   variant="tool"
                   side="left"
                   triggerTestId="e2e-plan-upload-floor"
-                  onClick={() => applyIsImportDialogOpen(true)}
+                  onClick={() => {
+                    setPendingImportFile(null)
+                    applyIsImportDialogOpen(true)
+                  }}
                 />
 
                 {/* Move floor (plan image) */}
@@ -7929,7 +8068,8 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
         {/* Import Dialog */}
         <ImportPlanImageDialog
           isOpen={isImportDialogOpen}
-          onClose={() => applyIsImportDialogOpen(false)}
+          initialFile={pendingImportFile}
+          onClose={closeImportDialog}
         />
       </div>
     </CanvasOverlayScaleProvider>

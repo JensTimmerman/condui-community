@@ -502,10 +502,12 @@
   },
   "panel": {
     "deleteConfirmTitle": "Delete Panel(s)?",
-    "deleteLastMainTitle": "Delete Last Main Panel?",
-    "deleteLastMainMessage": "You are about to delete the last main panel \"{{panelNames}}\".\n\nAfter deletion, you will need to drop a new panel distribution board to create a new main panel before you can add other components.\n\nAre you sure you want to continue?",
-    "deleteConfirmMessage": "The following panel(s) contain circuits, protections, or sub-panels: {{panelNames}}\n\nDeleting them will also delete all their contents. This action cannot be undone.\n\nAre you sure you want to continue?",
-    "deleteEmptyPanelMessage": "Are you sure you want to delete panel(s): {{panelNames}}?\n\nThis will also remove any associated frames and nested panels. This action cannot be undone."
+    "deleteBlockedTitle": "Cannot delete main panel",
+    "deleteLastMainTitle": "Cannot Delete Last Main Panel",
+    "deleteLastMainMessage": "At least one main panel is required. Main panel \"{{panelNames}}\" cannot be deleted.",
+    "deleteMainConfirmMessage": "Delete main panel(s) {{panelNames}}?\n\nThe selected panel(s), their circuits, protection devices, sub-panels, and associated frames will be removed. You can undo this action.",
+    "deleteConfirmMessage": "The following panel(s) contain circuits, protections, or sub-panels: {{panelNames}}\n\nDeleting them will also delete all their contents. You can undo this action.\n\nAre you sure you want to continue?",
+    "deleteEmptyPanelMessage": "Are you sure you want to delete panel(s): {{panelNames}}?\n\nThis will also remove any associated frames and nested panels. You can undo this action."
   },
   "protections": {
     "title": "Protections",
@@ -529,8 +531,10 @@
     "residualType_F": "F (mixed frequency)",
     "residualType_B": "B (smooth DC)",
     "description": "Description",
-    "deleteLinkedPanelTitle": "Remove linked board too?",
-    "deleteLinkedPanelMessage": "This also deletes board \"{{panelNames}}\" and everything on that side of the feed (its circuits, devices, nested boards). Continue?"
+    "deleteLinkedPanelTitle": "Delete protection?",
+    "deleteLinkedPanelMessage": "Linked panel: {{panelNames}}",
+    "deleteLinkedPanelAction": "Delete panel too",
+    "deleteProtectionAction": "Delete protection only"
   },
   "circuits": {
     "title": "Circuits",
@@ -1580,13 +1584,22 @@
       "title": "Export to PDF",
       "selectCanvases": "Select canvases to export",
       "eendraad": "1draad (Single-line diagram)",
+      "eendraadShort": "Eendraad",
       "panel": "Distribution board (cabinet view)",
+      "panelShort": "Panel",
       "sitplan": "Sitplan (Floor plan)",
+      "sitplanShort": "Situation plan",
+      "options": "Options",
+      "theme": "Theme",
+      "themeLight": "Light",
+      "themeDark": "Dark",
       "pageCount": "Page count",
       "pagesForEendraad": "{{count}} pages for 1draad",
       "pagesForPanel": "{{count}} pages for distribution board",
       "pagesForSitplan": "{{count}} pages for sitplan",
       "totalPages": "Total: {{count}} pages",
+      "total": "Total",
+      "editablePremiumTooltip": "Unlock this project or upgrade to Premium to embed editable project data.",
       "installDates": "Include install dates",
       "exportButton": "Export",
       "cancelButton": "Cancel"

@@ -5,6 +5,7 @@ import { calculateBottomUpLayout, type BottomUpLayoutResult } from '@/lib/layout
 import { buildLayoutTree, type LayoutTree } from '@/lib/layout/layoutTree'
 import { deriveWires } from '@/lib/layout/deriveWires'
 import {
+  simulatePanelAttachmentMoveOnProject,
   simulateDropOnProject,
   simulateEndpointSelectionMoveOnProject,
   simulateTrunkDeviceRelocationOnProject,
@@ -54,7 +55,13 @@ export function useEendraadPreviewGraph(
     if (!currentProject || !dragPreview || !dragPreview.symbolData) return null
 
     let sim: EendraadPreviewChangeSet | null = null
-    if (dragPreview.movingEndpointSelection) {
+    if (dragPreview.movingPanelAttachment) {
+      sim = simulatePanelAttachmentMoveOnProject(
+        currentProject,
+        dragPreview.movingPanelAttachment,
+        dragPreview.dropTarget ?? { type: null },
+      )
+    } else if (dragPreview.movingEndpointSelection) {
       sim = simulateEndpointSelectionMoveOnProject(
         currentProject,
         dragPreview.movingEndpointSelection,
@@ -151,4 +158,3 @@ export function useEendraadPreviewGraph(
     }
   }, [currentProject, dragPreview, eendraadLayoutOverrides])
 }
-

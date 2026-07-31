@@ -8,7 +8,14 @@
  * Phase 2+: Direct generation via NodeLayouter pattern
  */
 
-import type { Panel, Circuit, ProtectionDevice, Endpoint, CableSpec, TrunkDevice } from '@/types/schema'
+import type {
+  Panel,
+  Circuit,
+  ProtectionDevice,
+  Endpoint,
+  CableSpec,
+  TrunkDevice,
+} from '@/types/schema'
 import { getSubPanelMainBusFeedDevice } from '@/lib/panel/subPanelFeed'
 import { resolvePanelSupplyLinkForProtection } from '@/lib/eendraad/panelSupplyLink'
 import {
@@ -64,6 +71,8 @@ export interface SymbolVisual {
   symbolId: string
   label?: string
   opacity?: number
+  /** Whether this endpoint is the final symbol on its horizontal branch. */
+  isEndpointAtBranchEnd?: boolean
   /** For a bottom label, keep its left edge clear of a nearby branch wire. */
   bottomLabelMinimumLeftX?: number
   /** For a bottom label, truncate before crossing the circuit's right boundary. */
@@ -534,8 +543,7 @@ function buildPanelNode(panelLayout: BottomUpPanelLayout): LayoutNode {
   if (parentMcbElement && mainBusElement) {
     const pad = 10
     const parentMcbNode = children.find((c) => c.id === 'parent-mcb')
-    const incomingWireEndY =
-      parentMcbNode?.bounds.y ?? parentMcbElement.position.y
+    const incomingWireEndY = parentMcbNode?.bounds.y ?? parentMcbElement.position.y
     const wireTop = Math.min(mainBusElement.position.y, incomingWireEndY)
     const wireHeight = Math.abs(incomingWireEndY - mainBusElement.position.y)
     children.unshift({
@@ -924,6 +932,7 @@ function buildRcdNode(
   circuits: BottomUpCircuitLayout[]
 ): LayoutNode {
   const children: LayoutNode[] = []
+  const protection = panelLayout.panel.protections.find((p) => p.id === rcdElement.protectionId)
 
   // Find trunk for this RCD
   const trunk = panelLayout.trunks.find((t) => t.protectionId === rcdElement.protectionId)
@@ -952,6 +961,8 @@ function buildRcdNode(
           type: 'rcd',
           padding: 0,
         },
+        domainId: protection?.id,
+        domainRef: protection,
         children: circuits
           .map((cl) => buildMcbNode(panelLayout, cl))
           .filter((n): n is LayoutNode => n !== null),
@@ -959,9 +970,6 @@ function buildRcdNode(
       children.push(trunkNode)
     }
   }
-
-  // Find protection device for domain reference
-  const protection = panelLayout.panel.protections.find((p) => p.id === rcdElement.protectionId)
 
   return {
     id: rcdElement.id,
@@ -1364,10 +1372,8 @@ function buildMcbNode(
 
       if (nestedXs.length > 0) {
         const secondaryBusAttachmentXs =
-          hasPanelAttachmentOnSecondaryBus(
-            circuitLayout.protection,
-            circuitLayout.circuit
-          ) && subPanelSymbolElement
+          hasPanelAttachmentOnSecondaryBus(circuitLayout.protection, circuitLayout.circuit) &&
+          subPanelSymbolElement
             ? [subPanelSymbolElement.position.x, ...nestedXs]
             : nestedXs
         const leftmostX = Math.min(...secondaryBusAttachmentXs)
@@ -1526,7 +1532,7 @@ function buildBranchNode(
   }
 
   // Add endpoints on this branch
-  for (const endpoint of branch.endpoints) {
+  for (const [endpointIndex, endpoint] of branch.endpoints.entries()) {
     const endpointElement = panelLayout.elements.find(
       (e) => e.type === 'endpoint' && e.endpointId === endpoint.id
     )
@@ -1563,15 +1569,15 @@ function buildBranchNode(
           type: 'symbol',
           symbolId: endpoint.symbol || getDefaultSymbolForEndpointType(endpoint.type),
           label: endpoint.label,
-          bottomLabelMinimumLeftX:
-            constrainSingleEndpointLabel
-              ? getEndpointNoteMinimumLeftX(endpointElement.position.x, branch.branchX)
-              : undefined,
+          isEndpointAtBranchEnd: endpointIndex === branch.endpoints.length - 1,
+          bottomLabelMinimumLeftX: constrainSingleEndpointLabel
+            ? getEndpointNoteMinimumLeftX(endpointElement.position.x, branch.branchX)
+            : undefined,
           bottomLabelMaximumRightX:
             constrainSingleEndpointLabel && circuitLayout
               ? getEndpointNoteMaximumRightX(
                   endpointElement.position.x,
-                  circuitLayout.x + circuitLayout.width,
+                  circuitLayout.x + circuitLayout.width
                 )
               : undefined,
         },

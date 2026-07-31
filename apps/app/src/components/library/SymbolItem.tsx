@@ -332,6 +332,7 @@ export default function SymbolItem({
     <>
       <div
         ref={itemRef}
+        data-testid={`library-symbol-${symbol.id}`}
         draggable
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}

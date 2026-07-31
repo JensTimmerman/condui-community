@@ -8,6 +8,7 @@ import { useProjectStore, type ProjectState } from '@/stores/projectStore'
 import { useUIStore } from '@/stores/uiStore'
 import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
 import { linkedSubPanelDisplayNamesForProtectionIds } from '@/lib/panel/linkedSubPanelDeleteWarning'
+import { createLinkedProtectionDeleteDialog } from '@/lib/panel/linkedProtectionDeleteDialog'
 import { isKeyboardTypingTarget } from '@/lib/ui/keyboardTypingTarget'
 import { panelGridModuleRefKey } from '@/components/canvas/panel/panelGridLayout'
 import type { Panel, PanelGridModuleRef } from '@/types/schema'
@@ -195,8 +196,10 @@ export function usePanelContextMenu({
                 const endpointIds = selection.type === 'endpoint' ? selection.ids : []
                 const trunkIds = selection.type === 'trunkDevice' ? selection.ids : []
 
-                const runBulkDelete = () => {
-                  if (protectionIds.length > 0) deleteProtections(protectionIds)
+                const runBulkDelete = (preserveLinkedPanels = false) => {
+                  if (protectionIds.length > 0) {
+                    deleteProtections(protectionIds, { preserveLinkedPanels })
+                  }
                   if (endpointIds.length > 0) deleteEndpoints(endpointIds)
 
                   for (const id of trunkIds) {
@@ -221,17 +224,14 @@ export function usePanelContextMenu({
                   protectionIds,
                 )
                 if (linkedPanelNames.length > 0) {
-                  openDialog({
-                    type: 'confirm',
-                    title: t('protections.deleteLinkedPanelTitle'),
-                    message: t('protections.deleteLinkedPanelMessage', {
+                  openDialog(
+                    createLinkedProtectionDeleteDialog({
+                      t,
                       panelNames: linkedPanelNames.join(', '),
-                    }),
-                    variant: 'warning',
-                    confirmLabel: t('common.delete'),
-                    cancelLabel: t('common.cancel'),
-                    onConfirm: runBulkDelete,
-                  })
+                      onDeletePanel: () => runBulkDelete(false),
+                      onDeleteProtection: () => runBulkDelete(true),
+                    })
+                  )
                 } else {
                   runBulkDelete()
                 }
@@ -334,8 +334,8 @@ export function usePanelContextMenu({
                 } = store
 
                 if (ref.kind === 'protection') {
-                  const runDeleteProtection = () => {
-                    deleteProtection(ref.id)
+                  const runDeleteProtection = (preserveLinkedPanels = false) => {
+                    deleteProtection(ref.id, { preserveLinkedPanels })
                     clearSelection()
                   }
                   const linkedNames = linkedSubPanelDisplayNamesForProtectionIds(
@@ -344,17 +344,14 @@ export function usePanelContextMenu({
                     [ref.id],
                   )
                   if (linkedNames.length > 0) {
-                    openDialog({
-                      type: 'confirm',
-                      title: t('protections.deleteLinkedPanelTitle'),
-                      message: t('protections.deleteLinkedPanelMessage', {
+                    openDialog(
+                      createLinkedProtectionDeleteDialog({
+                        t,
                         panelNames: linkedNames.join(', '),
-                      }),
-                      variant: 'warning',
-                      confirmLabel: t('common.delete'),
-                      cancelLabel: t('common.cancel'),
-                      onConfirm: runDeleteProtection,
-                    })
+                        onDeletePanel: () => runDeleteProtection(false),
+                        onDeleteProtection: () => runDeleteProtection(true),
+                      })
+                    )
                   } else {
                     runDeleteProtection()
                   }

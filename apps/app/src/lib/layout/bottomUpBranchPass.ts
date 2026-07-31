@@ -1,7 +1,14 @@
 import type { Circuit, Panel } from '@/types/schema'
-import { getCircuitBranches, initializeBranchesIfNeeded } from './endpointChains'
+import { getCircuitBranches } from './endpointChains'
 import type { BranchLayout, TrunkLayout } from './wireSegments'
 import { calculateBranchWidth } from './bottomUpBranchWidths'
+import {
+  getVisibleConversionLabelParts,
+  getVisibleEndpointNoteText,
+} from '@/lib/conversionLabels'
+import { getVisibleCertificationLabelParts } from '@/lib/certificationLabels'
+import { countSymbolLabelVisualLines } from '@/lib/symbolLabelMetrics'
+import { getEndpointBranchLabelPrefix } from '@/lib/eendraad/automaticEndpointBranchNaming'
 
 export interface BranchPassConstants {
   BRANCH_LEAD_IN: number
@@ -35,6 +42,43 @@ export interface BranchLayoutPassResult {
 }
 
 const NESTED_BRANCH_LABEL_CLEARANCE = 10
+const ENDPOINT_LABEL_LINE_HEIGHT = 10
+const ENDPOINT_LABEL_FIXED_VERTICAL_CLEARANCE = 25
+
+function endpointUsesRightSideLabel(endpoint: Circuit['endpoints'][number], isBranchEnd: boolean) {
+  return (
+    isBranchEnd &&
+    (endpoint.symbol === 'solar_panel' ||
+      endpoint.symbol === 'battery' ||
+      endpoint.symbol === 'ev')
+  )
+}
+
+export function getBranchBottomLabelHeight(branchEndpoints: Circuit['endpoints']): number {
+  let maximumVisualLines = 0
+
+  branchEndpoints.forEach((endpoint, index) => {
+    if (endpointUsesRightSideLabel(endpoint, index === branchEndpoints.length - 1)) return
+
+    const texts = [
+      ...getVisibleConversionLabelParts(endpoint).map((part) => part.text),
+      ...getVisibleCertificationLabelParts(endpoint).map((part) => part.text),
+      getVisibleEndpointNoteText(endpoint),
+    ].filter((text) => text.length > 0)
+    const visualLines = texts.reduce(
+      (total, text) => total + countSymbolLabelVisualLines(text),
+      0
+    )
+    maximumVisualLines = Math.max(maximumVisualLines, visualLines)
+  })
+
+  return maximumVisualLines * ENDPOINT_LABEL_LINE_HEIGHT
+}
+
+function getSequentialBranchLabelFallback(circuit: Circuit, branchIndex: number): string {
+  const prefix = getEndpointBranchLabelPrefix(circuit)
+  return prefix ? `${prefix}${branchIndex + 1}` : ''
+}
 
 export function buildBranchCircuitMap(panel?: Panel): Map<string, Circuit> {
   const circuitMap = new Map<string, Circuit>()
@@ -152,30 +196,48 @@ function createEndpointBranchRows(
   nestedBranchLabelClearance: number
 ): BranchLayout[] {
   const endpointBranches = getCircuitBranches(circuit)
-  const storedBranches = initializeBranchesIfNeeded(circuit)
+  const storedBranches = circuit.branches ?? []
   const result: BranchLayout[] = []
   let domoticaVerticalReserve = 0
+  let labelVerticalReserve = 0
 
   endpointBranches.forEach((branchEndpoints, branchIndex) => {
     const trunkDevicesBetween = (circuit.trunkDevices || []).filter(
       (d) => d.trunkPosition > 0 && d.trunkPosition <= branchIndex
     ).length
     const interBranchTrunkDeviceOffset = trunkDevicesBetween * constants.TRUNK_DEVICE_SPACING
+    const availableLabelHeight =
+      (branchIndex === 0
+        ? constants.BRANCH_START_OFFSET
+        : constants.ENDPOINT_BRANCH_SPACING) - ENDPOINT_LABEL_FIXED_VERTICAL_CLEARANCE
+    labelVerticalReserve += Math.max(
+      0,
+      getBranchBottomLabelHeight(branchEndpoints) - availableLabelHeight
+    )
     let branchY =
       firstBranchY -
       branchIndex * constants.ENDPOINT_BRANCH_SPACING -
       interBranchTrunkDeviceOffset -
-      domoticaVerticalReserve
+      domoticaVerticalReserve -
+      labelVerticalReserve
 
     if ((circuit.trunkDevices || []).length === 0 && branchIndex === 0) {
       branchY -= nestedBranchLabelClearance
     }
 
     const storedBranch = storedBranches[branchIndex]
+    const storedLabel = storedBranch?.label?.trim() ?? ''
+    const storedLabelIsDuplicate =
+      storedLabel.length > 0 && result.some((existing) => existing.label === storedLabel)
+    const branchLabel =
+      (!storedLabelIsDuplicate ? storedLabel : '') ||
+      getSequentialBranchLabelFallback(circuit, branchIndex) ||
+      branchEndpoints.find((ep) => ep.label)?.label ||
+      ''
     result.push({
       id: `branch-${circuit.id}-${branchIndex}`,
       circuitId: circuit.id,
-      label: storedBranch?.label || branchEndpoints.find((ep) => ep.label)?.label || '',
+      label: branchLabel,
       trunkX: startX,
       trunkY: startY,
       branchX: startX,

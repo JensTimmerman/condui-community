@@ -259,7 +259,11 @@ function Dialog() {
               {dialog.footerStart ? (
                 <div className="min-w-0 flex-1">{dialog.footerStart}</div>
               ) : null}
-              <div className={`flex shrink-0 gap-2 sm:gap-3 ${dialog.footerStart ? '' : 'ml-auto'}`}>
+              <div
+                className={`flex min-w-0 flex-wrap justify-end gap-2 sm:gap-3 ${
+                  dialog.footerStart ? '' : 'ml-auto'
+                }`}
+              >
                 {dialog.buttons.map((button, index) => (
                   <button
                     key={index}
@@ -271,7 +275,7 @@ function Dialog() {
                       }
                     }}
                     autoFocus={button.autoFocus}
-                    className={`px-4 py-2 font-medium rounded-md transition-colors ${
+                    className={`max-w-full whitespace-normal rounded-md px-4 py-2 text-center font-medium transition-colors ${
                       button.variant === 'danger'
                         ? 'bg-red-600 hover:bg-red-700 text-white'
                         : button.variant === 'primary'
