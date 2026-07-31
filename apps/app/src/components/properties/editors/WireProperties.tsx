@@ -12,6 +12,7 @@ import {
 } from '@/lib/feedTopology'
 import {
   findSectionWireOverrideWithFeederFallback,
+  findSubPanelFeederWireOverride,
   getSectionRefFromWireSegment,
   upsertSectionWireOverride,
 } from '@/lib/wires/sectionWireOverrides'
@@ -361,8 +362,12 @@ function WireProperties({
         ? 'upstream'
         : undefined)
 
-  const isSubPanelSupplyWire =
-    wireSegment.circuitId && wireSegment.type === 'vertical' && !wireSegment.fromElementType
+  const isSubPanelSupplyWire = wireSegment.isSubPanelSupply === true
+  const subPanelFeederTargetId = isSubPanelSupplyWire
+    ? wireSegment.panelId
+    : wireSegment.feederProtectionId && wireSegment.toElementType === 'endpoint'
+      ? wireSegment.toElementId
+      : undefined
 
   const effectiveSupplyWireRole: SupplyWireRole | undefined =
     wireSegment.supplyMergedIntoBusDrop ? 'downstream' : supplyWireRole
@@ -467,18 +472,8 @@ function WireProperties({
 
   // Sub-panel supply wire - edit the parent circuit (circuitId points to parent circuit)
   // This will fall through to the regular circuit wire handling below
-  if (isSubPanelSupplyWire) {
-    // Segment above the local feeder device (device -> bus) has no editable properties.
-    if (wireSegment.isSubPanelSupply && wireSegment.fromElementId && !wireSegment.toElementId) {
-      return (
-        <div className="p-4 text-center text-gray-500">
-          {t('wires.noPropertiesForSegment', 'This wire segment has no editable properties')}
-        </div>
-      )
-    }
-    // The circuitId is the parent circuit that supplies the sub-panel
-    // Continue to regular circuit wire handling - it will edit the parent circuit
-  }
+  // The circuitId is the parent circuit that supplies the sub-panel. Continue to
+  // regular circuit handling, using the canonical source protection → target panel ref.
 
   // Handle circuit wires - edit the circuit
   if (!wireSegment.circuitId) {
@@ -516,11 +511,18 @@ function WireProperties({
     )
     sectionRef = originVertical ? getSectionRefFromWireSegment(originVertical) : null
   }
-  const sectionOverride = findSectionWireOverrideWithFeederFallback(
-    circuit,
-    sectionRef,
-    wireSegment.feederProtectionId
-  )
+  const sectionOverride = subPanelFeederTargetId
+    ? findSubPanelFeederWireOverride(
+        circuit,
+        wireSegment.feederProtectionId,
+        subPanelFeederTargetId,
+        wireDomain
+      )
+    : findSectionWireOverrideWithFeederFallback(
+        circuit,
+        sectionRef,
+        wireSegment.feederProtectionId
+      )
   const effectiveWireRoute =
     sectionOverride?.wireRoute ??
     domainOverride?.wireRoute ??
@@ -696,4 +698,3 @@ function WireProperties({
     </div>
   )
 }
-

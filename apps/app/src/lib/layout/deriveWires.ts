@@ -26,6 +26,7 @@ import {
 import {
   findSectionWireOverride,
   findSectionWireOverrideWithFeederFallback,
+  findSubPanelFeederWireOverride,
   getSectionRefFromWireSegment,
   type CircuitSectionRef,
 } from '@/lib/wires/sectionWireOverrides'
@@ -363,12 +364,33 @@ function derivePanelWires(
         ? parentProtection.circuits.find((c: Circuit) => c.id === parentMcbNode.circuitIdForWires)
         : undefined) ?? parentProtection?.circuits?.[0]
     const parentCircuitCable = parentCircuit?.cable
-    const supplyCable = parentCircuitCable || {
+    const fallbackSupplyCable = parentCircuitCable || {
       kind: 'XVB' as const,
       conductors: 3,
       sectionMm2: 6,
       hasPE: true,
     }
+    // The same physical feeder is rendered once in the source panel and once as
+    // the incoming supply of the target panel. Resolve the target-side copy from
+    // the source panel's protection→panel section override as well, otherwise it
+    // silently falls back to Circuit.cable and validation can report a different
+    // section than the wire properties editor.
+    const parentFeederOverride = parentCircuit
+      ? findSubPanelFeederWireOverride(
+          parentCircuit,
+          parentProtection?.id,
+          panel.id,
+          DEFAULT_ELECTRICAL_DOMAIN
+        )
+      : undefined
+    const supplyWireProps = parentCircuit
+      ? getCircuitWirePropertiesFromResolvedOverride(
+          parentCircuit,
+          DEFAULT_ELECTRICAL_DOMAIN,
+          parentFeederOverride
+        )
+      : undefined
+    const supplyCable = supplyWireProps?.cable ?? fallbackSupplyCable
 
     const subPanelSupplyDeviceNodes = panelNode.children
       .filter((c) => c.type === 'trunkDevice' && c.id?.startsWith('subpanelSupplyTrunkDevice-'))
@@ -409,18 +431,22 @@ function derivePanelWires(
         panelId: panel.id,
         domain: DEFAULT_ELECTRICAL_DOMAIN,
         circuitId: parentCircuit?.id,
-        inTube: parentCircuit?.inTube,
-        wireRoute: parentCircuit?.wireRoute ?? (parentCircuit?.inWall ? 'wall' : undefined),
-        inWall:
-          (parentCircuit?.wireRoute ?? (parentCircuit?.inWall ? 'wall' : undefined)) === 'wall'
-            ? (parentCircuit?.inWall ?? false)
-            : false,
-        hideWireLabel: parentCircuit?.hideWireLabel,
+        inTube: supplyWireProps?.inTube ?? parentCircuit?.inTube,
+        wireRoute:
+          supplyWireProps?.wireRoute ??
+          parentCircuit?.wireRoute ??
+          (parentCircuit?.inWall ? 'wall' : undefined),
+        inWall: supplyWireProps?.inWall ?? false,
+        hideWireLabel: supplyWireProps?.hideWireLabel ?? parentCircuit?.hideWireLabel,
+        showFireClassLabel: supplyWireProps?.showFireClassLabel,
+        wireLengthM: supplyWireProps?.wireLengthM,
+        showWireLengthLabel: supplyWireProps?.showWireLengthLabel,
         fromElementType: 'protection',
         fromElementId: from.deviceId ?? parentProtection?.id,
         toElementType: to.deviceId ? 'protection' : undefined,
         toElementId: to.deviceId,
         isSubPanelSupply: true,
+        feederProtectionId: parentProtection?.id,
       })
     }
   }
@@ -751,6 +777,7 @@ function derivePanelWires(
         segment.fromElementId === parentProtectionId
       ) {
         segment.isSubPanelSupply = true
+        segment.feederProtectionId = parentProtectionId
       }
     }
   }
@@ -1185,8 +1212,12 @@ function deriveMcbWires(
           domain: DEFAULT_ELECTRICAL_DOMAIN,
         }
         const resolvedSectionOverride =
-          findSectionWireOverrideWithFeederFallback(circuit, mergedEndpointRef, protection?.id) ??
-          findSectionWireOverride(circuit, directEndpointSectionRef)
+          findSubPanelFeederWireOverride(
+            circuit,
+            protection?.id,
+            topmostEndpoint.domainId ?? '',
+            DEFAULT_ELECTRICAL_DOMAIN
+          ) ?? findSectionWireOverrideWithFeederFallback(circuit, mergedEndpointRef, protection?.id)
         const mergedWireProps = getCircuitWirePropertiesFromResolvedOverride(
           circuit,
           DEFAULT_ELECTRICAL_DOMAIN,

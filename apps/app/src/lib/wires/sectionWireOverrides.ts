@@ -10,8 +10,80 @@ export interface CircuitSectionRef {
   domain?: ElectricalDomain
 }
 
+export function getSubPanelFeederSectionRef(
+  protectionId: string | undefined,
+  subPanelId: string,
+  domain: ElectricalDomain
+): CircuitSectionRef {
+  return {
+    fromElementType: 'protection',
+    fromElementId: protectionId,
+    toElementType: 'endpoint',
+    toElementId: subPanelId,
+    domain,
+  }
+}
+
+export function findSubPanelFeederWireOverride(
+  circuit: Circuit,
+  protectionId: string | undefined,
+  subPanelId: string,
+  domain: ElectricalDomain
+): CircuitSectionOverride | undefined {
+  return (
+    findSectionWireOverride(circuit, getSubPanelFeederSectionRef(protectionId, subPanelId, domain)) ??
+    findSectionWireOverride(circuit, {
+      fromElementType: 'mainBus',
+      toElementType: 'endpoint',
+      toElementId: subPanelId,
+      domain,
+    }) ??
+    findSectionWireOverride(circuit, {
+      fromElementType: 'secondaryBus',
+      toElementType: 'endpoint',
+      toElementId: subPanelId,
+      domain,
+    }) ??
+    findSectionWireOverride(circuit, {
+      fromElementType: 'mainBus',
+      toElementType: 'protection',
+      toElementId: protectionId,
+      domain,
+    }) ??
+    findSectionWireOverride(circuit, {
+      fromElementType: 'secondaryBus',
+      toElementType: 'protection',
+      toElementId: protectionId,
+      domain,
+    }) ??
+    findSectionWireOverride(circuit, {
+      fromElementType: 'protection',
+      fromElementId: protectionId,
+      domain,
+    })
+  )
+}
+
 export function getSectionRefFromWireSegment(wireSegment: WireSegment): CircuitSectionRef | null {
   if (wireSegment.type !== 'vertical' || !wireSegment.circuitId) return null
+  if (
+    wireSegment.feederProtectionId &&
+    wireSegment.toElementType === 'endpoint' &&
+    wireSegment.toElementId
+  ) {
+    return getSubPanelFeederSectionRef(
+      wireSegment.feederProtectionId,
+      wireSegment.toElementId,
+      wireSegment.domain ?? 'AC'
+    )
+  }
+  if (wireSegment.isSubPanelSupply && wireSegment.feederProtectionId) {
+    return getSubPanelFeederSectionRef(
+      wireSegment.feederProtectionId,
+      wireSegment.panelId,
+      wireSegment.domain ?? 'AC'
+    )
+  }
   const fromType = wireSegment.fromElementType
   if (
     fromType !== 'mainBus' &&
