@@ -111,6 +111,14 @@ interface WallRendererProps {
   } | null
   /** Wall colour overrides from settings — pass from a DOM ancestor (required under react-konva). */
   customWallColors?: ThemeWallColors
+  onSegmentLengthCommit?: (wallId: string, segmentIndex: number, lengthCm: number) => void
+  onSegmentDimensionDrag?: (
+    wallId: string,
+    segmentIndex: number,
+    delta: Point2,
+    phase: 'start' | 'preview' | 'commit' | 'cancel',
+    precise: boolean
+  ) => void
 }
 
 /**
@@ -159,6 +167,8 @@ function WallRendererInner({
   wallsListening = listening,
   previewOpening = null,
   customWallColors,
+  onSegmentLengthCommit,
+  onSegmentDimensionDrag,
 }: WallRendererProps) {
   const touchPrimary = useTouchPrimaryDevice()
   const wallPointSelectionFromStore = useStoreWithEqualityFn(
@@ -862,6 +872,19 @@ function WallRendererInner({
           }
           return Array.from(indices).sort((a, b) => a - b)
         })()
+        const editableMeasurementSegmentIndices = (() => {
+          if (selectedSegments.length === 1) {
+            const selectedSegment = selectedSegments[0]!
+            return measurementSegmentIndices.includes(selectedSegment) ? [selectedSegment] : []
+          }
+          // Every visible measurement on the selected wall is a valid editing entry point.
+          // Point/segment selection state can arrive through separate stores, so requiring
+          // every point to be mirrored here made otherwise valid shape segments read-only.
+          if (isSelected && selectedSegments.length === 0) {
+            return measurementSegmentIndices
+          }
+          return []
+        })()
         const solidIntervals = getWallSolidIntervals(
           wall.points,
           wallDoors,
@@ -1253,14 +1276,30 @@ function WallRendererInner({
               (measurementSegmentIndices.length > 0 || openingMeasurementIntervals.length > 0) &&
               pxPerMeter != null &&
               pxPerMeter > 0 && (
-              <SegmentMeasurementOverlay
-                wall={wall}
-                segmentIndices={measurementSegmentIndices}
-                distanceIntervals={openingMeasurementIntervals}
-                pxPerMeter={pxPerMeter}
-                zoom={zoom}
-                textColor={theme === 'dark' ? '#ffffff' : '#000000'}
-              />
+                <SegmentMeasurementOverlay
+                  wall={wall}
+                  segmentIndices={measurementSegmentIndices}
+                  distanceIntervals={openingMeasurementIntervals}
+                  pxPerMeter={pxPerMeter}
+                  zoom={zoom}
+                  textColor={theme === 'dark' ? '#ffffff' : '#000000'}
+                  editableLabelFill={
+                    theme === 'dark' ? 'rgba(17,24,39,0.95)' : 'rgba(255,255,255,0.95)'
+                  }
+                  editableSegmentIndices={editableMeasurementSegmentIndices}
+                  onSegmentLengthCommit={
+                    onSegmentLengthCommit
+                      ? (segmentIndex, lengthCm) =>
+                          onSegmentLengthCommit(wall.id, segmentIndex, lengthCm)
+                      : undefined
+                  }
+                  onSegmentDimensionDrag={
+                    onSegmentDimensionDrag
+                      ? (segmentIndex, delta, phase, precise) =>
+                          onSegmentDimensionDrag(wall.id, segmentIndex, delta, phase, precise)
+                      : undefined
+                  }
+                />
               )}
           </Group>
         )
@@ -1295,7 +1334,9 @@ function areEqual(prev: WallRendererProps, next: WallRendererProps): boolean {
     prev.theme === next.theme &&
     prev.listening === next.listening &&
     prev.wallsListening === next.wallsListening &&
-    prev.previewOpening === next.previewOpening
+    prev.previewOpening === next.previewOpening &&
+    prev.onSegmentLengthCommit === next.onSegmentLengthCommit &&
+    prev.onSegmentDimensionDrag === next.onSegmentDimensionDrag
   )
 }
 

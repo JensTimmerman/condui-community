@@ -103,6 +103,7 @@ import {
   constrainVertexMove,
   applyOpeningMoveOnSegment,
   getOpeningsBySegment,
+  minSegmentLengthForOpenings,
   preserveOpeningPositionsAfterPointChange,
   sanitizeWallOpeningPositions,
   isRigidTranslation,
@@ -119,6 +120,7 @@ import {
   splitWallPointsAtDeletedSegments,
 } from '@/lib/plan/wallSelectionDeletion'
 import { resolveOpeningPositionSnap } from '@/lib/plan/openingPositionSnap'
+import { dragWallShapeDimension, resizeWallShapeSegment } from '@/lib/plan/wallShapeResize'
 import type { OpeningOnSegment } from '@/lib/plan/constraints'
 import { snapPlacementCenterToGrid, snapToGrid } from '@/utils/plan/gridSnap'
 import {
@@ -689,6 +691,14 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
   const [previewWalls, applyPreviewWalls] = useState<Map<string, Wall> | null>(null)
   const [previewDoors, applyPreviewDoors] = useState<Map<string, Door> | null>(null)
   const [previewWindows, applyPreviewWindows] = useState<Map<string, Window> | null>(null)
+  const wallDimensionDragRef = useRef<{
+    wall: Wall
+    doors: Door[]
+    windows: Window[]
+    segmentIndex: number
+    minimumSegmentLength: number
+    parallelDragDirection: -1 | 1 | null
+  } | null>(null)
   // Selection-drag preview (whole walls moved together) stored outside the store.
   const wallSelectionPreviewRef = useRef<Map<string, Point2[]>>(new Map())
   const stairSelectionPreviewRef = useRef<Map<string, Point2[]>>(new Map())
@@ -5447,6 +5457,194 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
     withSingleUndoEntry,
   ])
 
+  const commitWallSegmentLength = useCallback(
+    (wallId: string, segmentIndex: number, lengthCm: number) => {
+      const floorPlan = activeFloor?.floorPlan
+      if (!floorPlan || !Number.isFinite(lengthCm) || lengthCm <= 0 || canvasPxPerMeter <= 0) {
+        return
+      }
+      const wall = floorPlan.walls.find((entry: Wall) => entry.id === wallId)
+      if (!wall) return
+      const wallDoors = floorPlan.doors.filter((door: Door) => door.wallId === wallId)
+      const wallWindows = floorPlan.windows.filter((window: Window) => window.wallId === wallId)
+      const lengthSnapStep = canvasPxPerMeter / 1000
+      const openingMinimum = minSegmentLengthForOpenings(
+        getOpeningsBySegment(wall.points, wallDoors, wallWindows).get(segmentIndex) ?? []
+      )
+      const snappedLengthCm = Math.round(lengthCm * 10) / 10
+      const requestedLength = (snappedLengthCm / 100) * canvasPxPerMeter
+      const targetLength = Math.max(
+        requestedLength,
+        Math.ceil(openingMinimum / lengthSnapStep) * lengthSnapStep
+      )
+      const resize = resizeWallShapeSegment(
+        wall.points,
+        segmentIndex,
+        targetLength,
+        lengthSnapStep
+      )
+      if (!resize) return
+
+      const constrained = adjustVerticesAndOpenings(
+        wall.points,
+        resize.points,
+        wallDoors,
+        wallWindows,
+        resize.movedPointIndices
+      )
+      const constrainedOpeningIds = new Set([
+        ...constrained.doorUpdates.map((update) => update.id),
+        ...constrained.windowUpdates.map((update) => update.id),
+      ])
+      const preserved = preserveOpeningPositionsAfterPointChange(
+        wall.points,
+        constrained.points,
+        wallDoors,
+        wallWindows,
+        constrainedOpeningIds
+      )
+      const doorUpdates = [...constrained.doorUpdates, ...preserved.doorUpdates]
+      const windowUpdates = [...constrained.windowUpdates, ...preserved.windowUpdates]
+
+      withSingleUndoEntry(
+        () => {
+          updateWall(wallId, { points: constrained.points, doorUpdates, windowUpdates })
+          return true
+        },
+        { sessionLabel: 'resize-wall-segment' }
+      )
+    },
+    [activeFloor?.floorPlan, canvasPxPerMeter, updateWall, withSingleUndoEntry]
+  )
+
+  const handleWallDimensionDrag = useCallback(
+    (
+      wallId: string,
+      segmentIndex: number,
+      delta: Point2,
+      phase: 'start' | 'preview' | 'commit' | 'cancel',
+      _precise: boolean
+    ) => {
+      const floorPlan = activeFloor?.floorPlan
+      if (!floorPlan) return
+
+      if (phase === 'start') {
+        const wall = floorPlan.walls.find((entry: Wall) => entry.id === wallId)
+        if (!wall) return
+        wallDimensionDragRef.current = {
+          wall: { ...wall, points: wall.points.map((point) => ({ ...point })) },
+          doors: floorPlan.doors
+            .filter((door: Door) => door.wallId === wallId)
+            .map((door: Door) => ({ ...door })),
+          windows: floorPlan.windows
+            .filter((window: Window) => window.wallId === wallId)
+            .map((window: Window) => ({ ...window })),
+          segmentIndex,
+          minimumSegmentLength: minSegmentLengthForOpenings(
+            getOpeningsBySegment(
+              wall.points,
+              floorPlan.doors.filter((door: Door) => door.wallId === wallId),
+              floorPlan.windows.filter((window: Window) => window.wallId === wallId)
+            ).get(segmentIndex) ?? []
+          ),
+          parallelDragDirection: null,
+        }
+        applyPreviewWalls(null)
+        applyPreviewDoors(null)
+        applyPreviewWindows(null)
+        return
+      }
+
+      const drag = wallDimensionDragRef.current
+      if (!drag || drag.wall.id !== wallId || drag.segmentIndex !== segmentIndex) return
+      if (phase === 'cancel') {
+        wallDimensionDragRef.current = null
+        applyPreviewWalls(null)
+        applyPreviewDoors(null)
+        applyPreviewWindows(null)
+        return
+      }
+
+      const segmentStart = drag.wall.points[segmentIndex]
+      const segmentEnd = drag.wall.points[segmentIndex + 1]
+      if (drag.parallelDragDirection == null && segmentStart && segmentEnd) {
+        const segmentX = segmentEnd.x - segmentStart.x
+        const segmentY = segmentEnd.y - segmentStart.y
+        const segmentLength = Math.hypot(segmentX, segmentY)
+        if (segmentLength > 1e-6) {
+          const parallelDelta = (delta.x * segmentX + delta.y * segmentY) / segmentLength
+          if (Math.abs(parallelDelta) > 1e-6) {
+            drag.parallelDragDirection = parallelDelta < 0 ? -1 : 1
+          }
+        }
+      }
+
+      const resize = dragWallShapeDimension(
+        drag.wall.points,
+        segmentIndex,
+        delta,
+        canvasPxPerMeter / 1000,
+        drag.minimumSegmentLength,
+        drag.parallelDragDirection ?? undefined
+      )
+      if (!resize) return
+      const constrained = adjustVerticesAndOpenings(
+        drag.wall.points,
+        resize.points,
+        drag.doors,
+        drag.windows,
+        resize.movedPointIndices
+      )
+      const constrainedOpeningIds = new Set([
+        ...constrained.doorUpdates.map((update) => update.id),
+        ...constrained.windowUpdates.map((update) => update.id),
+      ])
+      const preserved = preserveOpeningPositionsAfterPointChange(
+        drag.wall.points,
+        constrained.points,
+        drag.doors,
+        drag.windows,
+        constrainedOpeningIds
+      )
+      const doorUpdates = [...constrained.doorUpdates, ...preserved.doorUpdates]
+      const windowUpdates = [...constrained.windowUpdates, ...preserved.windowUpdates]
+
+      if (phase === 'preview') {
+        applyPreviewWalls(new Map([[wallId, { ...drag.wall, points: constrained.points }]]))
+        applyPreviewDoors(
+          new Map(
+            drag.doors.map((door) => {
+              const update = doorUpdates.find((entry) => entry.id === door.id)
+              return [door.id, update ? { ...door, position: update.position } : door]
+            })
+          )
+        )
+        applyPreviewWindows(
+          new Map(
+            drag.windows.map((window) => {
+              const update = windowUpdates.find((entry) => entry.id === window.id)
+              return [window.id, update ? { ...window, position: update.position } : window]
+            })
+          )
+        )
+        return
+      }
+
+      withSingleUndoEntry(
+        () => {
+          updateWall(wallId, { points: constrained.points, doorUpdates, windowUpdates })
+          return true
+        },
+        { sessionLabel: 'drag-wall-dimension' }
+      )
+      wallDimensionDragRef.current = null
+      applyPreviewWalls(null)
+      applyPreviewDoors(null)
+      applyPreviewWindows(null)
+    },
+    [activeFloor?.floorPlan, canvasPxPerMeter, updateWall, withSingleUndoEntry]
+  )
+
   // Keyboard shortcuts are now handled by usePlanKeyboard hook
   usePlanKeyboard(activeFloorId, {
     pointerOverPlanRef,
@@ -6651,6 +6849,8 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
                   selectedPointIndices={selectedPointIndices}
                   selectedSegmentIndices={selectedSegmentIndices}
                   showSegmentMeasurements={isFloorPlanMode && activeTool !== 'none'}
+                  onSegmentLengthCommit={commitWallSegmentLength}
+                  onSegmentDimensionDrag={handleWallDimensionDrag}
                   hoveredWallId={shouldHandleWallHover ? hoveredWallId : null}
                   hoveredDoorId={isFloorPlanMode ? hoveredDoorId : null}
                   hoveredWindowId={isFloorPlanMode ? hoveredWindowId : null}

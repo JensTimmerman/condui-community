@@ -145,6 +145,9 @@ function isNodeDraggableForTouch(
   while (n && n !== stage && depth < 10) {
     const name = n.name()
     if (typeof n.draggable === 'function' && n.draggable()) return true
+    // Measurement labels own their single-finger drag gesture. Treat them like
+    // draggable canvas content so the camera pan recognizer does not steal it.
+    if (name?.startsWith('planDimension-')) return true
     if (name?.startsWith('panelModule-')) return true
     if (name?.startsWith('protection-')) {
       const id = name.slice('protection-'.length)
