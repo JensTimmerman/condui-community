@@ -31,6 +31,10 @@ import {
 } from '@/lib/projectV2/electrical'
 import { findPanelById, walkPanels } from '@/lib/panel/panelTree'
 import { DEFAULT_INSTALLATION_PROFILE } from '@/lib/installationProfile'
+import {
+  DEFAULT_PANEL_GRID_COLUMNS,
+  DEFAULT_PANEL_GRID_ROWS,
+} from '@/lib/panel/panelGridDefaults'
 
 type Project = Parameters<typeof migrateProjectV1ToV2>[0]
 
@@ -194,8 +198,8 @@ function addDefaultTrunkDevicesAndPanelGrid(
   ]
 
   mainPanel.gridView = {
-    rows: 8,
-    columns: 12,
+    rows: DEFAULT_PANEL_GRID_ROWS,
+    columns: DEFAULT_PANEL_GRID_COLUMNS,
     feedFromTop: false,
     slots: mainPanelSlots,
     supplyPanelSlots,

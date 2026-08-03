@@ -28,8 +28,12 @@ import {
 } from './canvasSymbols'
 import { useTouchPrimaryDevice } from '@/editions/community/communityHooks'
 import { ProtectionOneWireLabels } from './ProtectionOneWireLabels'
-import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
+import {
+  getElectricalInstallationFromProject,
+  getElectricalPanelsFromProject,
+} from '@/lib/projectV2/electrical'
 import { getSecondaryBusOrderForCircuit } from '@/lib/eendraad/protectionDragEligibility'
+import { getProtectionPhaseLabel } from '@/lib/wires/phaseAssignment'
 import type { Circuit, ProtectionDevice } from '@/types/schema'
 import type { Point } from '@/types/ui'
 
@@ -72,9 +76,20 @@ export function ProtectionSymbol({
   const isPreviewSelected = useIsPreviewSelected('protection', protection.id)
   const [processedImage, setProcessedImage] = useState<HTMLImageElement | null>(null)
   type ProjectStoreState = ReturnType<typeof useProjectStore.getState>
+  const currentProject = useProjectStore((state: ProjectStoreState) => state.currentProject)
   
   // Subscribe to actual data to make moveInfo reactive
   const circuit = protection.circuits?.[0]
+  const installation = currentProject
+    ? getElectricalInstallationFromProject(currentProject)
+    : undefined
+  const panels = currentProject ? getElectricalPanelsFromProject(currentProject) : []
+  const phaseLabel = getProtectionPhaseLabel(
+    protection,
+    installation?.nominalVoltage.system,
+    panels,
+    installation,
+  )
   const secondaryBusOrder = useProjectStore((state: ProjectStoreState) => {
     if (!circuit || !state.currentProject) return null
     return getSecondaryBusOrderForCircuit(
@@ -234,6 +249,7 @@ export function ProtectionSymbol({
           fontFamily={fontFamily}
           fontSize={10}
           symbolSize={SYMBOL_SIZE}
+          phaseLabel={phaseLabel}
         />
       </Group>
     )
@@ -403,6 +419,7 @@ export function ProtectionSymbol({
         fontFamily={fontFamily}
         fontSize={10}
         symbolSize={SYMBOL_SIZE}
+        phaseLabel={phaseLabel}
         onLabelClick={handleClick}
       />
     </Group>

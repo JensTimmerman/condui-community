@@ -405,7 +405,7 @@ export function routePanelWire(
       )
       .map((segment) => segment.from.x),
   ])
-  const regions = options.pathwayRegions?.filter((region) => region.horizontalYs.length >= 2) ?? []
+  const regions = options.pathwayRegions?.filter((region) => region.horizontalYs.length >= 1) ?? []
   const horizontalLaneYs =
     regions.length > 0
       ? uniqueSorted(regions.flatMap((region) => region.horizontalYs))

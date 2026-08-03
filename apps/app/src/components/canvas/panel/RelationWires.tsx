@@ -17,6 +17,7 @@ import {
 } from '@/lib/projectV2/electrical'
 import { useIsMarqueeSelecting } from '@/contexts/SelectionPreviewContext'
 import { useUIStore } from '@/stores/uiStore'
+import { DEFAULT_PANEL_GRID_COLUMNS } from '@/lib/panel/panelGridDefaults'
 import {
   routePanelWire,
   type PanelWirePathRegion,
@@ -84,6 +85,8 @@ interface RoutedWire {
   pathDebug?: WirePathDebug
   selectedEndpoint?: 'source' | 'target'
   remotePlacement?: ModulePlacement
+  /** Cross-panel wires in the same bundle should share their trunk, not repel it. */
+  overlapGroup?: string
 }
 
 interface RenderedWireSegment {
@@ -301,9 +304,8 @@ const WUMP_SIDE_OFFSET = 5
 const INTERNAL_FEED_AVOID_OFFSET = 6
 /** Split opposite vertical WINT flows in same side corridor. */
 const INTERNAL_BIDIR_CORRIDOR_SPLIT = 4
-/** Prefer opposite sides, but allow two same-side ports when they save a material detour. */
-const SAME_SIDE_PORT_PENALTY = 128
-const DUAL_MODULE_PORT_SPACING = 8
+/** Prefer a clear alternative, but never justify a board-scale detour for one conflict. */
+const WIRE_CONFLICT_PENALTY = ROW_STRIDE * 4
 
 /* ── Wire routing helpers ─────────────────────────────────────── */
 
@@ -319,6 +321,153 @@ function routeViaGap(
 }
 
 type ModulePortCandidate = { wires: RoutedWire[]; preferencePenalty: number }
+
+export function countWirePathConflicts(
+  wires: Array<{ points: number[]; overlapGroup?: string }>
+): number {
+  const segmentsFor = (wire: { points: number[] }): WirePathSegment[] => {
+    const segments: WirePathSegment[] = []
+    for (let index = 0; index <= wire.points.length - 4; index += 2) {
+      segments.push({
+        from: { x: wire.points[index]!, y: wire.points[index + 1]! },
+        to: { x: wire.points[index + 2]!, y: wire.points[index + 3]! },
+      })
+    }
+    return segments
+  }
+  const allSegments = wires.map(segmentsFor)
+  let conflicts = 0
+  for (let wireIndex = 1; wireIndex < allSegments.length; wireIndex += 1) {
+    for (const candidate of allSegments[wireIndex]!) {
+      const candidateVertical = candidate.from.x === candidate.to.x
+      for (let previousIndex = 0; previousIndex < wireIndex; previousIndex += 1) {
+        if (
+          wires[wireIndex]!.overlapGroup &&
+          wires[wireIndex]!.overlapGroup === wires[previousIndex]!.overlapGroup
+        ) {
+          continue
+        }
+        for (const reserved of allSegments[previousIndex]!) {
+          const reservedVertical = reserved.from.x === reserved.to.x
+          if (candidateVertical !== reservedVertical) {
+            const vertical = candidateVertical ? candidate : reserved
+            const horizontal = candidateVertical ? reserved : candidate
+            const verticalLow = Math.min(vertical.from.y, vertical.to.y)
+            const verticalHigh = Math.max(vertical.from.y, vertical.to.y)
+            const horizontalLow = Math.min(horizontal.from.x, horizontal.to.x)
+            const horizontalHigh = Math.max(horizontal.from.x, horizontal.to.x)
+            const crosses =
+              vertical.from.x >= horizontalLow &&
+              vertical.from.x <= horizontalHigh &&
+              horizontal.from.y >= verticalLow &&
+              horizontal.from.y <= verticalHigh
+            const isHorizontalEndpoint =
+              vertical.from.x === horizontalLow || vertical.from.x === horizontalHigh
+            const isVerticalEndpoint =
+              horizontal.from.y === verticalLow || horizontal.from.y === verticalHigh
+            if (
+              crosses &&
+              // A shared endpoint is a legitimate connection. A T-junction,
+              // such as a side ladder continuing through another wire, is not.
+              !(isHorizontalEndpoint && isVerticalEndpoint)
+            ) {
+              conflicts += 1
+            }
+            continue
+          }
+          if (candidateVertical && candidate.from.x === reserved.from.x) {
+            const overlap =
+              Math.min(
+                Math.max(candidate.from.y, candidate.to.y),
+                Math.max(reserved.from.y, reserved.to.y)
+              ) -
+              Math.max(
+                Math.min(candidate.from.y, candidate.to.y),
+                Math.min(reserved.from.y, reserved.to.y)
+              )
+            if (overlap > 0) conflicts += 1
+          } else if (!candidateVertical && candidate.from.y === reserved.from.y) {
+            const overlap =
+              Math.min(
+                Math.max(candidate.from.x, candidate.to.x),
+                Math.max(reserved.from.x, reserved.to.x)
+              ) -
+              Math.max(
+                Math.min(candidate.from.x, candidate.to.x),
+                Math.min(reserved.from.x, reserved.to.x)
+              )
+            if (overlap > 0) conflicts += 1
+          }
+        }
+      }
+    }
+  }
+  return conflicts
+}
+
+function resolveSameRowLockedRegion(
+  placement: ModulePlacement,
+  remote: ModulePlacement,
+  side: 'top' | 'bottom',
+  pathwayRegions: PanelWirePathRegion[] | undefined
+): PanelWirePathRegion[] | undefined {
+  if (placement.row !== remote.row) return undefined
+  const placementCenterX = placement.x + placement.width / 2
+  const remoteCenterX = remote.x + remote.width / 2
+  const placementCenterY = placement.y + placement.height / 2
+  const remoteCenterY = remote.y + remote.height / 2
+  const region = pathwayRegions?.find((candidate) => {
+    const minY = Math.min(...candidate.horizontalYs)
+    const maxY = Math.max(...candidate.horizontalYs)
+    return (
+      placementCenterX >= candidate.left &&
+      placementCenterX <= candidate.right &&
+      remoteCenterX >= candidate.left &&
+      remoteCenterX <= candidate.right &&
+      placementCenterY >= minY &&
+      placementCenterY <= maxY &&
+      remoteCenterY >= minY &&
+      remoteCenterY <= maxY
+    )
+  })
+  if (pathwayRegions && !region) return undefined
+
+  const edgeY =
+    side === 'top'
+      ? Math.min(placement.y, remote.y)
+      : Math.max(placement.y + placement.height, remote.y + remote.height)
+  const eligibleLanes = region?.horizontalYs.filter((y) =>
+    side === 'top' ? y <= edgeY : y >= edgeY
+  )
+  const laneY = eligibleLanes?.reduce<number | null>((nearest, y) => {
+    if (nearest == null) return y
+    return Math.abs(y - edgeY) < Math.abs(nearest - edgeY) ? y : nearest
+  }, null)
+  const lockedLaneY = laneY ?? (side === 'top' ? edgeY - ROW_GAP / 2 : edgeY + ROW_GAP / 2)
+  return [
+    region
+      ? { ...region, horizontalYs: [lockedLaneY] }
+      : {
+          id: 'same-row-lock',
+          left: Math.min(placementCenterX, remoteCenterX),
+          right: Math.max(placementCenterX, remoteCenterX),
+          horizontalYs: [lockedLaneY],
+        },
+  ]
+}
+
+function candidateKeepsOverlapGroupsTogether(candidate: ModulePortCandidate): boolean {
+  const terminalYByGroup = new Map<string, number>()
+  for (const wire of candidate.wires) {
+    if (!wire.overlapGroup || !wire.selectedEndpoint) continue
+    const terminalIndex = wire.selectedEndpoint === 'source' ? 1 : wire.points.length - 1
+    const terminalY = wire.points[terminalIndex]!
+    const existing = terminalYByGroup.get(wire.overlapGroup)
+    if (existing != null && existing !== terminalY) return false
+    terminalYByGroup.set(wire.overlapGroup, terminalY)
+  }
+  return true
+}
 
 function applyWireTerminal(
   wire: RoutedWire,
@@ -364,44 +513,31 @@ function buildModulePortCandidates(
   placement: ModulePlacement
 ): ModulePortCandidate[] {
   const centerX = placement.x + placement.width / 2
-  const incoming = wires.filter((wire) => wire.selectedEndpoint === 'target')
-  const outgoing = wires.filter((wire) => wire.selectedEndpoint === 'source')
   const cloneWires = () => wires.map((wire) => ({ ...wire, points: [...wire.points] }))
-  if (incoming.length === 0 || outgoing.length === 0) {
+  const configurableWireIndexes = wires.flatMap((wire, index) =>
+    wire.selectedEndpoint ? [index] : []
+  )
+  if (configurableWireIndexes.length === 0) {
     return [{ wires: cloneWires(), preferencePenalty: 0 }]
   }
 
-  const applyTerminal = (wire: RoutedWire, side: 'top' | 'bottom', terminalX: number) => {
-    if (!wire.selectedEndpoint) return
-    applyWireTerminal(wire, wire.selectedEndpoint, placement, side, terminalX)
-  }
-
-  const buildCandidate = (
-    incomingSide: 'top' | 'bottom',
-    outgoingSide: 'top' | 'bottom',
-    incomingX: number,
-    outgoingX: number,
-    preferencePenalty: number
-  ): ModulePortCandidate => {
+  // Port planning happens before pathfinding. Evaluate each relation's top/bottom
+  // choice independently so even a module with only one visible relation can flip
+  // to the side that produces the shortest complete route.
+  const configurableCount = Math.min(configurableWireIndexes.length, 5)
+  const assignmentCount = 1 << configurableCount
+  const candidates: ModulePortCandidate[] = []
+  for (let assignment = 0; assignment < assignmentCount; assignment += 1) {
     const candidateWires = cloneWires()
-    candidateWires
-      .filter((wire) => wire.selectedEndpoint === 'target')
-      .forEach((wire) => applyTerminal(wire, incomingSide, incomingX))
-    candidateWires
-      .filter((wire) => wire.selectedEndpoint === 'source')
-      .forEach((wire) => applyTerminal(wire, outgoingSide, outgoingX))
-    return { wires: candidateWires, preferencePenalty }
+    for (let planIndex = 0; planIndex < configurableCount; planIndex += 1) {
+      const wireIndex = configurableWireIndexes[planIndex]!
+      const wire = candidateWires[wireIndex]!
+      const side = (assignment & (1 << planIndex)) === 0 ? 'top' : 'bottom'
+      applyWireTerminal(wire, wire.selectedEndpoint!, placement, side, centerX)
+    }
+    candidates.push({ wires: candidateWires, preferencePenalty: 0 })
   }
-  const leftX = centerX - DUAL_MODULE_PORT_SPACING / 2
-  const rightX = centerX + DUAL_MODULE_PORT_SPACING / 2
-  return [
-    buildCandidate('top', 'bottom', centerX, centerX, 0),
-    buildCandidate('bottom', 'top', centerX, centerX, 0),
-    buildCandidate('top', 'top', leftX, rightX, SAME_SIDE_PORT_PENALTY),
-    buildCandidate('top', 'top', rightX, leftX, SAME_SIDE_PORT_PENALTY),
-    buildCandidate('bottom', 'bottom', leftX, rightX, SAME_SIDE_PORT_PENALTY),
-    buildCandidate('bottom', 'bottom', rightX, leftX, SAME_SIDE_PORT_PENALTY),
-  ]
+  return candidates
 }
 
 function routeWithDodge(
@@ -1466,7 +1602,7 @@ function computeWires(
   }
 
   // Use panel content bounds so the side corridor stays truly at row edges.
-  const cols = panelForContext.gridView?.columns ?? 12
+  const cols = panelForContext.gridView?.columns ?? DEFAULT_PANEL_GRID_COLUMNS
   let mainPanelLeftX = hierarchyRoute ? hierarchyRoute.panelLeftX + hierarchyRoute.panelInset : 0
   let mainPanelRightX = hierarchyRoute
     ? hierarchyRoute.panelRightX - hierarchyRoute.panelInset
@@ -1606,6 +1742,7 @@ function computeWires(
           wspfFeedFromTop
         ),
         kind: 'mainProtectionToSecondaryPanelFeed', // WSPF
+        overlapGroup: `panel-link:${sourcePanel.id}->${downstreamPanel.id}`,
       })
     } else if (supplyToMainCorridorRoute) {
       const useSharedSupplyRoute = parentIsSharedSupplyTrunk
@@ -1791,6 +1928,7 @@ function computeWires(
           wspfFeedFromTop
         ),
         kind: 'mainProtectionToSecondaryPanelFeed', // WSPF
+        overlapGroup: `panel-link:${sourcePanel.id}->${downstreamPanel.id}`,
       })
     } else if (childIsDownstreamIncomingTrunk) {
       const wpbpFeedFromTop =
@@ -2012,27 +2150,79 @@ function computeWires(
     }
   }
   const routeCandidate = (candidate: ModulePortCandidate) => {
-    const reservedSegments: WirePathSegment[] = []
+    const reservedRoutes: Array<{ segment: WirePathSegment; overlapGroup?: string }> = []
     let score = candidate.preferencePenalty
     const wires = candidate.wires.map((wire) => {
       const wireOptions = (() => {
-        if (wire.kind !== 'internal' || !wire.remotePlacement || !wire.selectedEndpoint) {
+        if (!wire.remotePlacement || !wire.selectedEndpoint) {
           return [wire]
         }
         const remoteEndpoint = wire.selectedEndpoint === 'source' ? 'target' : 'source'
         const remoteCenterX = wire.remotePlacement.x + wire.remotePlacement.width / 2
-        return (['top', 'bottom'] as const).map((side) => {
+        const selectedPointIndex = wire.selectedEndpoint === 'source' ? 1 : wire.points.length - 1
+        const selectedTerminalY = wire.points[selectedPointIndex]
+        const selectedSide =
+          selectedTerminalY === targetPlacement.y
+            ? 'top'
+            : selectedTerminalY === targetPlacement.y + targetPlacement.height
+              ? 'bottom'
+              : null
+        // A same-row relation belongs to one horizontal corridor end-to-end.
+        // Letting its remote terminal choose the opposite side creates a large
+        // loop around the panel even though both modules touch the same lane.
+        const lockedSameRowRegion = selectedSide
+          ? resolveSameRowLockedRegion(
+              targetPlacement,
+              wire.remotePlacement,
+              selectedSide,
+              pathwayRegions
+            )
+          : undefined
+        const remoteSides: Array<'top' | 'bottom'> =
+          lockedSameRowRegion && selectedSide ? [selectedSide] : ['top', 'bottom']
+        return remoteSides.map((side) => {
           const option = { ...wire, points: [...wire.points] }
           applyWireTerminal(option, remoteEndpoint, wire.remotePlacement!, side, remoteCenterX)
           return option
         })
       })()
       const routedOptions = wireOptions.map((option) => {
+        const lockedSameRowRegion = (() => {
+          if (
+            !option.remotePlacement ||
+            !option.selectedEndpoint ||
+            option.remotePlacement.row !== targetPlacement.row
+          ) {
+            return undefined
+          }
+          const selectedTerminalIndex =
+            option.selectedEndpoint === 'source' ? 1 : option.points.length - 1
+          const selectedTerminalY = option.points[selectedTerminalIndex]
+          const selectedSide =
+            selectedTerminalY === targetPlacement.y
+              ? 'top'
+              : selectedTerminalY === targetPlacement.y + targetPlacement.height
+                ? 'bottom'
+                : null
+          return selectedSide
+            ? resolveSameRowLockedRegion(
+                targetPlacement,
+                option.remotePlacement,
+                selectedSide,
+                pathwayRegions
+              )
+            : undefined
+        })()
+        const reservedSegments = reservedRoutes
+          .filter(
+            (reserved) => !option.overlapGroup || reserved.overlapGroup !== option.overlapGroup
+          )
+          .map((reserved) => reserved.segment)
         const routed = routePanelWire(option.points, effective, {
           preserveGuideTurns: pathwayRegions == null || pathwayRegions.length === 0,
           reservedSegments,
-          pathwayRegions,
-          pathwayLinks,
+          pathwayRegions: lockedSameRowRegion ?? pathwayRegions,
+          pathwayLinks: lockedSameRowRegion ? undefined : pathwayLinks,
         })
         return {
           wire: option,
@@ -2045,14 +2235,17 @@ function computeWires(
       )
       score += chosen.score
       for (let index = 0; index <= chosen.routed.points.length - 4; index += 2) {
-        reservedSegments.push({
-          from: {
-            x: chosen.routed.points[index]!,
-            y: chosen.routed.points[index + 1]!,
-          },
-          to: {
-            x: chosen.routed.points[index + 2]!,
-            y: chosen.routed.points[index + 3]!,
+        reservedRoutes.push({
+          overlapGroup: chosen.wire.overlapGroup,
+          segment: {
+            from: {
+              x: chosen.routed.points[index]!,
+              y: chosen.routed.points[index + 1]!,
+            },
+            to: {
+              x: chosen.routed.points[index + 2]!,
+              y: chosen.routed.points[index + 3]!,
+            },
           },
         })
       }
@@ -2062,9 +2255,16 @@ function computeWires(
         pathDebug: chosen.routed.debug,
       }
     })
+    // Complete feed/supply paths must not win merely because a crossing or
+    // shared run is a little shorter. Prefer a conflict-free corridor split.
+    score += countWirePathConflicts(wires) * WIRE_CONFLICT_PENALTY
     return { wires, score }
   }
-  const routedCandidates = buildModulePortCandidates(result, targetPlacement).map(routeCandidate)
+  const modulePortCandidates = buildModulePortCandidates(result, targetPlacement)
+  const bundledCandidates = modulePortCandidates.filter(candidateKeepsOverlapGroupsTogether)
+  const routedCandidates = (
+    bundledCandidates.length > 0 ? bundledCandidates : modulePortCandidates
+  ).map(routeCandidate)
   const routedResult = routedCandidates.reduce((best, candidate) =>
     candidate.score < best.score ? candidate : best
   )

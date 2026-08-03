@@ -5,6 +5,10 @@
 import type { Panel, PanelGridSlot } from '@/types/schema'
 import type { ProjectWithOptionalV2Electrical } from '@/lib/projectV2/electrical'
 import { resolveModuleWidthCols } from './panelGridLayout'
+import {
+  DEFAULT_PANEL_GRID_COLUMNS,
+  DEFAULT_PANEL_GRID_ROWS,
+} from '@/lib/panel/panelGridDefaults'
 
 const cellKey = (r: number, c: number) => `${r},${c}`
 
@@ -56,9 +60,14 @@ export function applyPanelRowChange(
   project: ProjectWithOptionalV2Electrical | null,
   newRows: number
 ): ApplyPanelRowChangeResult {
-  const grid = panel.gridView ?? { rows: 8, columns: 12, feedFromTop: false, slots: [] }
+  const grid = panel.gridView ?? {
+    rows: DEFAULT_PANEL_GRID_ROWS,
+    columns: DEFAULT_PANEL_GRID_COLUMNS,
+    feedFromTop: false,
+    slots: [],
+  }
   const oldRows = grid.rows
-  const cols = grid.columns ?? 12
+  const cols = grid.columns ?? DEFAULT_PANEL_GRID_COLUMNS
   const feedFromTop = grid.feedFromTop ?? false
   const slots = grid.slots ?? []
 

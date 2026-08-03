@@ -1317,10 +1317,10 @@
           "remediation": "Vérifiez la puissance de sortie du convertisseur et la tension/courant DC réels. Si nécessaire, augmentez la section du câble DC, réduisez la charge attendue ou ajustez la configuration du convertisseur/de l'appareil."
         },
         "post-main-bus-pe-conductor": {
-          "shortTitle": "Pas de conducteur PE après le bus principal",
-          "message": "Les câbles AC après le bus principal doivent inclure la terre de protection (G)",
-          "details": "La terre de protection est raccordée au bus principal. L’alimentation côté installation (de la limite de panneau au bus) et les circuits alimentés depuis le bus doivent utiliser des conducteurs avec G (p. ex. 3G, 4G), pas des dénombrements sans terre comme 3 ou 4. Le câblage DC n’est pas contrôlé.",
-          "remediation": "Choisissez 3G, 4G ou une autre option …G pour les câbles côté installation. L’alimentation amont avant la limite en pointillés peut rester sans G."
+          "shortTitle": "Chemin PE absent après le jeu de barres principal",
+          "message": "Les circuits AC après le jeu de barres principal nécessitent un chemin PE continu",
+          "details": "Le conducteur de protection peut faire partie du câble (G) ou être posé indépendamment à proximité des conducteurs actifs. Les liaisons internes entre appareils de protection peuvent ne transporter que les conducteurs actifs ; le PE reste continu via la barre de terre et ne doit pas traverser ces appareils. Le câblage DC n’est pas contrôlé.",
+          "remediation": "Prévoyez un chemin PE continu avec le câblage AC sortant. Utilisez un câble avec G ou un conducteur PE indépendant correctement dimensionné et installé."
         },
         "main-rcd": {
           "message": "Le disjoncteur différentiel principal sur la ligne d'alimentation doit être présent et correctement dimensionné",
@@ -1351,6 +1351,9 @@
           "details": "Certains circuits, points ou contenus de cadre ne sont pas correctement liés, ils n'apparaissent pas dans le schéma unifilaire (eendraad) ou apparaissent sous la mauvaise protection. Les points censés apparaître sur le plan peuvent aussi ne pas avoir de placement au sol. Corrigez les sous-circuits, les listes de points, les références de cadre ou ajoutez des placements sur le plan.",
           "remediation": "Assurez-vous que chaque circuit n'est sous qu'une seule protection ; ajoutez chaque point à une branche (ou supprimez-le) ; corrigez ou supprimez les références de cadre vers des éléments manquants ; ajoutez un placement au sol pour les points absents du plan."
         },
+        "phase-protection-compatibility": {
+          "shortTitle": "Le nombre de pôles semble incorrect"
+        },
         "duplicate-panel-protection-label": {
           "shortTitle": "Nom de protection en double sur le tableau",
           "message": "Deux protections ou plus sur ce tableau partagent le même nom",
@@ -1380,6 +1383,21 @@
       "duplicatePanelProtectionLabels": {
         "message": "Le nom de protection « {{label}} » est utilisé {{count}} fois sur ce tableau",
         "details": "Des noms de protection en double sur le même tableau (bus principal, bus secondaire ou alimentation) rendent les circuits difficiles à identifier. Renommez une protection ou activez le nommage automatique."
+      },
+      "protectionPhaseCompatibility": {
+        "deviceLabel": "Protection",
+        "neutralUnavailable": {
+          "message": "{{deviceLabel}} utilise le neutre, mais ce réseau n’en a pas",
+          "details": "Cette combinaison n’est peut-être pas logique. Vérifiez la phase ou les pôles."
+        },
+        "tooManyPoles": {
+          "message": "{{deviceLabel}} a {{poleCount}} pôles ; cela semble trop pour cette alimentation à {{availablePoleCount}} pôles",
+          "details": "Cette combinaison n’est peut-être pas logique. Vérifiez les pôles."
+        },
+        "tooFewPoles": {
+          "message": "{{deviceLabel}} a {{poleCount}} pôles ; cela semble trop peu pour ce réseau triphasé",
+          "details": "Cette combinaison n’est peut-être pas logique. Vérifiez les pôles."
+        }
       },
       "hasUpstreamOvercurrent": {
         "message": "Le circuit {{circuitCode}} manque de protection contre les surintensités en amont",
@@ -1584,6 +1602,7 @@
       "total": "Total",
       "editablePremiumTooltip": "Déverrouillez ce projet ou passez à Premium pour intégrer les données de projet modifiables.",
       "installDates": "Inclure les dates d'installation",
+      "includeSignature": "Inclure la signature",
       "exportButton": "Exporter",
       "cancelButton": "Annuler"
     },
@@ -1741,6 +1760,14 @@
   },
   "wires": {
     "title": "Propriétés du fil",
+    "phase": "Phase",
+    "phaseAll": "Toutes les phases",
+    "phaseInherited": "Héritée",
+    "phaseAutomatic": "Automatique",
+    "phaseSelect": "Sélectionner la phase",
+    "busbarPhaseOrder": "Ordre des phases du jeu de barres",
+    "showPhaseLabel": "Afficher la phase sur le schéma",
+    "hidePhaseLabel": "Masquer la phase sur le schéma",
     "type": "Type",
     "conductors": "Conducteurs",
     "thickness": "Épaisseur",

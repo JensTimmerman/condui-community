@@ -16,6 +16,10 @@ import {
   getElectricalPanelsFromProject,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
+import {
+  DEFAULT_PANEL_GRID_COLUMNS,
+  DEFAULT_PANEL_GRID_ROWS,
+} from '@/lib/panel/panelGridDefaults'
 
 function visitPanels(panels: Panel[], fn: (p: Panel) => void): void {
   for (const p of panels) {
@@ -53,7 +57,12 @@ export function ejectSupplyTrunkFromMainGridSlot(
   if (!panel.isMain || moduleRef.kind !== 'trunkDevice' || moduleRef.scope !== 'supply') return false
   if (!isSharedSupplyRef(panel, project, moduleRef)) return false
   if (!panel.gridView) {
-    panel.gridView = { rows: 8, columns: 12, feedFromTop: false, slots: [] }
+    panel.gridView = {
+      rows: DEFAULT_PANEL_GRID_ROWS,
+      columns: DEFAULT_PANEL_GRID_COLUMNS,
+      feedFromTop: false,
+      slots: [],
+    }
   }
   const key = panelGridModuleRefKey(moduleRef)
   const slots = panel.gridView.slots ?? []

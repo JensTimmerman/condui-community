@@ -79,11 +79,13 @@ function getSelectionForRef(
 }
 
 const LABEL_FONT_SIZE = 10
-const LABEL_Y = 1
 const SPEC_FONT_SIZE = 7.5
-const SPEC_START_Y = 13
 const SPEC_LINE_HEIGHT = 8.5
 const MAX_SPEC_LINES = 3
+const MODULE_TOP_BAND_RATIO = 0.25
+const MODULE_BOTTOM_BAND_RATIO = 0.75
+const MODULE_BAND_PADDING = 3
+const PHASE_FONT_SIZE = 7
 
 const TOOLTIP_DELAY_MS = 650
 
@@ -120,7 +122,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
   const isDragging = useRef(false)
   const bgRectRef = useRef<Konva.Rect>(null)
   const labelTextRef = useRef<Konva.Text>(null)
-  const specTextRefs = useRef<(Konva.Text | null)[]>([])
+  const specTextRef = useRef<Konva.Text>(null)
   const handleVisualRef = useRef<Konva.Rect>(null)
   const resizeWidthRef = useRef<number | null>(null)
   const [isHovered, setIsHovered] = useState(false)
@@ -477,6 +479,20 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
 
   const visibleSpecLines = info.specLines.slice(0, MAX_SPEC_LINES)
 
+  const effectiveModuleWidth = liveWidth ?? width
+  const topBandHeight = height * MODULE_TOP_BAND_RATIO
+  const bottomBandTop = height * MODULE_BOTTOM_BAND_RATIO
+  const centerBandHeight = bottomBandTop - topBandHeight
+  const bottomBandHeight = height - bottomBandTop
+  const textSidePadding = Math.min(4, Math.max(2, effectiveModuleWidth * 0.08))
+  const textWidth = Math.max(1, effectiveModuleWidth - textSidePadding * 2)
+  const topTextY = MODULE_BAND_PADDING
+  const topTextHeight = Math.max(1, topBandHeight - MODULE_BAND_PADDING * 2)
+  const middleTextY = topBandHeight + MODULE_BAND_PADDING
+  const middleTextHeight = Math.max(1, centerBandHeight - MODULE_BAND_PADDING * 2)
+  const bottomTextY = bottomBandTop + MODULE_BAND_PADDING
+  const bottomTextHeight = Math.max(1, bottomBandHeight - MODULE_BAND_PADDING * 2)
+
   // In rewire mode, disable dragging only on target modules (not on origin or other modules)
   const effectiveDraggable = isRewireTarget ? false : draggable
 
@@ -607,7 +623,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
     >
       <Rect
         ref={bgRectRef}
-        width={liveWidth ?? width}
+        width={effectiveModuleWidth}
         height={height}
         fill={debugBg}
         stroke={debugBorder}
@@ -616,14 +632,31 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
         perfectDrawEnabled={false}
         listening={true}
       />
+      {/* Subtle guides divide the module into label, symbol/detail, and phase bands. */}
+      <Line
+        points={[1, topBandHeight, effectiveModuleWidth - 1, topBandHeight]}
+        stroke={secondaryColor}
+        strokeWidth={0.75}
+        opacity={0.45}
+        perfectDrawEnabled={false}
+        listening={false}
+      />
+      <Line
+        points={[1, bottomBandTop, effectiveModuleWidth - 1, bottomBandTop]}
+        stroke={secondaryColor}
+        strokeWidth={0.75}
+        opacity={0.45}
+        perfectDrawEnabled={false}
+        listening={false}
+      />
       {/* Energy conversion domain indicators (AC/DC) for trunk devices */}
       {isEnergyConversionModule && energyDomains && (
         (() => {
-          const effectiveWidth = liveWidth ?? width
-          const effectiveHeight = height
-          const iconSize = Math.min(effectiveWidth, effectiveHeight) * 0.22
+          const effectiveWidth = effectiveModuleWidth
+          const iconSize = Math.min(effectiveWidth, centerBandHeight) * 0.22
           const padding = 3
-          const topMargin = LABEL_Y + 12 + padding
+          const centerTop = topBandHeight
+          const centerBottom = bottomBandTop
 
           const getImageForDomain = (domain: 'AC' | 'DC') =>
             domain === 'DC' ? dcSymbolImage : acSymbolImage
@@ -635,12 +668,12 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
             <>
               {/* Diagonal line from bottom-left to top-right, same color as outline */}
               <Line
-                points={[padding, effectiveHeight - padding, effectiveWidth - padding, padding]}
+                points={[padding, centerBottom - padding, effectiveWidth - padding, centerTop + padding]}
                 stroke={debugBorder}
                 strokeWidth={1}
                 listening={false}
               />
-              {/* Output domain symbol – top-left, below label */}
+              {/* Output domain symbol – top-left of the center band */}
               {outputImg && (
                 <Image
                   image={outputImg}
@@ -649,11 +682,11 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
                   offsetX={iconSize / 2}
                   offsetY={iconSize / 2}
                   x={padding + iconSize / 2}
-                  y={topMargin + iconSize / 2}
+                  y={centerTop + padding + iconSize / 2}
                   listening={false}
                 />
               )}
-              {/* Input domain symbol – bottom-right */}
+              {/* Input domain symbol – bottom-right of the center band */}
               {inputImg && (
                 <Image
                   image={inputImg}
@@ -662,7 +695,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
                   offsetX={iconSize / 2}
                   offsetY={iconSize / 2}
                   x={effectiveWidth - padding - iconSize / 2}
-                  y={effectiveHeight - padding - iconSize / 2}
+                  y={centerBottom - padding - iconSize / 2}
                   listening={false}
                 />
               )}
@@ -672,14 +705,13 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
       )}
       {isEnergyConversionModule && energyDeviceImage && (
         (() => {
-          const effectiveWidth = liveWidth ?? width
-          const availableHeight = Math.max(12, height - 18)
-          const symbolSize = Math.min(effectiveWidth * 0.48, availableHeight * 0.72)
+          const effectiveWidth = effectiveModuleWidth
+          const symbolSize = Math.min(effectiveWidth * 0.48, centerBandHeight * 0.72)
           return (
             <Image
               image={energyDeviceImage}
               x={effectiveWidth / 2}
-              y={18 + availableHeight / 2}
+              y={topBandHeight + centerBandHeight / 2}
               width={symbolSize}
               height={symbolSize}
               offsetX={symbolSize / 2}
@@ -692,10 +724,10 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
       {/* Label - prominent, bold */}
       <Text
         ref={labelTextRef}
-        x={2}
-        y={LABEL_Y}
-        width={width - 4}
-        height={12}
+        x={textSidePadding}
+        y={topTextY}
+        width={textWidth}
+        height={topTextHeight}
         text={energyMeterCircuitLabel}
         fontSize={LABEL_FONT_SIZE}
         fontStyle={isEnergyMeterDevice ? 'italic bold' : 'bold'}
@@ -705,26 +737,30 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
         listening={false}
         wrap="none"
         ellipsis={true}
+        align="center"
+        verticalAlign="middle"
       />
-      {/* Spec lines - smaller, secondary color, one per line */}
-      {visibleSpecLines.map((line, i) => (
+      {/* Spec block - vertically centered as one multiline text box. */}
+      {visibleSpecLines.length > 0 && (
         <Text
-          key={i}
-          ref={(el: Konva.Text | null) => { specTextRefs.current[i] = el }}
-          x={2}
-          y={SPEC_START_Y + i * SPEC_LINE_HEIGHT}
-          width={width - 4}
-          height={SPEC_LINE_HEIGHT}
-          text={line}
+          ref={specTextRef}
+          x={textSidePadding}
+          y={middleTextY}
+          width={textWidth}
+          height={middleTextHeight}
+          text={visibleSpecLines.join('\n')}
           fontSize={SPEC_FONT_SIZE}
+          lineHeight={SPEC_LINE_HEIGHT / SPEC_FONT_SIZE}
           fontFamily={fontFamily}
           fill={secondaryColor}
           perfectDrawEnabled={false}
           listening={false}
-          wrap="none"
+          wrap="word"
           ellipsis={true}
+          align="center"
+          verticalAlign="middle"
         />
-      ))}
+      )}
       {/* Domotica visual overlays inside panel modules */}
       {moduleRef.kind === 'domotica' && domoticaProps && (
         <>
@@ -736,20 +772,19 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
             const count = activeKeys.length
             if (count === 0) return null
 
-            const effectiveWidth = liveWidth ?? width
-            const effectiveHeight = height
+            const effectiveWidth = effectiveModuleWidth
 
             const moduleCols = Math.max(1, Math.round(effectiveWidth / CELL_W))
             const isOneWide = moduleCols === 1
-            const baseSize = Math.min(effectiveWidth, effectiveHeight)
+            const baseSize = Math.min(effectiveWidth, centerBandHeight)
             const iconSize = isOneWide ? baseSize * 0.33 : baseSize * 0.22
 
             if (isOneWide && count === 4) {
               const positions = [
-                { x: effectiveWidth * 0.3, y: effectiveHeight * 0.34 },
-                { x: effectiveWidth * 0.7, y: effectiveHeight * 0.34 },
-                { x: effectiveWidth * 0.3, y: effectiveHeight * 0.5 },
-                { x: effectiveWidth * 0.7, y: effectiveHeight * 0.5 },
+                { x: effectiveWidth * 0.3, y: topBandHeight + centerBandHeight * 0.3 },
+                { x: effectiveWidth * 0.7, y: topBandHeight + centerBandHeight * 0.3 },
+                { x: effectiveWidth * 0.3, y: topBandHeight + centerBandHeight * 0.7 },
+                { x: effectiveWidth * 0.7, y: topBandHeight + centerBandHeight * 0.7 },
               ]
               return activeKeys.map((key, index) => {
                 const img = domoticaControlImages[key]
@@ -772,7 +807,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
             }
 
             // Single row, centered horizontally regardless of count
-            const rowY = isOneWide ? effectiveHeight * 0.34 : effectiveHeight * 0.34
+            const rowY = topBandHeight + centerBandHeight * 0.34
             return activeKeys.map((key, index) => {
               const img = domoticaControlImages[key]
               if (!img) return null
@@ -796,11 +831,10 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
           {/* Main device symbol, centered underneath controls (live during resize) */}
           {domoticaMainImage && domoticaMainType && (
             (() => {
-              const effectiveWidth = liveWidth ?? width
-              const effectiveHeight = height
+              const effectiveWidth = effectiveModuleWidth
               const moduleCols = Math.max(1, Math.round(effectiveWidth / CELL_W))
               const sizeFactor = moduleCols === 1 ? 0.55 : 0.4
-              const size = Math.min(effectiveWidth, effectiveHeight) * sizeFactor
+              const size = Math.min(effectiveWidth, centerBandHeight) * sizeFactor
               const yFactor = moduleCols === 1 ? 0.75 : 0.7
               return (
                 <Image
@@ -810,7 +844,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
                   offsetX={size / 2}
                   offsetY={size / 2}
                   x={effectiveWidth / 2}
-                  y={effectiveHeight * yFactor}
+                  y={topBandHeight + centerBandHeight * yFactor}
                   listening={false}
                 />
               )
@@ -822,12 +856,11 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
       {/* Energy meter label: draw centered \"kWh\" text inside module, with a box (live during resize) */}
       {isEnergyMeterDevice && (
         (() => {
-          const effectiveWidth = liveWidth ?? width
-          const effectiveHeight = height
+          const effectiveWidth = effectiveModuleWidth
           const boxWidth = effectiveWidth * 0.6
           const boxHeight = SPEC_LINE_HEIGHT + 4
           const boxX = (effectiveWidth - boxWidth) / 2
-          const boxY = effectiveHeight * 0.45 - 2
+          const boxY = topBandHeight + centerBandHeight / 2 - boxHeight / 2
           return (
             <>
               <Rect
@@ -858,6 +891,25 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
             </>
           )
         })()
+      )}
+      {info.phaseLabel && (
+        <Text
+          x={textSidePadding}
+          y={bottomTextY}
+          width={textWidth}
+          height={bottomTextHeight}
+          text={info.phaseLabel}
+          fontSize={PHASE_FONT_SIZE}
+          fontStyle="bold"
+          fontFamily={fontFamily}
+          fill={secondaryColor}
+          perfectDrawEnabled={false}
+          listening={false}
+          wrap="none"
+          ellipsis={true}
+          align="center"
+          verticalAlign="middle"
+        />
       )}
       {/* Resize handle — visible when selected, but not during rewire mode */}
       {isSelected && onResizeEnd && !onRewireDragStart && !isRewireTarget && (
@@ -894,12 +946,16 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
               const handleCenter = node.x() + RESIZE_HANDLE_W / 2
               const newCols = Math.max(1, Math.min(maxWidthCols ?? 999, Math.round(handleCenter / CELL_W)))
               const snapped = newCols * CELL_W
+              const nextTextPadding = Math.min(4, Math.max(2, snapped * 0.08))
+              const nextTextWidth = Math.max(1, snapped - nextTextPadding * 2)
               node.x(snapped - RESIZE_HANDLE_W / 2)
               node.y(0)
               bgRectRef.current?.width(snapped)
               handleVisualRef.current?.x(snapped - 2)
-              labelTextRef.current?.width(snapped - 4)
-              specTextRefs.current.forEach(r => r?.width(snapped - 4))
+              labelTextRef.current?.x(nextTextPadding)
+              labelTextRef.current?.width(nextTextWidth)
+              specTextRef.current?.x(nextTextPadding)
+              specTextRef.current?.width(nextTextWidth)
               resizeWidthRef.current = snapped
               setLiveWidth(snapped)
             }}
@@ -915,8 +971,10 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
                 e.target.x(width - RESIZE_HANDLE_W / 2)
                 bgRectRef.current?.width(width)
                 handleVisualRef.current?.x(width - 2)
-                labelTextRef.current?.width(width - 4)
-                specTextRefs.current.forEach(r => r?.width(width - 4))
+                labelTextRef.current?.x(textSidePadding)
+                labelTextRef.current?.width(textWidth)
+                specTextRef.current?.x(textSidePadding)
+                specTextRef.current?.width(textWidth)
               }
               setLiveWidth(null)
             }}

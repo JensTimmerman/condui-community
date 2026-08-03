@@ -249,6 +249,17 @@ export const beAreiBook1_2025: RulePack = {
       tags: ['naming', 'panel', 'consistency'],
     },
     {
+      id: 'be.areibook1.2025.phase-protection-compatibility',
+      title: 'Protection and phase compatibility',
+      severity: 'warning',
+      appliesTo: ['board'],
+      checks: [{ name: 'protectionPhaseCompatibility' }],
+      message: 'validation.rules.be.areibook1.2025.phase-protection-compatibility.message',
+      details: 'validation.rules.be.areibook1.2025.phase-protection-compatibility.details',
+      citations: [],
+      tags: ['phase', 'protection', 'consistency'],
+    },
+    {
       id: 'be.areibook1.2025.overcurrent-upstream',
       title: 'Overcurrent device upstream',
       severity: 'warning',

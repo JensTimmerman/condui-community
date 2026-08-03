@@ -1325,10 +1325,10 @@
           "remediation": "Check converter output power and actual DC voltage/current. If needed, increase DC wire section, reduce expected load, or adjust converter/device configuration."
         },
         "post-main-bus-pe-conductor": {
-          "shortTitle": "No PE conductor after main bus",
-          "message": "AC wiring after the main bus should include protective earth (G)",
-          "details": "Protective earth is connected at the main bus. Installation-side supply cabling (from the panel boundary to the bus) and circuits fed from the bus should use conductor counts with G (e.g. 3G, 4G), not ungrounded counts such as 3 or 4. DC wiring is not checked.",
-          "remediation": "Choose 3G, 4G, or another …G conductor option for installation-side wires. Utility-side supply before the dashed panel boundary may stay without G."
+          "shortTitle": "Missing PE path after main bus",
+          "message": "AC circuits after the main bus need a continuous protective-earth path",
+          "details": "Protective earth may be included in the cable (G) or installed as an independent conductor alongside the active conductors. Internal links between protection devices may carry only active conductors; PE remains continuous through the panel earth bar and must not pass through those devices. DC wiring is not checked.",
+          "remediation": "Provide a continuous PE path with outgoing AC wiring. Use a G cable or a correctly sized and installed independent PE conductor."
         },
         "heavy-appliance-dedicated-circuit": {
           "shortTitle": "Heavy appliance not on own circuit",
@@ -1360,6 +1360,9 @@
           "details": "Some circuits, endpoints or frame contents are not correctly linked, so they do not appear in the one-line (eendraad) view or appear under the wrong protection. Endpoints that should appear on the floor plan may also lack any sitplan placement. Fix circuit subcircuit assignments, branch endpoint lists, frame content references, or add plan placements.",
           "remediation": "Ensure each circuit is under only one protection; add every endpoint to a branch (or remove it); fix or remove frame content references to missing items; add a floor-plan placement for endpoints that are missing from the plan."
         },
+        "phase-protection-compatibility": {
+          "shortTitle": "Pole count may not match"
+        },
         "duplicate-panel-protection-label": {
           "shortTitle": "Duplicate protection label on panel",
           "message": "Two or more protections on this panel share the same label",
@@ -1389,6 +1392,21 @@
       "duplicatePanelProtectionLabels": {
         "message": "Protection label \"{{label}}\" is used {{count}} times on this panel",
         "details": "Duplicate protection names on the same panel (main bus, secondary bus, or supply) make circuits hard to identify. Rename one protection or enable automatic naming."
+      },
+      "protectionPhaseCompatibility": {
+        "deviceLabel": "Protection",
+        "neutralUnavailable": {
+          "message": "{{deviceLabel}} uses neutral, but this network has none",
+          "details": "This combination may not make sense. Check the phase or pole setting."
+        },
+        "tooManyPoles": {
+          "message": "{{deviceLabel}} is {{poleCount}}-pole; that may be too many for this {{availablePoleCount}}-pole supply",
+          "details": "This combination may not make sense. Check the pole setting."
+        },
+        "tooFewPoles": {
+          "message": "{{deviceLabel}} is {{poleCount}}-pole; that may be too few for this three-phase network",
+          "details": "This combination may not make sense. Check the pole setting."
+        }
       },
       "hasUpstreamOvercurrent": {
         "message": "Circuit {{circuitCode}} lacks upstream overcurrent protection",
@@ -1601,6 +1619,7 @@
       "total": "Total",
       "editablePremiumTooltip": "Unlock this project or upgrade to Premium to embed editable project data.",
       "installDates": "Include install dates",
+      "includeSignature": "Include signature",
       "exportButton": "Export",
       "cancelButton": "Cancel"
     },
@@ -1759,6 +1778,14 @@
   },
   "wires": {
     "title": "Wire Properties",
+    "phase": "Phase",
+    "phaseAll": "All phases",
+    "phaseInherited": "Inherited",
+    "phaseAutomatic": "Automatic",
+    "phaseSelect": "Select phase",
+    "busbarPhaseOrder": "Busbar phase order",
+    "showPhaseLabel": "Show phase on one-wire",
+    "hidePhaseLabel": "Hide phase on one-wire",
     "type": "Type",
     "conductors": "Conductors",
     "thickness": "Thickness",

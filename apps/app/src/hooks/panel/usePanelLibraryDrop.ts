@@ -48,6 +48,10 @@ import {
 } from '@/handlers/eendraad/dropBehaviors'
 import type { DropTarget } from '@/lib/layout/findDropTarget'
 import { trackSymbolPlace } from '@/lib/analytics/editorEventAnalytics'
+import {
+  DEFAULT_PANEL_GRID_COLUMNS,
+  DEFAULT_PANEL_GRID_ROWS,
+} from '@/lib/panel/panelGridDefaults'
 
 type Project = NonNullable<ProjectState['currentProject']>
 
@@ -177,8 +181,8 @@ export function usePanelLibraryDrop({
       // Calculate panel dimensions
       const FRAME_MARGIN = 40
       const SUPPLY_GAP = 20
-      const rows = panel?.gridView?.rows ?? 8
-      const cols = panel?.gridView?.columns ?? 12
+      const rows = panel?.gridView?.rows ?? DEFAULT_PANEL_GRID_ROWS
+      const cols = panel?.gridView?.columns ?? DEFAULT_PANEL_GRID_COLUMNS
       const supplyRows = getSupplyPanelRows(panel)
       const supplyCols = getSupplyPanelColumns(panel)
       const contentWidth = cols * CELL_W
@@ -373,8 +377,8 @@ export function usePanelLibraryDrop({
       // Check if drop is in supply panel area (only for main panels)
       const FRAME_MARGIN = 40
       const SUPPLY_GAP = 20
-      const rows = panel?.gridView?.rows ?? 8
-      const cols = panel?.gridView?.columns ?? 12
+      const rows = panel?.gridView?.rows ?? DEFAULT_PANEL_GRID_ROWS
+      const cols = panel?.gridView?.columns ?? DEFAULT_PANEL_GRID_COLUMNS
       const contentWidth = cols * CELL_W
       const contentHeight = rows * CELL_H + (rows - 1) * ROW_GAP
       const panelFrameHeight = contentHeight + FRAME_MARGIN * 2

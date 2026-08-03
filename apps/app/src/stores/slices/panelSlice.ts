@@ -41,6 +41,10 @@ import { supportsExtendedInstallationProfiles } from '@/lib/editionInstallationP
 import { DEFAULT_INSTALLATION_PROFILE } from '@/lib/installationProfile'
 import { promotePanelToRootSupply } from '@/lib/panel/panelSupplyMove'
 import { isLastMainPanel } from '@/utils/eendraad'
+import {
+  DEFAULT_PANEL_GRID_COLUMNS,
+  DEFAULT_PANEL_GRID_ROWS,
+} from '@/lib/panel/panelGridDefaults'
 
 export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
     // Panel actions
@@ -305,7 +309,12 @@ export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
           const panel = findPanelById(getElectricalPanelsFromProject(state.currentProject), panelId)
           if (panel) {
             if (!panel.gridView) {
-              panel.gridView = { rows: 8, columns: 12, feedFromTop: false, slots: [] }
+              panel.gridView = {
+                rows: DEFAULT_PANEL_GRID_ROWS,
+                columns: DEFAULT_PANEL_GRID_COLUMNS,
+                feedFromTop: false,
+                slots: [],
+              }
             }
             const resizedSlots =
               updates.rows != null && updates.rows !== panel.gridView.rows
@@ -324,7 +333,12 @@ export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
           const panel = findPanelById(getElectricalPanelsFromProject(state.currentProject), panelId)
           if (panel) {
             if (!panel.gridView) {
-              panel.gridView = { rows: 8, columns: 12, feedFromTop: false, slots: [] }
+              panel.gridView = {
+                rows: DEFAULT_PANEL_GRID_ROWS,
+                columns: DEFAULT_PANEL_GRID_COLUMNS,
+                feedFromTop: false,
+                slots: [],
+              }
             }
             // Single source of truth: filter out invalid slots before storing
             const validMainSlots = slots.filter((s) => {
@@ -398,8 +412,8 @@ export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
         if (supplySlots.length === 0) panel.gridView.supplyPanelVisible = false
         const mainSlots = panel.gridView.slots ?? []
         const usedCols = new Set(mainSlots.map((s) => s.row * 1000 + s.col))
-        const rows = panel.gridView.rows ?? 8
-        const cols = panel.gridView.columns ?? 12
+        const rows = panel.gridView.rows ?? DEFAULT_PANEL_GRID_ROWS
+        const cols = panel.gridView.columns ?? DEFAULT_PANEL_GRID_COLUMNS
         for (let r = 0; r < rows; r++) {
           for (let c = 0; c < cols; c++) {
             if (!usedCols.has(r * 1000 + c)) {
@@ -428,7 +442,12 @@ export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
         const panel = findPanelById(getMutableElectricalPanelsForProject(state.currentProject), panelId)
         if (!panel) return
         if (!panel.gridView) {
-          panel.gridView = { rows: 8, columns: 12, feedFromTop: false, slots: [] }
+          panel.gridView = {
+            rows: DEFAULT_PANEL_GRID_ROWS,
+            columns: DEFAULT_PANEL_GRID_COLUMNS,
+            feedFromTop: false,
+            slots: [],
+          }
         }
         const hidden = panel.gridView.hiddenModuleKeys ?? []
         const shown = panel.gridView.shownModuleKeys ?? []
@@ -452,7 +471,12 @@ export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
         const panel = findPanelById(getMutableElectricalPanelsForProject(state.currentProject), panelId)
         if (!panel) return
         if (!panel.gridView) {
-          panel.gridView = { rows: 8, columns: 12, feedFromTop: false, slots: [] }
+          panel.gridView = {
+            rows: DEFAULT_PANEL_GRID_ROWS,
+            columns: DEFAULT_PANEL_GRID_COLUMNS,
+            feedFromTop: false,
+            slots: [],
+          }
         }
         let changed = false
         if (panel.gridView.hiddenModuleKeys?.length) {
@@ -523,8 +547,8 @@ export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
         }
         const mainSlots = panel.gridView.slots ?? []
         const usedCols = new Set(mainSlots.map((s) => s.row * 1000 + s.col))
-        const rows = panel.gridView.rows ?? 8
-        const cols = panel.gridView.columns ?? 12
+        const rows = panel.gridView.rows ?? DEFAULT_PANEL_GRID_ROWS
+        const cols = panel.gridView.columns ?? DEFAULT_PANEL_GRID_COLUMNS
         for (const slot of supplySlots) {
           let placed = false
           for (let r = 0; r < rows && !placed; r++) {
@@ -561,7 +585,12 @@ export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
           const panel = findPanelById(getElectricalPanelsFromProject(state.currentProject), panelId)
           if (!panel) return
           if (!panel.gridView) {
-            panel.gridView = { rows: 8, columns: 12, feedFromTop: false, slots: [] }
+            panel.gridView = {
+              rows: DEFAULT_PANEL_GRID_ROWS,
+              columns: DEFAULT_PANEL_GRID_COLUMNS,
+              feedFromTop: false,
+              slots: [],
+            }
           }
           const previousMainSlots = panel.gridView.slots ?? []
           const validMainSlots = mainSlots.filter((s) => {

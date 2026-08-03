@@ -52,6 +52,7 @@ import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
 } from '@/lib/projectV2/electrical'
+import { DEFAULT_PANEL_GRID_COLUMNS } from '@/lib/panel/panelGridDefaults'
 import { getInstallDateTargetInheritedYear } from '@/lib/installDatePropagation'
 import { useEditionFeatureAvailability } from '@/hooks/useEditionFeatureAvailability'
 import { InstallDateField } from '../shared/propertiesShared'
@@ -1288,7 +1289,8 @@ export function SupplyPanelProperties({
 }) {
   const { t } = useTranslation()
   const supplyPanelRows = panel.gridView?.supplyPanelRows ?? 1
-  const supplyPanelColumns = panel.gridView?.supplyPanelColumns ?? panel.gridView?.columns ?? 12
+  const supplyPanelColumns =
+    panel.gridView?.supplyPanelColumns ?? panel.gridView?.columns ?? DEFAULT_PANEL_GRID_COLUMNS
 
   return (
     <div className="space-y-4">
@@ -1332,4 +1334,3 @@ export function SupplyPanelProperties({
     </div>
   )
 }
-

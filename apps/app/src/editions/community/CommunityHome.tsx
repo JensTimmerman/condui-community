@@ -169,6 +169,7 @@ export default function CommunityHome() {
     await saveProject(project, { storageMode: 'local' })
     setIsNewProjectOpen(false)
     navigate(`/project/${project.project.id}`)
+    return true
   }
 
   const importProject = async (file: File) => {
@@ -410,9 +411,7 @@ export default function CommunityHome() {
       <NewProjectDialog
         isOpen={isNewProjectOpen}
         onClose={() => setIsNewProjectOpen(false)}
-        onCreate={(name, installation, yearOfConstruction, meterEanCode) =>
-          void handleCreateProject(name, installation, yearOfConstruction, meterEanCode)
-        }
+        onCreate={handleCreateProject}
       />
 
       <DeleteConfirmDialog

@@ -1,7 +1,12 @@
 import { Eye, EyeOff } from 'lucide-react'
 import { DebouncedTextInput } from '@/components/forms'
 import CustomDropdown from '@/components/common/CustomDropdown'
-import type { CableSpec, Installation, Panel } from '@/types/schema'
+import type {
+  CableSpec,
+  CircuitPhaseAssignment,
+  Installation,
+  Panel,
+} from '@/types/schema'
 import {
   applyCableKindChange,
   getAcWireTypeOptions,
@@ -25,6 +30,11 @@ import {
 } from '@/lib/wireConductorOptions'
 import { visibilityToggleClass } from '../shared/propertiesSharedUtils'
 import { WireLengthField } from '../shared/propertiesShared'
+import {
+  WireRouteAndCableForm,
+  type WireRouteFormState,
+} from '../shared/propertiesShared'
+import type { PhaseAssignmentConstraint } from '@/lib/wires/phaseAssignment'
 // Supply Wire Properties Component (for supply-to-main-bus wire)
 export function SupplyWireProperties({
   installation,
@@ -35,6 +45,12 @@ export function SupplyWireProperties({
   onUpdate,
   onUpdateCable,
   wireDomain = 'AC',
+  configuredPhaseAssignment,
+  effectivePhaseAssignment,
+  showPhaseLabel,
+  phaseConstraint,
+  phaseLocked = false,
+  onUpdatePhase,
   t,
 }: {
   installation: Installation
@@ -45,6 +61,14 @@ export function SupplyWireProperties({
   onUpdate: (updates: Partial<Installation>) => void
   onUpdateCable?: (cable: CableSpec) => void
   wireDomain?: 'AC' | 'DC'
+  configuredPhaseAssignment?: CircuitPhaseAssignment
+  effectivePhaseAssignment?: CircuitPhaseAssignment
+  showPhaseLabel?: boolean
+  phaseConstraint?: PhaseAssignmentConstraint
+  phaseLocked?: boolean
+  onUpdatePhase?: (
+    updates: Partial<Pick<WireRouteFormState, 'phaseAssignment' | 'showPhaseLabel'>>
+  ) => void
   t: (key: string, defaultValue?: string) => string
 }) {
   const isDC = wireDomain === 'DC'
@@ -83,8 +107,17 @@ export function SupplyWireProperties({
     'Fca',
   ]
 
-  const conductorOptions = getWireConductorOptions(isDC)
-  const selectedConductorValue = resolveConductorDropdownValue(supplyCable, isDC)
+  const conductorOptions = getWireConductorOptions(
+    isDC,
+    effectivePhaseAssignment,
+    phaseConstraint
+  )
+  const selectedConductorValue = resolveConductorDropdownValue(
+    supplyCable,
+    isDC,
+    effectivePhaseAssignment,
+    phaseConstraint
+  )
 
   const wireTypes = isDC
     ? getDcWireTypeOptions(t('wires.other', 'Other'))
@@ -131,6 +164,34 @@ export function SupplyWireProperties({
         />
         {wireDomain}
       </span>
+      {onUpdatePhase && (
+        <WireRouteAndCableForm
+          state={{
+            cable: supplyCable,
+            phaseAssignment: configuredPhaseAssignment,
+            showPhaseLabel,
+            phaseConstraint,
+          }}
+          onChange={(updates) => {
+            const phaseUpdates: Partial<
+              Pick<WireRouteFormState, 'phaseAssignment' | 'showPhaseLabel'>
+            > = {}
+            if (Object.prototype.hasOwnProperty.call(updates, 'phaseAssignment')) {
+              phaseUpdates.phaseAssignment = updates.phaseAssignment
+            }
+            if (Object.prototype.hasOwnProperty.call(updates, 'showPhaseLabel')) {
+              phaseUpdates.showPhaseLabel = updates.showPhaseLabel
+            }
+            onUpdatePhase(phaseUpdates)
+          }}
+          isDC={isDC}
+          phaseSystem={installation.nominalVoltage.system}
+          showPhaseAssignment
+          phaseOnly
+          phaseLocked={phaseLocked}
+          t={t}
+        />
+      )}
       <div className="flex items-center gap-2">
         <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
           {t('wires.wireTypeLabel', 'Wire type')}
@@ -427,6 +488,4 @@ export function GroundWireProperties({
     </div>
   )
 }
-
-
 

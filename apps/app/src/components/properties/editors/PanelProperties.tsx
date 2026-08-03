@@ -24,6 +24,10 @@ import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
 } from '@/lib/projectV2/electrical'
+import {
+  DEFAULT_PANEL_GRID_COLUMNS,
+  DEFAULT_PANEL_GRID_ROWS,
+} from '@/lib/panel/panelGridDefaults'
 // Panel Properties Component
 export function PanelProperties({
   panelId,
@@ -287,7 +291,7 @@ export function PanelProperties({
             type="number"
             min={1}
             max={32}
-            value={panel.gridView?.rows ?? 8}
+            value={panel.gridView?.rows ?? DEFAULT_PANEL_GRID_ROWS}
             onChange={(e) =>
               updatePanelGrid(panelId, {
                 rows: Math.max(1, Math.min(32, Number(e.target.value) || 1)),
@@ -304,7 +308,7 @@ export function PanelProperties({
             type="number"
             min={1}
             max={48}
-            value={panel.gridView?.columns ?? 12}
+            value={panel.gridView?.columns ?? DEFAULT_PANEL_GRID_COLUMNS}
             onChange={(e) =>
               updatePanelGrid(panelId, {
                 columns: Math.max(1, Math.min(48, Number(e.target.value) || 1)),

@@ -31,6 +31,13 @@ import {
   type CircuitSectionRef,
 } from '@/lib/wires/sectionWireOverrides'
 import {
+  getEffectiveCircuitPhaseState,
+  getFullInstallationPhaseAssignment,
+  getInheritedCircuitPhaseState,
+  getMainBusProtectionPhaseAssignment,
+  getPanelIncomingPhaseState,
+} from '@/lib/wires/phaseAssignment'
+import {
   LAYOUT_CONSTANTS,
   hasPanelAttachmentOnSecondaryBus,
   isPanelOnlySubPanelFeeder,
@@ -55,6 +62,7 @@ import {
   resolveSupplyFeedScopeForDeviceId,
   splitHorizontalSpanAtSeparator,
   type SupplySpanEndpoint,
+  type SupplyWireRole,
 } from '@/lib/supplyWireCables'
 import { findPanelById } from '@/lib/panel/panelTree'
 
@@ -80,17 +88,38 @@ function getNodeLightPointProps(node: LayoutNode): Endpoint['lightPointProps'] |
   return (node.domainRef as Endpoint).lightPointProps
 }
 
+function getDomoticaOutputPhaseState(
+  circuit: Circuit,
+  segment: WireSegment
+):
+  | Pick<ReturnType<typeof getCircuitWirePropertiesForDomain>, 'phaseAssignment' | 'showPhaseLabel'>
+  | undefined {
+  if (!segment.domoticaOutputGroup || segment.domoticaOutputIndex == null) return undefined
+  const domotica = circuit.endpoints.find(
+    (endpoint) => endpoint.symbol === 'domotica' && endpoint.domoticaProps
+  )
+  if (!domotica?.domoticaProps) return undefined
+  const outputWires =
+    segment.domoticaOutputGroup === 'control'
+      ? domotica.domoticaProps.controlOutputWires
+      : domotica.domoticaProps.endpointOutputWires
+  const output = outputWires?.[segment.domoticaOutputIndex]
+  return output
+    ? { phaseAssignment: output.phaseAssignment, showPhaseLabel: output.showPhaseLabel }
+    : undefined
+}
+
 function applyNodeWireInset(
   point: { x: number; y: number },
   otherEnd: { x: number; y: number },
-  node: LayoutNode,
+  node: LayoutNode
 ): { x: number; y: number } {
   return applyWireInset(
     point,
     otherEnd,
     node.type,
     getNodeSymbolId(node),
-    getNodeLightPointProps(node),
+    getNodeLightPointProps(node)
   )
 }
 
@@ -129,6 +158,12 @@ function getCircuitWirePropertiesForDomain(
     (circuit.inWall ? 'wall' : undefined)
   return {
     cable: sectionOverride?.cable ?? domainOverride?.cable ?? circuit.cable,
+    phaseAssignment:
+      sectionOverride?.phaseAssignment ??
+      domainOverride?.phaseAssignment ??
+      circuit.phaseAssignment,
+    showPhaseLabel:
+      sectionOverride?.showPhaseLabel ?? domainOverride?.showPhaseLabel ?? circuit.showPhaseLabel,
     inTube: sectionOverride?.inTube ?? domainOverride?.inTube ?? circuit.inTube,
     wireRoute,
     inWall:
@@ -141,14 +176,13 @@ function getCircuitWirePropertiesForDomain(
       sectionOverride?.showFireClassLabel ??
         domainOverride?.showFireClassLabel ??
         circuit.showFireClassLabel,
-      domain,
+      domain
     ),
-    wireLengthM:
-      sectionOverride?.wireLengthM ?? domainOverride?.wireLengthM ?? circuit.wireLengthM,
+    wireLengthM: sectionOverride?.wireLengthM ?? domainOverride?.wireLengthM ?? circuit.wireLengthM,
     showWireLengthLabel: resolveShowWireLengthLabel(
       sectionOverride?.showWireLengthLabel ??
         domainOverride?.showWireLengthLabel ??
-        circuit.showWireLengthLabel,
+        circuit.showWireLengthLabel
     ),
   }
 }
@@ -167,6 +201,12 @@ function getCircuitWirePropertiesFromResolvedOverride(
     (circuit.inWall ? 'wall' : undefined)
   return {
     cable: sectionOverride?.cable ?? domainOverride?.cable ?? circuit.cable,
+    phaseAssignment:
+      sectionOverride?.phaseAssignment ??
+      domainOverride?.phaseAssignment ??
+      circuit.phaseAssignment,
+    showPhaseLabel:
+      sectionOverride?.showPhaseLabel ?? domainOverride?.showPhaseLabel ?? circuit.showPhaseLabel,
     inTube: sectionOverride?.inTube ?? domainOverride?.inTube ?? circuit.inTube,
     wireRoute,
     inWall:
@@ -179,14 +219,13 @@ function getCircuitWirePropertiesFromResolvedOverride(
       sectionOverride?.showFireClassLabel ??
         domainOverride?.showFireClassLabel ??
         circuit.showFireClassLabel,
-      domain,
+      domain
     ),
-    wireLengthM:
-      sectionOverride?.wireLengthM ?? domainOverride?.wireLengthM ?? circuit.wireLengthM,
+    wireLengthM: sectionOverride?.wireLengthM ?? domainOverride?.wireLengthM ?? circuit.wireLengthM,
     showWireLengthLabel: resolveShowWireLengthLabel(
       sectionOverride?.showWireLengthLabel ??
         domainOverride?.showWireLengthLabel ??
-        circuit.showWireLengthLabel,
+        circuit.showWireLengthLabel
     ),
   }
 }
@@ -234,6 +273,7 @@ function derivePanelWires(
   const mainBusY = mainBusNode.bounds.y + mainBusNode.bounds.height / 2
   const mainBusX = mainBusNode.bounds.x
   const mainBusWidth = mainBusNode.bounds.width
+  const panelIncomingPhaseState = getPanelIncomingPhaseState(installation, panels, panel)
 
   // 1. Ground wire (vertical from ground to main bus) - only for main panels
   if (groundNode && panel.isMain) {
@@ -275,15 +315,11 @@ function derivePanelWires(
 
         // Apply inset on the "from" side (ground symbol or trunk device)
         const fromNode = allNodes[i]
-        const adjustedStart = fromNode
-          ? applyNodeWireInset(startPt, endPt, fromNode)
-          : startPt
+        const adjustedStart = fromNode ? applyNodeWireInset(startPt, endPt, fromNode) : startPt
 
         // Apply inset on the "to" side (trunk device or main bus — bus has no inset)
         const toNode = allNodes[i + 1] // undefined for the last segment (→ main bus)
-        const adjustedEnd = toNode
-          ? applyNodeWireInset(endPt, startPt, toNode)
-          : endPt
+        const adjustedEnd = toNode ? applyNodeWireInset(endPt, startPt, toNode) : endPt
 
         segments.push({
           id: generateId(),
@@ -331,6 +367,9 @@ function derivePanelWires(
 
   const busStartX = mainBusX
   const busEndX = mainBusX + mainBusWidth
+  const mainBusPhaseAssignment =
+    panelIncomingPhaseState.assignment ??
+    getFullInstallationPhaseAssignment(installation?.nominalVoltage.system)
 
   const waypoints: number[] = [busStartX, ...connectionXs, busEndX]
 
@@ -347,6 +386,7 @@ function derivePanelWires(
       cable: defaultCable,
       panelId: panel.id,
       domain: DEFAULT_ELECTRICAL_DOMAIN,
+      phaseAssignment: mainBusPhaseAssignment,
       fromElementType: 'mainBus',
       toElementType: 'mainBus',
     })
@@ -398,16 +438,16 @@ function derivePanelWires(
     const hasLocalFeederDevice = subPanelSupplyDeviceNodes.length > 0
     const waypoints: Array<{ y: number; node?: LayoutNode; deviceId?: string }> =
       hasLocalFeederDevice
-      ? [
-          { y: parentMcbNode.bounds.y, node: parentMcbNode },
-          ...subPanelSupplyDeviceNodes.map((node) => ({
-            y: node.bounds.y,
-            node,
-            deviceId: node.domainId,
-          })),
-          { y: mainBusY },
-        ]
-      : [{ y: parentMcbNode.bounds.y, node: parentMcbNode }, { y: mainBusY }]
+        ? [
+            { y: parentMcbNode.bounds.y, node: parentMcbNode },
+            ...subPanelSupplyDeviceNodes.map((node) => ({
+              y: node.bounds.y,
+              node,
+              deviceId: node.domainId,
+            })),
+            { y: mainBusY },
+          ]
+        : [{ y: parentMcbNode.bounds.y, node: parentMcbNode }, { y: mainBusY }]
     for (let i = 0; i < waypoints.length - 1; i++) {
       const from = waypoints[i]!
       const to = waypoints[i + 1]!
@@ -416,12 +456,8 @@ function derivePanelWires(
       const endPt = { x: parentMcbNode.bounds.x, y: to.y }
       const fromNode = from.node
       const toNode = to.node
-      const adjustedStart = fromNode
-        ? applyNodeWireInset(startPt, endPt, fromNode)
-        : startPt
-      const adjustedEnd = toNode
-        ? applyNodeWireInset(endPt, startPt, toNode)
-        : endPt
+      const adjustedStart = fromNode ? applyNodeWireInset(startPt, endPt, fromNode) : startPt
+      const adjustedEnd = toNode ? applyNodeWireInset(endPt, startPt, toNode) : endPt
       segments.push({
         id: generateId(),
         type: 'vertical',
@@ -465,29 +501,53 @@ function derivePanelWires(
     const supplyTrunkDeviceNodes = panelNode.children
       .filter((c) => c.type === 'trunkDevice' && c.id?.startsWith('supplyTrunkDevice-'))
       .sort((a, b) => a.bounds.x - b.bounds.x)
+    const lockingSupplyProtectionX = panelIncomingPhaseState.lockedByProtectionId
+      ? supplyTrunkDeviceNodes.find(
+          (node) => node.domainId === panelIncomingPhaseState.lockedByProtectionId
+        )?.bounds.x
+      : undefined
+    const fullSupplyPhaseAssignment = getFullInstallationPhaseAssignment(
+      installation?.nominalVoltage.system
+    )
+    const applySupplyPhaseState = (segment: WireSegment, role: SupplyWireRole) => {
+      if (role !== 'downstream') {
+        segment.phaseAssignment = fullSupplyPhaseAssignment
+        return
+      }
+      const isAfterLockingProtection =
+        panelIncomingPhaseState.lockedByProtectionId == null ||
+        lockingSupplyProtectionX == null ||
+        segment.type === 'vertical' ||
+        (segment.startPoint.x + segment.endPoint.x) / 2 < lockingSupplyProtectionX
+      segment.phaseAssignment = isAfterLockingProtection
+        ? panelIncomingPhaseState.assignment
+        : fullSupplyPhaseAssignment
+      segment.showPhaseLabel =
+        isAfterLockingProtection && panelIncomingPhaseState.showPhaseLabel === true
+    }
 
     const applySupplyLabelVisibility = (
       verticalSeg: WireSegment | undefined,
-      mergeCrossingWithBusDrop: boolean,
+      mergeCrossingWithBusDrop: boolean
     ) => {
       if (!installation || !verticalSeg) return
       const downstreamHidden = getSupplyWireHideWireLabelForRole(
         installation,
         panels,
         panel,
-        'downstream',
+        'downstream'
       )
       const crossingHidden = getSupplyWireHideWireLabelForRole(
         installation,
         panels,
         panel,
-        'crossing',
+        'crossing'
       )
       const upstreamHidden = getSupplyWireHideWireLabelForRole(
         installation,
         panels,
         panel,
-        'upstream',
+        'upstream'
       )
       if (mergeCrossingWithBusDrop) {
         verticalSeg.supplyMergesCrossingToBus = true
@@ -522,22 +582,20 @@ function derivePanelWires(
       separatorX: number | null,
       fromEndpoint?: SupplySpanEndpoint,
       toEndpoint?: SupplySpanEndpoint,
-      mergeCrossingWithBusDrop?: boolean,
+      mergeCrossingWithBusDrop?: boolean
     ) => {
       const spans = splitHorizontalSpanAtSeparator(
         start.x,
         end.x,
         separatorX,
         fromEndpoint,
-        toEndpoint,
+        toEndpoint
       )
       for (const span of spans) {
         const spanLeft = Math.min(span.x1, span.x2)
         const touchesBend = Math.abs(spanLeft - supplyBendX) < 1
         const mergeThisCrossing =
-          mergeCrossingWithBusDrop === true &&
-          span.role === 'crossing' &&
-          touchesBend
+          mergeCrossingWithBusDrop === true && span.role === 'crossing' && touchesBend
 
         const seg: WireSegment = {
           id: generateId(),
@@ -549,7 +607,7 @@ function derivePanelWires(
                 installation,
                 panels,
                 panel,
-                mergeThisCrossing ? 'downstream' : span.role,
+                mergeThisCrossing ? 'downstream' : span.role
               )
             : fallbackCable,
           panelId: panel.id,
@@ -573,7 +631,11 @@ function derivePanelWires(
             mergeThisCrossing ? 'downstream' : span.role,
             installation,
             panels,
-            panel,
+            panel
+          )
+          applySupplyPhaseState(
+            seg,
+            mergeThisCrossing ? 'downstream' : span.role
           )
         } else if (span.role !== 'downstream') {
           seg.hideWireLabel = true
@@ -591,12 +653,7 @@ function derivePanelWires(
       const devicePositions = supplyTrunkDeviceNodes.map((node) => ({
         x: node.bounds.x,
         feedScope: installation
-          ? resolveSupplyFeedScopeForDeviceId(
-              installation,
-              panels,
-              panel,
-              node.domainId ?? '',
-            )
+          ? resolveSupplyFeedScopeForDeviceId(installation, panels, panel, node.domainId ?? '')
           : ('shared' as const),
       }))
       const supplyEndX = supplyNode.bounds.x + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
@@ -619,6 +676,7 @@ function derivePanelWires(
       }
       if (installation) {
         applySupplyWireRoleToSegment(vertical, 'downstream', installation, panels, panel)
+        applySupplyPhaseState(vertical, 'downstream')
       }
       segments.push(vertical)
 
@@ -631,7 +689,7 @@ function derivePanelWires(
       const supplyInset = applyNodeWireInset(
         { x: supplyNode.bounds.x, y: supplyY },
         { x: lastSupplyTrunkNode.bounds.x, y: supplyY },
-        supplyNode,
+        supplyNode
       )
       waypoints.push({ x: supplyInset.x })
 
@@ -650,12 +708,8 @@ function derivePanelWires(
         const endPt = { x: to.x, y: supplyY }
         const fromDevice = allSupplyNodes[i - 1]
         const toDevice = allSupplyNodes[i]
-        const adjustedStart = fromDevice
-          ? applyNodeWireInset(startPt, endPt, fromDevice)
-          : startPt
-        const adjustedEnd = toDevice
-          ? applyNodeWireInset(endPt, startPt, toDevice)
-          : endPt
+        const adjustedStart = fromDevice ? applyNodeWireInset(startPt, endPt, fromDevice) : startPt
+        const adjustedEnd = toDevice ? applyNodeWireInset(endPt, startPt, toDevice) : endPt
         pushSupplyHorizontal(
           bendX,
           adjustedStart,
@@ -663,7 +717,7 @@ function derivePanelWires(
           separatorX,
           waypointScopes[i],
           waypointScopes[i + 1],
-          mergeCrossingWithBusDrop,
+          mergeCrossingWithBusDrop
         )
       }
       applySupplyLabelVisibility(vertical, mergeCrossingWithBusDrop)
@@ -690,13 +744,14 @@ function derivePanelWires(
       }
       if (installation) {
         applySupplyWireRoleToSegment(vertical, 'downstream', installation, panels, panel)
+        applySupplyPhaseState(vertical, 'downstream')
       }
       segments.push(vertical)
 
       const supplyInset = applyNodeWireInset(
         { x: supplyNode.bounds.x, y: supplyY },
         { x: bendX, y: supplyY },
-        supplyNode,
+        supplyNode
       )
       pushSupplyHorizontal(
         bendX,
@@ -705,7 +760,7 @@ function derivePanelWires(
         separatorX,
         'bend',
         'supply',
-        mergeCrossingWithBusDrop,
+        mergeCrossingWithBusDrop
       )
       applySupplyLabelVisibility(vertical, mergeCrossingWithBusDrop)
     }
@@ -714,7 +769,12 @@ function derivePanelWires(
   // 4. Process main bus children (RCDs, MCBs)
   for (const child of mainBusNode.children) {
     if (child.type === 'rcd') {
-      const rcdSegments = deriveRcdWires(child, panel, mainBusY)
+      const rcdSegments = deriveRcdWires(
+        child,
+        panel,
+        mainBusY,
+        installation?.nominalVoltage.system
+      )
       segments.push(...rcdSegments)
     } else if (child.type === 'mcb') {
       const mcbSegments = deriveMcbWires(child, panel, mainBusY, null)
@@ -725,7 +785,11 @@ function derivePanelWires(
   // Final pass: enforce per-section overrides on all vertical circuit segments.
   for (const segment of segments) {
     if (segment.type !== 'vertical' || !segment.circuitId) continue
-    const circuit = findCircuitByIdInPanel(panel, segment.circuitId)
+    const circuit =
+      findCircuitByIdInPanel(panel, segment.circuitId) ??
+      panels
+        .map((candidatePanel) => findCircuitByIdInPanel(candidatePanel, segment.circuitId))
+        .find((candidate): candidate is Circuit => candidate !== null)
     if (!circuit) continue
     const sectionRef = getSectionRefFromWireSegment(segment)
     const sectionOverride = findSectionWireOverride(circuit, sectionRef)
@@ -752,11 +816,55 @@ function derivePanelWires(
     const wireProps = getCircuitWirePropertiesForDomain(
       circuit,
       segment.domain ?? DEFAULT_ELECTRICAL_DOMAIN,
-      sectionRef,
+      sectionRef
     )
     segment.showFireClassLabel = wireProps.showFireClassLabel
     segment.wireLengthM = wireProps.wireLengthM
     segment.showWireLengthLabel = wireProps.showWireLengthLabel
+  }
+
+  // Carry the effective phase assignment and label visibility onto every derived
+  // segment. Explicit child assignments win; otherwise a concrete lock from a
+  // parent circuit feeds the complete nested/secondary-panel chain.
+  for (const segment of segments) {
+    if (!segment.circuitId) continue
+    const circuit =
+      findCircuitByIdInPanel(panel, segment.circuitId) ??
+      panels
+        .map((candidatePanel) => findCircuitByIdInPanel(candidatePanel, segment.circuitId))
+        .find((candidate): candidate is Circuit => candidate !== null)
+    if (!circuit) continue
+    const sectionRef = getSectionRefFromWireSegment(segment)
+    const wireProps = getCircuitWirePropertiesForDomain(
+      circuit,
+      segment.domain ?? DEFAULT_ELECTRICAL_DOMAIN,
+      sectionRef
+    )
+    const inheritedPhaseState = getInheritedCircuitPhaseState(
+      circuit,
+      panels,
+      installation?.nominalVoltage.system,
+      installation
+    )
+    const effectivePhaseState = getEffectiveCircuitPhaseState(
+      circuit,
+      panels,
+      installation?.nominalVoltage.system,
+      installation
+    )
+    const outputPhaseState = getDomoticaOutputPhaseState(circuit, segment)
+    const crossesProtectionBoundary =
+      segment.fromElementType === 'protection' || segment.toElementType === 'protection'
+    segment.phaseAssignment =
+      inheritedPhaseState.assignment ??
+      outputPhaseState?.phaseAssignment ??
+      (crossesProtectionBoundary
+        ? effectivePhaseState.assignment
+        : (wireProps.phaseAssignment ?? effectivePhaseState.assignment))
+    segment.showPhaseLabel =
+      outputPhaseState?.showPhaseLabel ??
+      circuit.showPhaseLabel ??
+      inheritedPhaseState.showPhaseLabel
   }
 
   // Final pass: normalize sub-panel incoming feeder tagging.
@@ -788,13 +896,21 @@ function derivePanelWires(
 /**
  * Derive wires for an RCD node
  */
-function deriveRcdWires(rcdNode: LayoutNode, panel: Panel, mainBusY: number): WireSegment[] {
+function deriveRcdWires(
+  rcdNode: LayoutNode,
+  panel: Panel,
+  mainBusY: number,
+  phaseSystem?: Installation['nominalVoltage']['system']
+): WireSegment[] {
   const segments: WireSegment[] = []
   const rcdY = rcdNode.bounds.y
   // bounds.x IS the center of the RCD symbol (from bottomUpLayout position.x)
   const rcdX = rcdNode.bounds.x
 
   const protection = rcdNode.domainRef as ProtectionDevice | undefined
+  const phaseAssignment = protection
+    ? getMainBusProtectionPhaseAssignment(panel, protection, phaseSystem)
+    : undefined
   const cable = protection?.circuits?.[0]?.cable || {
     kind: 'XVB',
     conductors: 3,
@@ -813,6 +929,7 @@ function deriveRcdWires(rcdNode: LayoutNode, panel: Panel, mainBusY: number): Wi
     cable,
     panelId: panel.id,
     domain: DEFAULT_ELECTRICAL_DOMAIN,
+    phaseAssignment,
     fromElementType: 'mainBus',
     toElementType: 'rcd',
     toElementId: protection?.id,
@@ -833,6 +950,7 @@ function deriveRcdWires(rcdNode: LayoutNode, panel: Panel, mainBusY: number): Wi
       cable,
       panelId: panel.id,
       domain: DEFAULT_ELECTRICAL_DOMAIN,
+      phaseAssignment,
       fromElementType: 'rcd',
       fromElementId: protection?.id,
       toElementType: 'secondaryBus',
@@ -862,9 +980,12 @@ function deriveRcdWires(rcdNode: LayoutNode, panel: Panel, mainBusY: number): Wi
         cable,
         panelId: panel.id,
         domain: DEFAULT_ELECTRICAL_DOMAIN,
+        phaseAssignment,
         fromElementType: 'rcd',
         fromElementId: protection?.id,
-        ...(secondaryBusReferenceLabel ? { secondaryBusReferenceExportLabel: secondaryBusReferenceLabel } : {}),
+        ...(secondaryBusReferenceLabel
+          ? { secondaryBusReferenceExportLabel: secondaryBusReferenceLabel }
+          : {}),
         ...(secondaryBusReferenceLabel && shouldLabelSecondaryBusSegment(i, mcbXs.length)
           ? { secondaryBusReferenceLabel }
           : {}),
@@ -1009,7 +1130,7 @@ function deriveMcbWires(
       const epInset = applyNodeWireInset(
         { x: mcbX, y: topmostEndpoint.bounds.y },
         { x: mcbX, y: mcbY },
-        topmostEndpoint,
+        topmostEndpoint
       )
       topmostEndpointInsetY = epInset.y
     }
@@ -1070,12 +1191,8 @@ function deriveMcbWires(
         const toNode = allTrunkNodes[i + 1] // undefined for the last segment (→ branch/endpoint)
         const toEndpointRef = to.deviceId ?? toNode?.domainId
 
-        const adjustedStart = fromNode
-          ? applyNodeWireInset(startPt, endPt, fromNode)
-          : startPt
-        const adjustedEnd = toNode
-          ? applyNodeWireInset(endPt, startPt, toNode)
-          : endPt
+        const adjustedStart = fromNode ? applyNodeWireInset(startPt, endPt, fromNode) : startPt
+        const adjustedEnd = toNode ? applyNodeWireInset(endPt, startPt, toNode) : endPt
 
         const segmentSectionRef: CircuitSectionRef = {
           fromElementType: i === 0 ? 'protection' : 'endpoint',
@@ -1121,7 +1238,6 @@ function deriveMcbWires(
         const topDevice = trunkDeviceNodes[trunkDeviceNodes.length - 1]!
         const stubLen = Math.abs(verticalWireTopY - topDevice.bounds.y)
         if (stubLen > 0 && stubLen <= 20) {
-
           logger.info('[Eendraad Trunk Debug]', {
             circuitId: circuit.id,
             protectionId: protection?.id,
@@ -1433,16 +1549,12 @@ function deriveMcbWires(
     for (const panelEndpoint of secondaryBusEndpointNodes) {
       const busPoint = { x: panelEndpoint.bounds.x, y: secondaryBusY }
       const endpointPoint = { x: panelEndpoint.bounds.x, y: panelEndpoint.bounds.y }
-      const panelWireProps = getCircuitWirePropertiesForDomain(
-        circuit,
-        DEFAULT_ELECTRICAL_DOMAIN,
-        {
-          fromElementType: 'secondaryBus',
-          toElementType: 'endpoint',
-          toElementId: panelEndpoint.domainId,
-          domain: DEFAULT_ELECTRICAL_DOMAIN,
-        }
-      )
+      const panelWireProps = getCircuitWirePropertiesForDomain(circuit, DEFAULT_ELECTRICAL_DOMAIN, {
+        fromElementType: 'secondaryBus',
+        toElementType: 'endpoint',
+        toElementId: panelEndpoint.domainId,
+        domain: DEFAULT_ELECTRICAL_DOMAIN,
+      })
       segments.push({
         id: generateId(),
         type: 'vertical',
@@ -1548,8 +1660,7 @@ function deriveBranchWires(
           const childProps = ep?.domoticaChildProps
           return (
             childProps?.parentEndpointId === domoticaNode.domainId &&
-            (childProps?.outputGroup === group ||
-              childProps?.outputGroup === 'control') &&
+            (childProps?.outputGroup === group || childProps?.outputGroup === 'control') &&
             childProps?.outputIndex === index
           )
         })
@@ -1577,9 +1688,7 @@ function deriveBranchWires(
         id: generateId(),
         type: 'branch',
         startPoint: start,
-        endPoint: firstNode
-          ? applyNodeWireInset(firstEnd, start, firstNode)
-          : firstEnd,
+        endPoint: firstNode ? applyNodeWireInset(firstEnd, start, firstNode) : firstEnd,
         cable: segmentCable,
         panelId: panel.id,
         domain,

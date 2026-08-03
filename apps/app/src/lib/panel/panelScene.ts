@@ -22,6 +22,10 @@ import {
   resolveModuleWidthCols,
   type ModulePlacement,
 } from '@/components/canvas/panel/panelGridLayout'
+import {
+  DEFAULT_PANEL_GRID_COLUMNS,
+  DEFAULT_PANEL_GRID_ROWS,
+} from '@/lib/panel/panelGridDefaults'
 
 export const PANEL_SCENE_FRAME_MARGIN = 40
 /** Vertical gap between main and supply regions on one panel surface (matches legacy PanelCanvas). */
@@ -241,7 +245,7 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
     })
     if (slot == null) sharedCursorCol += widthCols
   }
-  const baseRootCols = firstRootOption.panel.gridView?.columns ?? 12
+  const baseRootCols = firstRootOption.panel.gridView?.columns ?? DEFAULT_PANEL_GRID_COLUMNS
   const baseRootContentWidth = baseRootCols * CELL_W
   const sharedContentWidth = baseRootContentWidth
   const sharedWidth = sharedContentWidth + PANEL_SCENE_FRAME_MARGIN * 2
@@ -251,8 +255,8 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
   const GAP = PANEL_SCENE_SUPPLY_GAP
 
   const buildSurfaceForPanel = (panel: Panel): Omit<PanelSceneSurface, 'x' | 'y'> => {
-    const rows = panel.gridView?.rows ?? 8
-    const cols = panel.gridView?.columns ?? 12
+    const rows = panel.gridView?.rows ?? DEFAULT_PANEL_GRID_ROWS
+    const cols = panel.gridView?.columns ?? DEFAULT_PANEL_GRID_COLUMNS
     const supplyLayout = getSupplyPanelLayout(panel)
     const feedFromTop = panel.gridView?.feedFromTop ?? false
     const contentHeight = rows * CELL_H + Math.max(0, rows - 1) * ROW_GAP

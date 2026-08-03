@@ -3,13 +3,22 @@ import { useTranslation } from 'react-i18next'
 import { Eye, EyeOff } from 'lucide-react'
 import { DebouncedTextInput } from '@/components/forms'
 import CustomDropdown from '@/components/common/CustomDropdown'
-import type { CableSpec } from '@/types/schema'
+import type { CableSpec, CircuitPhaseAssignment, Installation } from '@/types/schema'
 import {
   applyCableKindChange,
   getAcWireTypeOptions,
   getDcWireTypeOptions,
 } from '@/lib/wires/cableWireTypes'
 import { getWireConductorOptions, resolveConductorDropdownValue } from '@/lib/wireConductorOptions'
+import {
+  formatPhaseAssignment,
+  getPhaseAssignmentForOptionValue,
+  getPhaseAssignmentLabel,
+  getPhaseAssignmentOptionValue,
+  getPhaseAssignmentOptions,
+  supportsExplicitPhaseSelection,
+  type PhaseAssignmentConstraint,
+} from '@/lib/wires/phaseAssignment'
 import {
   getProjectDefaultInstallYear,
   getExplicitInstallYear,
@@ -110,6 +119,9 @@ export type WireRouteFormState = {
   wireLengthM?: number
   showWireLengthLabel?: boolean
   defaultWireLabelVisible?: boolean
+  phaseAssignment?: CircuitPhaseAssignment
+  phaseConstraint?: PhaseAssignmentConstraint
+  showPhaseLabel?: boolean
   cable: CableSpec
 }
 
@@ -183,15 +195,54 @@ export function WireRouteAndCableForm({
   state,
   onChange,
   isDC,
+  phaseSystem,
+  showPhaseAssignment = false,
+  phaseOnly = false,
+  phaseLocked = false,
   t,
 }: {
   state: WireRouteFormState
   onChange: (u: Partial<WireRouteFormState>) => void
   isDC: boolean
+  phaseSystem?: Installation['nominalVoltage']['system']
+  showPhaseAssignment?: boolean
+  /** Connection stubs expose only their shared phase assignment/visibility. */
+  phaseOnly?: boolean
+  /** Render the effective phase without an editable choice. */
+  phaseLocked?: boolean
   t: (key: string, defaultValue?: string) => string
 }) {
-  const conductorOptions = getWireConductorOptions(isDC)
-  const selectedConductorValue = resolveConductorDropdownValue(state.cable, isDC)
+  const phaseFeatureEnabled =
+    showPhaseAssignment && !isDC && !!phaseSystem && supportsExplicitPhaseSelection(phaseSystem)
+  const phaseOptions =
+    phaseFeatureEnabled && phaseSystem
+      ? getPhaseAssignmentOptions(phaseSystem, state.phaseConstraint)
+      : []
+  const phaseSelectionValue =
+    phaseFeatureEnabled && phaseSystem
+      ? getPhaseAssignmentOptionValue(state.phaseAssignment, phaseSystem, state.phaseConstraint)
+      : ''
+  const effectivePhaseAssignment = phaseFeatureEnabled
+    ? phaseSelectionValue === 'inherit'
+      ? state.phaseConstraint?.inheritedAssignment
+      : (state.phaseAssignment ?? state.phaseConstraint?.inheritedAssignment)
+    : undefined
+  const effectivePhaseConstraint = phaseFeatureEnabled ? state.phaseConstraint : undefined
+  const phaseLabelAvailable =
+    !!phaseSystem &&
+    !!effectivePhaseAssignment &&
+    !!getPhaseAssignmentLabel(effectivePhaseAssignment, phaseSystem)
+  const conductorOptions = getWireConductorOptions(
+    isDC,
+    effectivePhaseAssignment,
+    effectivePhaseConstraint
+  )
+  const selectedConductorValue = resolveConductorDropdownValue(
+    state.cable,
+    isDC,
+    effectivePhaseAssignment,
+    effectivePhaseConstraint
+  )
 
   const wireTypes = isDC
     ? getDcWireTypeOptions(t('wires.other', 'Other'))
@@ -250,8 +301,103 @@ export function WireRouteAndCableForm({
     (isDC ? state.showFireClassLabel === true : state.showFireClassLabel !== false) &&
     !!state.cable.fireClass
 
+  if (phaseOnly && phaseOptions.length === 0) return null
+
   return (
-    <div className="space-y-4">
+    <div className={phaseOnly ? 'space-y-4 [&>div:not(:first-child)]:hidden' : 'space-y-4'}>
+      {phaseOptions.length > 0 && phaseSystem && (
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              {t('wires.phase', 'Phase')}
+            </label>
+            <button
+              type="button"
+              disabled={!phaseLabelAvailable}
+              onClick={() => onChange({ showPhaseLabel: !(state.showPhaseLabel === true) })}
+              className={visibilityToggleClass(
+                phaseLabelAvailable && state.showPhaseLabel === true
+              )}
+              title={
+                state.showPhaseLabel === true
+                  ? t('wires.hidePhaseLabel', 'Hide phase on one-wire')
+                  : t('wires.showPhaseLabel', 'Show phase on one-wire')
+              }
+              aria-label={
+                state.showPhaseLabel === true
+                  ? t('wires.hidePhaseLabel', 'Hide phase on one-wire')
+                  : t('wires.showPhaseLabel', 'Show phase on one-wire')
+              }
+            >
+              {state.showPhaseLabel === true ? (
+                <Eye className="w-4 h-4" />
+              ) : (
+                <EyeOff className="w-4 h-4" />
+              )}
+            </button>
+          </div>
+          {phaseLocked ? (
+            <div className="w-full px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
+              {formatPhaseAssignment(effectivePhaseAssignment)}
+            </div>
+          ) : (
+            <CustomDropdown
+              value={phaseSelectionValue}
+              onChange={(nextValue) => {
+              const nextAssignment = getPhaseAssignmentForOptionValue(
+                nextValue,
+                phaseSystem,
+                effectivePhaseConstraint
+              )
+              const nextConductorOptions = getWireConductorOptions(
+                isDC,
+                nextAssignment,
+                effectivePhaseConstraint
+              )
+              const currentConductor = nextConductorOptions.find(
+                (option) => option.value === resolveConductorDropdownValue(state.cable, isDC)
+              )
+              const preferredConductor =
+                currentConductor ??
+                nextConductorOptions.find(
+                  (option) => option.hasPE === (state.cable.hasPE ?? false)
+                ) ??
+                nextConductorOptions[0]
+              onChange({
+                phaseAssignment: nextAssignment,
+                ...(!phaseOnly && preferredConductor
+                  ? {
+                      cable: {
+                        ...state.cable,
+                        conductors: preferredConductor.conductors,
+                        hasPE: preferredConductor.hasPE,
+                      },
+                    }
+                  : {}),
+              })
+              }}
+              options={phaseOptions.map((option) => ({
+                value: option.value,
+                label:
+                  option.assignment == null
+                    ? state.phaseConstraint?.inheritedAssignment
+                      ? `${t(
+                          state.phaseConstraint.inheritedAssignment.source === 'derived_from_busbar'
+                            ? 'wires.phaseAutomatic'
+                            : 'wires.phaseInherited',
+                          state.phaseConstraint.inheritedAssignment.source === 'derived_from_busbar'
+                            ? 'Automatic'
+                            : 'Inherited'
+                        )} ${formatPhaseAssignment(state.phaseConstraint.inheritedAssignment)}`
+                      : t('wires.phaseAll', 'All phases')
+                    : formatPhaseAssignment(option.assignment),
+              }))}
+              placeholder={t('wires.phaseSelect', 'Select phase')}
+              className="w-full px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
+            />
+          )}
+        </div>
+      )}
       <div>
         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
           {t('wires.inTube', 'Tube')}

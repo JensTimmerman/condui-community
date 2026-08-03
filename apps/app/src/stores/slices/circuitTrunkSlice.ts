@@ -47,24 +47,38 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
           const panels = getMutableElectricalPanelsForProject(state.currentProject)
           const panel = findPanelById(panels, panelId)
           if (panel) {
+            const protection = protectionId
+              ? panel.protections.find((candidate) => candidate.id === protectionId)
+              : undefined
+            if (protectionId && !protection) {
+              logger.error('Refusing to create an orphan circuit: protection was not found', {
+                panelId,
+                protectionId,
+                circuitId: circuit.id,
+                circuitCode: circuit.code,
+              })
+              return
+            }
+            if (!protectionId && circuit.code !== 'PANEL') {
+              logger.error('Refusing to create an orphan circuit without a protection', {
+                panelId,
+                circuitId: circuit.id,
+                circuitCode: circuit.code,
+              })
+              return
+            }
+
             if (!circuit.endpoints) {
               circuit.endpoints = []
             }
 
-            if (protectionId) {
-              // Add to protection's circuits
-              const protection = panel.protections.find((p) => p.id === protectionId)
-              if (protection) {
-                if (!protection.circuits) {
-                  protection.circuits = []
-                }
-                protection.circuits.push(circuit)
-              } else {
-                // Fallback to panel circuits
-                panel.circuits.push(circuit)
+            if (protection) {
+              if (!protection.circuits) {
+                protection.circuits = []
               }
+              protection.circuits.push(circuit)
             } else {
-              // Add to panel's direct circuits
+              // PANEL is the one supported direct circuit: it anchors a panel symbol on plan.
               panel.circuits.push(circuit)
             }
             state.isDirty = true

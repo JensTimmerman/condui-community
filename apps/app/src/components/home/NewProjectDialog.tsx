@@ -5,15 +5,17 @@ import {
   DEFAULT_SUPPLY_VOLTAGE_SYSTEM,
   applyNominalVoltageSystem,
   supplyCableConductorsForSystem,
-  type SupplyVoltageSystem,
 } from '@/constants/nominalVoltage'
 import { NominalVoltageSystemPicker } from '@/components/properties/NominalVoltageSystemPicker'
 import { DEFAULT_EENDRAAD_INSTALLATION_OPTIONS } from '@/utils/project'
-import {
-  DEFAULT_INSTALLATION_PROFILE,
-  resolveInstallationProfile,
-} from '@/lib/installationProfile'
+import { DEFAULT_INSTALLATION_PROFILE, resolveInstallationProfile } from '@/lib/installationProfile'
 import type { InstallationProfile } from '@/types/schema'
+import {
+  clearNewProjectDraft,
+  createEmptyNewProjectDraft,
+  readNewProjectDraft,
+  writeNewProjectDraft,
+} from './newProjectDraft'
 
 interface NewProjectDialogProps {
   isOpen: boolean
@@ -29,7 +31,7 @@ interface NewProjectDialogProps {
     installation: Installation,
     yearOfConstruction?: number,
     meterEanCode?: string
-  ) => void
+  ) => boolean | Promise<boolean>
 }
 
 function NewProjectDialog({
@@ -46,19 +48,27 @@ function NewProjectDialog({
     localWarningMessage ??
     (willCreateAsLocal ? t('project.newProjectLocalWarningShort') : undefined)
 
-  const [projectName, setProjectName] = useState('')
-  const [yearOfConstruction, setYearOfConstruction] = useState<string>('')
-  const [meterEanCode, setMeterEanCode] = useState('')
-  const [address, setAddress] = useState({
-    street: '',
-    postalCode: '',
-    city: '',
-    country: 'BE',
-  })
-  const [voltageSystem, setVoltageSystem] = useState<SupplyVoltageSystem>(DEFAULT_SUPPLY_VOLTAGE_SYSTEM)
-  const [installationProfile, setInstallationProfile] =
-    useState<InstallationProfile>(DEFAULT_INSTALLATION_PROFILE)
+  const [draft, setDraft] = useState(readNewProjectDraft)
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const nameInputRef = useRef<HTMLInputElement>(null)
+  const skipNextDraftWriteRef = useRef(false)
+
+  const {
+    projectName,
+    yearOfConstruction,
+    meterEanCode,
+    address,
+    voltageSystem,
+    installationProfile,
+  } = draft
+
+  useEffect(() => {
+    if (skipNextDraftWriteRef.current) {
+      skipNextDraftWriteRef.current = false
+      return
+    }
+    writeNewProjectDraft(draft)
+  }, [draft])
 
   useEffect(() => {
     if (!isOpen) return
@@ -68,7 +78,7 @@ function NewProjectDialog({
     return () => cancelAnimationFrame(frame)
   }, [isOpen])
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
     if (!projectName.trim()) {
@@ -84,7 +94,7 @@ function NewProjectDialog({
       address,
       nominalVoltage: applyNominalVoltageSystem(
         { system: DEFAULT_SUPPLY_VOLTAGE_SYSTEM, uLineToNeutral: 230, uLineToLine: 230 },
-        voltageSystem,
+        voltageSystem
       ),
       mainSupply: {
         cable: {
@@ -99,25 +109,26 @@ function NewProjectDialog({
 
     const year = yearOfConstruction.trim() ? parseInt(yearOfConstruction, 10) : undefined
     if (year !== undefined && (Number.isNaN(year) || year < 1800 || year > 2100)) {
-      alert(t('project.yearOfConstructionInvalid', 'Please enter a valid year between 1800 and 2100.'))
+      alert(
+        t('project.yearOfConstructionInvalid', 'Please enter a valid year between 1800 and 2100.')
+      )
       return
     }
     const ean = meterEanCode.trim() || undefined
-    onCreate(projectName, installation, year, ean)
-    resetForm()
-  }
-
-  const resetForm = () => {
-    setProjectName('')
-    setYearOfConstruction('')
-    setMeterEanCode('')
-    setAddress({ street: '', postalCode: '', city: '', country: 'BE' })
-    setVoltageSystem(DEFAULT_SUPPLY_VOLTAGE_SYSTEM)
-    setInstallationProfile(DEFAULT_INSTALLATION_PROFILE)
+    setIsSubmitting(true)
+    try {
+      const created = await onCreate(projectName, installation, year, ean)
+      if (!created) return
+      clearNewProjectDraft()
+      skipNextDraftWriteRef.current = true
+      setDraft(createEmptyNewProjectDraft())
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   const handleClose = () => {
-    resetForm()
+    writeNewProjectDraft(draft)
     onClose()
   }
 
@@ -128,9 +139,7 @@ function NewProjectDialog({
       <div className="bg-white/95 dark:bg-gray-800/90 border border-slate-200 dark:border-gray-700 rounded-md shadow-2xl backdrop-blur-sm max-w-2xl w-full max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="sticky top-0 bg-white/95 dark:bg-gray-800/90 border-b border-slate-200 dark:border-gray-700 px-6 py-4 flex items-center justify-between">
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
-            {t('project.new')}
-          </h2>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">{t('project.new')}</h2>
           <button
             onClick={handleClose}
             className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
@@ -177,7 +186,7 @@ function NewProjectDialog({
               type="text"
               data-testid="new-project-name-input"
               value={projectName}
-              onChange={(e) => setProjectName(e.target.value)}
+              onChange={(e) => setDraft((current) => ({ ...current, projectName: e.target.value }))}
               autoFocus
               className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-sky-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
               placeholder={t('project.name')}
@@ -195,7 +204,9 @@ function NewProjectDialog({
               min={1800}
               max={2100}
               value={yearOfConstruction}
-              onChange={(e) => setYearOfConstruction(e.target.value)}
+              onChange={(e) =>
+                setDraft((current) => ({ ...current, yearOfConstruction: e.target.value }))
+              }
               className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-sky-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
               placeholder="e.g. 1995"
             />
@@ -209,7 +220,9 @@ function NewProjectDialog({
             <input
               type="text"
               value={meterEanCode}
-              onChange={(e) => setMeterEanCode(e.target.value)}
+              onChange={(e) =>
+                setDraft((current) => ({ ...current, meterEanCode: e.target.value }))
+              }
               className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-sky-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
               placeholder={t('project.meterEanCodePlaceholder', 'e.g. 5412345678901234')}
             />
@@ -229,7 +242,10 @@ function NewProjectDialog({
                 <select
                   value={installationProfile}
                   onChange={(event) =>
-                    setInstallationProfile(event.target.value as InstallationProfile)
+                    setDraft((current) => ({
+                      ...current,
+                      installationProfile: event.target.value as InstallationProfile,
+                    }))
                   }
                   className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-sky-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 >
@@ -252,7 +268,12 @@ function NewProjectDialog({
                 <input
                   type="text"
                   value={address.street}
-                  onChange={(e) => setAddress({ ...address, street: e.target.value })}
+                  onChange={(e) =>
+                    setDraft((current) => ({
+                      ...current,
+                      address: { ...current.address, street: e.target.value },
+                    }))
+                  }
                   className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-sky-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                   placeholder="Kerkstraat 123"
                 />
@@ -266,7 +287,12 @@ function NewProjectDialog({
                   <input
                     type="text"
                     value={address.postalCode}
-                    onChange={(e) => setAddress({ ...address, postalCode: e.target.value })}
+                    onChange={(e) =>
+                      setDraft((current) => ({
+                        ...current,
+                        address: { ...current.address, postalCode: e.target.value },
+                      }))
+                    }
                     className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-sky-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                     placeholder="1000"
                   />
@@ -278,7 +304,12 @@ function NewProjectDialog({
                   <input
                     type="text"
                     value={address.city}
-                    onChange={(e) => setAddress({ ...address, city: e.target.value })}
+                    onChange={(e) =>
+                      setDraft((current) => ({
+                        ...current,
+                        address: { ...current.address, city: e.target.value },
+                      }))
+                    }
                     className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-sky-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                     placeholder="Brussel"
                   />
@@ -305,7 +336,7 @@ function NewProjectDialog({
               </label>
               <NominalVoltageSystemPicker
                 value={voltageSystem}
-                onChange={setVoltageSystem}
+                onChange={(voltageSystem) => setDraft((current) => ({ ...current, voltageSystem }))}
               />
             </div>
           </div>
@@ -315,6 +346,7 @@ function NewProjectDialog({
             <button
               type="button"
               onClick={handleClose}
+              disabled={isSubmitting}
               className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
             >
               {t('common.cancel')}
@@ -322,6 +354,7 @@ function NewProjectDialog({
             <button
               type="submit"
               data-testid="new-project-submit"
+              disabled={isSubmitting}
               className="flex-1 px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-md transition-colors font-medium"
             >
               {t('project.create')}

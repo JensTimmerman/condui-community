@@ -24,6 +24,10 @@ import {
   panelGridModuleRefKey,
   resolveModuleWidthCols,
 } from '@/components/canvas/panel/panelGridLayout'
+import {
+  DEFAULT_PANEL_GRID_COLUMNS,
+  DEFAULT_PANEL_GRID_ROWS,
+} from '@/lib/panel/panelGridDefaults'
 
 export type PanelSupplySlotProject = ProjectWithOptionalV2Electrical
 
@@ -116,8 +120,8 @@ export function rebalanceSupplyOverflowIntoMain(
   targetProject: PanelSupplySlotProject
 ): { mainSlots: PanelGridSlot[]; supplySlots: PanelGridSlot[] } {
   const { rows: supplyRows, cols: supplyCols } = getSupplyPanelLayout(targetPanel)
-  const cols = targetPanel.gridView?.columns ?? 12
-  const rows = targetPanel.gridView?.rows ?? 8
+  const cols = targetPanel.gridView?.columns ?? DEFAULT_PANEL_GRID_COLUMNS
+  const rows = targetPanel.gridView?.rows ?? DEFAULT_PANEL_GRID_ROWS
   const feedFromTop = targetPanel.gridView?.feedFromTop ?? false
   const existingMainSlots = targetPanel.gridView?.slots ?? []
   const existingSupplySlots = targetPanel.gridView?.supplyPanelSlots ?? []
@@ -249,9 +253,9 @@ export function buildPanelAutoArrangeSlots({
   targetPanel: Panel
   targetProject: PanelSupplySlotProject
 }): { mainSlots: PanelGridSlot[]; supplySlots: PanelGridSlot[] } {
-  const cols = targetPanel.gridView?.columns ?? 12
+  const cols = targetPanel.gridView?.columns ?? DEFAULT_PANEL_GRID_COLUMNS
   const feedFromTop = targetPanel.gridView?.feedFromTop ?? false
-  const panelRows = targetPanel.gridView?.rows ?? 8
+  const panelRows = targetPanel.gridView?.rows ?? DEFAULT_PANEL_GRID_ROWS
   const existingMainSlots = targetPanel.gridView?.slots ?? []
   const existingSupplySlots = targetPanel.gridView?.supplyPanelSlots ?? []
   const prevMainByKey = new Map(

@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useUIStore, type UIState } from '@/stores/uiStore'
 import { useProjectStore, type ProjectState } from '@/stores/projectStore'
 import { useEendraadWireSegments } from '@/hooks/eendraad'
-import type { CableSpec, Circuit, ProtectionDevice, WireSegment } from '@/types/schema'
+import type { AcLinePhase, CableSpec, Circuit, Panel, WireSegment } from '@/types/schema'
 import { getDomainForSymbol, resolveSymbolPortsForWire } from '@/lib/symbols'
 import {
   collectRootPanels,
@@ -16,29 +16,75 @@ import {
   getSectionRefFromWireSegment,
   upsertSectionWireOverride,
 } from '@/lib/wires/sectionWireOverrides'
-import { resolveShowFireClassLabel, resolveShowWireLengthLabel } from '@/lib/wires/circuitWireDefaults'
-import { panelStringT, visibilityToggleClass } from '../shared/propertiesSharedUtils'
 import {
-  WireRouteAndCableForm,
-  type WireRouteFormState,
-} from '../shared/propertiesShared'
+  resolveShowFireClassLabel,
+  resolveShowWireLengthLabel,
+} from '@/lib/wires/circuitWireDefaults'
+import {
+  getInheritedPhaseConstraint,
+  getInheritedCircuitPhaseState,
+  getBusbarPhaseOrder,
+  getPanelIncomingPhaseState,
+  getProtectionPhaseConstraint,
+  supportsExplicitPhaseSelection,
+} from '@/lib/wires/phaseAssignment'
+import CustomDropdown from '@/components/common/CustomDropdown'
+import { panelStringT, visibilityToggleClass } from '../shared/propertiesSharedUtils'
+import { WireRouteAndCableForm, type WireRouteFormState } from '../shared/propertiesShared'
 import { GroundWireProperties, SupplyWireProperties } from './SupplyGroundWireProperties'
 import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
 } from '@/lib/projectV2/electrical'
-function isPanelOnlySubPanelFeeder(protection: ProtectionDevice | undefined): boolean {
-  if (!protection?.subPanelId) return false
-  const circuit = protection.circuits?.[0]
-  if (!circuit) return false
-  const hasConsumerEndpoints = circuit.endpoints.some(
-    (endpoint) => endpoint.symbol !== 'panel_distribution'
-  )
+function BusbarPhaseOrderProperties({
+  panel,
+  ownerId,
+  onUpdate,
+}: {
+  panel: Panel
+  ownerId?: string
+  onUpdate: (id: string, updates: Partial<Panel>) => void
+}) {
+  const { t } = useTranslation()
+  const order = getBusbarPhaseOrder(panel, ownerId)
+  const options = (['L1', 'L2', 'L3'] as AcLinePhase[]).map((phase) => ({
+    value: phase,
+    label: phase,
+  }))
+  const updateOrder = (index: number, nextPhase: AcLinePhase) => {
+    const next = [...order]
+    const previousIndex = next.indexOf(nextPhase)
+    if (previousIndex >= 0)
+      [next[index], next[previousIndex]] = [next[previousIndex]!, next[index]!]
+    else next[index] = nextPhase
+    const current = panel.busbarPhases ?? {}
+    onUpdate(panel.id, {
+      busbarPhases: ownerId
+        ? {
+            ...current,
+            secondary: { ...current.secondary, [ownerId]: next },
+          }
+        : { ...current, main: next },
+    })
+  }
+
   return (
-    !hasConsumerEndpoints &&
-    (circuit.branches?.length ?? 0) === 0 &&
-    (circuit.subCircuitIds?.length ?? 0) === 0 &&
-    (circuit.trunkDevices?.length ?? 0) === 0
+    <div className="space-y-3">
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+        {t('wires.busbarPhaseOrder', 'Busbar phase order')}
+      </label>
+      <div className="grid grid-cols-3 gap-2">
+        {order.map((phase, index) => (
+          <CustomDropdown
+            key={index}
+            value={phase}
+            onChange={(value) => updateOrder(index, value as AcLinePhase)}
+            options={options}
+            ariaLabel={`${t('wires.phase', 'Phase')} ${index + 1}`}
+          />
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -51,11 +97,7 @@ export function WirePropertiesWithLayout({
 }) {
   const wireSegments = useEendraadWireSegments()
   return (
-    <WireProperties
-      wireSegmentId={wireSegmentId}
-      wireSegments={wireSegments}
-      onUpdate={onUpdate}
-    />
+    <WireProperties wireSegmentId={wireSegmentId} wireSegments={wireSegments} onUpdate={onUpdate} />
   )
 }
 
@@ -72,11 +114,19 @@ function WireProperties({
   const { t } = useTranslation()
   const getCircuitById = useProjectStore((state: ProjectState) => state.getCircuitById)
   const getEndpointById = useProjectStore((state: ProjectState) => state.getEndpointById)
-  const getProtectionById = useProjectStore((state: ProjectState) => state.getProtectionById)
+  const getProtectionForCircuit = useProjectStore(
+    (state: ProjectState) => state.getProtectionForCircuit
+  )
   const getTrunkDeviceById = useProjectStore((state: ProjectState) => state.getTrunkDeviceById)
   const currentProject = useProjectStore((state: ProjectState) => state.currentProject)
+  const installationForPhase = currentProject
+    ? getElectricalInstallationFromProject(currentProject)
+    : undefined
+  const panelsForPhase = currentProject ? getElectricalPanelsFromProject(currentProject) : []
   const updateInstallation = useProjectStore((state: ProjectState) => state.updateInstallation)
   const updateEndpoint = useProjectStore((state: ProjectState) => state.updateEndpoint)
+  const getPanelById = useProjectStore((state: ProjectState) => state.getPanelById)
+  const updatePanel = useProjectStore((state: ProjectState) => state.updatePanel)
 
   // Get selection to access wire metadata
   const selection = useUIStore((state: UIState) => state.selection)
@@ -189,27 +239,38 @@ function WireProperties({
     )
   }
 
-  // Vertical stub that only connects a bus bar to a protection symbol.
-  // Treat this as part of the bus connection visual and keep it non-editable.
+  const selectedBusbarOwnerId =
+    wireSegment.type === 'trunk' && wireSegment.fromElementType === 'rcd'
+      ? wireSegment.fromElementId
+      : wireSegment.fromElementType === 'secondaryBus' &&
+          wireSegment.toElementType === 'secondaryBus'
+        ? wireSegment.circuitId
+        : undefined
+  const isSelectedMainBusbar =
+    wireSegment.type === 'mainBus' &&
+    wireSegment.fromElementType === 'mainBus' &&
+    wireSegment.toElementType === 'mainBus' &&
+    !wireSegment.circuitId
+  const isSelectedSecondaryBusbar = !!selectedBusbarOwnerId
   const isBusBarProtectionStub =
     wireSegment.type === 'vertical' &&
     wireSegment.toElementType === 'protection' &&
     (wireSegment.fromElementType === 'mainBus' || wireSegment.fromElementType === 'secondaryBus')
-  const protectionStub = wireSegment.toElementId
-    ? getProtectionById(wireSegment.toElementId)
-    : undefined
-  const isEditablePanelFeederStub =
-    isBusBarProtectionStub &&
-    !!wireSegment.circuitId &&
-    protectionStub?.circuits?.some((circuit: Circuit) => circuit.id === wireSegment.circuitId) &&
-    isPanelOnlySubPanelFeeder(protectionStub)
-
-  if (isBusBarProtectionStub && !isEditablePanelFeederStub) {
-    return (
-      <div className="p-4 text-center text-gray-500">
-        {t('wires.busStubNoProperties', 'This bus-bar connection stub has no editable properties')}
-      </div>
-    )
+  if (
+    (isSelectedMainBusbar || isSelectedSecondaryBusbar) &&
+    installationForPhase?.nominalVoltage.system &&
+    supportsExplicitPhaseSelection(installationForPhase.nominalVoltage.system)
+  ) {
+    const panel = getPanelById(wireSegment.panelId)
+    if (panel) {
+      return (
+        <BusbarPhaseOrderProperties
+          panel={panel}
+          ownerId={isSelectedSecondaryBusbar ? selectedBusbarOwnerId : undefined}
+          onUpdate={updatePanel}
+        />
+      )
+    }
   }
 
   // Domotica output wires (right side of domotica box) are new wires that can have
@@ -244,6 +305,19 @@ function WireProperties({
 
     const wireDomain = wireSegment.domain ?? 'AC'
     const isDC = wireDomain === 'DC'
+    const inheritedPhaseState = getInheritedCircuitPhaseState(
+      circuit,
+      panelsForPhase,
+      installationForPhase?.nominalVoltage.system,
+      installationForPhase
+    )
+    const protectionPhaseConstraint = getProtectionPhaseConstraint(
+      getProtectionForCircuit(circuit.id) ?? undefined,
+      installationForPhase?.nominalVoltage.system,
+      wireSegment.phaseAssignment
+    )
+    const phaseConstraint =
+      getInheritedPhaseConstraint(inheritedPhaseState.assignment) ?? protectionPhaseConstraint
 
     const baseCable = circuit.cable
     const effectiveCable = wireProps.cable ?? baseCable
@@ -270,6 +344,13 @@ function WireProperties({
       showFireClassLabel: wireProps.showFireClassLabel,
       wireLengthM: wireProps.wireLengthM,
       showWireLengthLabel: wireProps.showWireLengthLabel,
+      phaseAssignment: wireProps.phaseAssignment ?? circuit.phaseAssignment,
+      showPhaseLabel:
+        wireProps.showPhaseLabel ??
+        circuit.showPhaseLabel ??
+        inheritedPhaseState.showPhaseLabel ??
+        wireSegment.showPhaseLabel,
+      phaseConstraint,
       defaultWireLabelVisible: false,
       cable: effectiveCable,
     }
@@ -297,7 +378,14 @@ function WireProperties({
             {wireDomain}
           </span>
         </div>
-        <WireRouteAndCableForm state={wireFormState} onChange={setWireProps} isDC={isDC} t={panelStringT(t)} />
+        <WireRouteAndCableForm
+          state={wireFormState}
+          onChange={setWireProps}
+          isDC={isDC}
+          phaseSystem={installationForPhase?.nominalVoltage.system}
+          showPhaseAssignment
+          t={panelStringT(t)}
+        />
       </div>
     )
   }
@@ -354,9 +442,7 @@ function WireProperties({
   // Main panel supply: upstream (utility), crossing (dashed separator), downstream (bus side + vertical)
   const supplyWireRole: SupplyWireRole | undefined =
     wireSegment.supplyWireRole ??
-    (wireSegment.type === 'vertical' &&
-    !wireSegment.circuitId &&
-    !wireSegment.fromElementType
+    (wireSegment.type === 'vertical' && !wireSegment.circuitId && !wireSegment.fromElementType
       ? 'downstream'
       : wireSegment.isSupplyTrunk
         ? 'upstream'
@@ -369,8 +455,9 @@ function WireProperties({
       ? wireSegment.toElementId
       : undefined
 
-  const effectiveSupplyWireRole: SupplyWireRole | undefined =
-    wireSegment.supplyMergedIntoBusDrop ? 'downstream' : supplyWireRole
+  const effectiveSupplyWireRole: SupplyWireRole | undefined = wireSegment.supplyMergedIntoBusDrop
+    ? 'downstream'
+    : supplyWireRole
 
   if (effectiveSupplyWireRole && !isSubPanelSupplyWire) {
     const installation = currentProject
@@ -384,6 +471,14 @@ function WireProperties({
       )
     }
     const panels = getElectricalPanelsFromProject(currentProject)
+    const panel = getPanelById(wireSegment.panelId)
+    if (!panel) {
+      return (
+        <div className="p-4 text-center text-gray-500">
+          {t('wires.noInstallation', 'Installation not found')}
+        </div>
+      )
+    }
     const mainSupply = installation.mainSupply
     const defaultCable = mainSupply?.cable ?? {
       kind: 'XVB',
@@ -394,8 +489,10 @@ function WireProperties({
     const soleMain = collectRootPanels(panels).length === 1
     const rootFeed =
       ensureInstallationFeedTopology(installation, panels).rootFeeds.find(
-        (feed) => feed.panelId === wireSegment.panelId,
+        (feed) => feed.panelId === wireSegment.panelId
       ) ?? null
+    const incomingPhaseState = getPanelIncomingPhaseState(installation, panels, panel)
+    const editsPanelIncomingPhase = effectiveSupplyWireRole === 'downstream'
 
     const supplyCable =
       effectiveSupplyWireRole === 'crossing'
@@ -444,7 +541,22 @@ function WireProperties({
         feedTopology: {
           ...topology,
           rootFeeds: topology.rootFeeds.map((feed) =>
-            feed.panelId === wireSegment.panelId ? { ...feed, cable } : feed,
+            feed.panelId === wireSegment.panelId ? { ...feed, cable } : feed
+          ),
+        },
+      })
+    }
+
+    const onUpdateSupplyPhase = (
+      updates: Partial<Pick<WireRouteFormState, 'phaseAssignment' | 'showPhaseLabel'>>
+    ) => {
+      if (!rootFeed) return
+      const topology = ensureInstallationFeedTopology(installation, panels)
+      updateInstallation({
+        feedTopology: {
+          ...topology,
+          rootFeeds: topology.rootFeeds.map((feed) =>
+            feed.panelId === wireSegment.panelId ? { ...feed, ...updates } : feed
           ),
         },
       })
@@ -464,6 +576,20 @@ function WireProperties({
           onUpdate={updateInstallation}
           onUpdateCable={onUpdateSupplyCable}
           wireDomain={wireSegment.domain ?? 'AC'}
+          configuredPhaseAssignment={
+            editsPanelIncomingPhase ? incomingPhaseState.configuredAssignment : undefined
+          }
+          effectivePhaseAssignment={
+            editsPanelIncomingPhase ? incomingPhaseState.assignment : undefined
+          }
+          showPhaseLabel={
+            editsPanelIncomingPhase ? incomingPhaseState.showPhaseLabel : undefined
+          }
+          phaseConstraint={editsPanelIncomingPhase ? incomingPhaseState.constraint : undefined}
+          phaseLocked={
+            editsPanelIncomingPhase && incomingPhaseState.lockedByProtectionId != null
+          }
+          onUpdatePhase={editsPanelIncomingPhase ? onUpdateSupplyPhase : undefined}
           t={panelStringT(t)}
         />
       </div>
@@ -495,6 +621,19 @@ function WireProperties({
 
   const wireDomain = wireSegment.domain ?? 'AC'
   const isDC = wireDomain === 'DC'
+  const inheritedPhaseState = getInheritedCircuitPhaseState(
+    circuit,
+    panelsForPhase,
+    installationForPhase?.nominalVoltage.system,
+    installationForPhase
+  )
+  const protectionPhaseConstraint = getProtectionPhaseConstraint(
+    getProtectionForCircuit(circuit.id) ?? undefined,
+    installationForPhase?.nominalVoltage.system,
+    wireSegment.phaseAssignment
+  )
+  const phaseConstraint =
+    getInheritedPhaseConstraint(inheritedPhaseState.assignment) ?? protectionPhaseConstraint
   const domainOverride = circuit.domainWireOverrides?.[wireDomain]
   let sectionRef = getSectionRefFromWireSegment(wireSegment)
   // Branch wires represent the same physical wire section as the trunk segment they
@@ -518,11 +657,7 @@ function WireProperties({
         subPanelFeederTargetId,
         wireDomain
       )
-    : findSectionWireOverrideWithFeederFallback(
-        circuit,
-        sectionRef,
-        wireSegment.feederProtectionId
-      )
+    : findSectionWireOverrideWithFeederFallback(circuit, sectionRef, wireSegment.feederProtectionId)
   const effectiveWireRoute =
     sectionOverride?.wireRoute ??
     domainOverride?.wireRoute ??
@@ -566,6 +701,8 @@ function WireProperties({
     effectiveConversionExitDomain !== null &&
     wireDomain === effectiveConversionExitDomain
   const currentShowDomainChangeLabel = fromTrunkDevice?.device.showDomainChangeLabel !== false
+  const crossesProtectionBoundary =
+    wireSegment.fromElementType === 'protection' || wireSegment.toElementType === 'protection'
 
   const resolvedCircuitCable = sectionOverride?.cable ?? domainOverride?.cable ?? circuit.cable
   const circuitWireFormState: WireRouteFormState = {
@@ -578,15 +715,22 @@ function WireProperties({
       sectionOverride?.showFireClassLabel ??
         domainOverride?.showFireClassLabel ??
         circuit.showFireClassLabel,
-      wireDomain,
+      wireDomain
     ),
-    wireLengthM:
-      sectionOverride?.wireLengthM ?? domainOverride?.wireLengthM ?? circuit.wireLengthM,
+    wireLengthM: sectionOverride?.wireLengthM ?? domainOverride?.wireLengthM ?? circuit.wireLengthM,
     showWireLengthLabel: resolveShowWireLengthLabel(
       sectionOverride?.showWireLengthLabel ??
         domainOverride?.showWireLengthLabel ??
-        circuit.showWireLengthLabel,
+        circuit.showWireLengthLabel
     ),
+    phaseAssignment: crossesProtectionBoundary
+      ? circuit.phaseAssignment
+      : (sectionOverride?.phaseAssignment ??
+        domainOverride?.phaseAssignment ??
+        circuit.phaseAssignment),
+    showPhaseLabel:
+      circuit.showPhaseLabel ?? inheritedPhaseState.showPhaseLabel ?? wireSegment.showPhaseLabel,
+    phaseConstraint,
     // Default visibility: first vertical after a protection, or the bus→feeder stub for panel-only sub-panels.
     defaultWireLabelVisible:
       wireSegment.type === 'vertical' &&
@@ -604,9 +748,22 @@ function WireProperties({
   }
 
   const onCircuitWireFormChange = (u: Partial<WireRouteFormState>) => {
+    const hasPhaseAssignmentUpdate = Object.prototype.hasOwnProperty.call(u, 'phaseAssignment')
+    const hasShowPhaseLabelUpdate = Object.prototype.hasOwnProperty.call(u, 'showPhaseLabel')
+    const { phaseAssignment, showPhaseLabel, ...wireUpdates } = u
+    const sharedPhaseUpdates: Partial<Circuit> = {
+      ...(hasPhaseAssignmentUpdate ? { phaseAssignment } : {}),
+      ...(hasShowPhaseLabelUpdate ? { showPhaseLabel } : {}),
+    }
     if (sectionRef) {
-      const nextOverrides = upsertSectionWireOverride(circuit, sectionRef, u)
-      onUpdate(circuit.id, { sectionWireOverrides: nextOverrides })
+      const hasSectionWireUpdates = Object.keys(wireUpdates).length > 0
+      const nextOverrides = hasSectionWireUpdates
+        ? upsertSectionWireOverride(circuit, sectionRef, wireUpdates)
+        : circuit.sectionWireOverrides
+      onUpdate(circuit.id, {
+        ...(hasSectionWireUpdates ? { sectionWireOverrides: nextOverrides } : {}),
+        ...sharedPhaseUpdates,
+      })
       return
     }
     if (wireDomain === 'DC') {
@@ -614,85 +771,92 @@ function WireProperties({
       const existing = currentDomainOverrides.DC ?? {}
       const nextDomainOverride = {
         ...existing,
-        ...u,
-        cable: u.cable ?? existing.cable,
+        ...wireUpdates,
+        cable: wireUpdates.cable ?? existing.cable,
       }
       onUpdate(circuit.id, {
         domainWireOverrides: {
           ...currentDomainOverrides,
           DC: nextDomainOverride,
         },
+        ...sharedPhaseUpdates,
       })
       return
     }
 
-    const updates: Partial<Circuit> = { ...u }
-    if (u.cable) updates.cable = u.cable
+    const updates: Partial<Circuit> = { ...wireUpdates }
+    if (wireUpdates.cable) updates.cable = wireUpdates.cable
+    Object.assign(updates, sharedPhaseUpdates)
     onUpdate(circuit.id, updates)
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <span
-          className={`shrink-0 inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium rounded ${
-            isDC
-              ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300'
-              : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
-          }`}
-          title={t('wires.domainTag', 'Electrical domain')}
-        >
-          <img
-            src={
+      {!isBusBarProtectionStub && (
+        <div className="flex items-center gap-3">
+          <span
+            className={`shrink-0 inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium rounded ${
               isDC
-                ? '/symbols/energy-conversion/symbol_DC.svg'
-                : '/symbols/energy-conversion/symbol_AC.svg'
-            }
-            alt=""
-            className="h-4 w-4 shrink-0 object-contain opacity-90 dark:invert dark:opacity-90"
-            aria-hidden
-          />
-          {wireDomain}
-        </span>
-
-        {isDomainChangeExitWire && fromTrunkDevice && (
-          <button
-            type="button"
-            onClick={() => {
-              const { device, circuit, isSupplyDevice, isGroundDevice } = fromTrunkDevice
-              const updates = { showDomainChangeLabel: !currentShowDomainChangeLabel }
-              if (isSupplyDevice) {
-                useProjectStore.getState().updateSupplyTrunkDevice(device.id, updates)
-              } else if (isGroundDevice) {
-                useProjectStore.getState().updateGroundTrunkDevice(device.id, updates)
-              } else if (circuit) {
-                useProjectStore.getState().updateTrunkDevice(circuit.id, device.id, updates)
-              }
-            }}
-            className={visibilityToggleClass(currentShowDomainChangeLabel)}
-            title={
-              currentShowDomainChangeLabel
-                ? t('wires.hideDomainChangeLabel', 'Hide domain change label')
-                : t('wires.showDomainChangeLabel', 'Show domain change label')
-            }
-            aria-label={
-              currentShowDomainChangeLabel
-                ? t('wires.hideDomainChangeLabel', 'Hide domain change label')
-                : t('wires.showDomainChangeLabel', 'Show domain change label')
-            }
+                ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300'
+                : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
+            }`}
+            title={t('wires.domainTag', 'Electrical domain')}
           >
-            {currentShowDomainChangeLabel ? (
-              <Eye className="w-4 h-4" />
-            ) : (
-              <EyeOff className="w-4 h-4" />
-            )}
-          </button>
-        )}
-      </div>
+            <img
+              src={
+                isDC
+                  ? '/symbols/energy-conversion/symbol_DC.svg'
+                  : '/symbols/energy-conversion/symbol_AC.svg'
+              }
+              alt=""
+              className="h-4 w-4 shrink-0 object-contain opacity-90 dark:invert dark:opacity-90"
+              aria-hidden
+            />
+            {wireDomain}
+          </span>
+
+          {isDomainChangeExitWire && fromTrunkDevice && (
+            <button
+              type="button"
+              onClick={() => {
+                const { device, circuit, isSupplyDevice, isGroundDevice } = fromTrunkDevice
+                const updates = { showDomainChangeLabel: !currentShowDomainChangeLabel }
+                if (isSupplyDevice) {
+                  useProjectStore.getState().updateSupplyTrunkDevice(device.id, updates)
+                } else if (isGroundDevice) {
+                  useProjectStore.getState().updateGroundTrunkDevice(device.id, updates)
+                } else if (circuit) {
+                  useProjectStore.getState().updateTrunkDevice(circuit.id, device.id, updates)
+                }
+              }}
+              className={visibilityToggleClass(currentShowDomainChangeLabel)}
+              title={
+                currentShowDomainChangeLabel
+                  ? t('wires.hideDomainChangeLabel', 'Hide domain change label')
+                  : t('wires.showDomainChangeLabel', 'Show domain change label')
+              }
+              aria-label={
+                currentShowDomainChangeLabel
+                  ? t('wires.hideDomainChangeLabel', 'Hide domain change label')
+                  : t('wires.showDomainChangeLabel', 'Show domain change label')
+              }
+            >
+              {currentShowDomainChangeLabel ? (
+                <Eye className="w-4 h-4" />
+              ) : (
+                <EyeOff className="w-4 h-4" />
+              )}
+            </button>
+          )}
+        </div>
+      )}
       <WireRouteAndCableForm
         state={circuitWireFormState}
         onChange={onCircuitWireFormChange}
         isDC={isDC}
+        phaseSystem={installationForPhase?.nominalVoltage.system}
+        showPhaseAssignment
+        phaseOnly={isBusBarProtectionStub}
         t={panelStringT(t)}
       />
     </div>

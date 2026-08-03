@@ -23,6 +23,14 @@ import {
 } from './common'
 import { isHouseholdInstallation } from '@/lib/installationProfile'
 import { resolveEffectiveEarthingSystem } from '@/lib/panel/panelEarthingSync'
+import {
+  getActiveConductorCount,
+  getEffectiveCircuitPhaseState,
+  getFullInstallationPhaseAssignment,
+  getPanelIncomingPhaseState,
+  supportsExplicitPhaseSelection,
+} from '@/lib/wires/phaseAssignment'
+import type { CircuitPhaseAssignment } from '@/types/schema'
 
 function activeConductorsForSystem(system: string | undefined): number {
   switch (system) {
@@ -95,6 +103,131 @@ function poleCountFromDevice(device: { polesConfig?: string; poles?: number }): 
     default:
       return undefined
   }
+}
+
+type PhaseProtectionDevice = {
+  id: string
+  label?: string
+  polesConfig?: string
+  poles?: number
+}
+
+type PhaseCompatibilityReason = 'neutralUnavailable' | 'tooManyPoles' | 'tooFewPoles'
+
+function getPhaseCompatibilityReason(
+  device: PhaseProtectionDevice,
+  assignment: CircuitPhaseAssignment
+): PhaseCompatibilityReason | undefined {
+  const poles = poleCountFromDevice(device)
+  const activeConductors = getActiveConductorCount(assignment)
+  if (poles == null || activeConductors == null) return undefined
+
+  const expectsNeutral = device.polesConfig === '1P+N' || device.polesConfig === '3P+N'
+  if (expectsNeutral && !assignment.phases.includes('N')) return 'neutralUnavailable'
+  if (poles > activeConductors) return 'tooManyPoles'
+  // A one-pole device on a phase-to-phase supply is the useful suspicious case.
+  // Do not warn for common L+N arrangements where neutral is intentionally unswitched.
+  if (poles < activeConductors && !assignment.phases.includes('N')) return 'tooFewPoles'
+  return undefined
+}
+
+function protectionPhaseCompatibility(context: CheckContext): Issue[] {
+  const { scope, query, project } = context
+  if (scope.type !== 'board') return []
+  const panel = query.getPanelById(scope.id)
+  const installation = projectInstallation(project)
+  const system = installation?.nominalVoltage.system
+  if (!panel || !installation || !supportsExplicitPhaseSelection(system)) return []
+
+  const panels = projectPanels(project)
+  const fullAssignment = getFullInstallationPhaseAssignment(system)
+  const panelIncoming = getPanelIncomingPhaseState(installation, panels, panel)
+  const issues: Issue[] = []
+  const seen = new Set<string>()
+  const addIssue = (
+    device: PhaseProtectionDevice,
+    assignment: CircuitPhaseAssignment | undefined,
+    offenderKind: 'protection' | 'device'
+  ) => {
+    if (!assignment) return
+    const reason = getPhaseCompatibilityReason(device, assignment)
+    if (!reason) return
+    const key = `${device.id}:${reason}`
+    if (seen.has(key)) return
+    seen.add(key)
+
+    const poleCount = poleCountFromDevice(device)
+    const availablePoleCount = getActiveConductorCount(assignment)
+    if (poleCount == null || availablePoleCount == null) return
+    const deviceLabel =
+      device.label?.trim() ||
+      i18n.t('validation.primitives.protectionPhaseCompatibility.deviceLabel', {
+        defaultValue: 'Protection',
+      })
+    const messageKey = `validation.primitives.protectionPhaseCompatibility.${reason}.message`
+    const detailsKey = `validation.primitives.protectionPhaseCompatibility.${reason}.details`
+    const defaults: Record<PhaseCompatibilityReason, { message: string; details: string }> = {
+      neutralUnavailable: {
+        message: `{{deviceLabel}} uses neutral, but this network has none`,
+        details: 'This combination may not make sense. Check the phase or pole setting.',
+      },
+      tooManyPoles: {
+        message: `{{deviceLabel}} is {{poleCount}}-pole; that may be too many for this {{availablePoleCount}}-pole supply`,
+        details: 'This combination may not make sense. Check the pole setting.',
+      },
+      tooFewPoles: {
+        message: `{{deviceLabel}} is {{poleCount}}-pole; that may be too few for this three-phase network`,
+        details: 'This combination may not make sense. Check the pole setting.',
+      },
+    }
+    issues.push({
+      id: `be.areibook1.2025.phase-protection-compatibility:board:${panel.id}:${device.id}:${reason}`,
+      ruleId: 'be.areibook1.2025.phase-protection-compatibility',
+      severity: 'warning',
+      jurisdiction: installation.address.country || 'BE',
+      rulesetVersion: '2025',
+      scope: { type: 'board', id: panel.id },
+      offenders: [{ kind: offenderKind, id: device.id, viewHint: 'both' }],
+      message: i18n.t(messageKey, {
+        deviceLabel,
+        poleCount,
+        availablePoleCount,
+        defaultValue: defaults[reason].message,
+      }),
+      details: i18n.t(detailsKey, {
+        defaultValue: defaults[reason].details,
+      }),
+      citations: [],
+      tags: ['phase', 'protection', 'consistency'],
+    })
+  }
+
+  for (const protection of panel.protections) {
+    const assignments = (protection.circuits ?? []).map(
+      (circuit) =>
+        getEffectiveCircuitPhaseState(circuit, panels, system, installation).assignment
+    )
+    if (assignments.length === 0) {
+      assignments.push(panelIncoming.assignment ?? fullAssignment)
+    }
+    for (const assignment of assignments) addIssue(protection, assignment, 'protection')
+  }
+
+  // Root-feed devices are ordered from supply to bus. Once the incoming protection
+  // narrows the feed, later panel-side devices see that reduced phase set.
+  const projection = getPanelFeedProjection(installation, panels, panel)
+  const rootDevices = projection?.rootFeed?.trunkDevices ?? []
+  let rootAssignment = projection?.rootFeed?.phaseAssignment ?? fullAssignment
+  for (const device of rootDevices) {
+    if (trunkDeviceCountsAsProtection(device)) {
+      addIssue(device, rootAssignment, 'device')
+    }
+    if (device.id === panelIncoming.lockedByProtectionId) {
+      rootAssignment = panelIncoming.assignment
+    }
+  }
+
+  return issues
 }
 
 function canDisconnectAllActiveConductors(
@@ -444,7 +577,7 @@ function checkEendraadOrphans(context: CheckContext, _params?: Record<string, un
         i18n.t('validation.orphanDetection.circuitMissingProtection', {
           circuitCode: opts.circuitCode,
           endpointCount: opts.endpointCount,
-          defaultValue: `Circuit "{{circuitCode}}" has {{endpointCount}} endpoint(s) but is not attached to any protection; it cannot render in one-line view.`,
+          defaultValue: `Circuit "{{circuitCode}}" is not attached to any protection; it cannot render in one-line view.`,
         }),
       circuitRefMismatch: (opts) =>
         i18n.t('validation.orphanDetection.circuitRefMismatch', {
@@ -559,3 +692,4 @@ registerPrimitive('nonHouseholdPanelShowsGroundedNetwork', nonHouseholdPanelShow
 registerPrimitive('nonHouseholdPanelNumberingIsShown', nonHouseholdPanelNumberingIsShown)
 registerPrimitive('checkDuplicatePanelProtectionLabels', checkDuplicatePanelProtectionLabels)
 registerPrimitive('checkEendraadOrphans', checkEendraadOrphans)
+registerPrimitive('protectionPhaseCompatibility', protectionPhaseCompatibility)

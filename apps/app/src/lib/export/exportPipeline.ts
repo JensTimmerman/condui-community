@@ -17,7 +17,10 @@ import type {
 export type { ExportContext } from './types'
 import { ExportError } from './types'
 import { injectPlanGraphicCatalogSvgsIntoExportSvg } from './planGraphicSvgInject'
-import { injectSymbolSvgsIntoExportSvg, replaceRasterSymbolImagesInExportSvg } from './symbolSvgInject'
+import {
+  injectSymbolSvgsIntoExportSvg,
+  replaceRasterSymbolImagesInExportSvg,
+} from './symbolSvgInject'
 import { embedExternalImagesInExportSvg } from './exportSvgImageEmbed'
 import { renderSvgFromScene } from './renderSvgFromScene'
 import { fixEendraadWireLineCapsInExportSvg } from './eendraadWireSvgFix'
@@ -472,7 +475,12 @@ export async function exportToPDF(
               logoDataUrl: null,
               signatureDataUrl: null,
             }
-          : rawEffectiveProfile
+          : {
+              ...rawEffectiveProfile,
+              signatureDataUrl: options.includeSignature
+                ? rawEffectiveProfile.signatureDataUrl
+                : null,
+            }
       const { language } = useSettingsStore.getState()
       const countryLabel = i18n.t('installation.countryBelgium', 'Belgium')
       const madeWithText = i18n.t('infoBlock.madeWith', {
@@ -566,7 +574,7 @@ export async function exportToPDF(
               svgString = await injectSymbolSvgsIntoExportSvg(
                 svgString,
                 scene.symbolExports,
-                exportTheme,
+                exportTheme
               )
             }
             svgString = await replaceRasterSymbolImagesInExportSvg(svgString, exportTheme)
@@ -673,8 +681,9 @@ export async function exportToPDF(
               scene.kind === 'eendraad'
                 ? (() => {
                     const panelId = scene.id.replace(/^eendraad-/, '').replace(/-slice-\d+$/, '')
-                    const panel =
-                      context.eendraadLayout?.panels.find((p) => p.panel.id === panelId)?.panel
+                    const panel = context.eendraadLayout?.panels.find(
+                      (p) => p.panel.id === panelId
+                    )?.panel
                     if (!panel) return null
                     return getPanelDiagramTitleLine(
                       project,

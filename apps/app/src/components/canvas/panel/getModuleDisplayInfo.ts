@@ -1,12 +1,26 @@
 import { polesConfigToDisplay } from '@/constants/poleConfig'
-import type { Panel, PanelGridModuleRef, ProtectionDevice } from '@/types/schema'
+import type {
+  Circuit,
+  Endpoint,
+  Installation,
+  Panel,
+  PanelGridModuleRef,
+  ProtectionDevice,
+} from '@/types/schema'
 import i18n from '@/i18n'
 import { findTrunkDeviceInProject } from '@/utils/project'
 import {
+  getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
-import { findPanelById } from '@/lib/panel/panelTree'
+import { findPanelById, walkPanels } from '@/lib/panel/panelTree'
+import {
+  getEffectiveCircuitPhaseState,
+  getInheritedCircuitPhaseState,
+  getPhaseAssignmentLabel,
+  phaseAssignmentDiffersFromInstallation,
+} from '@/lib/wires/phaseAssignment'
 
 function findProtectionRecursive(panels: Panel[], id: string): ProtectionDevice | null {
   for (const p of panels) {
@@ -18,22 +32,149 @@ function findProtectionRecursive(panels: Panel[], id: string): ProtectionDevice 
   return null
 }
 
-function findEndpointRecursive(panels: Panel[], id: string): import('@/types/schema').Endpoint | null {
+interface EndpointContext {
+  endpoint: Endpoint
+  circuit: Circuit
+}
+
+function findEndpointContextRecursive(panels: Panel[], id: string): EndpointContext | null {
   for (const p of panels) {
-    for (const c of p.circuits ?? []) {
+    const circuits = [
+      ...(p.circuits ?? []),
+      ...(p.protections ?? []).flatMap((protection) => protection.circuits ?? []),
+    ]
+    for (const c of circuits) {
       const ep = c.endpoints.find((e) => e.id === id)
-      if (ep) return ep
+      if (ep) return { endpoint: ep, circuit: c }
     }
-    for (const pr of p.protections) {
-      for (const c of pr.circuits ?? []) {
-        const ep = c.endpoints.find((e) => e.id === id)
-        if (ep) return ep
-      }
-    }
-    const inSub = findEndpointRecursive(p.subPanels ?? [], id)
+    const inSub = findEndpointContextRecursive(p.subPanels ?? [], id)
     if (inSub) return inSub
   }
   return null
+}
+
+function findCircuitForTrunkDevice(panels: Panel[], deviceId: string): Circuit | null {
+  for (const panel of walkPanels(panels)) {
+    const circuits = [
+      ...(panel.circuits ?? []),
+      ...(panel.protections ?? []).flatMap((protection) => protection.circuits ?? []),
+    ]
+    const circuit = circuits.find((candidate) =>
+      candidate.trunkDevices?.some((device) => device.id === deviceId)
+    )
+    if (circuit) return circuit
+  }
+  return null
+}
+
+function findProtectionForCircuit(panels: Panel[], circuitId: string): ProtectionDevice | null {
+  for (const panel of walkPanels(panels)) {
+    const protection = (panel.protections ?? []).find((candidate) =>
+      candidate.circuits?.some((circuit) => circuit.id === circuitId)
+    )
+    if (protection) return protection
+  }
+  return null
+}
+
+function isMultiPoleDevice(device: { polesConfig?: string; poles?: number }): boolean {
+  return (
+    device.polesConfig === '3P' ||
+    device.polesConfig === '3P+N' ||
+    device.polesConfig === '4P' ||
+    (device.poles ?? 0) >= 3
+  )
+}
+
+type PhaseSystem = Parameters<typeof getPhaseAssignmentLabel>[1]
+
+function getVisiblePhaseLabel(
+  assignment: Parameters<typeof getPhaseAssignmentLabel>[0],
+  showPhaseLabel: boolean | undefined,
+  system: PhaseSystem,
+  allowFullInstallation = false
+): string | undefined {
+  if (
+    showPhaseLabel !== true ||
+    (!allowFullInstallation && !phaseAssignmentDiffersFromInstallation(assignment, system))
+  ) {
+    return undefined
+  }
+  return getPhaseAssignmentLabel(assignment, system)
+}
+
+function getCircuitPhaseLabel(
+  circuit: Circuit,
+  panels: Panel[],
+  system: PhaseSystem,
+  installation: Installation | undefined,
+  allowFullInstallation = false
+): string | undefined {
+  const inherited = getInheritedCircuitPhaseState(circuit, panels, system, installation)
+  const effective = getEffectiveCircuitPhaseState(circuit, panels, system, installation)
+  return getVisiblePhaseLabel(
+    effective.assignment,
+    circuit.showPhaseLabel ?? inherited.showPhaseLabel,
+    system,
+    allowFullInstallation
+  )
+}
+
+function joinPhaseLabels(labels: Array<string | undefined>): string | undefined {
+  const unique = [...new Set(labels.filter((label): label is string => Boolean(label)))]
+  return unique.length > 0 ? unique.join(' / ') : undefined
+}
+
+function getProtectionModulePhaseLabel(
+  protection: ProtectionDevice,
+  panels: Panel[],
+  system: PhaseSystem,
+  installation: Installation | undefined
+): string | undefined {
+  return joinPhaseLabels(
+    (protection.circuits ?? []).map((circuit) =>
+      getCircuitPhaseLabel(circuit, panels, system, installation, isMultiPoleDevice(protection))
+    )
+  )
+}
+
+function getDomoticaModulePhaseLabel(
+  context: EndpointContext,
+  panels: Panel[],
+  system: PhaseSystem,
+  installation: Installation | undefined
+): string | undefined {
+  const { circuit, endpoint } = context
+  const inherited = getInheritedCircuitPhaseState(circuit, panels, system, installation)
+  const effective = getEffectiveCircuitPhaseState(circuit, panels, system, installation)
+  const allowFullInstallation = isMultiPoleDevice(
+    findProtectionForCircuit(panels, circuit.id) ?? {}
+  )
+  const labels: Array<string | undefined> = [
+    getVisiblePhaseLabel(
+      effective.assignment,
+      circuit.showPhaseLabel ?? inherited.showPhaseLabel,
+      system,
+      allowFullInstallation
+    ),
+  ]
+
+  const outputWires = [
+    ...(endpoint.domoticaProps?.controlOutputWires ?? []),
+    ...(endpoint.domoticaProps?.endpointOutputWires ?? []),
+  ]
+  for (const output of outputWires) {
+    labels.push(
+      getVisiblePhaseLabel(
+        inherited.assignment ?? output.phaseAssignment ?? effective.assignment,
+        output.showPhaseLabel ?? circuit.showPhaseLabel ?? inherited.showPhaseLabel,
+        system,
+        allowFullInstallation
+      )
+    )
+  }
+
+  return joinPhaseLabels(labels)
 }
 
 function findParentPanel(panels: Panel[], protectionId: string): Panel | null {
@@ -56,6 +197,8 @@ function countCircuitEndpoints(pr: ProtectionDevice): number {
 export interface ModuleDisplayInfo {
   label: string
   specLines: string[]
+  /** Optional non-standard phase annotation shown in the module's bottom band. */
+  phaseLabel?: string
   tooltipText: string
   kind: 'protection' | 'trunkDevice' | 'domotica'
 }
@@ -109,8 +252,12 @@ export function getModuleDisplayInfo(
   const empty: ModuleDisplayInfo = { label: '', specLines: [], tooltipText: '', kind: ref.kind }
   if (!project) return empty
 
+  const panels = getElectricalPanelsFromProject(project)
+  const installation = getElectricalInstallationFromProject(project)
+  const system = installation?.nominalVoltage?.system
+
   if (ref.kind === 'protection') {
-    const pr = findProtectionRecursive(getElectricalPanelsFromProject(project), ref.id)
+    const pr = findProtectionRecursive(panels, ref.id)
     if (!pr) return { ...empty, label: ref.id }
 
     const specLines: string[] = []
@@ -158,6 +305,7 @@ export function getModuleDisplayInfo(
       // the circuit actually has endpoints and the store assigns a label.
       label: pr.label,
       specLines,
+      phaseLabel: getProtectionModulePhaseLabel(pr, panels, system, installation),
       tooltipText: buildProtectionTooltip(pr, project, ref.id),
       kind: 'protection',
     }
@@ -234,14 +382,21 @@ export function getModuleDisplayInfo(
     return {
       label: visibleLabel,
       specLines,
+      phaseLabel: (() => {
+        const circuit = findCircuitForTrunkDevice(panels, ref.id)
+        return circuit
+          ? getCircuitPhaseLabel(circuit, panels, system, installation, isMultiPoleDevice(d))
+          : undefined
+      })(),
       tooltipText: tooltipParts.join('\n'),
       kind: 'trunkDevice',
     }
   }
 
   if (ref.kind === 'domotica') {
-    const ep = findEndpointRecursive(getElectricalPanelsFromProject(project), ref.endpointId)
-    if (!ep) return { ...empty, label: ref.endpointId }
+    const context = findEndpointContextRecursive(panels, ref.endpointId)
+    if (!context) return { ...empty, label: ref.endpointId }
+    const { endpoint: ep } = context
 
     const tooltipParts: string[] = [ep.label]
     const typeName = ep.type.replace(/_/g, ' ')
@@ -255,6 +410,7 @@ export function getModuleDisplayInfo(
     return {
       label: ep.label,
       specLines: [],
+      phaseLabel: getDomoticaModulePhaseLabel(context, panels, system, installation),
       tooltipText: tooltipParts.join('\n'),
       kind: 'domotica',
     }

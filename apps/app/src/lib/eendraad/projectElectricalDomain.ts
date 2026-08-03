@@ -53,6 +53,10 @@ import {
 import { findPanelById, findPanelByName } from '@/lib/panel/panelTree'
 import { findPanelGridDuplicateFindings } from '@/lib/panel/panelGridDuplicates'
 import { DEFAULT_RCBO_SENSITIVITY_MA } from '@/lib/protectionDefaults'
+import {
+  DEFAULT_PANEL_GRID_COLUMNS,
+  DEFAULT_PANEL_GRID_ROWS,
+} from '@/lib/panel/panelGridDefaults'
 import { generateId } from '@/utils/project'
 
 export type ElectricalDomainProject = ProjectWithOptionalV2Electrical &
@@ -1104,7 +1108,12 @@ export function rewriteRelocatedCircuitTrunkDeviceGridRef(
   sourcePanel.gridView.hiddenModuleKeys = removeOldKey(sourcePanel.gridView.hiddenModuleKeys)
 
   if (!wasShown && !wasHidden) return
-  targetPanel.gridView ??= { rows: 8, columns: 18, feedFromTop: false, slots: [] }
+  targetPanel.gridView ??= {
+    rows: DEFAULT_PANEL_GRID_ROWS,
+    columns: DEFAULT_PANEL_GRID_COLUMNS,
+    feedFromTop: false,
+    slots: [],
+  }
   const targetKeys = wasShown
     ? (targetPanel.gridView.shownModuleKeys ?? [])
     : (targetPanel.gridView.hiddenModuleKeys ?? [])

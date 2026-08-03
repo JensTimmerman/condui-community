@@ -34,6 +34,31 @@ export interface CableSpec {
   notes?: string
 }
 
+export type AcPhase = 'L1' | 'L2' | 'L3' | 'N' | 'PE'
+export type AcLinePhase = Extract<AcPhase, 'L1' | 'L2' | 'L3'>
+
+/** Optional per-busbar phase rotation. Missing orders use L1, L2, L3. */
+export interface BusbarPhaseConfiguration {
+  main?: AcLinePhase[]
+  /** Secondary busbar owner id (grouping protection or parent circuit) to phase rotation. */
+  secondary?: Record<string, AcLinePhase[]>
+}
+
+export type CircuitPhaseAssignmentKind =
+  | 'inherit'
+  | 'single_phase'
+  | 'phase_to_phase'
+  | 'three_phase'
+  | 'dc'
+
+/** Typed conductor/phase assignment for an AC or DC circuit wire. */
+export interface CircuitPhaseAssignment {
+  kind: CircuitPhaseAssignmentKind
+  phases: AcPhase[]
+  neutral?: 'used' | 'not_used' | 'not_present'
+  source?: 'manual' | 'derived_from_protection' | 'derived_from_voltage' | 'derived_from_busbar'
+}
+
 /** Reference to a module that can appear in the panel grid (kast) view */
 export type PanelGridModuleRef =
   | { kind: 'protection'; id: string }
@@ -93,6 +118,8 @@ export interface Panel {
   protections: ProtectionDevice[]
   circuits: Circuit[] // Circuits not under a protection
   subPanels: Panel[] // Nested panels, connected via MCB
+  /** Phase rotations reset independently for this panel's main and secondary busbars. */
+  busbarPhases?: BusbarPhaseConfiguration
   /** Optional config for panel (kast) grid view; only affects display in that view */
   gridView?: PanelGridConfig
   /** Generic one-wire label rendering options for the panel symbol label. */
@@ -210,6 +237,10 @@ export interface Circuit {
   eendraadManualCodeLock?: boolean
   kind: CircuitKind
   cable: CableSpec
+  /** Optional explicit phase/conductor assignment; omitted means inherit the upstream phase set. */
+  phaseAssignment?: CircuitPhaseAssignment
+  /** When true, show the assigned phase beside the protection in one-wire. Defaults off. */
+  showPhaseLabel?: boolean
   inTube?: boolean // Flag: vertical wire is in tube (independent)
   inWall?: boolean // @deprecated use wireRoute === 'wall'
   /** Route/location: wall, ground, or air. Mutually exclusive; undefined/air = in air. */
@@ -237,6 +268,8 @@ export interface Circuit {
       ElectricalDomain,
       {
         cable?: CableSpec
+        phaseAssignment?: CircuitPhaseAssignment
+        showPhaseLabel?: boolean
         inTube?: boolean
         inWall?: boolean
         wireRoute?: 'wall' | 'ground' | 'air'
@@ -261,6 +294,8 @@ export interface Circuit {
     toElementId?: string
     domain?: ElectricalDomain
     cable?: CableSpec
+    phaseAssignment?: CircuitPhaseAssignment
+    showPhaseLabel?: boolean
     inTube?: boolean
     inWall?: boolean
     wireRoute?: 'wall' | 'ground' | 'air'
@@ -455,6 +490,10 @@ export type DomoticaSwitchType = '1p' | '2p' | 'impulse'
 export interface DomoticaOutputWireProps {
   /** Optional cable override for this output; falls back to the parent circuit cable when omitted. */
   cable?: CableSpec
+  /** Optional phase assignment for this output; falls back to the parent circuit when omitted. */
+  phaseAssignment?: CircuitPhaseAssignment
+  /** When true, show the output's assigned phase in one-wire. Defaults off. */
+  showPhaseLabel?: boolean
   /** Route flags for this specific output wire; fall back to the parent circuit when omitted. */
   inTube?: boolean
   wireRoute?: 'wall' | 'ground' | 'air'
@@ -1126,6 +1165,10 @@ export interface RootPanelFeedPath {
   panelId: string
   /** Omitted when there is only one main panel (`mainSupply.cable` applies). Set when multiple mains may use different drops. */
   cable?: CableSpec
+  /** Optional phase set carried by this panel's private supply section. */
+  phaseAssignment?: CircuitPhaseAssignment
+  /** Show the incoming phase beside this panel's supply wire. Defaults off. */
+  showPhaseLabel?: boolean
   hideWireLabel?: boolean
   showFireClassLabel?: boolean
   wireLengthM?: number
@@ -1149,6 +1192,10 @@ export interface WireSegment {
   cable: CableSpec
   /** Electrical domain of this segment (AC or DC). Default for new wires: AC. */
   domain?: ElectricalDomain
+  /** Effective typed phase/conductor assignment carried by this segment. */
+  phaseAssignment?: CircuitPhaseAssignment
+  /** Effective phase-label visibility carried by this segment. */
+  showPhaseLabel?: boolean
   installationType?: 'in-wall' | 'in-tube' | 'surface' | 'conduit'
   inTube?: boolean // Flag: wire is in tube (independent)
   inWall?: boolean // @deprecated use wireRoute === 'wall'

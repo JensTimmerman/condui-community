@@ -213,7 +213,7 @@ function hasDirectProtectionForCircuit(panel: Panel, circuitId: string): boolean
 }
 
 export interface OrphanReport {
-  /** Circuit has endpoints but is not owned by any panel protection (one-wire cannot render it). */
+  /** Non-PANEL circuit is not owned by any panel protection (one-wire cannot render it). */
   circuitMissingProtection: Array<{
     circuitId: string
     circuitCode: string
@@ -590,7 +590,10 @@ export function detectPanelOrphans(project: OrphanDetectionProject, panelId: str
     const endpointCount = circuit.endpoints.filter(
       (endpoint) => endpoint.symbol !== 'panel_distribution'
     ).length
-    if (endpointCount > 0 && !hasDirectProtectionForCircuit(currentPanel, circuit.id)) {
+    if (
+      circuit.code !== 'PANEL' &&
+      !hasDirectProtectionForCircuit(currentPanel, circuit.id)
+    ) {
       report.circuitMissingProtection.push({
         circuitId: circuit.id,
         circuitCode: validationCircuitCode(circuit.code),
@@ -830,9 +833,13 @@ export function detectPanelOrphans(project: OrphanDetectionProject, panelId: str
   for (const protection of currentPanel.protections) {
     allProtectionIds.add(protection.id)
   }
-  // Supply/ground trunk devices belong to the main panel.
-  if (!(currentPanel as { parentId?: string }).parentId) {
-    for (const td of projectInstallation?.mainSupply?.supplyTrunkDevices ?? []) {
+  // Supply/ground trunk devices belong to main panels. Resolve supply devices through the
+  // canonical feed projection so current V2 root-feed devices are included alongside legacy
+  // mainSupply devices.
+  if (currentPanel.isMain === true) {
+    for (const td of projectInstallation
+      ? (getPanelFeedProjection(projectInstallation, projectPanels, currentPanel)?.devices ?? [])
+      : []) {
       allTrunkDeviceIds.add(td.id)
     }
     for (const td of projectInstallation?.groundTrunkDevices ?? []) {
@@ -928,7 +935,7 @@ export function getDetectedOrphans(project: OrphanDetectionProject): DetectedOrp
         id: `circuit-missing-protection-${item.circuitId}`,
         kind: 'circuit',
         reason: 'circuitMissingProtection',
-        summary: `Circuit "${item.circuitCode}" has endpoints but no owning protection`,
+        summary: `Circuit "${item.circuitCode}" has no owning protection`,
         panelId,
         focusSelection: { type: 'circuit', ids: [item.circuitId] },
         quarantinePayload: { kind: 'circuit', circuitId: item.circuitId },
@@ -1268,7 +1275,7 @@ export function logOrphanReport(project: OrphanDetectionProject): void {
     totalCount += count
 
     for (const item of report.circuitMissingProtection) {
-      const msg = `${ORPHAN_LOG_PREFIX} Circuit missing protection: circuit "${item.circuitCode}" (id: ${item.circuitId}) has ${item.endpointCount} endpoint(s) but no owning protection.`
+      const msg = `${ORPHAN_LOG_PREFIX} Circuit missing protection: circuit "${item.circuitCode}" (id: ${item.circuitId}) has no owning protection (${item.endpointCount} endpoint(s)).`
       logger.error(msg)
       logger.error(
         `${ORPHAN_LOG_PREFIX} Likely cause: circuit exists only in panel.circuits and was never attached to any protection.circuits. The one-wire layout creates MCB nodes from protections, so this circuit will be invisible.`,

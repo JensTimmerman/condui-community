@@ -1,3 +1,4 @@
+import { Text } from 'react-konva'
 import { SymbolTextLabels } from './SymbolTextLabels'
 import {
   getProtectionOneWireAnchorLineIndex,
@@ -15,7 +16,7 @@ type ProtectionLike = ProtectionDevice | TrunkDevice
 
 function mergeProtectionLabelConfig(
   device: ProtectionLike,
-  defaults: { position: SymbolLabelPosition },
+  defaults: { position: SymbolLabelPosition }
 ): SymbolLabelDisplayConfig {
   const d = device.symbolLabelDisplay
   return {
@@ -34,6 +35,8 @@ export interface ProtectionOneWireLabelsProps {
   textColor: string
   fontFamily: string
   fontSize?: number
+  /** Explicit narrowed circuit phase, rendered low on the symbol's left side. */
+  phaseLabel?: string
   symbolSize?: number
   symbolWidth?: number
   symbolHeight?: number
@@ -48,6 +51,7 @@ export function ProtectionOneWireLabels({
   textColor,
   fontFamily,
   fontSize = 10,
+  phaseLabel,
   symbolSize = SYMBOL_SIZE,
   symbolWidth,
   symbolHeight,
@@ -55,22 +59,48 @@ export function ProtectionOneWireLabels({
   onLabelClick,
 }: ProtectionOneWireLabelsProps) {
   const wireLines = getProtectionOneWireLabelLines(source, { splitResidualLine })
-  if (wireLines.length === 0) return null
+  if (wireLines.length === 0 && !phaseLabel) return null
+
+  const resolvedSymbolWidth = symbolWidth ?? symbolSize
+  const resolvedSymbolHeight = symbolHeight ?? symbolSize
+  const phaseLabelFontSize = Math.max(7, fontSize - 2)
+  const phaseLabelWidth = Math.max(
+    resolvedSymbolWidth * 1.5,
+    (phaseLabel?.length ?? 0) * phaseLabelFontSize * 0.65
+  )
 
   return (
-    <SymbolTextLabels
-      items={[]}
-      lines={wireLines.map((line) => line.text)}
-      lineFrames={wireLines.map((line) => line.frame ?? false)}
-      anchorLineIndex={getProtectionOneWireAnchorLineIndex(wireLines)}
-      config={mergeProtectionLabelConfig(source, { position: defaultPosition })}
-      textColor={textColor}
-      fontFamily={fontFamily}
-      fontSize={fontSize}
-      symbolSize={symbolSize}
-      symbolWidth={symbolWidth}
-      symbolHeight={symbolHeight}
-      onLabelClick={onLabelClick}
-    />
+    <>
+      {wireLines.length > 0 && (
+        <SymbolTextLabels
+          items={[]}
+          lines={wireLines.map((line) => line.text)}
+          lineFrames={wireLines.map((line) => line.frame ?? false)}
+          anchorLineIndex={getProtectionOneWireAnchorLineIndex(wireLines)}
+          config={mergeProtectionLabelConfig(source, { position: defaultPosition })}
+          textColor={textColor}
+          fontFamily={fontFamily}
+          fontSize={fontSize}
+          symbolSize={symbolSize}
+          symbolWidth={symbolWidth}
+          symbolHeight={symbolHeight}
+          onLabelClick={onLabelClick}
+        />
+      )}
+      {phaseLabel && (
+        <Text
+          x={-resolvedSymbolWidth / 2 - phaseLabelWidth - 2}
+          y={resolvedSymbolHeight / 2 + 1}
+          width={phaseLabelWidth}
+          text={phaseLabel}
+          fontSize={phaseLabelFontSize}
+          fontFamily={fontFamily}
+          fill={textColor}
+          align="right"
+          wrap="none"
+          listening={false}
+        />
+      )}
+    </>
   )
 }

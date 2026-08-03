@@ -25,6 +25,8 @@ export interface ExportOptions {
   includePanel: boolean
   includeSitplan: boolean
   includeInstallDates: boolean
+  /** Include the effective installer signature in PDF info blocks. */
+  includeSignature: boolean
   theme: ExportTheme // Always required, no optional
   
 }
@@ -43,6 +45,7 @@ export function normalizeExportOptions(
     includePanel: options.includePanel,
     includeSitplan: options.includeSitplan,
     includeInstallDates: options.includeInstallDates ?? false,
+    includeSignature: options.includeSignature ?? true,
     theme: options.theme,
     
   }
@@ -176,7 +179,7 @@ export interface ExportContext {
   eendraadWireSegments?: WireSegment[]
   resolvePageReference?: (
     project: ExportProject,
-    baseHref: string,
+    baseHref: string
   ) => Promise<ExportPageReference | null>
   advancedPanelLabels?: boolean
 }

@@ -1328,10 +1328,10 @@
           "remediation": "Controleer uitgangsvermogen van de omzetter en de werkelijke DC-spanning/stroom. Verhoog indien nodig de DC-draaddoorsnede, verlaag de verwachte belasting of pas de omzetter-/toestelconfiguratie aan."
         },
         "post-main-bus-pe-conductor": {
-          "shortTitle": "Geen PE-aders na hoofdbord",
-          "message": "AC-bekabeling na de hoofdbussen moet beschermingsader (G) bevatten",
-          "details": "De beschermingsaarde wordt aangesloten op de hoofdbussen. Voedingsbekabeling aan installatiezijde (vanaf de paneelgrens tot de bus) en stroomkringen vanaf de bus moeten aders met G gebruiken (bv. 3G, 4G), niet ongeaarde tellingen zoals 3 of 4. DC-bekabeling wordt niet gecontroleerd.",
-          "remediation": "Kies 3G, 4G of een andere …G-optie voor installatiezijdige draden. Voeding vóór de gestippelde paneelgrens mag zonder G blijven."
+          "shortTitle": "Geen doorlopend PE-pad na hoofdbord",
+          "message": "AC-stroombanen na de hoofdbus moeten een doorlopend PE-pad hebben",
+          "details": "De beschermingsgeleider mag deel uitmaken van de kabel (G) of als onafhankelijke geleider naast de actieve geleiders lopen. Interne verbindingen tussen beveiligingstoestellen mogen alleen actieve geleiders bevatten; PE blijft doorlopend via de aardrail en mag niet door die toestellen lopen. DC-bekabeling wordt niet gecontroleerd.",
+          "remediation": "Voorzie een doorlopend PE-pad bij de uitgaande AC-bekabeling. Gebruik een kabel met G of een correct gedimensioneerde en geplaatste onafhankelijke beschermingsgeleider."
         },
         "heavy-appliance-dedicated-circuit": {
           "shortTitle": "Zwaar toestel niet op eigen stroombaan",
@@ -1363,6 +1363,9 @@
           "details": "Sommige stroombanen, eindpunten of kaderinhouden zijn niet correct gekoppeld, waardoor ze niet in het éénlijnschema (eendraad) verschijnen of onder de verkeerde beveiliging staan. Eindpunten die op het situatieplan horen, kunnen ook geen enkele planplaatsing hebben. Pas subcircuit-toewijzingen, tak-eindpuntlijsten, kaderverwijzingen aan of voeg planplaatsingen toe.",
           "remediation": "Zorg dat elke stroombaan onder slechts één beveiliging valt; voeg elk eindpunt toe aan een tak (of verwijder het); corrigeer of verwijder kaderverwijzingen naar ontbrekende items; voeg een situatieplan-plaatsing toe voor eindpunten die op het plan ontbreken."
         },
+        "phase-protection-compatibility": {
+          "shortTitle": "Poolaantal klopt misschien niet"
+        },
         "duplicate-panel-protection-label": {
           "shortTitle": "Dubbele beveiligingsnaam op bord",
           "message": "Twee of meer beveiligingen op dit bord hebben dezelfde naam",
@@ -1392,6 +1395,21 @@
       "duplicatePanelProtectionLabels": {
         "message": "Beveiligingsnaam \"{{label}}\" wordt {{count}} keer gebruikt op dit bord",
         "details": "Dubbele beveiligingsnamen op hetzelfde bord (hoofdbus, secundaire bus of voeding) maken stroombanen moeilijk herkenbaar. Hernoem één beveiliging of schakel automatische naamgeving in."
+      },
+      "protectionPhaseCompatibility": {
+        "deviceLabel": "Beveiliging",
+        "neutralUnavailable": {
+          "message": "{{deviceLabel}} gebruikt een nulleider, maar dit net heeft er geen",
+          "details": "Deze combinatie klopt misschien niet. Controleer de fase- of poolinstelling."
+        },
+        "tooManyPoles": {
+          "message": "{{deviceLabel}} is {{poleCount}}-polig; dat lijkt te veel voor deze {{availablePoleCount}}-polige voeding",
+          "details": "Deze combinatie klopt misschien niet. Controleer de poolinstelling."
+        },
+        "tooFewPoles": {
+          "message": "{{deviceLabel}} is {{poleCount}}-polig; dat lijkt te weinig voor dit driefasige net",
+          "details": "Deze combinatie klopt misschien niet. Controleer de poolinstelling."
+        }
       },
       "hasUpstreamOvercurrent": {
         "message": "Stroombaan {{circuitCode}} mist stroomopwaartse overstroombeveiliging",
@@ -1604,6 +1622,7 @@
       "total": "Totaal",
       "editablePremiumTooltip": "Ontgrendel dit project of upgrade naar Premium om bewerkbare projectdata in te sluiten.",
       "installDates": "Installatiedata opnemen",
+      "includeSignature": "Handtekening opnemen",
       "exportButton": "Exporteren",
       "cancelButton": "Annuleren"
     },
@@ -1762,6 +1781,14 @@
   },
   "wires": {
     "title": "Draad eigenschappen",
+    "phase": "Fase",
+    "phaseAll": "Alle fasen",
+    "phaseInherited": "Overgenomen",
+    "phaseAutomatic": "Automatisch",
+    "phaseSelect": "Selecteer fase",
+    "busbarPhaseOrder": "Fasevolgorde rail",
+    "showPhaseLabel": "Fase tonen op eendraad",
+    "hidePhaseLabel": "Fase verbergen op eendraad",
     "type": "Type",
     "conductors": "Geleiders",
     "thickness": "Dikte",

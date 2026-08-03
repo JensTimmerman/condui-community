@@ -58,6 +58,8 @@ import {
 } from '@/lib/wireTextLabel'
 import type { WireTranslateFn } from '@/lib/wires/wireFingerprint'
 import { shouldShowDomainChangeMarker } from '@/lib/wires/domainChangeMarker'
+import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
+import { getPhaseAssignmentLabel } from '@/lib/wires/phaseAssignment'
 
 type WireSegmentPointerEvent = KonvaEventObject<MouseEvent | TouchEvent>
 
@@ -87,7 +89,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
   const colors = useThemeColors()
   const fontFamily = useCanvasFontFamily()
   const isPreviewSelected = useIsPreviewSelected('wire', wireSegment.id)
-  const { getEndpointById, getTrunkDeviceById } = useProjectStore()
+  const { currentProject, getEndpointById, getTrunkDeviceById } = useProjectStore()
   const translateWire = t as unknown as WireTranslateFn
   const [acSymbolImage, setAcSymbolImage] = useState<HTMLImageElement | null>(null)
   const [dcSymbolImage, setDcSymbolImage] = useState<HTMLImageElement | null>(null)
@@ -332,6 +334,26 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
     isFromConversionDevice,
     showDomainChangeLabel
   )
+  const phaseSystem = currentProject
+    ? getElectricalInstallationFromProject(currentProject)?.nominalVoltage.system
+    : undefined
+  const isSubPanelIncomingPhaseSegment =
+    wireSegment.isSubPanelSupply === true &&
+    wireSegment.fromElementId === wireSegment.feederProtectionId
+  const isRootSupplyPhaseSegment =
+    wireSegment.supplyWireRole === 'downstream' &&
+    wireSegment.supplyFeedScope === 'root' &&
+    !wireSegment.circuitId
+  const incomingPanelPhaseLabel =
+    (isSubPanelIncomingPhaseSegment || isRootSupplyPhaseSegment) &&
+    wireSegment.showPhaseLabel === true &&
+    isVertical
+      ? getPhaseAssignmentLabel(wireSegment.phaseAssignment, phaseSystem)
+      : undefined
+  const incomingPanelPhaseLabelWidth = 48
+  const incomingPanelPhaseLabelY =
+    Math.max(wireSegment.startPoint.y, wireSegment.endPoint.y) +
+    (isRootSupplyPhaseSegment ? 4 : -10)
 
   const isDark = theme?.mode === 'dark'
   useEffect(() => {
@@ -509,6 +531,29 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
           onLabelMouseEnter={handleMouseEnter}
           onLabelMouseLeave={handleMouseLeave}
         />
+      )}
+
+      {incomingPanelPhaseLabel && isVertical && (
+        <Group
+          x={wireSegment.startPoint.x}
+          y={incomingPanelPhaseLabelY}
+          name="export-strip-label"
+          onClick={handleClick}
+          onTap={handleClick}
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
+        >
+          <Text
+            x={isRootSupplyPhaseSegment ? 5 : -incomingPanelPhaseLabelWidth - 5}
+            y={0}
+            width={incomingPanelPhaseLabelWidth}
+            text={incomingPanelPhaseLabel}
+            fontSize={8}
+            fontFamily={fontFamily}
+            fill={colors.wireColor}
+            align={isRootSupplyPhaseSegment ? 'left' : 'right'}
+          />
+        </Group>
       )}
 
       {/* Route indicators (tube, wall, air, ground) — vertical circuit wires only */}

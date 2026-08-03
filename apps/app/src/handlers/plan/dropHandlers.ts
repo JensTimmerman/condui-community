@@ -184,10 +184,11 @@ export function createEmptyCircuitOnPanel(
           state.isDirty = true
           return
         }
-        const panel = findPanelInTree(panels, targetPanelId)
-        if (!panel) return
-        panel.circuits.push(planCircuit)
-        state.isDirty = true
+        logger.error('Unable to create plan-drop circuit because its protection is missing', {
+          panelId: targetPanelId,
+          protectionId,
+          circuitId: planCircuit.id,
+        })
       })
     },
   })
@@ -200,7 +201,7 @@ export function createEmptyCircuitOnPanel(
     callbacks,
     false,
   )
-  return newCircuitId
+  return newCircuitId && getCircuitForPlanDrop(newCircuitId) ? newCircuitId : null
 }
 
 /**

@@ -1,0 +1,764 @@
+import { normalizeNominalVoltageSystem } from '@/constants/nominalVoltage'
+import type {
+  AcLinePhase,
+  AcPhase,
+  Circuit,
+  CircuitPhaseAssignment,
+  Installation,
+  Panel,
+  ProtectionDevice,
+  RootPanelFeedPath,
+  TrunkDevice,
+} from '@/types/schema'
+import { polesFromConfig } from '@/constants/poleConfig'
+import { findParentCircuitInfo } from '@/lib/eendraad/findParentCircuitInfo'
+import { walkPanels } from '@/lib/panel/panelTree'
+import { getMainBusOrder } from '@/lib/eendraad/mainBusOrder'
+import { collectRootPanels, ensureInstallationFeedTopology } from '@/lib/feedTopology'
+
+export type PhaseAssignmentOption = {
+  value: string
+  assignment?: CircuitPhaseAssignment
+}
+
+export interface PhaseAssignmentConstraint {
+  allowedKinds?: CircuitPhaseAssignment['kind'][]
+  /** Active conductors required by the upstream protection, excluding PE. */
+  activeConductorCount?: number
+  /** Every selected phase must be present in the upstream locked phase set. */
+  allowedPhases?: AcPhase[]
+  /** Concrete phase set inherited from the upstream circuit, if one exists. */
+  inheritedAssignment?: CircuitPhaseAssignment
+  /** A protection boundary cannot remain an unqualified all-phase wire. */
+  requireExplicit?: boolean
+}
+
+export interface InheritedCircuitPhaseState {
+  assignment?: CircuitPhaseAssignment
+  showPhaseLabel?: boolean
+}
+
+export interface PanelIncomingPhaseState {
+  /** Persisted user choice on this panel's private root feed. */
+  configuredAssignment?: CircuitPhaseAssignment
+  /** Effective assignment arriving at the panel busbar. */
+  assignment?: CircuitPhaseAssignment
+  showPhaseLabel?: boolean
+  /** Root-feed protection that makes the assignment non-editable. */
+  lockedByProtectionId?: string
+  constraint?: PhaseAssignmentConstraint
+}
+
+type VoltageSystem = Installation['nominalVoltage']['system'] | string | undefined
+const PHASE_ORDER: AcPhase[] = ['L1', 'L2', 'L3', 'N', 'PE']
+const DEFAULT_BUSBAR_PHASE_ORDER: AcLinePhase[] = ['L1', 'L2', 'L3']
+
+function sanitizeBusbarPhaseOrder(order: AcLinePhase[] | undefined): AcLinePhase[] {
+  if (!order?.length) return DEFAULT_BUSBAR_PHASE_ORDER
+  const unique = order.filter(
+    (phase, index): phase is AcLinePhase =>
+      DEFAULT_BUSBAR_PHASE_ORDER.includes(phase) && order.indexOf(phase) === index
+  )
+  return unique.length === 3 ? unique : DEFAULT_BUSBAR_PHASE_ORDER
+}
+
+export function getBusbarPhaseOrder(panel: Panel, ownerId?: string): AcLinePhase[] {
+  return sanitizeBusbarPhaseOrder(
+    ownerId ? panel.busbarPhases?.secondary?.[ownerId] : panel.busbarPhases?.main
+  )
+}
+
+function getProtectionPoles(
+  protection: Pick<ProtectionDevice, 'polesConfig' | 'poles'> | undefined
+): number | undefined {
+  return protection?.polesConfig ? polesFromConfig(protection.polesConfig) : protection?.poles
+}
+
+function assignmentForBusbarSlot(
+  system: VoltageSystem,
+  order: AcLinePhase[],
+  slotIndex: number,
+  poles = 2
+): CircuitPhaseAssignment | undefined {
+  const normalized = normalizeNominalVoltageSystem(system ?? '2~')
+  if (!supportsExplicitPhaseSelection(normalized)) return undefined
+  if (normalized === '3~' && poles >= 3) {
+    return {
+      kind: 'three_phase',
+      phases: Array.from(
+        { length: Math.min(poles, order.length) },
+        (_, poleIndex) => order[(slotIndex + poleIndex) % order.length]!
+      ),
+      neutral: 'not_present',
+      source: 'derived_from_busbar',
+    }
+  }
+  if (normalized === '3N~' && poles === 3) {
+    return {
+      kind: 'three_phase',
+      phases: ['L1', 'L2', 'L3'],
+      neutral: 'not_present',
+      source: 'derived_from_busbar',
+    }
+  }
+  if (poles >= 3) {
+    return getFullInstallationPhaseAssignment(normalized)
+  }
+  const phase = order[slotIndex % order.length]!
+  if (normalized === '3N~') {
+    return {
+      kind: 'single_phase',
+      phases: [phase, 'N'],
+      neutral: 'used',
+      source: 'derived_from_busbar',
+    }
+  }
+  const nextPhase = order[(slotIndex + 1) % order.length]!
+  return {
+    kind: 'phase_to_phase',
+    phases: [phase, nextPhase],
+    neutral: 'not_present',
+    source: 'derived_from_busbar',
+  }
+}
+
+function findCircuitContext(
+  circuitId: string,
+  panels: Panel[]
+): { panel: Panel; protection?: ProtectionDevice } | undefined {
+  for (const panel of walkPanels(panels)) {
+    if (panel.circuits.some((circuit) => circuit.id === circuitId)) return { panel }
+    const protection = panel.protections.find((candidate) =>
+      candidate.circuits?.some((circuit) => circuit.id === circuitId)
+    )
+    if (protection) return { panel, protection }
+  }
+  return undefined
+}
+
+function getBusbarPhaseAdvance(
+  protection: ProtectionDevice | undefined,
+  system: VoltageSystem
+): number {
+  if (!protection) return 0
+  const poles = getProtectionPoles(protection) ?? 2
+  if (!supportsExplicitPhaseSelection(system)) return 0
+  if (normalizeNominalVoltageSystem(system ?? '2~') === '3~') return Math.max(1, poles)
+  return poles <= 2 ? 1 : 0
+}
+
+function getMainBusSlotIndex(
+  panel: Panel,
+  item: { type: 'circuit' | 'protection'; id: string },
+  system: VoltageSystem
+): number {
+  let slot = 0
+  for (const candidate of getMainBusOrder(panel)) {
+    if (candidate.type === item.type && candidate.id === item.id) return slot
+    const candidateProtection =
+      candidate.type === 'protection'
+        ? panel.protections.find((protection) => protection.id === candidate.id)
+        : undefined
+    slot += getBusbarPhaseAdvance(candidateProtection, system)
+  }
+  return slot
+}
+
+export function getMainBusProtectionPhaseAssignment(
+  panel: Panel,
+  protection: ProtectionDevice,
+  system: VoltageSystem
+): CircuitPhaseAssignment | undefined {
+  const poles = getProtectionPoles(protection) ?? 2
+  const slot = getMainBusSlotIndex(panel, { type: 'protection', id: protection.id }, system)
+  if (poles > 2 && normalizeNominalVoltageSystem(system ?? '2~') !== '3~') {
+    return getFullInstallationPhaseAssignment(system)
+  }
+  return assignmentForBusbarSlot(system, getBusbarPhaseOrder(panel), slot, poles)
+}
+
+/** Automatic phase set supplied by the circuit's own busbar attachment. */
+export function getAutomaticBusbarPhaseAssignment(
+  circuit: Circuit,
+  panels: Panel[],
+  system: VoltageSystem
+): CircuitPhaseAssignment | undefined {
+  if (!supportsExplicitPhaseSelection(system)) return undefined
+  const context = findCircuitContext(circuit.id, panels)
+  if (!context) return undefined
+  const { panel, protection } = context
+  const parent = findParentCircuitInfo(circuit.id, panels)
+  if (parent) {
+    let index = 0
+    for (const siblingId of parent.parentCircuit.subCircuitIds ?? []) {
+      if (siblingId === circuit.id) break
+      index += getBusbarPhaseAdvance(findCircuitContext(siblingId, panels)?.protection, system)
+    }
+    return assignmentForBusbarSlot(
+      system,
+      getBusbarPhaseOrder(panel, parent.parentCircuit.id),
+      index,
+      getProtectionPoles(protection) ?? 2
+    )
+  }
+
+  const isGroupedRcd =
+    !!protection &&
+    (protection.type === 'RCD' || protection.type === 'RCBO') &&
+    (protection.circuits?.length ?? 0) > 1
+  if (isGroupedRcd) {
+    const incoming = getMainBusProtectionPhaseAssignment(panel, protection, system)
+    if (incoming && phaseAssignmentDiffersFromInstallation(incoming, system)) return incoming
+    const circuitIndex = Math.max(
+      0,
+      protection.circuits?.findIndex((item) => item.id === circuit.id) ?? 0
+    )
+    const index =
+      normalizeNominalVoltageSystem(system ?? '2~') === '3~' ? circuitIndex * 2 : circuitIndex
+    return assignmentForBusbarSlot(system, getBusbarPhaseOrder(panel, protection.id), index, 2)
+  }
+
+  if (protection) return getMainBusProtectionPhaseAssignment(panel, protection, system)
+  const slot = getMainBusSlotIndex(panel, { type: 'circuit', id: circuit.id }, system)
+  return assignmentForBusbarSlot(system, getBusbarPhaseOrder(panel), slot)
+}
+
+function manualAssignment(
+  kind: CircuitPhaseAssignment['kind'],
+  phases: AcPhase[],
+  neutral?: CircuitPhaseAssignment['neutral']
+): CircuitPhaseAssignment {
+  return { kind, phases, neutral, source: 'manual' }
+}
+
+function option(
+  value: string,
+  kind: CircuitPhaseAssignment['kind'],
+  phases: AcPhase[],
+  neutral?: CircuitPhaseAssignment['neutral']
+): PhaseAssignmentOption {
+  return { value, assignment: manualAssignment(kind, phases, neutral) }
+}
+
+/** Active AC conductors available from the installation voltage system, excluding PE. */
+export function getInstallationPhases(system: VoltageSystem): AcPhase[] {
+  switch (normalizeNominalVoltageSystem(system ?? '2~')) {
+    case '3N~':
+      return ['L1', 'L2', 'L3', 'N']
+    case '3~':
+      return ['L1', 'L2', 'L3']
+    case '1N~':
+      return ['L1', 'N']
+    case '2~':
+      return ['L1', 'L2']
+    case 'DC':
+    case '1~':
+    default:
+      return []
+  }
+}
+
+export function supportsExplicitPhaseSelection(system: VoltageSystem): boolean {
+  const normalized = normalizeNominalVoltageSystem(system ?? '2~')
+  return normalized === '3~' || normalized === '3N~'
+}
+
+/** Options intentionally omit PE: PE is a continuity conductor, not a switched phase. */
+export function getPhaseAssignmentOptions(
+  system: VoltageSystem,
+  constraint?: PhaseAssignmentConstraint
+): PhaseAssignmentOption[] {
+  const normalized = normalizeNominalVoltageSystem(system ?? '2~')
+  if (!supportsExplicitPhaseSelection(normalized)) return []
+
+  const options: PhaseAssignmentOption[] = [{ value: 'inherit' }]
+  if (normalized === '3N~') {
+    options.push(
+      option('single:L1+N', 'single_phase', ['L1', 'N'], 'used'),
+      option('single:L2+N', 'single_phase', ['L2', 'N'], 'used'),
+      option('single:L3+N', 'single_phase', ['L3', 'N'], 'used'),
+      option('pair:L1-L2', 'phase_to_phase', ['L1', 'L2'], 'not_present'),
+      option('pair:L2-L3', 'phase_to_phase', ['L2', 'L3'], 'not_present'),
+      option('pair:L3-L1', 'phase_to_phase', ['L3', 'L1'], 'not_present'),
+      option('three:L1+L2+L3', 'three_phase', ['L1', 'L2', 'L3'], 'not_present'),
+      option('three:L1+L2+L3+N', 'three_phase', ['L1', 'L2', 'L3', 'N'], 'used')
+    )
+  } else {
+    options.push(
+      option('pair:L1-L2', 'phase_to_phase', ['L1', 'L2'], 'not_present'),
+      option('pair:L2-L3', 'phase_to_phase', ['L2', 'L3'], 'not_present'),
+      option('pair:L3-L1', 'phase_to_phase', ['L3', 'L1'], 'not_present'),
+      option('three:L1+L2+L3', 'three_phase', ['L1', 'L2', 'L3'], 'not_used')
+    )
+  }
+  if (!constraint) return options
+  return options.filter((candidate) => {
+    if (!candidate.assignment) return constraint.requireExplicit !== true
+    if (constraint.allowedKinds && !constraint.allowedKinds.includes(candidate.assignment.kind)) {
+      return false
+    }
+    if (
+      constraint.activeConductorCount != null &&
+      getActiveConductorCount(candidate.assignment) !== constraint.activeConductorCount
+    ) {
+      return false
+    }
+    if (
+      constraint.allowedPhases &&
+      !candidate.assignment.phases.every((phase) => constraint.allowedPhases!.includes(phase))
+    ) {
+      return false
+    }
+    return true
+  })
+}
+
+function assignmentKey(assignment: CircuitPhaseAssignment | undefined): string {
+  if (!assignment || assignment.kind === 'inherit') return 'inherit'
+  const phases = [...assignment.phases].sort(
+    (left, right) => PHASE_ORDER.indexOf(left) - PHASE_ORDER.indexOf(right)
+  )
+  return `${assignment.kind}:${phases.join('+')}:${assignment.neutral ?? ''}`
+}
+
+export function getPhaseAssignmentOptionValue(
+  assignment: CircuitPhaseAssignment | undefined,
+  system: VoltageSystem,
+  constraint?: PhaseAssignmentConstraint
+): string {
+  const key = assignmentKey(assignment)
+  const options = getPhaseAssignmentOptions(system, constraint)
+  return (
+    options.find((candidate) => assignmentKey(candidate.assignment) === key)?.value ??
+    (options.some((option) => option.value === 'inherit') ? 'inherit' : '')
+  )
+}
+
+export function getPhaseAssignmentForOptionValue(
+  value: string,
+  system: VoltageSystem,
+  constraint?: PhaseAssignmentConstraint
+): CircuitPhaseAssignment | undefined {
+  return getPhaseAssignmentOptions(system, constraint).find(
+    (candidate) => candidate.value === value
+  )?.assignment
+}
+
+/**
+ * Infer the phase shape that a protection permits without guessing which physical
+ * phase (L1/L2/L3) the installer chose. Missing/legacy circuit assignments remain
+ * inherited, but the wire editor is still constrained to this shape.
+ */
+export function getProtectionPhaseConstraint(
+  protection: Pick<ProtectionDevice, 'polesConfig' | 'poles'> | undefined,
+  system: VoltageSystem,
+  upstreamAssignment?: CircuitPhaseAssignment
+): PhaseAssignmentConstraint | undefined {
+  if (!protection || !supportsExplicitPhaseSelection(system)) return undefined
+  const poles = protection.polesConfig ? polesFromConfig(protection.polesConfig) : protection.poles
+  if (poles == null) return undefined
+
+  const normalized = normalizeNominalVoltageSystem(system ?? '2~')
+  let constraint: PhaseAssignmentConstraint
+  if (normalized === '3N~') {
+    if (poles === 1) {
+      constraint = { allowedKinds: ['single_phase'], activeConductorCount: 2 }
+    } else if (poles === 2) {
+      constraint = {
+        allowedKinds: ['single_phase'],
+        activeConductorCount: 2,
+      }
+    } else if (poles === 3) {
+      constraint = { allowedKinds: ['three_phase'], activeConductorCount: 3 }
+    } else {
+      constraint = { allowedKinds: ['three_phase'], activeConductorCount: 4 }
+    }
+  } else {
+    if (poles <= 2) {
+      constraint = { allowedKinds: ['phase_to_phase'], activeConductorCount: 2 }
+    } else {
+      constraint = { allowedKinds: ['three_phase'], activeConductorCount: 3 }
+    }
+  }
+
+  const inherited =
+    isConcretePhaseAssignment(upstreamAssignment) &&
+    upstreamAssignment.source !== 'derived_from_busbar'
+      ? upstreamAssignment
+      : undefined
+  return {
+    ...constraint,
+    ...(inherited
+      ? { allowedPhases: inherited.phases, inheritedAssignment: inherited }
+      : upstreamAssignment?.source === 'derived_from_busbar'
+        ? { inheritedAssignment: upstreamAssignment }
+        : { requireExplicit: true }),
+  }
+}
+
+function getRootFeedForPanel(
+  installation: Installation,
+  panels: Panel[],
+  panelId: string
+): RootPanelFeedPath | undefined {
+  return ensureInstallationFeedTopology(installation, panels).rootFeeds.find(
+    (feed) => feed.panelId === panelId
+  )
+}
+
+function getFirstNarrowingRootProtection(
+  feed: RootPanelFeedPath | undefined,
+  system: VoltageSystem
+): TrunkDevice | undefined {
+  const fullCount = getActiveConductorCount(getFullInstallationPhaseAssignment(system))
+  if (fullCount == null) return undefined
+  return feed?.trunkDevices?.find((device) => {
+    if (device.type !== 'protection') return false
+    const constraint = getProtectionPhaseConstraint(device, system)
+    return (
+      constraint?.activeConductorCount != null &&
+      constraint.activeConductorCount < fullCount
+    )
+  })
+}
+
+function assignmentMatchesConstraint(
+  assignment: CircuitPhaseAssignment | undefined,
+  constraint: PhaseAssignmentConstraint | undefined
+): assignment is CircuitPhaseAssignment {
+  if (!isConcretePhaseAssignment(assignment) || !constraint) return false
+  if (constraint.allowedKinds && !constraint.allowedKinds.includes(assignment.kind)) return false
+  if (
+    constraint.activeConductorCount != null &&
+    getActiveConductorCount(assignment) !== constraint.activeConductorCount
+  ) {
+    return false
+  }
+  return true
+}
+
+/** Resolve the phase set on one main panel's private supply section. */
+export function getPanelIncomingPhaseState(
+  installation: Installation | undefined,
+  panels: Panel[],
+  panel: Panel
+): PanelIncomingPhaseState {
+  const system = installation?.nominalVoltage.system
+  if (!installation || panel.isMain === false || !supportsExplicitPhaseSelection(system)) return {}
+
+  const rootFeed = getRootFeedForPanel(installation, panels, panel.id)
+  const configuredAssignment = isConcretePhaseAssignment(rootFeed?.phaseAssignment)
+    ? rootFeed.phaseAssignment
+    : undefined
+  const narrowingProtection = getFirstNarrowingRootProtection(rootFeed, system)
+  if (!narrowingProtection) {
+    return {
+      configuredAssignment,
+      assignment: configuredAssignment ?? getFullInstallationPhaseAssignment(system),
+      showPhaseLabel: rootFeed?.showPhaseLabel,
+    }
+  }
+
+  const shapeConstraint = getProtectionPhaseConstraint(narrowingProtection, system)
+  const rootPanelIndex = Math.max(
+    0,
+    collectRootPanels(panels).findIndex((candidate) => candidate.id === panel.id)
+  )
+  const poles = getProtectionPoles(narrowingProtection) ?? 2
+  const normalized = normalizeNominalVoltageSystem(system ?? '2~')
+  const slotIndex = normalized === '3~' ? rootPanelIndex * Math.max(1, poles) : rootPanelIndex
+  const automaticAssignment = assignmentForBusbarSlot(
+    system,
+    DEFAULT_BUSBAR_PHASE_ORDER,
+    slotIndex,
+    poles
+  )
+  const assignment = assignmentMatchesConstraint(configuredAssignment, shapeConstraint)
+    ? configuredAssignment
+    : automaticAssignment
+
+  return {
+    configuredAssignment,
+    assignment,
+    showPhaseLabel: rootFeed?.showPhaseLabel,
+    lockedByProtectionId: narrowingProtection.id,
+    constraint: getInheritedPhaseConstraint(assignment),
+  }
+}
+
+function isConcretePhaseAssignment(
+  assignment: CircuitPhaseAssignment | undefined
+): assignment is CircuitPhaseAssignment {
+  return !!assignment && assignment.kind !== 'inherit' && assignment.kind !== 'dc'
+}
+
+type PanelFeedInfo = {
+  feederCircuit: Circuit
+}
+
+function findPanelForCircuit(circuitId: string, panels: Panel[]): Panel | undefined {
+  for (const panel of walkPanels(panels)) {
+    if (
+      panel.circuits.some((candidate) => candidate.id === circuitId) ||
+      panel.protections.some((protection) =>
+        protection.circuits?.some((candidate) => candidate.id === circuitId)
+      )
+    ) {
+      return panel
+    }
+  }
+  return undefined
+}
+
+/** Find the circuit carrying a panel's incoming feeder from its parent panel. */
+function findPanelFeed(panelId: string, panels: Panel[]): PanelFeedInfo | undefined {
+  for (const parentPanel of walkPanels(panels)) {
+    const feederProtection = parentPanel.protections.find(
+      (protection) => protection.subPanelId === panelId
+    )
+    if (!feederProtection?.circuits?.length) continue
+    const feederCircuit =
+      feederProtection.circuits.find((candidate) =>
+        candidate.endpoints.some(
+          (endpoint) => endpoint.symbol === 'panel_distribution' && endpoint.panelId === panelId
+        )
+      ) ?? feederProtection.circuits[0]
+    if (feederCircuit) return { feederCircuit }
+  }
+  return undefined
+}
+
+function getInheritedCircuitPhaseStateInternal(
+  circuit: Circuit,
+  panels: Panel[],
+  visitedCircuits: Set<string>,
+  visitedPanels: Set<string>,
+  system?: VoltageSystem,
+  installation?: Installation
+): InheritedCircuitPhaseState {
+  if (visitedCircuits.has(circuit.id)) return {}
+  const nextVisitedCircuits = new Set(visitedCircuits).add(circuit.id)
+
+  // A panel feed is the outermost electrical boundary. Its lock dominates any
+  // local circuit assignment, because every circuit in the child panel receives
+  // the same incoming phase set.
+  const panel = findPanelForCircuit(circuit.id, panels)
+  const panelFeed = panel ? findPanelFeed(panel.id, panels) : undefined
+  const panelState =
+    panel && panelFeed && !visitedPanels.has(panel.id)
+      ? getEffectiveCircuitPhaseStateInternal(
+          panelFeed.feederCircuit,
+          panels,
+          nextVisitedCircuits,
+          new Set(visitedPanels).add(panel.id),
+          system,
+          installation
+        )
+      : panel?.isMain
+        ? { assignment: getPanelIncomingPhaseState(installation, panels, panel).assignment }
+        : {}
+
+  const parent = findParentCircuitInfo(circuit.id, panels)
+  const parentState = parent
+    ? getEffectiveCircuitPhaseStateInternal(
+        parent.parentCircuit,
+        panels,
+        nextVisitedCircuits,
+        visitedPanels,
+        system,
+        installation
+      )
+    : {}
+
+  const context = system ? findCircuitContext(circuit.id, panels) : undefined
+  const groupedProtection = context?.protection
+  const protectionState =
+    system &&
+    context &&
+    groupedProtection &&
+    (groupedProtection.type === 'RCD' || groupedProtection.type === 'RCBO') &&
+    (groupedProtection.circuits?.length ?? 0) > 1
+      ? getMainBusProtectionPhaseAssignment(context.panel, groupedProtection, system)
+      : undefined
+
+  return {
+    assignment: [panelState.assignment, parentState.assignment, protectionState].find(
+      (assignment) =>
+        assignment && (!system || phaseAssignmentDiffersFromInstallation(assignment, system))
+    ),
+    showPhaseLabel: parentState.showPhaseLabel ?? panelState.showPhaseLabel,
+  }
+}
+
+function getEffectiveCircuitPhaseStateInternal(
+  circuit: Circuit,
+  panels: Panel[],
+  visitedCircuits: Set<string>,
+  visitedPanels: Set<string>,
+  system?: VoltageSystem,
+  installation?: Installation
+): InheritedCircuitPhaseState {
+  if (visitedCircuits.has(circuit.id)) return {}
+  const inherited = getInheritedCircuitPhaseStateInternal(
+    circuit,
+    panels,
+    visitedCircuits,
+    visitedPanels,
+    system,
+    installation
+  )
+  return {
+    assignment:
+      inherited.assignment ??
+      (isConcretePhaseAssignment(circuit.phaseAssignment)
+        ? circuit.phaseAssignment
+        : system
+          ? getAutomaticBusbarPhaseAssignment(circuit, panels, system)
+          : undefined),
+    showPhaseLabel: circuit.showPhaseLabel ?? inherited.showPhaseLabel,
+  }
+}
+
+/** Resolve the phase lock inherited from parent circuits and panel feeders. */
+export function getInheritedCircuitPhaseState(
+  circuit: Circuit,
+  panels: Panel[],
+  system?: VoltageSystem,
+  installation?: Installation
+): InheritedCircuitPhaseState {
+  return getInheritedCircuitPhaseStateInternal(
+    circuit,
+    panels,
+    new Set(),
+    new Set(),
+    system,
+    installation
+  )
+}
+
+export function getEffectiveCircuitPhaseState(
+  circuit: Circuit,
+  panels: Panel[],
+  system?: VoltageSystem,
+  installation?: Installation
+): InheritedCircuitPhaseState {
+  return getEffectiveCircuitPhaseStateInternal(
+    circuit,
+    panels,
+    new Set(),
+    new Set(),
+    system,
+    installation
+  )
+}
+
+export function getFullInstallationPhaseAssignment(
+  system: VoltageSystem
+): CircuitPhaseAssignment | undefined {
+  // Phase selection is intentionally a three-phase-only feature. In particular,
+  // 2×230 V has two active conductors but no user-facing phase identity.
+  if (!supportsExplicitPhaseSelection(system)) return undefined
+  const phases = getInstallationPhases(system)
+  if (phases.length === 0) return undefined
+  const active = phases.filter((phase) => phase !== 'N' && phase !== 'PE')
+  const kind =
+    active.length === 1 ? 'single_phase' : active.length === 2 ? 'phase_to_phase' : 'three_phase'
+  return {
+    kind,
+    phases,
+    neutral: phases.includes('N') ? 'used' : 'not_present',
+    source: 'derived_from_voltage',
+  }
+}
+
+export function getActiveConductorCount(
+  assignment: CircuitPhaseAssignment | undefined
+): number | undefined {
+  if (!assignment || assignment.kind === 'inherit' || assignment.kind === 'dc') return undefined
+  return assignment.phases.filter(
+    (phase) => phase === 'L1' || phase === 'L2' || phase === 'L3' || phase === 'N'
+  ).length
+}
+
+/** Hard-gate a downstream wire to the exact phase shape inherited from upstream. */
+export function getInheritedPhaseConstraint(
+  assignment: CircuitPhaseAssignment | undefined
+): PhaseAssignmentConstraint | undefined {
+  if (!isConcretePhaseAssignment(assignment)) return undefined
+  return {
+    allowedKinds: [assignment.kind],
+    activeConductorCount: getActiveConductorCount(assignment),
+    allowedPhases: assignment.phases,
+    inheritedAssignment: assignment,
+  }
+}
+
+function samePhaseSet(left: AcPhase[], right: AcPhase[]): boolean {
+  if (left.length !== right.length) return false
+  const rightSet = new Set(right)
+  return left.every((phase) => rightSet.has(phase))
+}
+
+/** Returns false for inherited/full-installation assignments so normal diagrams stay quiet. */
+export function phaseAssignmentDiffersFromInstallation(
+  assignment: CircuitPhaseAssignment | undefined,
+  system: VoltageSystem
+): boolean {
+  if (
+    !supportsExplicitPhaseSelection(system) ||
+    !assignment ||
+    assignment.kind === 'inherit' ||
+    assignment.kind === 'dc'
+  ) {
+    return false
+  }
+  return !samePhaseSet(
+    assignment.phases.filter((phase) => phase !== 'PE'),
+    getInstallationPhases(system).filter((phase) => phase !== 'PE')
+  )
+}
+
+export function formatPhaseAssignment(assignment: CircuitPhaseAssignment | undefined): string {
+  if (!assignment || assignment.kind === 'inherit') return ''
+  const phases = assignment.phases.filter((phase) => phase !== 'PE')
+  if (phases.length === 0) return ''
+  return phases.join('-')
+}
+
+export function getPhaseAssignmentLabel(
+  assignment: CircuitPhaseAssignment | undefined,
+  system: VoltageSystem
+): string | undefined {
+  if (
+    !supportsExplicitPhaseSelection(system) ||
+    !assignment ||
+    assignment.kind === 'inherit' ||
+    assignment.kind === 'dc'
+  ) {
+    return undefined
+  }
+  return formatPhaseAssignment(assignment) || undefined
+}
+
+/** Resolve an explicitly chosen phase for the protection label; legacy inference stays quiet. */
+export function getProtectionPhaseLabel(
+  protection: ProtectionDevice,
+  system: VoltageSystem,
+  panels: Panel[] = [],
+  installation?: Installation
+): string | undefined {
+  const candidates = (protection.circuits ?? []).flatMap((circuit) => {
+    const inherited = getInheritedCircuitPhaseState(circuit, panels, system, installation)
+    const effective = getEffectiveCircuitPhaseState(circuit, panels, system, installation)
+    return [
+      {
+        assignment: effective.assignment,
+        visible: circuit.showPhaseLabel ?? inherited.showPhaseLabel,
+      },
+    ]
+  })
+  return candidates
+    .filter((candidate) => candidate.visible === true)
+    .map((candidate) => getPhaseAssignmentLabel(candidate.assignment, system))
+    .find((label): label is string => label != null)
+}

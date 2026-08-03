@@ -5,13 +5,17 @@ import type { Panel, PanelGridConfig, PanelGridModuleRef, ProtectionDevice } fro
 import { findTrunkDeviceInProject } from '@/utils/project'
 import { clamp } from '@/lib/geometry'
 import {
+  DEFAULT_PANEL_GRID_COLUMNS,
+  DEFAULT_PANEL_GRID_ROWS,
+} from '@/lib/panel/panelGridDefaults'
+import {
   getElectricalPanelsFromProject,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 
 export const CELL_W = 20  // Width of a single module slot
-export const CELL_H = 40  // Height of a row
-export const ROW_GAP = 8  // Vertical gap between rows
+export const CELL_H = 80  // Height of a row / module body
+export const ROW_GAP = 16  // Vertical gap between rows
 export const ROW_STRIDE = CELL_H + ROW_GAP  // Total vertical step per row
 
 export function getSupplyPanelRows(panel: Panel | null | undefined): number {
@@ -19,7 +23,12 @@ export function getSupplyPanelRows(panel: Panel | null | undefined): number {
 }
 
 export function getSupplyPanelColumns(panel: Panel | null | undefined): number {
-  return Math.max(1, panel?.gridView?.supplyPanelColumns ?? panel?.gridView?.columns ?? 12)
+  return Math.max(
+    1,
+    panel?.gridView?.supplyPanelColumns ??
+      panel?.gridView?.columns ??
+      DEFAULT_PANEL_GRID_COLUMNS
+  )
 }
 
 /** Snap a pixel position to the nearest row/col. Boundary falls in middle of the gap. */
@@ -118,8 +127,8 @@ export function getPanelGridPlacements(
   }>
 ): ModulePlacement[] {
   const config: PanelGridConfig = panel.gridView ?? {
-    rows: 8,
-    columns: 12,
+    rows: DEFAULT_PANEL_GRID_ROWS,
+    columns: DEFAULT_PANEL_GRID_COLUMNS,
     feedFromTop: false,
     slots: [],
   }

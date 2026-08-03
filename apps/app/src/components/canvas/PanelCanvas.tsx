@@ -54,6 +54,10 @@ import {
   PANEL_FOCUS_SINGLE_PANEL_LINK_POLICY,
   type PanelSceneFilter,
 } from '@/lib/panel/applyPanelSceneFilter'
+import {
+  DEFAULT_PANEL_GRID_COLUMNS,
+  DEFAULT_PANEL_GRID_ROWS,
+} from '@/lib/panel/panelGridDefaults'
 import { getPanelFeedProjection } from '@/lib/feedTopology'
 import {
   getSharedSupplyRefKeysForPanel,
@@ -677,8 +681,8 @@ export default function PanelCanvas({ onMultiFingerSwipe, capabilities }: PanelC
     if (!selection.type || selection.ids.length === 0) return null
     const frameMargin = 40
     const supplyGap = 20
-    const rows = panel.gridView?.rows ?? 8
-    const cols = panel.gridView?.columns ?? 12
+    const rows = panel.gridView?.rows ?? DEFAULT_PANEL_GRID_ROWS
+    const cols = panel.gridView?.columns ?? DEFAULT_PANEL_GRID_COLUMNS
     const supplyLayout = getSupplyPanelLayout(panel)
     const contentWidth = cols * CELL_W
     const contentHeight = rows * CELL_H + (rows - 1) * ROW_GAP
@@ -901,8 +905,8 @@ export default function PanelCanvas({ onMultiFingerSwipe, capabilities }: PanelC
   // Calculate panel frame dimensions with margin
   const FRAME_MARGIN = 40
   const SUPPLY_GAP = 20
-  const rows = panel?.gridView?.rows ?? 8
-  const cols = panel?.gridView?.columns ?? 12
+  const rows = panel?.gridView?.rows ?? DEFAULT_PANEL_GRID_ROWS
+  const cols = panel?.gridView?.columns ?? DEFAULT_PANEL_GRID_COLUMNS
   const supplyLayout = getSupplyPanelLayout(panel)
   const contentWidth = cols * CELL_W
   const contentHeight = rows * CELL_H + (rows - 1) * ROW_GAP // Include gaps between rows
@@ -935,8 +939,8 @@ export default function PanelCanvas({ onMultiFingerSwipe, capabilities }: PanelC
         (placement) => panelGridModuleRefKey(placement.ref) === panelGridModuleRefKey(ref)
       )
       if (draggedPlacement) {
-        const currentRows = panel?.gridView?.rows ?? 8
-        const currentCols = panel?.gridView?.columns ?? 12
+        const currentRows = panel?.gridView?.rows ?? DEFAULT_PANEL_GRID_ROWS
+        const currentCols = panel?.gridView?.columns ?? DEFAULT_PANEL_GRID_COLUMNS
         const currentSupplyLayout = getSupplyPanelLayout(panel)
         const inSupply = draggedPlacement.inSupplyPanel === true
         const localY = y - (inSupply ? supplyPanelY : mainPanelY)
@@ -1324,8 +1328,8 @@ export default function PanelCanvas({ onMultiFingerSwipe, capabilities }: PanelC
 
       // Rewire mode is handled by handleRewireDragEnd, not here
 
-      const totalRows = panel.gridView?.rows ?? 8
-      const totalCols = panel.gridView?.columns ?? 12
+      const totalRows = panel.gridView?.rows ?? DEFAULT_PANEL_GRID_ROWS
+      const totalCols = panel.gridView?.columns ?? DEFAULT_PANEL_GRID_COLUMNS
       const draggedKey = panelGridModuleRefKey(draggedRef)
 
       const isRefInSelection = (
@@ -1998,8 +2002,8 @@ export default function PanelCanvas({ onMultiFingerSwipe, capabilities }: PanelC
           currentProject &&
           combinedPlacements &&
           (() => {
-            const rows = panel?.gridView?.rows ?? 8
-            const cols = panel?.gridView?.columns ?? 12
+            const rows = panel?.gridView?.rows ?? DEFAULT_PANEL_GRID_ROWS
+            const cols = panel?.gridView?.columns ?? DEFAULT_PANEL_GRID_COLUMNS
             const supplyRows = getSupplyPanelRows(panel)
             const supplyCols = getSupplyPanelColumns(panel)
             const supplyPanelVisible = !!(panel?.isMain && supplyModules.length > 0)

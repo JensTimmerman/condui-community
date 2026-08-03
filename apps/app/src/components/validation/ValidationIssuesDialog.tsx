@@ -422,7 +422,7 @@ function ValidationIssuesDialog({
     }
 
     const { elementIds } = focusIssue(issue.id, issues)
-    let selectionType: 'endpoint' | 'protection' | 'wire' | null = null
+    let selectionType: 'endpoint' | 'protection' | 'trunkDevice' | 'wire' | null = null
     let ids: string[] = []
     let explicitSelection: Selection | null = null
     const isVisibleWireSegment = (segment: WireSegment) =>
@@ -525,6 +525,22 @@ function ValidationIssuesDialog({
     ): WireSegment | undefined => {
       const protectionId = query?.getProtectionForCircuit(circuitId)?.id
       return pickRootmostLiveCircuitWireSegmentForFocus(candidates, circuitId, protectionId, domain)
+    }
+
+    if (issue.ruleId === 'be.areibook1.2025.phase-protection-compatibility') {
+      const protectionIds = issue.offenders
+        .filter((offender) => offender.kind === 'protection')
+        .map((offender) => offender.id)
+      const trunkDeviceIds = issue.offenders
+        .filter((offender) => offender.kind === 'device')
+        .map((offender) => offender.id)
+      if (protectionIds.length > 0) {
+        selectionType = 'protection'
+        ids = protectionIds
+      } else if (trunkDeviceIds.length > 0) {
+        selectionType = 'trunkDevice'
+        ids = trunkDeviceIds
+      }
     }
 
     // Cable sizing rules should focus one stable, visible root wire. Validation and

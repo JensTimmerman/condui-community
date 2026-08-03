@@ -437,6 +437,20 @@ function formatConductorLabel(cable: CableSpec): string {
 }
 
 /**
+ * Structural parent circuits only distribute active conductors from an RCD/RCBO
+ * to downstream protections. Their PE remains continuous through the panel's PE
+ * bar and must not be interpreted as passing through the protection devices.
+ */
+function isInternalProtectionDistributionCircuit(circuit: Circuit): boolean {
+  return (
+    (circuit.subCircuitIds?.length ?? 0) > 0 &&
+    circuit.endpoints.length === 0 &&
+    (circuit.branches?.length ?? 0) === 0 &&
+    (circuit.trunkDevices?.length ?? 0) === 0
+  )
+}
+
+/**
  * Warn when AC wiring on the installation side of the main bus uses conductors without PE.
  * Ground/PE is bonded at the main bus; circuits and the supply drop from the dashed separator
  * to the bus should use a G suffix (e.g. 3G, 4G). DC segments are excluded.
@@ -471,13 +485,23 @@ function postMainBusRequiresPeConductor(
       details,
       remediation: i18n.t('validation.primitives.postMainBusRequiresPeConductor.remediation', {
         defaultValue:
-          'Use a conductor count with protective earth (G), for example 3G or 4G, on installation-side wiring after the main bus. Utility-side supply cabling before the panel boundary may use conductors without G.',
+          'Provide a continuous protective-earth path with the outgoing AC wiring, either in the cable (G) or as a correctly installed independent PE conductor. PE must not pass through protection devices.',
       }),
       citations: [
         {
           code: 'AREI',
           title: 'Algemeen Reglement op de Elektrische Installaties',
-          section: '§ 5.3.2',
+          section: '§ 5.2.1.3',
+        },
+        {
+          code: 'AREI',
+          title: 'Algemeen Reglement op de Elektrische Installaties',
+          section: '§ 5.4.3.1',
+        },
+        {
+          code: 'AREI',
+          title: 'Algemeen Reglement op de Elektrische Installaties',
+          section: '§ 5.4.3.5-5.4.3.6',
         },
       ],
       tags: ['cable', 'PE', 'earthing', 'supply'],
@@ -536,11 +560,12 @@ function postMainBusRequiresPeConductor(
     if (seg.supplyWireRole === 'upstream') continue
     if (!seg.circuitId) continue
     if (!cableExplicitlyWithoutPe(seg.cable)) continue
-    if (flaggedCircuits.has(seg.circuitId)) continue
-    flaggedCircuits.add(seg.circuitId)
 
     const circuit = query.getCircuitById(seg.circuitId)
     if (!circuit) continue
+    if (isInternalProtectionDistributionCircuit(circuit)) continue
+    if (flaggedCircuits.has(seg.circuitId)) continue
+    flaggedCircuits.add(seg.circuitId)
 
     const circuitCode = validationCircuitCode(circuit.code)
     const conductorLabel = formatConductorLabel(seg.cable)
@@ -555,12 +580,12 @@ function postMainBusRequiresPeConductor(
       i18n.t('validation.primitives.postMainBusRequiresPeConductor.circuitMessage', {
         circuitCode,
         conductorLabel,
-        defaultValue: `Circuit ${circuitCode}: uses ${conductorLabel} without protective earth (G). Circuits fed from the main bus should use a G conductor (e.g. 3G, 4G).`,
+        defaultValue: `Circuit ${circuitCode}: outgoing AC wiring uses ${conductorLabel} without a protective-earth path.`,
       }),
       i18n.t('validation.primitives.postMainBusRequiresPeConductor.circuitDetails', {
         circuitCode,
         conductorLabel,
-        defaultValue: `The main bus is where protective earth is connected in the installation. Wiring from the bus to circuits should include a PE conductor (…G), not ungrounded counts such as ${conductorLabel}. DC circuits are not checked.`,
+        defaultValue: `Household AC circuits downstream of the general RCD need a continuous PE path. The outgoing wiring may include PE in the cable (…G) or use a correctly installed independent protective conductor. Internal links carrying only active conductors between protection devices are not treated as outgoing wiring. DC circuits are not checked.`,
       })
     )
   }
