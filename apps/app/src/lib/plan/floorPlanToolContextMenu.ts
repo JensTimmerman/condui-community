@@ -1,7 +1,4 @@
-export type FloorPlanToolContextMenuAction =
-  | 'commitPenAndExitDrawMode'
-  | 'exitDrawMode'
-  | 'ignore'
+export type FloorPlanToolContextMenuAction = 'commitPenAndDropTool' | 'dropTool' | 'ignore'
 
 const RIGHT_CLICK_EXIT_TOOLS = new Set([
   'drawWallRect',
@@ -20,9 +17,9 @@ export function resolveFloorPlanToolContextMenuAction(
   penPointCount: number
 ): FloorPlanToolContextMenuAction {
   if (activeTool === 'drawWall') {
-    if (!penIsDrawing || penPointCount === 0) return 'exitDrawMode'
-    if (penPointCount >= 2) return 'commitPenAndExitDrawMode'
-    return 'exitDrawMode'
+    if (!penIsDrawing || penPointCount === 0) return 'dropTool'
+    if (penPointCount >= 2) return 'commitPenAndDropTool'
+    return 'dropTool'
   }
-  return RIGHT_CLICK_EXIT_TOOLS.has(activeTool) ? 'exitDrawMode' : 'ignore'
+  return RIGHT_CLICK_EXIT_TOOLS.has(activeTool) ? 'dropTool' : 'ignore'
 }

@@ -11,17 +11,32 @@ export interface NearbyLineSnap {
   segment: LineSnapSegment
   segmentIndex: number
   distanceSq: number
+  kind: 'endpoint' | 'line'
 }
 
 /** Project a point onto the closest finite segment when it is inside the attraction radius. */
 export function snapPointToNearbyLine(
   point: Point2,
   segments: LineSnapSegment[],
-  radius: number,
+  radius: number
 ): NearbyLineSnap | null {
   if (!Number.isFinite(radius) || radius <= 0) return null
   const radiusSq = radius * radius
   let best: NearbyLineSnap | null = null
+
+  // Endpoints are intentional construction anchors and take precedence over
+  // projections on a nearby segment, even when that projection is marginally closer.
+  segments.forEach((segment, segmentIndex) => {
+    const endpoints = [segment.a, segment.b]
+    endpoints.forEach((endpoint) => {
+      const distanceSq = (endpoint.x - point.x) ** 2 + (endpoint.y - point.y) ** 2
+      if (distanceSq > radiusSq) return
+      if (!best || distanceSq < best.distanceSq) {
+        best = { point: endpoint, segment, segmentIndex, distanceSq, kind: 'endpoint' }
+      }
+    })
+  })
+  if (best) return best
 
   segments.forEach((segment, segmentIndex) => {
     const dx = segment.b.x - segment.a.x
@@ -35,6 +50,7 @@ export function snapPointToNearbyLine(
         segment,
         segmentIndex,
         distanceSq: projected.distanceSq,
+        kind: 'line',
       }
     }
   })
@@ -50,7 +66,7 @@ export function snapPointToNearbyLineOnAxis(
   point: Point2,
   segments: LineSnapSegment[],
   radius: number,
-  axis: 'x' | 'y',
+  axis: 'x' | 'y'
 ): NearbyLineSnap | null {
   if (!Number.isFinite(radius) || radius <= 0) return null
   const radiusSq = radius * radius
@@ -75,7 +91,7 @@ export function snapPointToNearbyLineOnAxis(
     const distanceSq = movableOffset * movableOffset
     if (distanceSq > radiusSq) return
     if (!best || distanceSq < best.distanceSq) {
-      best = { point: candidate, segment, segmentIndex, distanceSq }
+      best = { point: candidate, segment, segmentIndex, distanceSq, kind: 'line' }
     }
   })
 
@@ -89,9 +105,11 @@ export function snapPointToNearbyLineOnAxis(
 export function snapNearbyLineToGrid(
   snap: NearbyLineSnap,
   gridSize: number,
-  enabled: boolean,
+  enabled: boolean
 ): NearbyLineSnap {
-  if (!enabled || !Number.isFinite(gridSize) || gridSize <= 0) return snap
+  if (snap.kind === 'endpoint' || !enabled || !Number.isFinite(gridSize) || gridSize <= 0) {
+    return snap
+  }
 
   const { a, b } = snap.segment
   const dx = b.x - a.x

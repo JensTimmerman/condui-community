@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import { Circle, Group, Rect, RegularPolygon, Text } from 'react-konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import type { Door, Floor, Point2, Wall, Window } from '@/types/schema'
@@ -16,6 +17,7 @@ import {
   screenPxToCanvasUnits,
 } from '@/constants/canvasConstants'
 import { getThemeColor } from '@/lib/theme/colors'
+import { useBlinkingCaret, withDimensionCaret } from '@/hooks/useBlinkingCaret'
 
 type PlanCanvasInputEvent = KonvaEventObject<MouseEvent | TouchEvent | PointerEvent | DragEvent>
 
@@ -126,7 +128,9 @@ export function PlanOpeningResizeHandles({
     : windowsForRender.find((window) => window.id === id)
   if (!opening) return null
 
-  const wall = (activeFloor.floorPlan.walls ?? []).find((candidate: Wall) => candidate.id === opening.wallId)
+  const wall = (activeFloor.floorPlan.walls ?? []).find(
+    (candidate: Wall) => candidate.id === opening.wallId
+  )
   if (!wall) return null
 
   const geom = computeOpeningGeometry(wall.points, opening.position)
@@ -207,8 +211,12 @@ export function PlanOpeningResizeHandles({
 
 type PlanOpeningWidthEditorProps = {
   fontFamily: string
+  getCanvasPointFromEvent: (event: PlanCanvasInputEvent) => Point2 | null
   isActive: boolean
   onActivate: () => void
+  onDimensionDragEnd: (pointer: Point2 | null) => void
+  onDimensionDragMove: (pointer: Point2) => void
+  onDimensionDragStart: (pointer: Point2, outwardNormal: Point2) => void
   opening: SelectedOpeningWidthEditorModel | null
   themeMode: 'light' | 'dark'
   valueText: string
@@ -217,13 +225,19 @@ type PlanOpeningWidthEditorProps = {
 
 export function PlanOpeningWidthEditor({
   fontFamily,
+  getCanvasPointFromEvent,
   isActive,
   onActivate,
+  onDimensionDragEnd,
+  onDimensionDragMove,
+  onDimensionDragStart,
   opening,
   themeMode,
   valueText,
   zoom,
 }: PlanOpeningWidthEditorProps) {
+  const didDragRef = useRef(false)
+  const caretVisible = useBlinkingCaret(isActive)
   if (!opening) return null
 
   const { center, tangent } = opening
@@ -241,7 +255,12 @@ export function PlanOpeningWidthEditor({
     x: center.x + anchorOffset.x,
     y: center.y + anchorOffset.y,
   }
-  const label = `${valueText}${valueText ? ' cm' : ''}`
+  const anchorLength = Math.hypot(anchorOffset.x, anchorOffset.y)
+  const outwardNormal =
+    anchorLength > 1e-8
+      ? { x: anchorOffset.x / anchorLength, y: anchorOffset.y / anchorLength }
+      : normal
+  const label = withDimensionCaret(valueText, ' cm', isActive, caretVisible)
   const fontSize = 13 / zoom
   const paddingX = 8 / zoom
   const paddingY = 4 / zoom
@@ -263,12 +282,33 @@ export function PlanOpeningWidthEditor({
   return (
     <Group
       listening
+      draggable
+      onDragStart={(event) => {
+        const pointer = getCanvasPointFromEvent(event)
+        if (!pointer) return
+        didDragRef.current = true
+        onDimensionDragStart(pointer, outwardNormal)
+        event.target.position({ x: 0, y: 0 })
+      }}
+      onDragMove={(event) => {
+        const pointer = getCanvasPointFromEvent(event)
+        if (pointer) onDimensionDragMove(pointer)
+        event.target.position({ x: 0, y: 0 })
+      }}
+      onDragEnd={(event) => {
+        onDimensionDragEnd(getCanvasPointFromEvent(event))
+        event.target.position({ x: 0, y: 0 })
+      }}
       onPointerDown={(event) => {
         event.cancelBubble = true
         onActivate()
       }}
       onClick={(event) => {
         event.cancelBubble = true
+        if (didDragRef.current) {
+          didDragRef.current = false
+          return
+        }
         onActivate()
       }}
       onTap={(event) => {

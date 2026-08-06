@@ -17,6 +17,7 @@ import {
 } from '@/lib/plan/planGraphicColors'
 import { getThemeColor } from '@/lib/theme/colors'
 import { isPrimaryPlanActivationEvent } from '@/lib/canvas/planPointerEvent'
+import { useBlinkingCaret, withDimensionCaret } from '@/hooks/useBlinkingCaret'
 import {
   DRAW_TOOL_STROKE_PX,
   DRAW_TOOL_STROKE_PX_MAX,
@@ -316,6 +317,7 @@ function GraphicElementNode({
   const [draftText, setDraftText] = useState('')
   const [interactionDraft, setInteractionDraft] = useState<PlanGraphicElement | null>(null)
   const [isHovered, setIsHovered] = useState(false)
+  const caretVisible = useBlinkingCaret(editingField != null)
   const interactionDraftRef = useRef<PlanGraphicElement | null>(null)
   const resizeBaseRef = useRef<PlanGraphicElement | null>(null)
   const rotationBaseRef = useRef<PlanGraphicElement | null>(null)
@@ -535,8 +537,8 @@ function GraphicElementNode({
   const estimateDimensionLabelBoxWidth = (valuePx: number, field: DimensionField) => {
     const valueCm = canvasPxPerMeter > 0 ? (valuePx / canvasPxPerMeter) * 100 : 0
     const activeField = editingField === field
-    const text =
-      activeField && draftText ? `${draftText} cm` : `${Math.round(valueCm)} cm`
+    const value = activeField && draftText ? draftText : `${Math.round(valueCm)}`
+    const text = withDimensionCaret(value, ' cm', activeField, true)
     return Math.max(44 / zoom, text.length * fontSize * 0.62 + paddingX * 2)
   }
 
@@ -554,7 +556,8 @@ function GraphicElementNode({
   ) => {
     const valueCm = canvasPxPerMeter > 0 ? (valuePx / canvasPxPerMeter) * 100 : 0
     const activeField = editingField === field
-    const text = activeField && draftText ? `${draftText} cm` : `${Math.round(valueCm)} cm`
+    const value = activeField && draftText ? draftText : `${Math.round(valueCm)}`
+    const text = withDimensionCaret(value, ' cm', activeField, caretVisible)
     const boxWidth = estimateDimensionLabelBoxWidth(valuePx, field)
     const boxHeight = fontSize + paddingY * 2
     return (

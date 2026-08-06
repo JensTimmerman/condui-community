@@ -24,18 +24,14 @@ import { getTouchPointHitRadiusCanvas } from '@/lib/canvas/touchHitZones'
 import { useTouchPrimaryDevice } from '@/hooks/useTouchPrimaryDevice'
 import { useStoreWithEqualityFn } from 'zustand/traditional'
 import { useUIStore } from '@/stores/uiStore'
-import {
-  indexedPointMapsEqual,
-  parseWallPointIds,
-} from '@/lib/plan/wallPointSelection'
+import { indexedPointMapsEqual, parseWallPointIds } from '@/lib/plan/wallPointSelection'
 
 const INTERACTIVE_HIT_FILL = 'rgba(0,0,0,0.001)'
+import { getWallTotalLength, getWallPathBetweenDistances } from '@/handlers/plan/wallDrawing'
 import {
-  getWallTotalLength,
-  getWallPathBetweenDistances,
-} from '@/handlers/plan/wallDrawing'
-import {
+  buildOpeningCornerFusions,
   buildWallVolumeComponents,
+  isOpeningFrameCenterFused,
   resolveWallThicknessPx,
   type WallVolumeComponent,
 } from '@/lib/plan/wallVolumeGeometry'
@@ -78,7 +74,12 @@ interface WallRendererProps {
   onWallDragEnd?: (wallId: string, event: WallDragEvent) => void
   onPointClick?: (wallId: string, pointIndex: number, event: WallPointerEvent) => void
   onPointDragStart?: (wallId: string, pointIndex: number, event: WallDragEvent) => void
-  onPointDragMove?: (wallId: string, pointIndex: number, newPos: Point2, event: WallDragEvent) => Point2 | void
+  onPointDragMove?: (
+    wallId: string,
+    pointIndex: number,
+    newPos: Point2,
+    event: WallDragEvent
+  ) => Point2 | void
   onPointDragEnd?: (wallId: string, pointIndex: number, newPos: Point2) => void
   onDoorClick?: (doorId: string, event: WallPointerEvent) => void
   onDoorMouseEnter?: (doorId: string) => void
@@ -175,9 +176,7 @@ function WallRendererInner({
     useUIStore,
     (s) => (s.selection.type === 'wallPoint' ? parseWallPointIds(s.selection.ids) : null),
     (a, b) =>
-      a === b ||
-      (a != null && b != null && indexedPointMapsEqual(a, b)) ||
-      (a == null && b == null),
+      a === b || (a != null && b != null && indexedPointMapsEqual(a, b)) || (a == null && b == null)
   )
   const pointIndicesForRender = wallPointSelectionFromStore ?? selectedPointIndices
   const trackPointerHover = interactionMode !== 'select'
@@ -187,7 +186,9 @@ function WallRendererInner({
   const pointHandleStrokeColor = '#0284c7'
   const windowColor = theme === 'dark' ? '#0284c7' : '#0284c7'
 
-  const [wallVolumeComponents, setWallVolumeComponents] = React.useState<WallVolumeComponent[] | null>(null)
+  const [wallVolumeComponents, setWallVolumeComponents] = React.useState<
+    WallVolumeComponent[] | null
+  >(null)
 
   // Group doors and windows by wall ID for efficient lookup
   const doorsByWall = new Map<string, Door[]>()
@@ -207,7 +208,8 @@ function WallRendererInner({
 
   const roomPolygons = getRoomPolygonsFromWalls(walls)
 
-  const isInsideAnyRoom = (p: Point2): boolean => roomPolygons.some((poly) => pointInPolygon(p, poly))
+  const isInsideAnyRoom = (p: Point2): boolean =>
+    roomPolygons.some((poly) => pointInPolygon(p, poly))
 
   /**
    * Derive solid wall segments (distance intervals) by subtracting door/window openings.
@@ -280,7 +282,12 @@ function WallRendererInner({
   // Get wall thickness
   const getWallThickness = React.useCallback(
     (wall: Wall): number => resolveWallThicknessPx(wall, masterWallThickness, pxPerMeter),
-    [masterWallThickness, pxPerMeter],
+    [masterWallThickness, pxPerMeter]
+  )
+
+  const openingCornerFusions = React.useMemo(
+    () => buildOpeningCornerFusions(walls, doors, windows, masterWallThickness, pxPerMeter),
+    [doors, masterWallThickness, pxPerMeter, walls, windows]
   )
 
   const selectedDoorIdSet = React.useMemo(() => new Set(selectedDoorIds), [selectedDoorIds])
@@ -288,13 +295,10 @@ function WallRendererInner({
   const modeKey = theme // 'light' | 'dark'
   const customForMode = customWallColors ? customWallColors[modeKey] : undefined
   const baseFillColor =
-    customForMode?.stroke ?? (theme === 'dark'
-      ? getThemeColor(theme, 'grid')
-      : getThemeColor(theme, 'gray200'))
-  const baseBorderColor =
-    customForMode?.fill ?? getThemeColor(theme, 'wallColor')
-  const openingFrameColor =
-    customForMode?.fill ?? getThemeColor(theme, 'wallColor')
+    customForMode?.stroke ??
+    (theme === 'dark' ? getThemeColor(theme, 'grid') : getThemeColor(theme, 'gray200'))
+  const baseBorderColor = customForMode?.fill ?? getThemeColor(theme, 'wallColor')
+  const openingFrameColor = customForMode?.fill ?? getThemeColor(theme, 'wallColor')
   const wallOutlineStrokeWidth = getWallOutlineStrokeWidth(pxPerMeter)
 
   React.useEffect(() => {
@@ -328,11 +332,7 @@ function WallRendererInner({
     }
 
     return styleByWallId
-  }, [
-    baseBorderColor,
-    baseFillColor,
-    wallVolumeComponents,
-  ])
+  }, [baseBorderColor, baseFillColor, wallVolumeComponents])
   const orderedWalls = React.useMemo(() => {
     if (selectedWallIds.length === 0) return walls
     const selectedSet = new Set(selectedWallIds)
@@ -350,11 +350,7 @@ function WallRendererInner({
   }, [walls, selectedWallIds])
 
   // Render a door on a wall
-  const renderDoor = (
-    door: Door,
-    wall: Wall,
-    wallFillColor: string,
-  ) => {
+  const renderDoor = (door: Door, wall: Wall, wallFillColor: string) => {
     if (wall.points.length < 2) return null
 
     // Calculate position along wall (center and tangent)
@@ -427,6 +423,20 @@ function WallRendererInner({
       x: center.x + dirX * frameCenterOffset,
       y: center.y + dirY * frameCenterOffset,
     }
+    const fuseStartFrame = isOpeningFrameCenterFused(
+      openingCornerFusions,
+      'door',
+      door.id,
+      leftCenter,
+      rightCenter
+    )
+    const fuseEndFrame = isOpeningFrameCenterFused(
+      openingCornerFusions,
+      'door',
+      door.id,
+      rightCenter,
+      leftCenter
+    )
 
     // Door swing properties
     const swingMode: 'left' | 'right' | 'none' | 'double' = door.swing ?? 'right'
@@ -469,9 +479,8 @@ function WallRendererInner({
           return fallbackDirection === 'in' ? 1 : -1
         }
 
-        const desiredSide = logicalDirection === 'in'
-          ? interiorSide
-          : (interiorSide === 'left' ? 'right' : 'left')
+        const desiredSide =
+          logicalDirection === 'in' ? interiorSide : interiorSide === 'left' ? 'right' : 'left'
 
         const candidate = (sign: 1 | -1): 'left' | 'right' => {
           const openAngleDeg = closedAngleDeg + sign * angleOffsetDeg
@@ -543,34 +552,36 @@ function WallRendererInner({
         />
 
         {/* Left frame block */}
-        <Rect
-          x={leftCenter.x}
-          y={leftCenter.y}
-          width={frameLen}
-          height={frameHeight}
-          offsetX={frameLen / 2}
-          offsetY={frameHeight / 2}
-          rotation={angleDeg}
-          stroke={frameStrokeColor}
-          strokeWidth={openingStrokeWidth}
-          listening={false}
-        />
-
-
+        {!fuseStartFrame && (
+          <Rect
+            x={leftCenter.x}
+            y={leftCenter.y}
+            width={frameLen}
+            height={frameHeight}
+            offsetX={frameLen / 2}
+            offsetY={frameHeight / 2}
+            rotation={angleDeg}
+            stroke={frameStrokeColor}
+            strokeWidth={openingStrokeWidth}
+            listening={false}
+          />
+        )}
 
         {/* Right frame block */}
-        <Rect
-          x={rightCenter.x}
-          y={rightCenter.y}
-          width={frameLen}
-          height={frameHeight}
-          offsetX={frameLen / 2}
-          offsetY={frameHeight / 2}
-          rotation={angleDeg}
-          stroke={frameStrokeColor}
-          strokeWidth={openingStrokeWidth}
-          listening={false}
-        />
+        {!fuseEndFrame && (
+          <Rect
+            x={rightCenter.x}
+            y={rightCenter.y}
+            width={frameLen}
+            height={frameHeight}
+            offsetX={frameLen / 2}
+            offsetY={frameHeight / 2}
+            rotation={angleDeg}
+            stroke={frameStrokeColor}
+            strokeWidth={openingStrokeWidth}
+            listening={false}
+          />
+        )}
 
         {swingGeometries.map(({ side, hingePoint, doorTip, startAngle, sweep }) => (
           <Group key={`${door.id}-swing-${side}`}>
@@ -611,12 +622,9 @@ function WallRendererInner({
               zoom,
               SELECTION_OUTLINE_STROKE_PX,
               SELECTION_OUTLINE_STROKE_PX_MIN,
-              SELECTION_OUTLINE_STROKE_PX_MAX,
+              SELECTION_OUTLINE_STROKE_PX_MAX
             )}
-            dash={[
-              screenPxToCanvasUnits(zoom, 6, 3, 12),
-              screenPxToCanvasUnits(zoom, 4, 2, 8),
-            ]}
+            dash={[screenPxToCanvasUnits(zoom, 6, 3, 12), screenPxToCanvasUnits(zoom, 4, 2, 8)]}
             listening={false}
           />
         )}
@@ -625,11 +633,7 @@ function WallRendererInner({
   }
 
   // Render a window on a wall
-  const renderWindow = (
-    window: Window,
-    wall: Wall,
-    wallFillColor: string,
-  ) => {
+  const renderWindow = (window: Window, wall: Wall, wallFillColor: string) => {
     if (wall.points.length < 2) return null
 
     // Similar calculation to door
@@ -698,6 +702,20 @@ function WallRendererInner({
       x: windowCenter.x + dirX * frameCenterOffset,
       y: windowCenter.y + dirY * frameCenterOffset,
     }
+    const fuseStartFrame = isOpeningFrameCenterFused(
+      openingCornerFusions,
+      'window',
+      window.id,
+      leftCenter,
+      rightCenter
+    )
+    const fuseEndFrame = isOpeningFrameCenterFused(
+      openingCornerFusions,
+      'window',
+      window.id,
+      rightCenter,
+      leftCenter
+    )
 
     return (
       <Group
@@ -721,7 +739,6 @@ function WallRendererInner({
           fill="rgba(0,0,0,0.001)"
         />
 
-                
         {/* Glass in the middle */}
         <Rect
           x={windowCenter.x}
@@ -736,36 +753,37 @@ function WallRendererInner({
           listening={false}
         />
 
-
         {/* Left frame block */}
-        <Rect
-          x={leftCenter.x}
-          y={leftCenter.y}
-          width={frameLen}
-          height={frameHeight}
-          offsetX={frameLen / 2}
-          offsetY={frameHeight / 2}
-          rotation={angleDeg}
-          stroke={frameStrokeColor}
-          strokeWidth={openingStrokeWidth}
-          listening={false}
-        />
-
+        {!fuseStartFrame && (
+          <Rect
+            x={leftCenter.x}
+            y={leftCenter.y}
+            width={frameLen}
+            height={frameHeight}
+            offsetX={frameLen / 2}
+            offsetY={frameHeight / 2}
+            rotation={angleDeg}
+            stroke={frameStrokeColor}
+            strokeWidth={openingStrokeWidth}
+            listening={false}
+          />
+        )}
 
         {/* Right frame block */}
-        <Rect
-          x={rightCenter.x}
-          y={rightCenter.y}
-          width={frameLen}
-          height={frameHeight}
-          offsetX={frameLen / 2}
-          offsetY={frameHeight / 2}
-          rotation={angleDeg}
-          stroke={frameStrokeColor}
-          strokeWidth={openingStrokeWidth}
-          listening={false}
-        />
-
+        {!fuseEndFrame && (
+          <Rect
+            x={rightCenter.x}
+            y={rightCenter.y}
+            width={frameLen}
+            height={frameHeight}
+            offsetX={frameLen / 2}
+            offsetY={frameHeight / 2}
+            rotation={angleDeg}
+            stroke={frameStrokeColor}
+            strokeWidth={openingStrokeWidth}
+            listening={false}
+          />
+        )}
 
         {isHovered && (
           <Rect
@@ -781,17 +799,94 @@ function WallRendererInner({
               zoom,
               SELECTION_OUTLINE_STROKE_PX,
               SELECTION_OUTLINE_STROKE_PX_MIN,
-              SELECTION_OUTLINE_STROKE_PX_MAX,
+              SELECTION_OUTLINE_STROKE_PX_MAX
             )}
-            dash={[
-              screenPxToCanvasUnits(zoom, 6, 3, 12),
-              screenPxToCanvasUnits(zoom, 4, 2, 8),
-            ]}
+            dash={[screenPxToCanvasUnits(zoom, 6, 3, 12), screenPxToCanvasUnits(zoom, 4, 2, 8)]}
             listening={false}
           />
         )}
       </Group>
     )
+  }
+
+  const renderWallPointHandles = (wall: Wall) => {
+    if (!showPointHandles) return null
+    const selectedPointCount = pointIndicesForRender.get(wall.id)?.length ?? 0
+    const hasVertexSubselection =
+      (selectedSegmentIndices.get(wall.id)?.length ?? 0) > 0 ||
+      (selectedPointCount > 0 && selectedPointCount !== wall.points.length)
+
+    return wall.points.map((point, index) => {
+      const isPointSelected = pointIndicesForRender.get(wall.id)?.includes(index) ?? false
+      const showPointAsSelected = hasVertexSubselection && isPointSelected
+      const pointRadius = screenPxToCanvasUnits(
+        zoom,
+        showPointAsSelected ? DRAW_TOOL_POINT_RADIUS_PX + 2 : DRAW_TOOL_POINT_RADIUS_PX,
+        DRAW_TOOL_POINT_RADIUS_PX_MIN,
+        DRAW_TOOL_POINT_RADIUS_PX_MAX + 2
+      )
+      const pointStroke = screenPxToCanvasUnits(
+        zoom,
+        (showPointAsSelected ? DRAW_TOOL_STROKE_PX + 1 : DRAW_TOOL_STROKE_PX) * 0.75,
+        DRAW_TOOL_STROKE_PX_MIN,
+        DRAW_TOOL_STROKE_PX_MAX + 1
+      )
+      const pointHitRadius = touchPrimary
+        ? getTouchPointHitRadiusCanvas(zoom, pointRadius)
+        : pointRadius
+      const pointListening = wallsListening && !touchPrimary
+      const pointDraggable = pointHandlesDraggable
+      const bindPointPointer = {
+        onDragStart: (event: WallDragEvent) => {
+          onPointDragStart?.(wall.id, index, event)
+        },
+        onDragMove: (event: WallDragEvent) => {
+          const node = event.target
+          const clamped = onPointDragMove?.(wall.id, index, { x: node.x(), y: node.y() }, event)
+          if (clamped != null) node.position(clamped)
+        },
+        onDragEnd: (event: WallDragEvent) => {
+          const node = event.target
+          onPointDragEnd?.(wall.id, index, { x: node.x(), y: node.y() })
+        },
+        onClick: (event: WallPointerEvent) => {
+          event.cancelBubble = true
+          onPointClick?.(wall.id, index, event)
+        },
+        onTap: (event: WallPointerEvent) => {
+          event.cancelBubble = true
+          onPointClick?.(wall.id, index, event)
+        },
+      }
+
+      return (
+        <Group key={`point-${wall.id}-${index}`}>
+          <Circle
+            name={WALL_POINT_HANDLE_KONVA_NAME}
+            x={point.x}
+            y={point.y}
+            radius={pointRadius}
+            fill={pointHandleBaseColor}
+            stroke={pointHandleStrokeColor}
+            strokeWidth={pointStroke}
+            listening={pointListening}
+            draggable={pointDraggable}
+            {...bindPointPointer}
+          />
+          {touchPrimary && (
+            <Circle
+              x={point.x}
+              y={point.y}
+              radius={pointHitRadius}
+              fill={INTERACTIVE_HIT_FILL}
+              listening={wallsListening}
+              draggable={pointDraggable}
+              {...bindPointPointer}
+            />
+          )}
+        </Group>
+      )
+    })
   }
 
   return (
@@ -803,6 +898,7 @@ function WallRendererInner({
           <Group key={`merged-wall-volume-${component.id}`} listening={false}>
             <MergedWallVolumeShape
               paths={component.fillPaths}
+              outlinePaths={component.outlinePaths}
               fill={style.fillColor}
               stroke={style.borderColor}
               strokeWidth={wallOutlineStrokeWidth}
@@ -819,16 +915,17 @@ function WallRendererInner({
         const hasSelectedVertices = selectedPointCount > 0
         const allPointsSelected = selectedPointCount === wall.points.length
         const hasSelectedSegments = selectedSegments.length > 0
-        const hasVertexSubselection = hasSelectedSegments || (hasSelectedVertices && !allPointsSelected)
+        const hasVertexSubselection =
+          hasSelectedSegments || (hasSelectedVertices && !allPointsSelected)
         const isHovered = hoveredWallId === wall.id
         const thickness = getWallThickness(wall)
         const defaultBorderColor = hasVertexSubselection
           ? selectionPathDimmedColor
           : isSelected
-          ? selectionColor
-          : isHovered
-          ? selectionPathDimmedColor
-          : baseBorderColor
+            ? selectionColor
+            : isHovered
+              ? selectionPathDimmedColor
+              : baseBorderColor
         const mergedStyle = wallVolumeStyleByWallId.get(wall.id)
         const fillColor = mergedStyle?.fillColor ?? baseFillColor
         const fillThickness = thickness
@@ -837,7 +934,7 @@ function WallRendererInner({
           zoom,
           SELECTION_OUTLINE_STROKE_PX,
           SELECTION_OUTLINE_STROKE_PX_MIN,
-          SELECTION_OUTLINE_STROKE_PX_MAX,
+          SELECTION_OUTLINE_STROKE_PX_MAX
         )
         const borderColor = mergedStyle?.borderColor ?? defaultBorderColor
         // Detect geometrically closed walls (first and last points coincide).
@@ -855,9 +952,11 @@ function WallRendererInner({
         const wallDoors = doorsByWall.get(wall.id) ?? []
         const wallWindows = windowsByWall.get(wall.id) ?? []
         const selectedPoints = pointIndicesForRender.get(wall.id) ?? []
-        const hasSelectedOpeningsOnWall = wallDoors.some((door) => selectedDoorIdSet.has(door.id))
-          || wallWindows.some((window) => selectedWindowIdSet.has(window.id))
-        const shouldMeasureWall = showSegmentMeasurements && (isSelected || selectedPoints.length > 0)
+        const hasSelectedOpeningsOnWall =
+          wallDoors.some((door) => selectedDoorIdSet.has(door.id)) ||
+          wallWindows.some((window) => selectedWindowIdSet.has(window.id))
+        const shouldMeasureWall =
+          showSegmentMeasurements && (isSelected || selectedPoints.length > 0)
         const shouldMeasureOpenings = showSegmentMeasurements && hasSelectedOpeningsOnWall
         const segmentCount = Math.max(0, wall.points.length - 1)
         const measurementSegmentIndices = (() => {
@@ -949,13 +1048,16 @@ function WallRendererInner({
 
           if (openingBounds.length === 0) return []
 
-          const vertexDistances = sourceSegmentBounds.flatMap((segment) => [segment.start, segment.end])
+          const vertexDistances = sourceSegmentBounds.flatMap((segment) => [
+            segment.start,
+            segment.end,
+          ])
           const landmarkDistances = Array.from(
             new Set(
               [...vertexDistances, ...openingBounds.flatMap((bound) => [bound.start, bound.end])]
                 .map((distance) => clamp(totalLength, 0, distance))
-                .map((distance) => Number(distance.toFixed(6))),
-            ),
+                .map((distance) => Number(distance.toFixed(6)))
+            )
           ).sort((a, b) => a - b)
 
           const epsilon = 1e-6
@@ -967,7 +1069,9 @@ function WallRendererInner({
             const leftNeighbor = [...landmarkDistances]
               .reverse()
               .find((distance) => distance < bound.start - epsilon)
-            const rightNeighbor = landmarkDistances.find((distance) => distance > bound.end + epsilon)
+            const rightNeighbor = landmarkDistances.find(
+              (distance) => distance > bound.end + epsilon
+            )
 
             if (leftNeighbor != null && bound.start - leftNeighbor > epsilon) {
               const key = `${leftNeighbor.toFixed(6)}:${bound.start.toFixed(6)}`
@@ -991,50 +1095,86 @@ function WallRendererInner({
         return (
           <Group key={`wall-${wall.id}`}>
             {/* Wall segments: only solid parts between openings (terminator vertices on the line) */}
-            {renderIntervals.map(({ start: startDist, end: endDist, sourceSegmentIndex }, segIdx) => {
-              const segmentPoints = getWallPathBetweenDistances(
-                wall.points,
-                startDist,
-                endDist
-              )
-              const linePts = pointsToLinePoints(segmentPoints)
-              const isFullWall = startDist <= 1e-8 && endDist >= totalLength - 1e-8
-              const segmentIsBrightSelected =
-                hasVertexSubselection &&
-                brightSelectedSegmentIndices.has(sourceSegmentIndex)
-              const segmentBorderColor = segmentIsBrightSelected
-                ? selectionColor
-                : hasVertexSubselection
-                ? selectionPathDimmedColor
-                : isSelected
-                ? selectionColor
-                : isHovered
-                ? selectionPathDimmedColor
-                : borderColor
+            {renderIntervals.map(
+              ({ start: startDist, end: endDist, sourceSegmentIndex }, segIdx) => {
+                const segmentPoints = getWallPathBetweenDistances(wall.points, startDist, endDist)
+                const linePts = pointsToLinePoints(segmentPoints)
+                const isFullWall = startDist <= 1e-8 && endDist >= totalLength - 1e-8
+                const segmentIsBrightSelected =
+                  hasVertexSubselection && brightSelectedSegmentIndices.has(sourceSegmentIndex)
+                const segmentBorderColor = segmentIsBrightSelected
+                  ? selectionColor
+                  : hasVertexSubselection
+                    ? selectionPathDimmedColor
+                    : isSelected
+                      ? selectionColor
+                      : isHovered
+                        ? selectionPathDimmedColor
+                        : borderColor
 
-              return (
-                <React.Fragment key={`seg-${segIdx}`}>
-                  {!wallVolumeComponents && (
-                    <>
+                return (
+                  <React.Fragment key={`seg-${segIdx}`}>
+                    {!wallVolumeComponents && (
+                      <>
+                        <Line
+                          points={linePts}
+                          stroke={fillColor}
+                          strokeWidth={fillThickness}
+                          lineCap={'butt'}
+                          lineJoin={'miter'}
+                          closed={isClosed && isFullWall}
+                          listening={false}
+                        />
+                        <Line
+                          points={linePts}
+                          stroke={segmentBorderColor}
+                          strokeWidth={borderThickness}
+                          lineCap={'butt'}
+                          lineJoin={'miter'}
+                          closed={isClosed && isFullWall}
+                          fillEnabled={false}
+                          hitStrokeWidth={borderThickness}
+                          listening={wallsListening}
+                          draggable={draggableSelectedWalls && isSelected}
+                          onDragStart={(e) => {
+                            if (!isSelected) return
+                            e.target.x(0)
+                            e.target.y(0)
+                            onWallDragStart?.(wall.id, e)
+                          }}
+                          onDragMove={(e) => {
+                            if (!isSelected) return
+                            e.target.x(0)
+                            e.target.y(0)
+                            onWallDragMove?.(wall.id, e)
+                          }}
+                          onDragEnd={(e) => {
+                            if (!isSelected) return
+                            e.target.x(0)
+                            e.target.y(0)
+                            onWallDragEnd?.(wall.id, e)
+                          }}
+                          onClick={(e) => onWallClick?.(wall.id, e)}
+                          onTap={(e) => onWallClick?.(wall.id, e)}
+                          onMouseMove={
+                            trackPointerHover ? (e) => onWallMouseMove?.(wall.id, e) : undefined
+                          }
+                          onMouseEnter={(e) => onWallMouseMove?.(wall.id, e)}
+                          onMouseLeave={(e) => onWallMouseLeave?.(e)}
+                        />
+                      </>
+                    )}
+                    {wallVolumeComponents && (
                       <Line
                         points={linePts}
-                        stroke={fillColor}
+                        stroke="rgba(0,0,0,0.001)"
                         strokeWidth={fillThickness}
                         lineCap={'butt'}
                         lineJoin={'miter'}
                         closed={isClosed && isFullWall}
-                        listening={false}
-                      />
-                      <Line
-                        points={linePts}
-                        stroke={segmentBorderColor}
-                        strokeWidth={borderThickness}
-                        lineCap={'butt'}
-                        lineJoin={'miter'}
-                        closed={isClosed && isFullWall}
-                        fillEnabled={false}
-                        hitStrokeWidth={borderThickness}
                         listening={wallsListening}
+                        fillEnabled={false}
+                        hitStrokeWidth={fillThickness}
                         draggable={draggableSelectedWalls && isSelected}
                         onDragStart={(e) => {
                           if (!isSelected) return
@@ -1062,177 +1202,62 @@ function WallRendererInner({
                         onMouseEnter={(e) => onWallMouseMove?.(wall.id, e)}
                         onMouseLeave={(e) => onWallMouseLeave?.(e)}
                       />
-                    </>
-                  )}
-                  {wallVolumeComponents && (
-                    <Line
-                      points={linePts}
-                      stroke="rgba(0,0,0,0.001)"
-                      strokeWidth={fillThickness}
-                      lineCap={'butt'}
-                      lineJoin={'miter'}
-                      closed={isClosed && isFullWall}
-                      listening={wallsListening}
-                      fillEnabled={false}
-                      hitStrokeWidth={fillThickness}
-                      draggable={draggableSelectedWalls && isSelected}
-                      onDragStart={(e) => {
-                        if (!isSelected) return
-                        e.target.x(0)
-                        e.target.y(0)
-                        onWallDragStart?.(wall.id, e)
-                      }}
-                      onDragMove={(e) => {
-                        if (!isSelected) return
-                        e.target.x(0)
-                        e.target.y(0)
-                        onWallDragMove?.(wall.id, e)
-                      }}
-                      onDragEnd={(e) => {
-                        if (!isSelected) return
-                        e.target.x(0)
-                        e.target.y(0)
-                        onWallDragEnd?.(wall.id, e)
-                      }}
-                      onClick={(e) => onWallClick?.(wall.id, e)}
-                      onTap={(e) => onWallClick?.(wall.id, e)}
-                      onMouseMove={
-                        trackPointerHover ? (e) => onWallMouseMove?.(wall.id, e) : undefined
-                      }
-                      onMouseEnter={(e) => onWallMouseMove?.(wall.id, e)}
-                      onMouseLeave={(e) => onWallMouseLeave?.(e)}
-                    />
-                  )}
-                  {wallVolumeComponents && defaultBorderColor !== baseBorderColor && (
-                    <Line
-                      points={linePts}
-                      stroke={segmentBorderColor}
-                      strokeWidth={highlightThickness}
-                      lineCap={'butt'}
-                      lineJoin={'miter'}
-                      closed={isClosed && isFullWall}
-                      listening={false}
-                    />
-                  )}
-                </React.Fragment>
-              )
-            })}
-
-            {/* Hybrid butt/square cap: outer-stroke-only bar centered under the user vertex */}
-            {!wallVolumeComponents && !isClosed && wall.points.length >= 2 && (() => {
-              const firstSeg = solidIntervals[0]
-              const lastSeg = solidIntervals[solidIntervals.length - 1]
-              const hasStartEnd = firstSeg && firstSeg[0] <= 1e-8
-              const hasEndEnd = lastSeg && lastSeg[1] >= totalLength - 1e-8
-              if (!hasStartEnd && !hasEndEnd) return null
-
-              const caps: React.ReactNode[] = []
-              const addCap = (atStart: boolean) => {
-                const tangent = getPathEndTangent(wall.points, atStart)
-                if (!tangent) return
-                const pt = atStart ? wall.points[0]! : wall.points[wall.points.length - 1]!
-                const angleDeg = (Math.atan2(tangent.y, tangent.x) * 180) / Math.PI
-                // Single rect: outer-stroke look only (border color). Width = stroke width along line, height = wall thickness. Centered under vertex.
-                caps.push(
-                  <Rect
-                    key={atStart ? 'cap-start' : 'cap-end'}
-                    x={pt.x}
-                    y={pt.y}
-                    width={borderThickness/2}
-                    height={thickness}
-                    offsetX={borderThickness / 4}
-                    offsetY={thickness / 2}
-                    rotation={angleDeg}
-                    fill={fillColor}
-                    listening={false}
-                  />
-                )
-              }
-              if (hasStartEnd) addCap(true)
-              if (hasEndEnd) addCap(false)
-              return caps
-            })()}
-            {/* Point handles */}
-            {showPointHandles &&
-              wall.points.map((point, index) => {
-                const isPointSelected =
-                  pointIndicesForRender.get(wall.id)?.includes(index) ?? false
-                const showPointAsSelected = hasVertexSubselection && isPointSelected
-                const pointRadius = screenPxToCanvasUnits(
-                  zoom,
-                  showPointAsSelected ? DRAW_TOOL_POINT_RADIUS_PX + 2 : DRAW_TOOL_POINT_RADIUS_PX,
-                  DRAW_TOOL_POINT_RADIUS_PX_MIN,
-                  DRAW_TOOL_POINT_RADIUS_PX_MAX + 2
-                )
-                const pointStroke = screenPxToCanvasUnits(
-                  zoom,
-                  (showPointAsSelected ? DRAW_TOOL_STROKE_PX + 1 : DRAW_TOOL_STROKE_PX) * 0.75,
-                  DRAW_TOOL_STROKE_PX_MIN,
-                  DRAW_TOOL_STROKE_PX_MAX + 1
-                )
-                const pointHitRadius = touchPrimary
-                  ? getTouchPointHitRadiusCanvas(zoom, pointRadius)
-                  : pointRadius
-                const pointListening = wallsListening && !touchPrimary
-                const pointDraggable = pointHandlesDraggable && isPointSelected
-                const bindPointPointer = {
-                  onDragStart: (e: WallDragEvent) => {
-                    onPointDragStart?.(wall.id, index, e)
-                  },
-                  onDragMove: (e: WallDragEvent) => {
-                    const node = e.target
-                    const clamped = onPointDragMove?.(wall.id, index, { x: node.x(), y: node.y() }, e)
-                    if (clamped != null) {
-                      node.position(clamped)
-                    }
-                  },
-                  onDragEnd: (e: WallDragEvent) => {
-                    const node = e.target
-                    onPointDragEnd?.(wall.id, index, { x: node.x(), y: node.y() })
-                  },
-                  onClick: (e: WallPointerEvent) => {
-                    e.cancelBubble = true
-                    onPointClick?.(wall.id, index, e)
-                  },
-                  onTap: (e: WallPointerEvent) => {
-                    e.cancelBubble = true
-                    onPointClick?.(wall.id, index, e)
-                  },
-                }
-
-                return (
-                  <Group key={`point-${wall.id}-${index}`}>
-                    <Circle
-                      name={WALL_POINT_HANDLE_KONVA_NAME}
-                      x={point.x}
-                      y={point.y}
-                      radius={pointRadius}
-                      fill={pointHandleBaseColor}
-                      stroke={pointHandleStrokeColor}
-                      strokeWidth={pointStroke}
-                      listening={pointListening}
-                      draggable={pointDraggable}
-                      {...bindPointPointer}
-                    />
-                    {touchPrimary && (
-                      <Circle
-                        x={point.x}
-                        y={point.y}
-                        radius={pointHitRadius}
-                        fill={INTERACTIVE_HIT_FILL}
-                        listening={wallsListening}
-                        draggable={pointDraggable}
-                        {...bindPointPointer}
+                    )}
+                    {wallVolumeComponents && defaultBorderColor !== baseBorderColor && (
+                      <Line
+                        points={linePts}
+                        stroke={segmentBorderColor}
+                        strokeWidth={highlightThickness}
+                        lineCap={'butt'}
+                        lineJoin={'miter'}
+                        closed={isClosed && isFullWall}
+                        listening={false}
                       />
                     )}
-                  </Group>
+                  </React.Fragment>
                 )
-              })}
+              }
+            )}
 
+            {/* Hybrid butt/square cap: outer-stroke-only bar centered under the user vertex */}
+            {!wallVolumeComponents &&
+              !isClosed &&
+              wall.points.length >= 2 &&
+              (() => {
+                const firstSeg = solidIntervals[0]
+                const lastSeg = solidIntervals[solidIntervals.length - 1]
+                const hasStartEnd = firstSeg && firstSeg[0] <= 1e-8
+                const hasEndEnd = lastSeg && lastSeg[1] >= totalLength - 1e-8
+                if (!hasStartEnd && !hasEndEnd) return null
+
+                const caps: React.ReactNode[] = []
+                const addCap = (atStart: boolean) => {
+                  const tangent = getPathEndTangent(wall.points, atStart)
+                  if (!tangent) return
+                  const pt = atStart ? wall.points[0]! : wall.points[wall.points.length - 1]!
+                  const angleDeg = (Math.atan2(tangent.y, tangent.x) * 180) / Math.PI
+                  // Single rect: outer-stroke look only (border color). Width = stroke width along line, height = wall thickness. Centered under vertex.
+                  caps.push(
+                    <Rect
+                      key={atStart ? 'cap-start' : 'cap-end'}
+                      x={pt.x}
+                      y={pt.y}
+                      width={borderThickness / 2}
+                      height={thickness}
+                      offsetX={borderThickness / 4}
+                      offsetY={thickness / 2}
+                      rotation={angleDeg}
+                      fill={fillColor}
+                      listening={false}
+                    />
+                  )
+                }
+                if (hasStartEnd) addCap(true)
+                if (hasEndEnd) addCap(false)
+                return caps
+              })()}
             {/* Render doors on this wall */}
-            {doorsByWall
-              .get(wall.id)
-              ?.map((door) => renderDoor(door, wall, openingFrameColor))}
+            {doorsByWall.get(wall.id)?.map((door) => renderDoor(door, wall, openingFrameColor))}
 
             {/* Render windows on this wall */}
             {windowsByWall
@@ -1255,7 +1280,7 @@ function WallRendererInner({
                         isOpening: false,
                       },
                       wall,
-                      openingFrameColor,
+                      openingFrameColor
                     )
                   : renderWindow(
                       {
@@ -1266,7 +1291,7 @@ function WallRendererInner({
                         width: previewOpening.width,
                       },
                       wall,
-                      openingFrameColor,
+                      openingFrameColor
                     )}
               </Group>
             )}
@@ -1304,6 +1329,28 @@ function WallRendererInner({
           </Group>
         )
       })}
+
+      {openingCornerFusions.map((fusion) => {
+        const selected = fusion.members.some((member) =>
+          member.kind === 'window'
+            ? selectedWindowIdSet.has(member.id)
+            : selectedDoorIdSet.has(member.id)
+        )
+        return (
+          <Line
+            key={fusion.id}
+            points={pointsToLinePoints(fusion.renderPolygon)}
+            closed
+            stroke={selected ? selectionColor : openingFrameColor}
+            strokeWidth={getOpeningRenderMetrics(pxPerMeter).strokeWidth}
+            lineJoin="miter"
+            listening={false}
+          />
+        )
+      })}
+
+      {/* Vertices are the final visual and hit-test pass so openings can never cover them. */}
+      {orderedWalls.map((wall) => renderWallPointHandles(wall))}
     </Group>
   )
 }

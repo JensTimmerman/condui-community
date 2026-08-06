@@ -421,6 +421,8 @@
     "registrationRequiredCreateTitle": "Compte requis",
     "registrationRequiredCreateMessage": "Créez un compte gratuit pour créer vos propres projets. Le projet de démonstration reste disponible sans compte.",
     "registrationRequiredCreateWithLocalProjects": "Créez un compte gratuit pour créer de nouveaux projets. Vos projets locaux restent sur cet appareil et seront disponibles après inscription.",
+    "registrationRequiredActionMessage": "Créez un compte gratuit pour créer, importer et organiser des projets. Le projet de démonstration reste disponible sans compte.",
+    "registrationRequiredActionWithLocalProjects": "Créez un compte gratuit pour créer, importer et organiser des projets. Vos projets locaux restent sur cet appareil et seront disponibles après inscription.",
     "registrationRequiredCreateCta": "S'inscrire",
     "moveToLocal": "Déplacer en local",
     "openingTitle": "Chargement…",

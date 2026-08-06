@@ -421,6 +421,8 @@
     "registrationRequiredCreateTitle": "Account nodig",
     "registrationRequiredCreateMessage": "Maak een gratis account aan om eigen projecten te maken. Het demoproject blijft beschikbaar zonder account.",
     "registrationRequiredCreateWithLocalProjects": "Maak een gratis account aan om nieuwe projecten te maken. Je bestaande lokale projecten blijven op dit toestel en zijn beschikbaar na registratie.",
+    "registrationRequiredActionMessage": "Maak een gratis account aan om projecten te maken, importeren en organiseren. Het demoproject blijft beschikbaar zonder account.",
+    "registrationRequiredActionWithLocalProjects": "Maak een gratis account aan om projecten te maken, importeren en organiseren. Je bestaande lokale projecten blijven op dit toestel en zijn beschikbaar na registratie.",
     "registrationRequiredCreateCta": "Registreren",
     "moveToLocal": "Naar lokaal verplaatsen",
     "openingTitle": "Laden…",

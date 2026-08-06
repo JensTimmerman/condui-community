@@ -421,6 +421,8 @@
     "registrationRequiredCreateTitle": "Account needed",
     "registrationRequiredCreateMessage": "Create a free account to make your own projects. The demo project remains available without an account.",
     "registrationRequiredCreateWithLocalProjects": "Create a free account to make new projects. Your existing local projects stay on this device and will be available after registration.",
+    "registrationRequiredActionMessage": "Create a free account to create, import, and organize projects. The demo project remains available without an account.",
+    "registrationRequiredActionWithLocalProjects": "Create a free account to create, import, and organize projects. Your existing local projects stay on this device and will be available after registration.",
     "registrationRequiredCreateCta": "Register",
     "moveToLocal": "Move to local",
     "openingTitle": "Loading…",

@@ -173,6 +173,11 @@ export type PlanKeyboardOptions = {
   disabled?: boolean
   /** Canvas-owned deletion for local wall point/segment selection state. */
   onDeleteFloorPlanSelection?: () => boolean
+  /** Standard Ctrl/Cmd+C and Ctrl/Cmd+V for floor-plan geometry. */
+  floorPlanClipboard?: {
+    onCopy: () => boolean
+    onPaste: () => boolean
+  }
   /** Q / W / D toggles for quick placer, wiring, and draw mode (plan hover only). */
   toolShortcuts?: PlanKeyboardToolShortcuts
   /** Arrow-key nudge for selected symbols (plan visible, selection active). */
@@ -203,6 +208,8 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
   const onBeforeSwitchFloor = options?.onBeforeSwitchFloor
   const keyboardDisabled = options?.disabled
   const toolShortcuts = options?.toolShortcuts
+  const onCopyFloorPlanSelection = options?.floorPlanClipboard?.onCopy
+  const onPasteFloorPlanSelection = options?.floorPlanClipboard?.onPaste
 
   usePlanSymbolNudgeKeyboard({
     activeFloorId,
@@ -250,6 +257,7 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
               canToggleDrawMode: toolShortcuts.canToggleDrawMode,
             }
           : undefined,
+        clipboardShortcuts: !!onCopyFloorPlanSelection && !!onPasteFloorPlanSelection,
       }
       const decision = decidePlanKeyboardAction(
         {
@@ -319,10 +327,13 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
           e.preventDefault()
           const floor = floors[decision.index]
           if (onBeforeSwitchFloor?.(decision.floorId) === false) {
-            logger.warn('[PlanKeyboard] floor switch blocked: active drag could not be transferred', {
-              fromFloorId: activeFloorId,
-              toFloorId: decision.floorId,
-            })
+            logger.warn(
+              '[PlanKeyboard] floor switch blocked: active drag could not be transferred',
+              {
+                fromFloorId: activeFloorId,
+                toFloorId: decision.floorId,
+              }
+            )
             return
           }
           useUIStore.getState().setActiveFloor(decision.floorId)
@@ -335,6 +346,12 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
           }
           return
         }
+        case 'copyFloorPlanSelection':
+          if (onCopyFloorPlanSelection?.()) e.preventDefault()
+          return
+        case 'pasteFloorPlanSelection':
+          if (onPasteFloorPlanSelection?.()) e.preventDefault()
+          return
         case 'ignore':
           break
         case 'deleteSelection':
@@ -819,5 +836,7 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
     keyboardDisabled,
     onDeleteFloorPlanSelection,
     toolShortcuts,
+    onCopyFloorPlanSelection,
+    onPasteFloorPlanSelection,
   ])
 }

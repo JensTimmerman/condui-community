@@ -21,6 +21,12 @@ import {
   useTouchPrimaryDevice,
 } from '@/editions/community/communityHooks'
 import { planCanvasGeometrySelectionRenderKey } from '@/lib/plan/planCanvasSelectionRenderKey'
+import {
+  createFloorPlanClipboardPayload,
+  pasteFloorPlanClipboardPayload,
+  selectWallsForFloorPlanClipboard,
+  type FloorPlanClipboardPayload,
+} from '@/lib/plan/floorPlanClipboard'
 import { endpointSymbolVisibleOnSitplan } from '@/lib/plan/planSymbolVisibility'
 import { getTouchPointHitRadiusCanvas } from '@/lib/canvas/touchHitZones'
 import { getSymbolById, type SymbolMetadata } from '@/lib/symbols'
@@ -77,7 +83,7 @@ import { calculateLabelPositions } from '@/utils/plan/labelPositioning'
 import { commitPlanSymbolDrop } from '@/handlers/plan/dropHandlers'
 import PlanDropCircuitPanel from '@/components/plan/PlanDropCircuitPanel'
 import type { PlanDropKind } from '@/lib/plan/planDropPicker'
-import { segmentIntersectsRect } from '@/lib/geometry'
+import { clamp, segmentIntersectsRect } from '@/lib/geometry'
 import { isPrimaryPlanActivationEvent } from '@/lib/canvas/planPointerEvent'
 import {
   endpointTypeToPlanDropKind,
@@ -113,7 +119,16 @@ import {
   openingWallNormalDeadzoneCanvas,
   resolveDoorPlacementOrientation,
 } from '@/lib/plan/doorSwingFromPointer'
-import { snapOpeningWidthToWholeCentimeters } from '@/lib/plan/openingPlacementDrag'
+import {
+  fitOpeningPlacementForPreview,
+  snapOpeningWidthToWholeCentimeters,
+} from '@/lib/plan/openingPlacementDrag'
+import {
+  clampAnchoredDimensionResize,
+  resizeDimensionFromDrag,
+  resolveDimensionDrag,
+  type DimensionDragMode,
+} from '@/lib/plan/dimensionDragGesture'
 import { isFloorPlanTouchDragTool } from '@/lib/plan/planFloorDrawingKeyboardGate'
 import {
   buildWallSelectionDeletionPlan,
@@ -462,6 +477,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
   const updateFloor = useProjectStore((s: ProjectState) => s.updateFloor)
   const applyPlanRescale = useProjectStore((s: ProjectState) => s.applyPlanRescale)
   const updatePlacement = useProjectStore((s: ProjectState) => s.updatePlacement)
+  const addPlacement = useProjectStore((s: ProjectState) => s.addPlacement)
   const updateSitplanNote = useProjectStore((s: ProjectState) => s.updateSitplanNote)
   const updateWall = useProjectStore((s: ProjectState) => s.updateWall)
   const deleteWall = useProjectStore((s: ProjectState) => s.deleteWall)
@@ -479,7 +495,12 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
   const pointerOverPlanRef = useRef(false)
   const lastPlanPointerClientRef = useRef<ClientPoint | null>(null)
   const crossFloorDragSessionRef = useRef<CrossFloorDragSession | null>(null)
+  const floorPlanClipboardRef = useRef<FloorPlanClipboardPayload | null>(null)
   const [pendingImportFile, setPendingImportFile] = useState<File | null>(null)
+
+  useEffect(() => {
+    floorPlanClipboardRef.current = null
+  }, [projectId])
 
   // Register canvas for export
   // Always return stage if available - export will handle switching floors as needed
@@ -766,6 +787,18 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
     /** Distance from opening center to the visual handle (halfWidth + handleOffset) so we use actual handle position */
     handleOffsetFromCenter: number
   } | null>(null)
+  const openingDimensionDragRef = useRef<{
+    kind: 'door' | 'window'
+    entityId: string
+    wall: Wall
+    geom: WallOpeningGeometry
+    start: Point2
+    outwardNormal: Point2
+    mode: DimensionDragMode | null
+    baseWidth: number
+    basePosition: number
+    lastResult: { width: number; position: number } | null
+  } | null>(null)
 
   const handleZoomChange = useCallback(
     (zoom: number) => {
@@ -864,8 +897,10 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
     () => activeFloor?.floorPlan?.windows ?? [],
     [activeFloor?.floorPlan?.windows]
   )
-  const graphicElementsForRender: PlanGraphicElement[] =
-    activeFloor?.floorPlan?.graphicElements ?? []
+  const graphicElementsForRender = useMemo<PlanGraphicElement[]>(
+    () => activeFloor?.floorPlan?.graphicElements ?? [],
+    [activeFloor?.floorPlan?.graphicElements]
+  )
 
   // Use hooks for scale, placements, labels, image, and grid
   const { pxPerMeter, baseSymbolSizePx, planLabelFontSize } = usePlanScale(activeFloor ?? null)
@@ -1074,7 +1109,10 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
       clearMixedOpeningSelection()
     }
   }, [isFloorPlanMode, selection.type, activeFloorId, clearMixedOpeningSelection])
-  const selectedGraphicElementIds = selection.type === 'graphicElement' ? selection.ids : []
+  const selectedGraphicElementIds = useMemo(
+    () => (selection.type === 'graphicElement' ? selection.ids : []),
+    [selection.ids, selection.type]
+  )
   useEffect(
     function () {
       if (selection.type !== 'graphicElement') {
@@ -1168,8 +1206,18 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
     [stairsForRender, selectedStairIds]
   )
   const selectedWallsForCopy = useMemo(
-    () => wallsForRender.filter((wall) => selectedWallIds.includes(wall.id)),
-    [wallsForRender, selectedWallIds]
+    () =>
+      selectWallsForFloorPlanClipboard({
+        walls: wallsForRender,
+        selectedWallIds,
+        selectedSegmentIndices,
+      }),
+    [wallsForRender, selectedWallIds, selectedSegmentIndices]
+  )
+  const selectedGraphicElementsForCopy = useMemo(
+    () =>
+      graphicElementsForRender.filter((element) => selectedGraphicElementIds.includes(element.id)),
+    [graphicElementsForRender, selectedGraphicElementIds]
   )
   const selectedOpeningsForCopy = useMemo(
     function () {
@@ -1180,6 +1228,87 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
       }
     },
     [selectedWallsForCopy, doorsForRender, windowsForRender]
+  )
+  const createClipboardPayloadFromSelection = useCallback(() => {
+    if (!activeFloorId || !activeFloor) return null
+    const selectedPlacementIds = new Set(selection.type === 'placement' ? selection.ids : [])
+    const selectedPlacementsForCopy = getPlacementsByFloor(activeFloorId).flatMap(
+      (row: Placement & { endpointId?: string }) => {
+        if (!selectedPlacementIds.has(row.id) || !row.endpointId) return []
+        return [
+          {
+            endpointId: row.endpointId,
+            placement: {
+              id: row.id,
+              floorId: row.floorId,
+              layer: row.layer,
+              pos: row.pos,
+              rotationDeg: row.rotationDeg,
+              scale: row.scale,
+              locked: row.locked,
+              style: row.style,
+            },
+          },
+        ]
+      }
+    )
+    return createFloorPlanClipboardPayload({
+      sourceFloorId: activeFloorId,
+      sourcePxPerMeter: calculatePxPerMeter(activeFloor) ?? 100,
+      sourceMasterWallThickness: activeFloor.floorPlan?.masterWallThickness ?? 20,
+      walls: selectedWallsForCopy,
+      doors: selectedOpeningsForCopy.doors,
+      windows: selectedOpeningsForCopy.windows,
+      stairs: selectedStairsForCopy,
+      graphicElements: selectedGraphicElementsForCopy,
+      placements: selectedPlacementsForCopy,
+    })
+  }, [
+    activeFloor,
+    activeFloorId,
+    selectedGraphicElementsForCopy,
+    selectedOpeningsForCopy.doors,
+    selectedOpeningsForCopy.windows,
+    selectedStairsForCopy,
+    selectedWallsForCopy,
+    getPlacementsByFloor,
+    selection.ids,
+    selection.type,
+  ])
+
+  const getPlanViewportCenter = useCallback((): Point2 | undefined => {
+    const width = planCanvasViewportPx?.width ?? containerRef.current?.clientWidth ?? 0
+    const height = planCanvasViewportPx?.height ?? containerRef.current?.clientHeight ?? 0
+    if (width <= 0 || height <= 0 || planView.zoom <= 0) return undefined
+    return {
+      x: (width / 2 - planView.pan.x) / planView.zoom,
+      y: (height / 2 - planView.pan.y) / planView.zoom,
+    }
+  }, [planCanvasViewportPx?.height, planCanvasViewportPx?.width, planView.pan, planView.zoom])
+
+  const pasteClipboardPayloadToFloor = useCallback(
+    (
+      payload: FloorPlanClipboardPayload,
+      targetFloorId: string,
+      copyOpenings = true,
+      targetCenter?: Point2
+    ) => {
+      const targetFloor = getFloorById(targetFloorId)
+      if (!targetFloor) return null
+      const result = pasteFloorPlanClipboardPayload({
+        payload,
+        targetFloorId,
+        targetPxPerMeter: calculatePxPerMeter(targetFloor) ?? 100,
+        targetFloorPlan: targetFloor.floorPlan,
+        generateId,
+        copyOpenings,
+        targetCenter,
+      })
+      updateFloor(targetFloorId, { floorPlan: result.floorPlan })
+      result.placements.forEach(({ endpointId, placement }) => addPlacement(endpointId, placement))
+      return result
+    },
+    [addPlacement, getFloorById, updateFloor]
   )
 
   const handleGraphicElementSelect = useCallback(
@@ -1217,113 +1346,59 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
 
   const handleCopySelectionToFloors = useCallback(
     (targetFloorIds: string[], options: { copyOpenings: boolean }) => {
-      if (!activeFloorId || targetFloorIds.length === 0) return
-      const sourceFloor = getFloorById(activeFloorId)
-      if (!sourceFloor?.floorPlan) return
-      const sourcePlan = sourceFloor.floorPlan
-      const sourcePxPerMeter = calculatePxPerMeter(sourceFloor) ?? 100
-
-      for (const targetFloorId of targetFloorIds) {
-        const targetFloor = getFloorById(targetFloorId)
-        if (!targetFloor) continue
-        const targetPxPerMeter = calculatePxPerMeter(targetFloor) ?? 100
-        const scaleFactor =
-          sourcePxPerMeter > 0 && targetPxPerMeter > 0 ? targetPxPerMeter / sourcePxPerMeter : 1
-        const transformPoint = (p: Point2): Point2 => ({
-          // Match reference-overlay normalization exactly: scale floor geometry
-          // around world origin by the px/m ratio between floors.
-          x: p.x * scaleFactor,
-          y: p.y * scaleFactor,
-        })
-        const targetPlan = targetFloor.floorPlan ?? {
-          walls: [],
-          doors: [],
-          windows: [],
-          stairs: [],
-          graphicElements: [],
-          masterWallThickness: sourcePlan.masterWallThickness ?? 20,
-        }
-
-        const wallIdMap = new Map<string, string>()
-        const copiedWalls = selectedWallsForCopy.map((wall) => {
-          const nextId = generateId()
-          wallIdMap.set(wall.id, nextId)
-          return {
-            ...wall,
-            id: nextId,
-            floorId: targetFloorId,
-            points: wall.points.map(transformPoint),
-          }
-        })
-        const copiedStairs = selectedStairsForCopy.map((stair) => ({
-          ...stair,
-          id: generateId(),
-          floorId: targetFloorId,
-          points: stair.points.map(transformPoint),
-          width: stair.width * scaleFactor,
-          stepDepth: stair.stepDepth * scaleFactor,
-        }))
-        const copiedDoors = options.copyOpenings
-          ? (selectedOpeningsForCopy.doors
-              .map((door) => {
-                const newWallId = wallIdMap.get(door.wallId)
-                if (!newWallId) return null
-                return {
-                  ...door,
-                  id: generateId(),
-                  floorId: targetFloorId,
-                  wallId: newWallId,
-                  width: door.width * scaleFactor,
-                  centerAlongSegment:
-                    typeof door.centerAlongSegment === 'number'
-                      ? door.centerAlongSegment * scaleFactor
-                      : door.centerAlongSegment,
-                }
-              })
-              .filter((door) => door != null) as Door[])
-          : []
-        const copiedWindows = options.copyOpenings
-          ? (selectedOpeningsForCopy.windows
-              .map((window) => {
-                const newWallId = wallIdMap.get(window.wallId)
-                if (!newWallId) return null
-                return {
-                  ...window,
-                  id: generateId(),
-                  floorId: targetFloorId,
-                  wallId: newWallId,
-                  width: window.width * scaleFactor,
-                  centerAlongSegment:
-                    typeof window.centerAlongSegment === 'number'
-                      ? window.centerAlongSegment * scaleFactor
-                      : window.centerAlongSegment,
-                }
-              })
-              .filter((window) => window != null) as Window[])
-          : []
-
-        updateFloor(targetFloorId, {
-          floorPlan: {
-            ...targetPlan,
-            walls: [...(targetPlan.walls ?? []), ...copiedWalls],
-            doors: [...(targetPlan.doors ?? []), ...copiedDoors],
-            windows: [...(targetPlan.windows ?? []), ...copiedWindows],
-            stairs: [...(targetPlan.stairs ?? []), ...copiedStairs],
-            graphicElements: targetPlan.graphicElements ?? [],
-          },
-        })
-      }
+      if (targetFloorIds.length === 0) return
+      const payload = createClipboardPayloadFromSelection()
+      if (!payload) return
+      targetFloorIds.forEach((targetFloorId) =>
+        pasteClipboardPayloadToFloor(payload, targetFloorId, options.copyOpenings)
+      )
     },
-    [
-      activeFloorId,
-      getFloorById,
-      selectedWallsForCopy,
-      selectedStairsForCopy,
-      selectedOpeningsForCopy.doors,
-      selectedOpeningsForCopy.windows,
-      updateFloor,
-    ]
+    [createClipboardPayloadFromSelection, pasteClipboardPayloadToFloor]
   )
+
+  const handleCopyFloorPlanSelection = useCallback(() => {
+    const payload = createClipboardPayloadFromSelection()
+    if (!payload) return false
+    floorPlanClipboardRef.current = payload
+    return true
+  }, [createClipboardPayloadFromSelection])
+
+  const handlePasteFloorPlanSelection = useCallback(() => {
+    if (!activeFloorId || !floorPlanClipboardRef.current) return false
+    const resultRef: {
+      current: ReturnType<typeof pasteFloorPlanClipboardPayload> | null
+    } = { current: null }
+    withSingleUndoEntry(
+      () => {
+        resultRef.current = pasteClipboardPayloadToFloor(
+          floorPlanClipboardRef.current!,
+          activeFloorId,
+          true,
+          floorPlanClipboardRef.current!.sourceFloorId === activeFloorId
+            ? getPlanViewportCenter()
+            : undefined
+        )
+        return resultRef.current != null
+      },
+      { sessionLabel: 'paste-floor-plan-selection' }
+    )
+    const result = resultRef.current
+    if (!result) return false
+    if (result.wallIds.length > 0) applySelection({ type: 'wall', ids: result.wallIds })
+    else if (result.stairIds.length > 0) applySelection({ type: 'stair', ids: result.stairIds })
+    else if (result.graphicElementIds.length > 0) {
+      applySelection({ type: 'graphicElement', ids: result.graphicElementIds })
+    } else if (result.placementIds.length > 0) {
+      applySelection({ type: 'placement', ids: result.placementIds })
+    }
+    return true
+  }, [
+    activeFloorId,
+    applySelection,
+    getPlanViewportCenter,
+    pasteClipboardPayloadToFloor,
+    withSingleUndoEntry,
+  ])
   const buildEncodedFloorPointIds = useCallback(
     (wallPoints: Map<string, number[]>, stairPoints: Map<string, number[]>): string[] => {
       const ids: string[] = []
@@ -3080,6 +3155,155 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
     ]
   )
 
+  const beginOpeningDimensionDrag = useCallback(
+    (start: Point2, outwardNormal: Point2) => {
+      if (!activeFloor?.floorPlan || !selectedOpeningForWidthEditor) return
+      const { kind, id } = selectedOpeningForWidthEditor
+      const opening =
+        kind === 'door'
+          ? baseDoors.find((door) => door.id === id)
+          : baseWindows.find((window) => window.id === id)
+      if (!opening) return
+      const wall = activeFloor.floorPlan.walls.find(
+        (candidate: Wall) => candidate.id === opening.wallId
+      )
+      if (!wall) return
+      const geom = computeOpeningGeometry(wall.points, opening.position)
+      if (!geom) return
+      openingDimensionDragRef.current = {
+        kind,
+        entityId: id,
+        wall,
+        geom,
+        start,
+        outwardNormal,
+        mode: null,
+        baseWidth: opening.width,
+        basePosition: opening.position,
+        lastResult: null,
+      }
+    },
+    [activeFloor, baseDoors, baseWindows, selectedOpeningForWidthEditor]
+  )
+
+  const applyOpeningDimensionDrag = useCallback(
+    (pointer: Point2, mode: 'preview' | 'commit') => {
+      const drag = openingDimensionDragRef.current
+      if (!drag) return
+      const { wall, geom } = drag
+      const resolution = resolveDimensionDrag(
+        drag.start,
+        pointer,
+        geom.tangent,
+        drag.outwardNormal,
+        drag.mode,
+        screenPxToCanvasUnits(planView.zoom, 5, 3, 10)
+      )
+      drag.mode = resolution.mode
+      if (!resolution.mode) return
+
+      const minimumWidth = Math.max(1, canvasPxPerMeter / 100)
+      const rawResize = resizeDimensionFromDrag(drag.baseWidth, resolution, minimumWidth)
+      const width = snapOpeningWidthToWholeCentimeters(rawResize.width, canvasPxPerMeter)
+      const segmentLength = geom.segmentEndDist - geom.segmentStartDist
+      const boundedWidth = Math.min(width, Math.max(minimumWidth, segmentLength))
+      const totalLength = getWallTotalLength(wall.points)
+      const otherDoors =
+        drag.kind === 'door' ? baseDoors.filter((door) => door.id !== drag.entityId) : baseDoors
+      const otherWindows =
+        drag.kind === 'window'
+          ? baseWindows.filter((window) => window.id !== drag.entityId)
+          : baseWindows
+      let fitted: { width: number; position: number }
+
+      if (resolution.mode === 'centered') {
+        const halfWidth = boundedWidth / 2
+        const desiredCenterDist = clamp(
+          geom.segmentEndDist - halfWidth,
+          geom.segmentStartDist + halfWidth,
+          geom.centerDist
+        )
+        const segmentStart = wall.points[geom.segmentIndex]!
+        const centerPoint = {
+          x: segmentStart.x + geom.tangent.x * (desiredCenterDist - geom.segmentStartDist),
+          y: segmentStart.y + geom.tangent.y * (desiredCenterDist - geom.segmentStartDist),
+        }
+        fitted = fitOpeningPlacementForPreview(
+          wall,
+          {
+            width: boundedWidth,
+            centerPoint,
+            centerPosition: totalLength > 0 ? desiredCenterDist / totalLength : drag.basePosition,
+            doorSwing: null,
+            isDraggingAlongWall: false,
+          },
+          otherDoors,
+          otherWindows
+        )
+      } else {
+        const obstacleSpans = [...otherDoors, ...otherWindows].flatMap((opening) => {
+          if (opening.wallId !== wall.id) return []
+          const openingGeom = computeOpeningGeometry(wall.points, opening.position)
+          if (!openingGeom || openingGeom.segmentIndex !== geom.segmentIndex) return []
+          return [
+            {
+              start: openingGeom.centerDist - opening.width / 2,
+              end: openingGeom.centerDist + opening.width / 2,
+            },
+          ]
+        })
+        const anchored = clampAnchoredDimensionResize(
+          geom.centerDist,
+          drag.baseWidth,
+          boundedWidth,
+          resolution.mode,
+          minimumWidth,
+          geom.segmentStartDist,
+          geom.segmentEndDist,
+          obstacleSpans
+        )
+        fitted = {
+          width: anchored.width,
+          position: totalLength > 0 ? anchored.center / totalLength : drag.basePosition,
+        }
+      }
+      drag.lastResult = fitted
+
+      if (mode === 'preview') {
+        if (drag.kind === 'door') {
+          const base = baseDoors.find((door) => door.id === drag.entityId)
+          if (base) applyPreviewDoors(new Map([[base.id, { ...base, ...fitted }]]))
+        } else {
+          const base = baseWindows.find((window) => window.id === drag.entityId)
+          if (base) applyPreviewWindows(new Map([[base.id, { ...base, ...fitted }]]))
+        }
+        return
+      }
+
+      applyPreviewDoors(null)
+      applyPreviewWindows(null)
+      if (drag.kind === 'door') updateDoor(drag.entityId, fitted)
+      else updateWindow(drag.entityId, fitted)
+    },
+    [baseDoors, baseWindows, canvasPxPerMeter, planView.zoom, updateDoor, updateWindow]
+  )
+
+  const endOpeningDimensionDrag = useCallback(
+    (pointer: Point2 | null) => {
+      const drag = openingDimensionDragRef.current
+      if (!drag) return
+      if (pointer) applyOpeningDimensionDrag(pointer, 'commit')
+      else if (drag.lastResult) {
+        applyPreviewDoors(null)
+        applyPreviewWindows(null)
+        if (drag.kind === 'door') updateDoor(drag.entityId, drag.lastResult)
+        else updateWindow(drag.entityId, drag.lastResult)
+      }
+      openingDimensionDragRef.current = null
+    },
+    [applyOpeningDimensionDrag, updateDoor, updateWindow]
+  )
+
   const beginWallSelectionDrag = useCallback(
     (start: Point2, mode: 'free' | 'horizontal' | 'vertical' = 'free') => {
       if (!activeFloor?.floorPlan) return
@@ -4081,11 +4305,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
 
       crossFloorDragSessionRef.current = {
         floorId,
-        clientOffsets: captureCrossFloorDragClientOffsets(
-          positions,
-          cursorClient,
-          planToClient
-        ),
+        clientOffsets: captureCrossFloorDragClientOffsets(positions, cursorClient, planToClient),
         lastPositions: new Map(positions),
       }
       return true
@@ -5415,31 +5635,34 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
       return false
     }
 
-    withSingleUndoEntry(() => {
-      deletionPlan.wholeWallIds.forEach((wallId) => deleteWall(wallId))
-      for (const [wallId, indices] of deletionPlan.pointIndicesByWall.entries()) {
-        const wall = activeFloorPlan.walls.find((entry: Wall) => entry.id === wallId)
-        if (!wall) continue
-        const indexSet = new Set(indices)
-        const nextPoints = wall.points.filter((_: Point2, index: number) => !indexSet.has(index))
-        if (nextPoints.length >= 2) updateWall(wallId, { points: nextPoints })
-        else deleteWall(wallId)
-      }
-      for (const [wallId, indices] of deletionPlan.segmentIndicesByWall.entries()) {
-        const wall = activeFloorPlan.walls.find((entry: Wall) => entry.id === wallId)
-        if (!wall) continue
-        const remainingSplines = splitWallPointsAtDeletedSegments(wall.points, indices)
-        deleteWall(wallId)
-        remainingSplines.forEach((points) => {
-          addWall(activeFloorIdForDeletion, {
-            floorId: activeFloorIdForDeletion,
-            points,
-            thickness: wall.thickness,
+    withSingleUndoEntry(
+      () => {
+        deletionPlan.wholeWallIds.forEach((wallId) => deleteWall(wallId))
+        for (const [wallId, indices] of deletionPlan.pointIndicesByWall.entries()) {
+          const wall = activeFloorPlan.walls.find((entry: Wall) => entry.id === wallId)
+          if (!wall) continue
+          const indexSet = new Set(indices)
+          const nextPoints = wall.points.filter((_: Point2, index: number) => !indexSet.has(index))
+          if (nextPoints.length >= 2) updateWall(wallId, { points: nextPoints })
+          else deleteWall(wallId)
+        }
+        for (const [wallId, indices] of deletionPlan.segmentIndicesByWall.entries()) {
+          const wall = activeFloorPlan.walls.find((entry: Wall) => entry.id === wallId)
+          if (!wall) continue
+          const remainingSplines = splitWallPointsAtDeletedSegments(wall.points, indices)
+          deleteWall(wallId)
+          remainingSplines.forEach((points) => {
+            addWall(activeFloorIdForDeletion, {
+              floorId: activeFloorIdForDeletion,
+              points,
+              thickness: wall.thickness,
+            })
           })
-        })
-      }
-      return true
-    }, { sessionLabel: 'delete-wall-selection' })
+        }
+        return true
+      },
+      { sessionLabel: 'delete-wall-selection' }
+    )
 
     applySelectedPointIndices(new Map())
     applySelectedSegmentIndices(new Map())
@@ -5652,6 +5875,10 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
     onBeforeSwitchFloor: handleBeforeFloorSwitch,
     disabled: !canDeleteItems,
     onDeleteFloorPlanSelection: deleteSelectedWallGeometry,
+    floorPlanClipboard: {
+      onCopy: handleCopyFloorPlanSelection,
+      onPaste: handlePasteFloorPlanSelection,
+    },
     toolShortcuts: planToolShortcuts,
     symbolNudge: {
       pxPerMeter,
@@ -7538,8 +7765,12 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
               />
               <PlanOpeningWidthEditor
                 fontFamily={fontFamily}
+                getCanvasPointFromEvent={makeCanvasPointFromEvent}
                 isActive={openingWidthEditorActive}
                 onActivate={() => setOpeningWidthEditorActive(true)}
+                onDimensionDragStart={beginOpeningDimensionDrag}
+                onDimensionDragMove={(pointer) => applyOpeningDimensionDrag(pointer, 'preview')}
+                onDimensionDragEnd={endOpeningDimensionDrag}
                 opening={selectedOpeningForWidthEditor}
                 themeMode={theme.mode}
                 valueText={openingWidthText || ''}

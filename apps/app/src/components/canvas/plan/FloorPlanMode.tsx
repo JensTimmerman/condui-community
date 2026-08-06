@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { Group, Line, Rect, Circle, Text } from 'react-konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import { useUIStore } from '@/stores/uiStore'
+import { useBlinkingCaret, withDimensionCaret } from '@/hooks/useBlinkingCaret'
 import { useProjectStore, type ProjectState } from '@/stores/projectStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { snapToGrid } from '@/utils/plan/gridSnap'
@@ -63,6 +64,7 @@ import { getStairRenderMetrics } from '@/lib/plan/stairPlanScale'
 import { PlanGraphicElementShape } from '@/components/canvas/plan/PlanGraphicElementRenderer'
 import { planFloorDrawingConsumesTabRef } from '@/lib/plan/planFloorDrawingKeyboardGate'
 import { resolveFloorPlanToolContextMenuAction } from '@/lib/plan/floorPlanToolContextMenu'
+import { resolvePenEnterCommitPoints } from '@/lib/plan/planKeyboardDecisions'
 import {
   snapNearbyLineToGrid,
   snapPointToNearbyLine,
@@ -187,6 +189,10 @@ export function FloorPlanMode({
   const [projectedSnapGuides, setProjectedSnapGuides] = useState<
     Array<{ from: Point2; to: Point2; hideDistanceLabel?: boolean }>
   >([])
+  const [activeGeometrySnap, setActiveGeometrySnap] = useState<{
+    point: Point2
+    kind: 'endpoint' | 'line'
+  } | null>(null)
   const previousToolRef = useRef<ToolMode>(activeTool)
   const isFinalizingPenRef = useRef(false)
   const suppressAutoCommitRef = useRef(false)
@@ -225,6 +231,10 @@ export function FloorPlanMode({
   const [rectLockedXMeters, setRectLockedXMeters] = useState<number | null>(null)
   const [rectLockedYMeters, setRectLockedYMeters] = useState<number | null>(null)
   const [rectActiveAxis, setRectActiveAxis] = useState<'x' | 'y'>('x')
+  const dimensionCaretVisible = useBlinkingCaret(
+    (activeTool === 'drawWall' && wallDrawingState.isDrawing) ||
+      (activeTool === 'drawWallRect' && wallDrawingState.rectStartPoint != null)
+  )
 
   const drawingUndoStackRef = useRef<FloorPlanDrawingUndoSnapshot[]>([])
   const drawingRedoStackRef = useRef<FloorPlanDrawingUndoSnapshot[]>([])
@@ -275,6 +285,7 @@ export function FloorPlanMode({
     })
     setCurrentMousePosition(null)
     setProjectedSnapGuides([])
+    setActiveGeometrySnap(null)
     if (penAutoLockTimeoutRef.current != null) {
       clearTimeout(penAutoLockTimeoutRef.current)
       penAutoLockTimeoutRef.current = null
@@ -453,7 +464,13 @@ export function FloorPlanMode({
     commitWallWithUndo(activeFloorId, points)
     resetDrawingState()
     return true
-  }, [activeFloorId, commitWallWithUndo, gridSize, resetDrawingState, wallDrawingState.rectStartPoint])
+  }, [
+    activeFloorId,
+    commitWallWithUndo,
+    gridSize,
+    resetDrawingState,
+    wallDrawingState.rectStartPoint,
+  ])
 
   const commitCurrentStairDrawing = useCallback(() => {
     if (!activeFloorId || stairDrawingPoints.length < 1) return false
@@ -973,7 +990,10 @@ export function FloorPlanMode({
   }, [])
 
   const appendPenPoint = useCallback(
-    (rawPoint: Point2, options?: { snapTo45Degrees?: boolean }) => {
+    (
+      rawPoint: Point2,
+      options?: { snapTo45Degrees?: boolean; lockedLengthMeters?: number | null }
+    ) => {
       if (!activeFloorId) return
       pushDrawingUndoBeforeMutation()
 
@@ -981,6 +1001,10 @@ export function FloorPlanMode({
       const nearbyLine = resolveNearbyLineSnap(rawPoint, { excludeCurrentTail: 'drawWall' })
       let pointToUse = nearbyLine?.point ?? rawPoint
       const shouldSnapTo45Degrees = options?.snapTo45Degrees === true
+      const effectiveLockedLengthMeters =
+        options && 'lockedLengthMeters' in options
+          ? options.lockedLengthMeters
+          : penLockedLengthMeters
 
       if (
         !nearbyLine &&
@@ -1004,14 +1028,14 @@ export function FloorPlanMode({
       if (
         wallDrawingState.isDrawing &&
         wallDrawingState.currentPoints.length > 0 &&
-        penLockedLengthMeters &&
+        effectiveLockedLengthMeters &&
         canvasPxPerMeter
       ) {
         const start = wallDrawingState.currentPoints[wallDrawingState.currentPoints.length - 1]!
         const dx = rawPoint.x - start.x
         const dy = rawPoint.y - start.y
         const len = Math.sqrt(dx * dx + dy * dy)
-        const targetPx = penLockedLengthMeters * canvasPxPerMeter
+        const targetPx = effectiveLockedLengthMeters * canvasPxPerMeter
         if (len > 1e-6 && targetPx > 0) {
           const scale = targetPx / len
           pointToUse = {
@@ -1034,7 +1058,7 @@ export function FloorPlanMode({
         },
         gridSize,
         !nearbyLine &&
-          !(penLockedLengthMeters && canvasPxPerMeter) &&
+          !(effectiveLockedLengthMeters && canvasPxPerMeter) &&
           planView.snapToGrid &&
           !shouldSnapTo45Degrees,
         walls
@@ -1082,6 +1106,7 @@ export function FloorPlanMode({
       // segment starts "fresh".
       clearPenConstraints()
       setProjectedSnapGuides([])
+      setActiveGeometrySnap(null)
       setWallDrawingState(nextState)
     },
     [
@@ -1400,8 +1425,26 @@ export function FloorPlanMode({
         e.preventDefault()
         e.stopPropagation()
         if (isPenDrawing) {
-          // Finish current wall and fall back to implicit select+move tool
-          setActiveTool('select')
+          const previewPoint = mousePreviewPositionRef.current
+          if (previewPoint) {
+            const commitPoints = resolvePenEnterCommitPoints(
+              wallDrawingState.currentPoints,
+              previewPoint
+            )
+            if (commitPoints && activeFloorId) {
+              commitWallWithUndo(activeFloorId, commitPoints)
+              resetDrawingState()
+              setActiveTool('select')
+              return
+            }
+            const typedCentimeters = Number.parseFloat(penDimensionText.trim().replace(',', '.'))
+            appendPenPoint(previewPoint, {
+              lockedLengthMeters:
+                Number.isFinite(typedCentimeters) && typedCentimeters > 0
+                  ? typedCentimeters / 100
+                  : penLockedLengthMeters,
+            })
+          }
         } else if (isStairDrawing) {
           commitCurrentStairDrawing()
         }
@@ -1443,6 +1486,7 @@ export function FloorPlanMode({
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [
     wallDrawingState.isDrawing,
+    wallDrawingState.currentPoints,
     wallDrawingState.rectStartPoint,
     stairDrawingPoints,
     activeTool,
@@ -1450,7 +1494,12 @@ export function FloorPlanMode({
     setSelection,
     setActiveTool,
     resetDrawingState,
+    activeFloorId,
+    commitWallWithUndo,
     commitCurrentStairDrawing,
+    appendPenPoint,
+    penDimensionText,
+    penLockedLengthMeters,
     rectActiveAxis,
     onOpeningPreviewOverrideChange,
     onWallHover,
@@ -1852,9 +1901,15 @@ export function FloorPlanMode({
             }
           })
         }
+        setActiveGeometrySnap(
+          nearbyLine && pointsMatch(next, nearbyLine.point)
+            ? { point: nearbyLine.point, kind: nearbyLine.kind }
+            : null
+        )
         scheduleMousePreviewPosition(next)
         setProjectedSnapGuides(nextGuides)
       } else if (activeTool === 'drawWallRect') {
+        setActiveGeometrySnap(null)
         if (!wallDrawingState.rectStartPoint && !rectPointerDownRef.current) {
           const nearbyLine = resolveNearbyLineSnap(canvasPoint)
           scheduleMousePreviewPosition(
@@ -1890,6 +1945,7 @@ export function FloorPlanMode({
           scheduleMousePreviewPosition(next)
         }
       } else if (activeTool === 'drawStair') {
+        setActiveGeometrySnap(null)
         const snapped = resolveStairDrawingSnap(canvasPoint)
         scheduleMousePreviewPosition(snapped.point)
         setProjectedSnapGuides(snapped.guides)
@@ -2505,9 +2561,9 @@ export function FloorPlanMode({
             if (action === 'ignore') return
             e.evt.preventDefault()
             e.cancelBubble = true
-            if (action === 'commitPenAndExitDrawMode') {
+            if (action === 'commitPenAndDropTool') {
               commitCurrentPenDrawing()
-            } else if (action === 'exitDrawMode') {
+            } else if (action === 'dropTool') {
               if (activeTool === 'drawWall') {
                 suppressAutoCommitRef.current = true
                 resetDrawingState()
@@ -2537,7 +2593,7 @@ export function FloorPlanMode({
               onOpeningPreviewOverrideChange?.(null)
               onWallHover?.(null, null)
             }
-            onExitDrawMode()
+            setActiveTool('select')
           }}
         >
           {/* Preview line while drawing */}
@@ -2660,6 +2716,18 @@ export function FloorPlanMode({
               fill="#334155"
               stroke="#ffffff"
               strokeWidth={drawStrokeCanvas}
+              listening={false}
+            />
+          )}
+
+          {activeTool === 'drawWall' && activeGeometrySnap && (
+            <Circle
+              x={activeGeometrySnap.point.x}
+              y={activeGeometrySnap.point.y}
+              radius={drawPointRadiusCanvas * (activeGeometrySnap.kind === 'endpoint' ? 1.2 : 0.9)}
+              fill={activeGeometrySnap.kind === 'endpoint' ? '#22c55e' : '#ffffff'}
+              stroke="#22c55e"
+              strokeWidth={drawStrokeCanvas * 1.5}
               listening={false}
             />
           )}
@@ -2884,7 +2952,7 @@ export function FloorPlanMode({
               const lenPx = Math.sqrt(dx * dx + dy * dy)
               const lengthCentimeters = (lenPx / canvasPxPerMeter) * 100
               const valueText = penDimensionText || lengthCentimeters.toFixed(1)
-              const label = `${valueText}${valueText ? ' cm' : ''}`
+              const label = withDimensionCaret(valueText, ' cm', true, dimensionCaretVisible)
               const fontSize = 13 / planView.zoom
               const paddingX = 8 / planView.zoom
               const paddingY = 4 / planView.zoom
@@ -2967,8 +3035,18 @@ export function FloorPlanMode({
 
               const textX = rectDimensionTextX || lenXCentimeters.toFixed(1)
               const textY = rectDimensionTextY || lenYCentimeters.toFixed(1)
-              const labelX = `${textX}${textX ? ' cm' : ''}`
-              const labelY = `${textY}${textY ? ' cm' : ''}`
+              const labelX = withDimensionCaret(
+                textX,
+                ' cm',
+                rectActiveAxis === 'x',
+                dimensionCaretVisible
+              )
+              const labelY = withDimensionCaret(
+                textY,
+                ' cm',
+                rectActiveAxis === 'y',
+                dimensionCaretVisible
+              )
               const fontSize = 13 / planView.zoom
               const paddingX = 8 / planView.zoom
               const paddingY = 4 / planView.zoom
