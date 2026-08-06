@@ -313,6 +313,37 @@ export function buildWallJunctionPolygons(
   return clusterNearbyNodes(collectWallVertexNodes(walls, masterWallThickness, pxPerMeter)).flatMap(
     (cluster) => {
       const polygons: Point2[][] = []
+      const incidentDirections = new Set(
+        cluster.flatMap((node) =>
+          node.crossSections.map(
+            (section) =>
+              `${Math.round(section.direction.x * 1_000_000)},${Math.round(section.direction.y * 1_000_000)}`
+          )
+        )
+      )
+
+      // Pairwise miters define the outside faces, but three-or-more-way junctions
+      // can still leave a triangular hole between the incident wall bodies. Fill
+      // only the immediate cap area; the bounded convex hull cannot create the
+      // long spikes that a multi-way projected miter would.
+      if (incidentDirections.size >= 3) {
+        const hub = convexHull(
+          cluster.flatMap((node) =>
+            node.crossSections.flatMap((section) => [
+              {
+                x: node.point.x + section.normal.x * node.halfThickness,
+                y: node.point.y + section.normal.y * node.halfThickness,
+              },
+              {
+                x: node.point.x - section.normal.x * node.halfThickness,
+                y: node.point.y - section.normal.y * node.halfThickness,
+              },
+            ])
+          )
+        )
+        if (hub.length >= 3) polygons.push(hub)
+      }
+
       for (let aIndex = 0; aIndex < cluster.length; aIndex += 1) {
         for (let bIndex = aIndex + 1; bIndex < cluster.length; bIndex += 1) {
           const nodeA = cluster[aIndex]!
