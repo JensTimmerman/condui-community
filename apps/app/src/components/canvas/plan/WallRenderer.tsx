@@ -976,10 +976,10 @@ function WallRendererInner({
             const selectedSegment = selectedSegments[0]!
             return measurementSegmentIndices.includes(selectedSegment) ? [selectedSegment] : []
           }
-          // Every visible measurement on the selected wall is a valid editing entry point.
-          // Point/segment selection state can arrive through separate stores, so requiring
-          // every point to be mirrored here made otherwise valid shape segments read-only.
-          if (isSelected && selectedSegments.length === 0) {
+          // Every visible measurement on a selected wall is an editing entry point.
+          // Master can represent whole-wall selection with multiple selected segments; do not
+          // let that representation silently turn every visible dimension back to read-only.
+          if (isSelected) {
             return measurementSegmentIndices
           }
           return []
