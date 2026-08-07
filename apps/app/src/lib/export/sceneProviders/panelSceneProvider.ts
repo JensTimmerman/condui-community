@@ -179,6 +179,7 @@ export async function preparePanelScene(
   return {
     id: sceneId,
     kind: 'panel',
+    renderedTheme: sourceTheme,
     rootNode: clonedGroup, // Isolated clone, safe to export
     bounds,
     preferredOrientation: exportMode.kind === 'overview' ? 'landscape' : 'portrait',

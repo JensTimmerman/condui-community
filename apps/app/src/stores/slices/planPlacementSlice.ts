@@ -980,6 +980,16 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
                 return
               }
             }
+            for (const circuit of getAllCircuits(panel)) {
+              for (const device of circuit.trunkDevices ?? []) {
+                const placement = device.placements?.find((candidate) => candidate.id === id)
+                if (!placement) continue
+                Object.assign(placement, withCustomPlacementFlag(placement, updates))
+                state.lastWorkedCircuitId = circuit.id
+                state.isDirty = true
+                return
+              }
+            }
           }
         }
       }),
@@ -1123,6 +1133,15 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
                 return
               }
             }
+            for (const circuit of getAllCircuits(panel)) {
+              for (const device of circuit.trunkDevices ?? []) {
+                const index = device.placements?.findIndex((placement) => placement.id === id) ?? -1
+                if (index === -1) continue
+                device.placements!.splice(index, 1)
+                state.isDirty = true
+                return
+              }
+            }
           }
         }
       }),
@@ -1162,6 +1181,13 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
             const endpoints = getAllEndpoints(panel)
             for (const endpoint of endpoints) {
               endpoint.placements = endpoint.placements.filter((p) => !idsSet.has(p.id))
+            }
+            for (const circuit of getAllCircuits(panel)) {
+              for (const device of circuit.trunkDevices ?? []) {
+                if (device.placements) {
+                  device.placements = device.placements.filter((placement) => !idsSet.has(placement.id))
+                }
+              }
             }
           }
           if (earthingIds.length > 0 && installation?.earthingPlacements) {

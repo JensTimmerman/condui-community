@@ -10,15 +10,16 @@ export interface HiddenItem {
 
 interface HiddenItemsDialogProps {
   items: HiddenItem[]
+  initialSelectedIds?: string[]
   description?: string
   onConfirm: (selectedIds: string[]) => void
   onCancel: () => void
 }
 
-export default function HiddenItemsDialog({ items, description, onConfirm, onCancel }: HiddenItemsDialogProps) {
+export default function HiddenItemsDialog({ items, initialSelectedIds, description, onConfirm, onCancel }: HiddenItemsDialogProps) {
   const { t } = useTranslation()
   const [selectedIds, setSelectedIds] = useState<Set<string>>(
-    () => new Set(items.map((item) => item.id))
+    () => new Set(initialSelectedIds ?? items.map((item) => item.id))
   )
 
   const allChecked = useMemo(() => {

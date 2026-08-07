@@ -5,6 +5,7 @@ import {
 } from '@/lib/projectV2/electrical'
 import type { ProjectWithOptionalV2Building } from '@/lib/projectV2/buildingFloors'
 import type { Panel, SymbolKey } from '@/types/schema'
+import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
 
 export type ProjectWithSituationPlanPlacements = ProjectWithOptionalV2Electrical &
   ProjectWithOptionalV2Building
@@ -44,6 +45,7 @@ export function getHiddenSituationPlanPlacements(
         if (seenCircuitIds.has(circuit.id)) continue
         seenCircuitIds.add(circuit.id)
         for (const endpoint of circuit.endpoints) {
+          if (!canSymbolAppearOnSituationPlan(endpoint.symbol)) continue
           for (const placement of endpoint.placements) {
             if (seenPlacementIds.has(placement.id)) continue
             if (!hiddenByFloor.get(placement.floorId)?.has(placement.id)) continue
@@ -55,6 +57,22 @@ export function getHiddenSituationPlanPlacements(
               endpointId: endpoint.id,
               endpointLabel: endpoint.label,
               symbol: endpoint.symbol,
+            })
+          }
+        }
+        for (const device of circuit.trunkDevices ?? []) {
+          if (!canSymbolAppearOnSituationPlan(device.symbol)) continue
+          for (const placement of device.placements ?? []) {
+            if (seenPlacementIds.has(placement.id)) continue
+            if (!hiddenByFloor.get(placement.floorId)?.has(placement.id)) continue
+            seenPlacementIds.add(placement.id)
+            hidden.push({
+              placementId: placement.id,
+              floorId: placement.floorId,
+              floorName: floorNameById.get(placement.floorId) ?? placement.floorId,
+              endpointId: device.id,
+              endpointLabel: device.label,
+              symbol: device.symbol,
             })
           }
         }

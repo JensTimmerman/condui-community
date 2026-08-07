@@ -26,14 +26,14 @@ import { logger } from '@/lib/logger'
  *    One-line layout may skip the circuit while plan-drop pickers still list it.
  */
 
-import type { Panel, Circuit, SymbolKey, PanelGridModuleRef } from '@/types/schema'
+import type { Panel, Circuit, PanelGridModuleRef } from '@/types/schema'
 import i18next from '@/i18n'
 import type { OrphanReason } from '@/types/schema'
 import type { Issue, Offender } from './core/types'
 import { findCircuitInProject, resolveFrameContentItems } from '@/lib/eendraad/frameContent'
 import { endpointSupportsMultiplier } from '@/utils/endpointMultipliers'
 import { isActualEndpoint } from '@/utils/symbolMapping'
-import { getSymbolById } from '@/lib/symbols'
+import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
 import { resolvePanelForDistributionEndpoint } from '@/lib/plan/panelDistributionEndpoint'
 import { panelGridModuleRefKey } from '@/components/canvas/panel/panelGridLayout'
 import {
@@ -104,10 +104,7 @@ function compatibleMultiplierMerge(
 
 /** Same idea as usePlanPlacements: these endpoints should be visible on the sitplan when placed. */
 function endpointExpectedOnSitplan(ep: Circuit['endpoints'][number]): boolean {
-  if (!ep.symbol || ep.symbol === 'domotica') return false
-  const meta = getSymbolById(ep.symbol as SymbolKey)
-  if (!meta) return false
-  return meta.scope === 'situatieplan' || meta.scope === 'both'
+  return canSymbolAppearOnSituationPlan(ep.symbol)
 }
 
 /** Single detected orphan for UI: banner, inspector, focus and quarantine */

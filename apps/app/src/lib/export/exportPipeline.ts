@@ -33,7 +33,11 @@ import {
 import { preparePanelScene } from './sceneProviders/panelSceneProvider'
 import { prepareSitplanScene } from './sceneProviders/sitplanSceneProvider'
 import { prepareEendraadScene } from './sceneProviders/eendraadSceneProvider'
-import { calculateEendraadSlices, EENDRAAD_MAX_SCALE_MM_PER_PX } from './slicing/eendraadSlicing'
+import {
+  calculateEendraadSlices,
+  chooseEendraadDocumentScale,
+  EENDRAAD_MAX_SCALE_MM_PER_PX,
+} from './slicing/eendraadSlicing'
 import { getPdfContentHeightMm } from './pdfPageLayout'
 import { A4_LANDSCAPE, A4_PORTRAIT } from './pageSizes'
 import { buildInfoBlockSvg } from './infoBlockSvg'
@@ -41,7 +45,7 @@ import type { Panel } from '@/types/schema'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useUIStore } from '@/stores/uiStore'
 import { yieldToBrowser } from './yieldToBrowser'
-import { applyExportThemeToSvg } from './themePostProcessor'
+import { applyPreparedSceneThemeToSvg } from './sceneSvgTheme'
 import { applyExportFontToSvg, getExportFontFamily } from './fontPostProcessor'
 import {
   collectEendraadTextOverlays,
@@ -441,7 +445,12 @@ export async function exportToPDF(
           hasPanelTitle: true,
         })
         const rawDocumentScale = usableHeight / maxHeight
-        const documentGlobalScale = Math.min(rawDocumentScale, EENDRAAD_MAX_SCALE_MM_PER_PX)
+        const initialDocumentScale = Math.min(rawDocumentScale, EENDRAAD_MAX_SCALE_MM_PER_PX)
+        const documentGlobalScale = chooseEendraadDocumentScale(
+          context.eendraadLayout.panels,
+          byPanelId,
+          initialDocumentScale
+        )
         eendraadCache = {
           byPanelId,
           documentGlobalScale,
@@ -451,7 +460,12 @@ export async function exportToPDF(
         }
         if (rawDocumentScale > EENDRAAD_MAX_SCALE_MM_PER_PX) {
           exportLog(
-            `[Export] Eendraad document scale capped: raw=${rawDocumentScale.toFixed(4)} -> ${documentGlobalScale.toFixed(4)} mm/px (max=${EENDRAAD_MAX_SCALE_MM_PER_PX})`
+            `[Export] Eendraad document scale capped: raw=${rawDocumentScale.toFixed(4)} -> ${initialDocumentScale.toFixed(4)} mm/px (max=${EENDRAAD_MAX_SCALE_MM_PER_PX})`
+          )
+        }
+        if (documentGlobalScale < initialDocumentScale) {
+          exportLog(
+            `[Export] Eendraad page compaction: scale ${initialDocumentScale.toFixed(4)} -> ${documentGlobalScale.toFixed(4)} mm/px to remove a sparse trailing page`
           )
         }
         exportLog(
@@ -562,14 +576,14 @@ export async function exportToPDF(
             // Yield before rendering
             await yieldToBrowser()
 
-            // Render to SVG. Eendraad scenes were prepared with export theme applied at Konva
-            // level (see eendraadSceneProvider + konvaThemeExport), so their SVG is already in
-            // export theme; pass exportTheme as current so no SVG post-processing is needed.
-            // Other scene kinds use the UI theme when rendered, so we pass renderTheme.
+            // Normalize the Konva-rendered portion before injecting catalog vectors that are
+            // already target-themed. This prevents a target light symbol color from being
+            // reinterpreted as a source dark color when both palettes share a hex value.
             let svgString = await renderSvgFromScene(scene)
             if (scene.kind === 'eendraad') {
               svgString = fixEendraadWireLineCapsInExportSvg(svgString)
             }
+            svgString = applyPreparedSceneThemeToSvg(svgString, scene, exportTheme, renderTheme)
             if (scene.symbolExports?.length) {
               svgString = await injectSymbolSvgsIntoExportSvg(
                 svgString,
@@ -584,8 +598,6 @@ export async function exportToPDF(
                 scene.planGraphicExports
               )
             }
-            const svgCurrentTheme = scene.kind === 'eendraad' ? exportTheme : renderTheme
-            svgString = applyExportThemeToSvg(svgString, exportTheme, svgCurrentTheme)
             svgString = applyExportFontToSvg(svgString)
             if (isLimitedRasterExport && scene.kind === 'eendraad' && context.eendraadLayout) {
               const panelId = scene.id.replace(/^eendraad-/, '').replace(/-slice-\d+$/, '')
@@ -708,7 +720,8 @@ export async function exportToPDF(
                   {
                     svgString: infoBlockSvg,
                   },
-                  panelTitle
+                  panelTitle,
+                  exportTheme
                 )
               : await composePdfPage(
                   pdf,
@@ -719,7 +732,8 @@ export async function exportToPDF(
                     svgString: infoBlockSvg,
                   },
                   panelTitle,
-                  referenceLink
+                  referenceLink,
+                  exportTheme
                 )
 
             if (
@@ -813,7 +827,7 @@ export async function exportToPDF(
               other: i18n.t('circuits.other', 'Other'),
             },
           } as const
-          const legendSvg = buildPanelLegendSvg(legendRows, fontFamily, legendLabels)
+          const legendSvg = buildPanelLegendSvg(legendRows, fontFamily, legendLabels, exportTheme)
           if (isLimitedRasterExport) {
             await composeLimitedRasterPdfPage(
               pdf,
@@ -838,10 +852,18 @@ export async function exportToPDF(
               },
               diagnostics,
               null,
-              null
+              null,
+              exportTheme
             )
           } else {
-            await composeFullSvgPage(pdf, legendSvg, 'panel-legend', diagnostics, orientation)
+            await composeFullSvgPage(
+              pdf,
+              legendSvg,
+              'panel-legend',
+              diagnostics,
+              orientation,
+              exportTheme
+            )
           }
           successfulPages++
           exportLog('[Export] Added panel circuit legend page')

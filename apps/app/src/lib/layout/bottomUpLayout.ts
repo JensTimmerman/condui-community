@@ -1038,6 +1038,7 @@ function pushNestedCircuitLayout(
 
   const nestedProtection = findProtectionForCircuit(panel, nested)
   const nestedParentRcd = findParentRcd(panel, nested)
+  const nestedLeftReserve = getProtectionLabelLeftReserve(nestedProtection ?? undefined)
   const nestedCircuitWidth = getCircuitColumnSpan(nested, circuitMap, protectionByCircuitId)
   const allNestedCircuits = (parentCircuit.subCircuitIds || [])
     .map((id) => panelCircuits.find((c) => c.id === id))
@@ -1045,7 +1046,10 @@ function pushNestedCircuitLayout(
   const hasSingleNested = allNestedCircuits.length === 1
   let nestedX: number
   if (hasSingleNested) {
-    nestedX = parentLayout.x
+    nestedX =
+      parentLayout.x +
+      getProtectionAnchorOffset(parentLayout.leftReserve) -
+      getProtectionAnchorOffset(nestedLeftReserve)
   } else {
     const parentProtection = findProtectionForCircuit(panel, parentCircuit)
     let currentNestedX =
@@ -1070,7 +1074,7 @@ function pushNestedCircuitLayout(
     parentCircuit,
     x: nestedX,
     width: nestedCircuitWidth,
-    leftReserve: getProtectionLabelLeftReserve(nestedProtection ?? undefined),
+    leftReserve: nestedLeftReserve,
     protectionY: LAYOUT_CONSTANTS.PROTECTION_Y,
     trunkY: undefined,
     branch: null,
@@ -1149,6 +1153,7 @@ function calculateBottomUpPanelLayout(
       // Nested circuits may already have been inserted while laying out their parent (recovery loop).
       if (parentLayout && !circuitLayouts.some((cl) => cl.circuit.id === circuit.id)) {
         const circuitWidth = getCircuitColumnSpan(circuit, circuitMap, protectionByCircuitId)
+        const circuitLeftReserve = getProtectionLabelLeftReserve(protection ?? undefined)
 
         // Find all nested circuits for this parent to calculate their X positions.
         // IMPORTANT: Use the order from subCircuitIds, not the order in panelCircuits.
@@ -1161,8 +1166,13 @@ function calculateBottomUpPanelLayout(
 
         let nestedX: number
         if (hasSingleNested) {
-          // ONE nested circuit: position at same X as parent (directly on parent's vertical wire)
-          nestedX = parentLayout.x
+          // ONE nested circuit: align protection anchors, not column left edges.
+          // Label reserves can differ per protection; aligning the columns would
+          // otherwise create a sideways jog in what should be one vertical feeder.
+          nestedX =
+            parentLayout.x +
+            getProtectionAnchorOffset(parentLayout.leftReserve) -
+            getProtectionAnchorOffset(circuitLeftReserve)
         } else {
           // MULTIPLE nested circuits: lay them out like a mini main bus
           // starting from the parent's vertical wire X. The parent circuit's
@@ -1197,7 +1207,7 @@ function calculateBottomUpPanelLayout(
           parentCircuit,
           x: nestedX, // Positioned at parent's X for single, or horizontally on secondary bus for multiple
           width: circuitWidth,
-          leftReserve: getProtectionLabelLeftReserve(protection ?? undefined),
+          leftReserve: circuitLeftReserve,
           protectionY: LAYOUT_CONSTANTS.PROTECTION_Y,
           trunkY: undefined,
           branch: null,

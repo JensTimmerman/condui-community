@@ -103,6 +103,7 @@ function collectPlacementsOnFloorFromProject(
         layer: jp.layer ?? 'default',
         pos: jp.pos,
         rotationDeg: (jp.rotationDeg ?? 0) as Placement['rotationDeg'],
+        rotationMode: jp.rotationMode,
         scale: jp.scale ?? 1,
         junctionPanelLabel: jp.label,
       })
@@ -116,6 +117,7 @@ function collectPlacementsOnFloorFromProject(
         layer: ep.layer ?? 'default',
         pos: ep.pos,
         rotationDeg: (ep.rotationDeg ?? 0) as Placement['rotationDeg'],
+        rotationMode: ep.rotationMode,
         scale: ep.scale ?? 1,
         locked: ep.locked,
         isEarthing: true,

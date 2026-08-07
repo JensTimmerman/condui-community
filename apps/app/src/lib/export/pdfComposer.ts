@@ -5,13 +5,14 @@
  * and the main content is scaled to fit above it so nothing overlaps.
  */
 
-import { jsPDF } from 'jspdf'
+import type { jsPDF } from 'jspdf'
 import { svg2pdf } from 'svg2pdf.js'
 import type {
   ExportPage,
   ExportDiagnostic,
   ComposedPagePlacement,
   ExportPageReference,
+  ExportTheme,
 } from './types'
 import { A4_LANDSCAPE, A4_PORTRAIT, PAGE_MARGIN } from './pageSizes'
 import { getExportFontFamily } from './fontPostProcessor'
@@ -22,6 +23,7 @@ import {
   getPdfContentHeightMm,
   PANEL_TITLE_HEIGHT_MM,
 } from './pdfPageLayout'
+import { getThemeColors } from '@/lib/theme/colors'
 
 const REFERENCE_IMAGE_SIZE_MM = 12.75
 const REFERENCE_LABEL_GAP_MM = 1.2
@@ -42,23 +44,44 @@ export interface PdfPageInfoBlock {
 function addReferenceLinkToPdf(
   pdf: jsPDF,
   referenceLink: ExportPageReference,
-  pageWidth: number
+  pageWidth: number,
+  exportTheme: ExportTheme
 ): void {
+  const colors = getThemeColors(exportTheme)
   const imageX = pageWidth - PAGE_MARGIN - REFERENCE_IMAGE_SIZE_MM
   const imageY = PAGE_MARGIN
   const labelX = imageX + REFERENCE_IMAGE_SIZE_MM / 2
   const labelY = imageY + REFERENCE_IMAGE_SIZE_MM + REFERENCE_LABEL_GAP_MM + 1.8
 
-  pdf.addImage(referenceLink.imageDataUrl, 'PNG', imageX, imageY, REFERENCE_IMAGE_SIZE_MM, REFERENCE_IMAGE_SIZE_MM)
-  pdf.link(imageX, imageY, REFERENCE_IMAGE_SIZE_MM, REFERENCE_IMAGE_SIZE_MM, { url: referenceLink.url })
+  pdf.addImage(
+    referenceLink.imageDataUrl,
+    'PNG',
+    imageX,
+    imageY,
+    REFERENCE_IMAGE_SIZE_MM,
+    REFERENCE_IMAGE_SIZE_MM
+  )
+  pdf.link(imageX, imageY, REFERENCE_IMAGE_SIZE_MM, REFERENCE_IMAGE_SIZE_MM, {
+    url: referenceLink.url,
+  })
   pdf.setFont(getExportFontFamily(), 'normal')
   pdf.setFontSize(REFERENCE_URL_FONT_SIZE_PT)
-  pdf.setTextColor(75, 85, 99)
+  pdf.setTextColor(colors.secondaryText)
   pdf.text(referenceLink.displayHost, labelX, labelY, {
     align: 'center',
     maxWidth: REFERENCE_IMAGE_SIZE_MM + 4,
   })
-  pdf.setTextColor(0, 0, 0)
+  pdf.setTextColor(colors.textColor)
+}
+
+function paintPdfPageBackground(
+  pdf: jsPDF,
+  pageWidth: number,
+  pageHeight: number,
+  exportTheme: ExportTheme
+): void {
+  pdf.setFillColor(getThemeColors(exportTheme).background)
+  pdf.rect(0, 0, pageWidth, pageHeight, 'F')
 }
 
 /**
@@ -82,7 +105,8 @@ export async function composePdfPage(
   diagnostics: ExportDiagnostic[],
   infoBlock?: PdfPageInfoBlock | null,
   panelTitle?: string | null,
-  referenceLink?: ExportPageReference | null
+  referenceLink?: ExportPageReference | null,
+  exportTheme: ExportTheme = 'light'
 ): Promise<ComposedPagePlacement | null> {
   try {
     // Reset jsPDF font state at the start of every composed page so that
@@ -97,6 +121,8 @@ export async function composePdfPage(
 
     const pageWidth = orientation === 'landscape' ? A4_LANDSCAPE.width : A4_PORTRAIT.width
     const pageHeight = orientation === 'landscape' ? A4_LANDSCAPE.height : A4_PORTRAIT.height
+    const themeColors = getThemeColors(exportTheme)
+    paintPdfPageBackground(pdf, pageWidth, pageHeight, exportTheme)
     const usableWidth = pageWidth - PAGE_MARGIN * 2
     const contentWidth = usableWidth
     const contentHeight = getPdfContentHeightMm(orientation, {
@@ -153,7 +179,7 @@ export async function composePdfPage(
       titleText.setAttribute('font-size', '3.5')
       titleText.setAttribute('font-weight', 'bold')
       titleText.setAttribute('font-family', 'sans-serif')
-      titleText.setAttribute('fill', '#1f2937')
+      titleText.setAttribute('fill', themeColors.textColor)
       titleText.textContent = panelTitle
       positionedSvg.appendChild(titleText)
     }
@@ -247,7 +273,7 @@ export async function composePdfPage(
     })
 
     if (referenceLink) {
-      addReferenceLinkToPdf(pdf, referenceLink, pageWidth)
+      addReferenceLinkToPdf(pdf, referenceLink, pageWidth, exportTheme)
     }
 
     return {
@@ -300,7 +326,10 @@ function grayscaleCanvasInPlace(canvas: HTMLCanvasElement): void {
   context.putImageData(imageData, 0, 0)
 }
 
-async function addLimitedWatermark(canvas: HTMLCanvasElement): Promise<void> {
+async function addLimitedWatermark(
+  canvas: HTMLCanvasElement,
+  exportTheme: ExportTheme
+): Promise<void> {
   const context = canvas.getContext('2d')
   if (!context) return
 
@@ -322,12 +351,12 @@ async function addLimitedWatermark(canvas: HTMLCanvasElement): Promise<void> {
     const totalWidth = targetWidth + gap + suffixWidth
     const logoX = -totalWidth / 2
     context.drawImage(logo, logoX, -targetHeight / 2, targetWidth, targetHeight)
-    context.fillStyle = '#111827'
+    context.fillStyle = getThemeColors(exportTheme).textColor
     context.textAlign = 'left'
     context.textBaseline = 'middle'
     context.fillText(suffix, logoX + targetWidth + gap, 0)
   } catch {
-    context.fillStyle = '#111827'
+    context.fillStyle = getThemeColors(exportTheme).textColor
     context.font = `700 ${Math.round(canvas.width * 0.11)}px sans-serif`
     context.textAlign = 'center'
     context.textBaseline = 'middle'
@@ -337,7 +366,10 @@ async function addLimitedWatermark(canvas: HTMLCanvasElement): Promise<void> {
   }
 }
 
-async function rasterizeSvgPageToDataUrl(positionedSvg: SVGSVGElement): Promise<string> {
+async function rasterizeSvgPageToDataUrl(
+  positionedSvg: SVGSVGElement,
+  exportTheme: ExportTheme
+): Promise<string> {
   const serializer = new XMLSerializer()
   const svgText = serializer.serializeToString(positionedSvg)
   const blob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' })
@@ -353,11 +385,14 @@ async function rasterizeSvgPageToDataUrl(positionedSvg: SVGSVGElement): Promise<
     canvas.height = heightPx
     const context = canvas.getContext('2d')
     if (!context) throw new Error('Could not create raster export canvas')
-    context.fillStyle = '#ffffff'
-    context.fillRect(0, 0, widthPx, heightPx)
     context.drawImage(image, 0, 0, widthPx, heightPx)
     grayscaleCanvasInPlace(canvas)
-    await addLimitedWatermark(canvas)
+    await addLimitedWatermark(canvas, exportTheme)
+    context.save()
+    context.globalCompositeOperation = 'destination-over'
+    context.fillStyle = getThemeColors(exportTheme).background
+    context.fillRect(0, 0, widthPx, heightPx)
+    context.restore()
     return canvas.toDataURL('image/jpeg', LIMITED_RASTER_JPEG_QUALITY)
   } finally {
     URL.revokeObjectURL(url)
@@ -374,7 +409,8 @@ export async function composeLimitedRasterPdfPage(
   page: ExportPage,
   diagnostics: ExportDiagnostic[],
   infoBlock?: PdfPageInfoBlock | null,
-  panelTitle?: string | null
+  panelTitle?: string | null,
+  exportTheme: ExportTheme = 'light'
 ): Promise<ComposedPagePlacement | null> {
   try {
     const orientation: 'landscape' | 'portrait' =
@@ -383,6 +419,7 @@ export async function composeLimitedRasterPdfPage(
 
     const pageWidth = orientation === 'landscape' ? A4_LANDSCAPE.width : A4_PORTRAIT.width
     const pageHeight = orientation === 'landscape' ? A4_LANDSCAPE.height : A4_PORTRAIT.height
+    const themeColors = getThemeColors(exportTheme)
     const usableWidth = pageWidth - PAGE_MARGIN * 2
     const contentWidth = usableWidth
     const contentHeight = getPdfContentHeightMm(orientation, {
@@ -431,7 +468,7 @@ export async function composeLimitedRasterPdfPage(
       titleText.setAttribute('font-size', '3.5')
       titleText.setAttribute('font-weight', 'bold')
       titleText.setAttribute('font-family', 'sans-serif')
-      titleText.setAttribute('fill', '#1f2937')
+      titleText.setAttribute('fill', themeColors.textColor)
       titleText.textContent = panelTitle
       positionedSvg.appendChild(titleText)
     }
@@ -496,7 +533,7 @@ export async function composeLimitedRasterPdfPage(
       positionedSvg.appendChild(infoGroup)
     }
 
-    const dataUrl = await rasterizeSvgPageToDataUrl(positionedSvg)
+    const dataUrl = await rasterizeSvgPageToDataUrl(positionedSvg, exportTheme)
     pdf.addImage(dataUrl, 'JPEG', 0, 0, pageWidth, pageHeight)
 
     return {
@@ -527,11 +564,13 @@ export async function composeFullSvgPage(
   svgString: string,
   pageId: string,
   diagnostics: ExportDiagnostic[],
-  orientation: 'portrait' | 'landscape' = 'portrait'
+  orientation: 'portrait' | 'landscape' = 'portrait',
+  exportTheme: ExportTheme = 'light'
 ): Promise<void> {
   try {
     const pageWidth = orientation === 'landscape' ? A4_LANDSCAPE.width : A4_PORTRAIT.width
     const pageHeight = orientation === 'landscape' ? A4_LANDSCAPE.height : A4_PORTRAIT.height
+    paintPdfPageBackground(pdf, pageWidth, pageHeight, exportTheme)
 
     const parser = new DOMParser()
     const svgDoc = parser.parseFromString(svgString, 'image/svg+xml')

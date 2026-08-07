@@ -13,6 +13,7 @@ import { dedupeAllPanelsProtectionsInProject } from '@/lib/eendraad/mainBusOrder
 import { ensureInstallationFeedTopology } from '@/lib/feedTopology'
 import { healSupplyTrunkMisplacedOnMainGrid } from '@/lib/panel/healSupplyTrunkGrid'
 import { healEarthingSitplanPlacements } from '@/lib/plan/earthingSitplanPlacement'
+import { healJunctionBoxSitplanPlacements } from '@/lib/plan/junctionBoxSitplanPlacement'
 import { healProjectFloorsElectricalLayers } from '@/lib/plan/floorLayers'
 import { healPlanWiring } from '@/lib/plan/planWiring'
 import {
@@ -91,6 +92,7 @@ export function hydrateProjectForEditor(project: ProjectInput): {
   normalizeFloorPlanAssets(runtimeProject)
   healProjectFloorsElectricalLayers(runtimeProject)
   const healedEarthingSitplan = healEarthingSitplanPlacements(runtimeProject)
+  const healedJunctionBoxSitplan = healJunctionBoxSitplanPlacements(runtimeProject)
   const healedPlanWiring = healPlanWiring(runtimeProject)
   syncValidationFromCompatibility(runtimeProject)
   stripLazyElementGraphForRuntime(runtimeProject)
@@ -113,6 +115,7 @@ export function hydrateProjectForEditor(project: ProjectInput): {
       removedDuplicatePanelGridRefs ||
       healedSharedPlanScale ||
       healedEarthingSitplan ||
+      healedJunctionBoxSitplan ||
       healedPlanWiring,
   }
 }

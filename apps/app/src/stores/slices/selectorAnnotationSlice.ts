@@ -143,6 +143,7 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
           layer: earthing.layer ?? 'default',
           pos: earthing.pos,
           rotationDeg: (earthing.rotationDeg ?? 0) as 0 | 90 | 180 | 270,
+          rotationMode: earthing.rotationMode,
           scale: earthing.scale ?? 1,
           locked: earthing.locked,
           isEarthing: true,
@@ -153,6 +154,12 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
           const placement = endpoint.placements.find((p) => p.id === id)
           if (placement) {
             return { ...placement, endpointId: endpoint.id }
+          }
+        }
+        for (const circuit of getAllCircuits(panel)) {
+          for (const device of circuit.trunkDevices ?? []) {
+            const placement = device.placements?.find((candidate) => candidate.id === id)
+            if (placement) return { ...placement, trunkDeviceId: device.id }
           }
         }
       }
@@ -396,7 +403,7 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
       const { currentProject } = get()
       if (!currentProject) return []
       const result: Array<
-        Placement & { endpointId?: string; junctionPanelLabel?: string; isEarthing?: boolean }
+        Placement & { endpointId?: string; trunkDeviceId?: string; junctionPanelLabel?: string; isEarthing?: boolean }
       > = []
       for (const panel of getElectricalPanelsFromProject(currentProject)) {
         const endpoints = getAllEndpoints(panel)
@@ -404,6 +411,15 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
           for (const placement of endpoint.placements) {
             if (placement.floorId === floorId) {
               result.push({ ...placement, endpointId: endpoint.id })
+            }
+          }
+        }
+        for (const circuit of getAllCircuits(panel)) {
+          for (const device of circuit.trunkDevices ?? []) {
+            for (const placement of device.placements ?? []) {
+              if (placement.floorId === floorId) {
+                result.push({ ...placement, trunkDeviceId: device.id })
+              }
             }
           }
         }
@@ -418,6 +434,7 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
             layer: jp.layer ?? 'default',
             pos: jp.pos,
             rotationDeg: (jp.rotationDeg ?? 0) as 0 | 90 | 180 | 270,
+            rotationMode: jp.rotationMode,
             scale: jp.scale ?? 1,
             junctionPanelLabel: jp.label,
           })
@@ -432,6 +449,7 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
             layer: ep.layer ?? 'default',
             pos: ep.pos,
             rotationDeg: (ep.rotationDeg ?? 0) as 0 | 90 | 180 | 270,
+            rotationMode: ep.rotationMode,
             scale: ep.scale ?? 1,
             locked: ep.locked,
             isEarthing: true,

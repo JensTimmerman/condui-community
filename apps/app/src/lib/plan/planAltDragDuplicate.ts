@@ -86,6 +86,7 @@ export function createPlanPropertyAltDuplicatePlacement(
       y: refPlacement.pos.y + PLAN_ALT_DRAG_COPY_OFFSET.y,
     },
     rotationDeg: refPlacement.rotationDeg ?? 0,
+    rotationMode: refPlacement.rotationMode,
     scale: refPlacement.scale ?? 1,
     locked: false,
   })
@@ -162,6 +163,7 @@ export function runPlanEndpointAltDragDuplicate(
     layer: refPlacement?.layer ?? 'electrical',
     pos: { x: dropPos.x, y: dropPos.y },
     rotationDeg: refPlacement?.rotationDeg ?? 0,
+    rotationMode: refPlacement?.rotationMode,
     scale: refPlacement?.scale ?? 1,
     locked: false,
   })

@@ -9,6 +9,7 @@ import { Search, X } from 'lucide-react'
 import { useLibraryStore } from '@/stores/libraryStore'
 import type { SymbolMetadata } from '@/lib/symbols'
 import type { Point } from '@/types/ui'
+import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
 
 const ADD_ELEMENT_DROP_MARGIN = 12
 
@@ -18,7 +19,7 @@ function filterByScope(symbols: SymbolMetadata[], scope: AddElementScope): Symbo
   if (scope === 'eendraad') {
     return symbols.filter((s) => s.scope === 'eendraad' || s.scope === 'both')
   }
-  return symbols.filter((s) => s.scope === 'situatieplan' || s.scope === 'both')
+  return symbols.filter((s) => canSymbolAppearOnSituationPlan(s.id))
 }
 
 interface AddElementPickerProps {

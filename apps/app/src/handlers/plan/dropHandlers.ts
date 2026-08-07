@@ -100,8 +100,11 @@ function createStoreDropBehaviorCallbacks(
     setSelection: () => {},
     getFloorById: (floorId) => {
       const floor = store.getFloorById(floorId)
-      return floor ? { id: floor.id, layers: floor.layers } : null
+      return floor
+        ? { id: floor.id, layers: floor.layers, hiddenSitplanPlacementIds: floor.hiddenSitplanPlacementIds }
+        : null
     },
+    updateFloor: store.updateFloor,
     getCircuitById: (circuitId) => store.getCircuitById(circuitId) ?? null,
     getProtectionById: (protectionId) => store.getProtectionById(protectionId) ?? null,
     addTrunkDevice: store.addTrunkDevice,

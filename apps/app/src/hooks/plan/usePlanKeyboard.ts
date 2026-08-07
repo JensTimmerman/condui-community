@@ -33,6 +33,7 @@ import {
   describePlanKeyboardDecision,
   PLAN_ARROW_KEY_PRECEDENCE,
 } from '@/lib/plan/planKeyboardDecisions'
+import { explicitClockwiseRotationPatch } from '@/lib/plan/situationPlanRotation'
 
 type PlanKeyboardProject = ProjectWithOptionalV2Building & ProjectWithOptionalV2Electrical
 
@@ -191,6 +192,7 @@ export type PlanKeyboardOptions = {
 
 type FloorPlacement = Placement & {
   endpointId?: string
+  trunkDeviceId?: string
   junctionPanelLabel?: string
   isEarthing?: boolean
 }
@@ -247,6 +249,78 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
       if (keyboardDisabled) return
       const floors = getCurrentProjectFloors()
       const pointerOverPlan = pointerOverPlanRef?.current === true
+
+      if (
+        pointerOverPlan &&
+        !typing &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !e.repeat &&
+        (e.key === 'r' || e.key === 'R') &&
+        activeFloorId
+      ) {
+        const store = useProjectStore.getState()
+        const { selection } = useUIStore.getState()
+        const rows = store.getPlacementsByFloor(activeFloorId) as FloorPlacement[]
+        const selectedPlacementIds = new Set<string>()
+
+        if (selection.type === 'placement') {
+          selection.ids.forEach((id) => selectedPlacementIds.add(id))
+        } else if (selection.type === 'ground' && selection.ids.includes('ground')) {
+          rows.filter((row) => row.isEarthing).forEach((row) => selectedPlacementIds.add(row.id))
+        } else if (selection.type === 'endpoint' || selection.type === 'panel') {
+          const endpointIds = new Set(
+            resolveSelectionToEndpointIds(selection, {
+              getPanelById: store.getPanelById,
+              getPanelByName: store.getPanelByName,
+              getAllEndpoints: store.getAllEndpoints,
+            })
+          )
+          rows
+            .filter((row) => row.endpointId && endpointIds.has(row.endpointId))
+            .forEach((row) => selectedPlacementIds.add(row.id))
+        } else if (selection.type === 'trunkDevice') {
+          const trunkDeviceIds = new Set(selection.ids)
+          const junctionPanelLabels = new Set(
+            selection.ids.flatMap((id) => {
+              const device = store.getTrunkDeviceById(id)?.device
+              return device?.type === 'junction_panel' && device.label ? [device.label] : []
+            })
+          )
+          rows
+            .filter(
+              (row) =>
+                (row.trunkDeviceId != null && trunkDeviceIds.has(row.trunkDeviceId)) ||
+                (row.junctionPanelLabel != null &&
+                  (trunkDeviceIds.has(row.id) || junctionPanelLabels.has(row.junctionPanelLabel)))
+            )
+            .forEach((row) => selectedPlacementIds.add(row.id))
+        }
+
+        const targets = rows.filter((row) => selectedPlacementIds.has(row.id))
+        if (targets.length > 0) {
+          e.preventDefault()
+          store.withSingleUndoEntry(
+            () => {
+              targets.forEach((placement) => {
+                const patch = explicitClockwiseRotationPatch(placement)
+                if (placement.junctionPanelLabel != null) {
+                  store.updateJunctionPanelPlacement(placement.id, patch)
+                } else if (placement.isEarthing) {
+                  store.updateEarthingPlacement(placement.id, patch)
+                } else {
+                  store.updatePlacement(placement.id, patch)
+                }
+              })
+              return true
+            },
+            { sessionLabel: 'rotate situation plan symbols' }
+          )
+          return
+        }
+      }
+
       const decisionContext = {
         pointerOverPlan,
         suppressDigitFloorShortcuts: !!suppressDigitFloorShortcuts,

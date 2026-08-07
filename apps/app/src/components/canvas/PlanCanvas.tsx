@@ -28,6 +28,7 @@ import {
   type FloorPlanClipboardPayload,
 } from '@/lib/plan/floorPlanClipboard'
 import { endpointSymbolVisibleOnSitplan } from '@/lib/plan/planSymbolVisibility'
+import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
 import { getTouchPointHitRadiusCanvas } from '@/lib/canvas/touchHitZones'
 import { getSymbolById, type SymbolMetadata } from '@/lib/symbols'
 import type { CanvasDropMeta, Point, Selection } from '@/types/ui'
@@ -75,6 +76,7 @@ import { PlanDebugOverlay } from './plan/PlanDebugOverlay'
 import { CanvasOverlayScaleProvider } from '@/contexts/CanvasOverlayScaleContext'
 import CanvasFloatingControlRail from './CanvasFloatingControlRail'
 import { suggestRotationForPlacement } from '@/utils/planAutoOrient'
+import { hasExplicitSituationPlanRotation } from '@/lib/plan/situationPlanRotation'
 import FloorSelectionDialog from '../plan/FloorSelectionDialog'
 import { useDialogStore } from '@/stores/dialogStore'
 import { useCanvasRegistryStore } from '@/stores/canvasRegistryStore'
@@ -1244,6 +1246,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
               layer: row.layer,
               pos: row.pos,
               rotationDeg: row.rotationDeg,
+              rotationMode: row.rotationMode,
               scale: row.scale,
               locked: row.locked,
               style: row.style,
@@ -5279,7 +5282,11 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
         pos: snappedPos,
       }
 
-      if (endpoint && (endpoint.type === 'socket' || endpoint.symbol === 'panel_distribution')) {
+      if (
+        endpoint &&
+        !hasExplicitSituationPlanRotation(placement) &&
+        (endpoint.type === 'socket' || endpoint.symbol === 'panel_distribution')
+      ) {
         const wallFacingSide = endpoint.symbol === 'panel_distribution' ? 'top' : 'left'
         const suggestedRotation = suggestRotationForPlacement(
           { ...placement, pos: snappedPos },
@@ -5934,8 +5941,8 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
         return
       }
 
-      if (symbol.scope === 'eendraad') {
-        logger.warn('PlanCanvas: Symbol scope is eendraad only:', symbol.id)
+      if (!canSymbolAppearOnSituationPlan(symbol.id)) {
+        logger.warn('PlanCanvas: Symbol is unavailable on the situation plan:', symbol.id)
         return
       }
 
@@ -7870,7 +7877,12 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
                     ) => {
                       const endpoint =
                         placement.endpointId != null ? getEndpointById(placement.endpointId) : null
-                      const labelText = endpoint?.label ?? placement.junctionPanelLabel
+                      const trunkDevice = (placement as Placement & { trunkDeviceId?: string }).trunkDeviceId
+                        ? useProjectStore.getState().getTrunkDeviceById(
+                            (placement as Placement & { trunkDeviceId: string }).trunkDeviceId
+                          )?.device
+                        : null
+                      const labelText = endpoint?.label ?? trunkDevice?.label ?? placement.junctionPanelLabel
                       if (!labelText) return null
                       const staticLabelPosition = labelPositions.get(placement.id)
                       if (!staticLabelPosition && !isDraggingRef.current) return null

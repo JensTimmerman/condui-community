@@ -298,6 +298,7 @@ function duplicateNonMultiplierProperty(
         y: basePos.y + MULTIPLIER_PLACEMENT_OFFSET,
       },
       rotationDeg: refPlacement?.rotationDeg ?? 0,
+      rotationMode: refPlacement?.rotationMode,
       scale: refPlacement?.scale ?? 1,
       locked: false,
     })

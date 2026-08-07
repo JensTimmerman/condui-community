@@ -51,6 +51,8 @@ const TRUNK_ONLY_ON_CIRCUIT_SYMBOLS = new Set([
   'dc_dc_converter',
 ])
 
+const TRUNK_CAPABLE_ENDPOINT_SYMBOLS = new Set(['junction_box', 'junction_panel'])
+
 function isProtectionDragSymbol(symbol: SymbolMetadata): boolean {
   return PROTECTION_DRAG_SYMBOL_IDS.has(symbol.id)
 }
@@ -61,7 +63,7 @@ function isEndpointDragSymbol(symbol: SymbolMetadata): boolean {
 
 function findCircuitInProject(
   project: ProjectWithOptionalV2Electrical,
-  circuitId: string,
+  circuitId: string
 ): Circuit | undefined {
   const stack: Panel[] = [...getElectricalPanelsFromProject(project)]
   while (stack.length) {
@@ -81,7 +83,7 @@ function findCircuitInProject(
 
 function circuitFeedsSubPanel(
   project: ProjectWithOptionalV2Electrical,
-  circuitId: string,
+  circuitId: string
 ): boolean {
   const stack: Panel[] = [...getElectricalPanelsFromProject(project)]
   while (stack.length) {
@@ -107,7 +109,7 @@ function hintCenter(node: LayoutNode): { x: number; y: number } {
 }
 
 function parseCircuitTrunkSegmentId(
-  nodeId: string,
+  nodeId: string
 ): { circuitId: string; segmentIndex: number } | null {
   const match = nodeId.match(/^circuit-trunk-(.+)-segment-(\d+)$/)
   if (!match) return null
@@ -123,7 +125,10 @@ function buildTrunkSegmentCountByCircuit(layoutTree: LayoutTree): Map<string, nu
   const visit = (node: LayoutNode) => {
     const parsed = node.id ? parseCircuitTrunkSegmentId(node.id) : null
     if (parsed) {
-      counts.set(parsed.circuitId, Math.max(counts.get(parsed.circuitId) ?? 0, parsed.segmentIndex + 1))
+      counts.set(
+        parsed.circuitId,
+        Math.max(counts.get(parsed.circuitId) ?? 0, parsed.segmentIndex + 1)
+      )
     }
     for (const child of node.children) {
       visit(child)
@@ -137,7 +142,7 @@ function buildTrunkSegmentCountByCircuit(layoutTree: LayoutTree): Map<string, nu
 
 function isLastCircuitTrunkSegment(
   nodeId: string,
-  trunkSegmentCounts: Map<string, number>,
+  trunkSegmentCounts: Map<string, number>
 ): boolean {
   const parsed = parseCircuitTrunkSegmentId(nodeId)
   if (!parsed) return false
@@ -167,7 +172,9 @@ type LastTrunkSegmentInfo = {
   segmentIndex: number
 }
 
-function collectLastTrunkSegmentByCircuit(layoutTree: LayoutTree): Map<string, LastTrunkSegmentInfo> {
+function collectLastTrunkSegmentByCircuit(
+  layoutTree: LayoutTree
+): Map<string, LastTrunkSegmentInfo> {
   const map = new Map<string, LastTrunkSegmentInfo>()
   const visit = (node: LayoutNode) => {
     const parsed = node.id ? parseCircuitTrunkSegmentId(node.id) : null
@@ -192,9 +199,13 @@ function appendTrunkTopSlotHints(
   project: ProjectWithOptionalV2Electrical,
   layoutTree: LayoutTree,
   trunkSegmentCounts: Map<string, number>,
-  hints: HintWithSpan[],
+  hints: HintWithSpan[]
 ): void {
-  if (!TRUNK_ONLY_ON_CIRCUIT_SYMBOLS.has(symbol.id)) return
+  if (
+    !TRUNK_ONLY_ON_CIRCUIT_SYMBOLS.has(symbol.id) &&
+    !TRUNK_CAPABLE_ENDPOINT_SYMBOLS.has(symbol.id)
+  )
+    return
 
   const lastSegmentByCircuit = collectLastTrunkSegmentByCircuit(layoutTree)
   const existingSlots = new Set<string>()
@@ -286,7 +297,7 @@ function isSupplyWireSlotSegment(node: LayoutNode, panelNode: LayoutNode): boole
   if (id.includes('supply-wire-vertical')) return false
 
   const hasHorizontalSegments = panelNode.children.some((c) =>
-    c.id?.startsWith(`supply-wire-segment-${panelId}-`),
+    c.id?.startsWith(`supply-wire-segment-${panelId}-`)
   )
 
   const suffix = supplySegmentSuffix(id, panelId)
@@ -306,7 +317,7 @@ function isSupplyWireSlotSegment(node: LayoutNode, panelNode: LayoutNode): boole
 function buildHintMatch(
   node: LayoutNode,
   hitType: NonNullable<DropTarget['type']>,
-  ctx: HintWalkContext,
+  ctx: HintWalkContext
 ): DropZoneHintMatch | undefined {
   if (hitType === 'supplyWire') {
     return {
@@ -366,7 +377,7 @@ function shouldIncludeHintNode(
   symbol: SymbolMetadata,
   project: ProjectWithOptionalV2Electrical,
   panelNode: LayoutNode,
-  trunkSegmentCounts: Map<string, number>,
+  trunkSegmentCounts: Map<string, number>
 ): boolean {
   if (shouldSkipContainerNode(node)) return false
   if (node.hitZone?.type !== hitType) return false
@@ -404,6 +415,7 @@ function shouldIncludeHintNode(
     if (node.id?.startsWith('circuit-nest-')) return false
     if (node.type === 'trunkDevice') return false
     if (node.id?.startsWith('circuit-trunk-')) {
+      if (TRUNK_CAPABLE_ENDPOINT_SYMBOLS.has(symbol.id)) return true
       const circuit = ctx.circuitId ? findCircuitInProject(project, ctx.circuitId) : undefined
       if ((circuit?.subCircuitIds?.length ?? 0) === 0) return false
       return isLastCircuitTrunkSegment(node.id, trunkSegmentCounts)
@@ -415,7 +427,7 @@ function shouldIncludeHintNode(
         (child) =>
           child.type === 'endpoint' &&
           (child.domainRef as Endpoint | undefined)?.symbol === 'domotica' &&
-          !(child.domainRef as Endpoint | undefined)?.domoticaChildProps,
+          !(child.domainRef as Endpoint | undefined)?.domoticaChildProps
       )
       if (hasDomoticaParent) return false
 
@@ -461,7 +473,10 @@ function shouldIncludeHintNode(
   }
 
   if (node.type === 'trunkDevice') {
-    if (node.id?.startsWith('supplyTrunkDevice-') || node.id?.startsWith('subpanelSupplyTrunkDevice-')) {
+    if (
+      node.id?.startsWith('supplyTrunkDevice-') ||
+      node.id?.startsWith('subpanelSupplyTrunkDevice-')
+    ) {
       return false
     }
     if (node.id?.startsWith('groundTrunkDevice-')) {
@@ -496,7 +511,7 @@ function visitForHints(
   symbol: SymbolMetadata,
   project: ProjectWithOptionalV2Electrical,
   trunkSegmentCounts: Map<string, number>,
-  hints: HintWithSpan[],
+  hints: HintWithSpan[]
 ): void {
   const nextCtx = accumulateHintContext(node, ctx)
 
@@ -509,7 +524,7 @@ function visitForHints(
         symbol,
         project,
         panelNode,
-        trunkSegmentCounts,
+        trunkSegmentCounts
       )
     ) {
       const { x, y } = hintAnchor(node)
@@ -530,7 +545,16 @@ function visitForHints(
   }
 
   for (const child of node.children) {
-    visitForHints(child, nextCtx, panelNode, validTargets, symbol, project, trunkSegmentCounts, hints)
+    visitForHints(
+      child,
+      nextCtx,
+      panelNode,
+      validTargets,
+      symbol,
+      project,
+      trunkSegmentCounts,
+      hints
+    )
   }
 }
 
@@ -540,7 +564,7 @@ function visitForHints(
 export function isDropZoneHintActive(
   hint: DropZoneHint,
   dropTarget: DropTarget | null,
-  matchedNodeId: string | null,
+  matchedNodeId: string | null
 ): boolean {
   if (!dropTarget || dropTarget.type !== hint.targetType) return false
   if (matchedNodeId && matchedNodeId === hint.nodeId) return true
@@ -616,19 +640,17 @@ export function resolveActiveDropZoneHintNodeId(
   hints: DropZoneHint[],
   dropTarget: DropTarget | null,
   matchedNodeId: string | null,
-  position: Point | null,
+  position: Point | null
 ): string | null {
   if (!dropTarget?.type) return null
 
   const exactMatch = matchedNodeId
-    ? hints.find(
-        (hint) => hint.nodeId === matchedNodeId && hint.targetType === dropTarget.type,
-      )
+    ? hints.find((hint) => hint.nodeId === matchedNodeId && hint.targetType === dropTarget.type)
     : undefined
   if (exactMatch) return exactMatch.nodeId
 
   const semanticMatches = hints.filter((hint) =>
-    isDropZoneHintActive(hint, dropTarget, matchedNodeId),
+    isDropZoneHintActive(hint, dropTarget, matchedNodeId)
   )
   const candidates =
     semanticMatches.length > 0
@@ -653,13 +675,13 @@ export function resolveActiveDropZoneHintNodeId(
 export function collectDropZoneHints(
   symbol: SymbolMetadata,
   layoutTree: LayoutTree,
-  project: ProjectWithOptionalV2Electrical,
+  project: ProjectWithOptionalV2Electrical
 ): DropZoneHint[] {
   const behavior = dropBehaviors[symbol.id]
   if (!behavior) return []
 
   const validTargets = new Set(
-    behavior.validTargets.filter((t): t is NonNullable<DropTarget['type']> => t !== null),
+    behavior.validTargets.filter((t): t is NonNullable<DropTarget['type']> => t !== null)
   )
   if (validTargets.size === 0) return []
 
@@ -676,7 +698,7 @@ export function collectDropZoneHints(
       symbol,
       project,
       trunkSegmentCounts,
-      rawHints,
+      rawHints
     )
   }
 

@@ -438,6 +438,8 @@ export interface TrunkDevice {
   type: TrunkDeviceType
   symbol: SymbolKey
   label: string
+  /** Situation-plan instances for trunk devices that also have a physical plan symbol. */
+  placements?: Placement[]
   /** Show domain-change label (AC/DC symbol) after this device on 1draad trunk. Defaults to true. */
   showDomainChangeLabel?: boolean
   energyMeterProps?: EnergyMeterDeviceProps
@@ -960,6 +962,8 @@ export interface Placement {
   layer: string
   pos: Point2
   rotationDeg: Rotation
+  /** Set after a user rotates the situation-plan symbol with R. Missing means auto-rotation may apply. */
+  rotationMode?: 'explicit'
   scale: number
   locked?: boolean // If true, position cannot be moved
   style?: Record<string, unknown>
@@ -1017,6 +1021,7 @@ export interface JunctionPanelPlacement {
   floorId: string
   pos: Point2
   rotationDeg?: Rotation
+  rotationMode?: 'explicit'
   scale?: number
   layer?: string
 }
@@ -1027,6 +1032,7 @@ export interface EarthingPlacement {
   floorId: string
   pos: Point2
   rotationDeg?: Rotation
+  rotationMode?: 'explicit'
   scale?: number
   layer?: string
   locked?: boolean

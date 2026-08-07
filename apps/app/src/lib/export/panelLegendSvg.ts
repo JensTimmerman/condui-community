@@ -5,6 +5,8 @@ import {
   getElectricalPanelsFromProject,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
+import type { ExportTheme } from './types'
+import { getThemeColors } from '@/lib/theme/colors'
 
 interface CircuitLegendRow {
   panelName: string
@@ -14,7 +16,10 @@ interface CircuitLegendRow {
   notes: string | undefined
 }
 
-function collectAllPanelsWithPath(panels: Panel[], prefix: string[] = []): Array<{ panel: Panel; pathLabel: string }> {
+function collectAllPanelsWithPath(
+  panels: Panel[],
+  prefix: string[] = []
+): Array<{ panel: Panel; pathLabel: string }> {
   const result: Array<{ panel: Panel; pathLabel: string }> = []
   for (const panel of panels) {
     const path = [...prefix, panel.name]
@@ -33,21 +38,22 @@ function getProtectionForCircuit(panel: Panel, circuitId: string): ProtectionDev
   return null
 }
 
-export function buildPanelCircuitLegendRows(project: ProjectWithOptionalV2Electrical): CircuitLegendRow[] {
+export function buildPanelCircuitLegendRows(
+  project: ProjectWithOptionalV2Electrical
+): CircuitLegendRow[] {
   const rows: CircuitLegendRow[] = []
   const panelsWithPath = collectAllPanelsWithPath(getElectricalPanelsFromProject(project))
 
   for (const { panel, pathLabel } of panelsWithPath) {
     const addCircuit = (circuit: Circuit) => {
       if (!circuit.code) return
-      // Skip synthetic / empty feeder circuits (e.g. panel-labelled, no loads, or derived empty)
-      const hasLoads = circuit.endpoints.length > 0 || (circuit.trunkDevices?.length ?? 0) > 0
-      if (!hasLoads) return
       const protection = getProtectionForCircuit(panel, circuit.id)
       const kind = getDerivedCircuitKind(circuit, protection ?? undefined)
-      if (kind === 'empty') return
       const codeLower = circuit.code.toLowerCase()
       const nameLower = panel.name.toLowerCase()
+      // Keep named empty circuits in the legend: installers use these rows for
+      // spare/reserve ways, including circuits attached to a secondary busbar.
+      // Only structural panel-feeder placeholders remain hidden.
       if (codeLower === 'panel' || codeLower === nameLower) return
       rows.push({
         panelName: pathLabel,
@@ -115,7 +121,9 @@ export function buildPanelLegendSvg(
   rows: CircuitLegendRow[],
   fontFamily: string,
   labels: PanelLegendLabels,
+  exportTheme: ExportTheme = 'light'
 ): string {
+  const colors = getThemeColors(exportTheme)
   const width = A4_PORTRAIT.width
   const height = A4_PORTRAIT.height
   const startX = PAGE_MARGIN
@@ -131,35 +139,35 @@ export function buildPanelLegendSvg(
 
   const lines: string[] = []
   lines.push(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" fill="${colors.textColor}">`
   )
 
   lines.push(
     `<text x="${startX}" y="${y}" font-size="6" font-family="${fontFamily}" font-weight="bold">` +
       escapeXml(labels.title) +
-      `</text>`,
+      `</text>`
   )
   y += lineHeight * 1.8
 
   lines.push(
     `<text x="${colCircuit}" y="${y}" font-size="3.2" font-family="${fontFamily}" font-weight="bold">${escapeXml(
-      labels.circuit,
-    )}</text>`,
+      labels.circuit
+    )}</text>`
   )
   lines.push(
     `<text x="${colType}" y="${y}" font-size="3.2" font-family="${fontFamily}" font-weight="bold">${escapeXml(
-      labels.type,
-    )}</text>`,
+      labels.type
+    )}</text>`
   )
   lines.push(
     `<text x="${colProtection}" y="${y}" font-size="3.2" font-family="${fontFamily}" font-weight="bold">${escapeXml(
-      labels.protection,
-    )}</text>`,
+      labels.protection
+    )}</text>`
   )
   lines.push(
     `<text x="${colNotes}" y="${y}" font-size="3.2" font-family="${fontFamily}" font-weight="bold">${escapeXml(
-      labels.notes,
-    )}</text>`,
+      labels.notes
+    )}</text>`
   )
 
   y += lineHeight
@@ -176,8 +184,8 @@ export function buildPanelLegendSvg(
       y += lineHeight * 0.5
       lines.push(
         `<text x="${startX}" y="${y}" font-size="3.4" font-family="${fontFamily}" font-weight="bold">${escapeXml(
-          `${labels.panel}: ${currentPanel}`,
-        )}</text>`,
+          `${labels.panel}: ${currentPanel}`
+        )}</text>`
       )
       y += lineHeight
       if (y > height - PAGE_MARGIN) {
@@ -192,26 +200,26 @@ export function buildPanelLegendSvg(
 
     lines.push(
       `<text x="${colCircuit}" y="${y}" font-size="3" font-family="${fontFamily}">${escapeXml(
-        circuitText,
-      )}</text>`,
+        circuitText
+      )}</text>`
     )
     lines.push(
       `<text x="${colType}" y="${y}" font-size="3" font-family="${fontFamily}">${escapeXml(
-        typeText,
-      )}</text>`,
+        typeText
+      )}</text>`
     )
     if (protText) {
       lines.push(
         `<text x="${colProtection}" y="${y}" font-size="3" font-family="${fontFamily}">${escapeXml(
-          protText,
-        )}</text>`,
+          protText
+        )}</text>`
       )
     }
     if (notesText) {
       lines.push(
         `<text x="${colNotes}" y="${y}" font-size="3" font-family="${fontFamily}">${escapeXml(
-          notesText,
-        )}</text>`,
+          notesText
+        )}</text>`
       )
     }
 
@@ -231,4 +239,3 @@ function escapeXml(text: string): string {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;')
 }
-

@@ -126,6 +126,7 @@ export function runEendraadEndpointAltDragDuplicate(
     addPlacement: deps.addPlacement,
     setSelection: deps.setSelection,
     getFloorById: deps.getFloorById,
+    updateFloor: store.updateFloor,
     getCircuitById: (circuitId) => store.getCircuitById(circuitId) || null,
     getProtectionById: deps.getProtectionById,
     addTrunkDevice: store.addTrunkDevice,

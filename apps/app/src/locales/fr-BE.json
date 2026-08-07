@@ -172,6 +172,7 @@
       "q": "Q",
       "w": "W",
       "d": "D",
+      "r": "R",
       "f1": "F1",
       "f2": "F2",
       "f3": "F3",
@@ -288,6 +289,10 @@
       },
       "openingWidthType": {
         "description": "Largeur d'ouverture"
+      },
+      "rotateSymbols": {
+        "description": "Faire pivoter les symboles sélectionnés de 90° dans le sens horaire",
+        "note": "Lorsque le pointeur est sur le plan de situation ; désactive la rotation automatique pour ces placements"
       },
       "nudgeSymbols": {
         "description": "Déplacer les symboles sélectionnés",

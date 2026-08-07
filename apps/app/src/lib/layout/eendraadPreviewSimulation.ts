@@ -668,11 +668,7 @@ function simulateProtectionDrop(
     target.type === 'circuit' && target.circuitId
       ? findProtectionByCircuitIdInProject(project, target.circuitId)
       : null
-  if (
-    targetedCircuit &&
-    targetedProtection?.directPanelFeeder &&
-    targetedProtection.subPanelId
-  ) {
+  if (targetedCircuit && targetedProtection?.directPanelFeeder && targetedProtection.subPanelId) {
     const circuitCode = resolveInitialProtectionBusLabel(
       protectionType,
       getNextAvailableCircuitCode(project, panel.id)
@@ -730,34 +726,45 @@ function simulateProtectionDrop(
   if (target.type === 'circuit' && target.circuitId && !isSecondaryBusSlot) {
     const parentCircuit = findCircuitInProject(project, target.circuitId)
     if (parentCircuit) {
-      const hasEndpoints = parentCircuit.endpoints.length > 0
-      const hasBranches = (parentCircuit.branches?.length ?? 0) > 0
-      const hasTrunkDevices = (parentCircuit.trunkDevices?.length ?? 0) > 0
-
-      if (hasEndpoints || hasBranches || hasTrunkDevices) {
-        circuit.endpoints = [...parentCircuit.endpoints]
-        if (parentCircuit.branches) {
-          circuit.branches = [...parentCircuit.branches]
-        }
-        if (parentCircuit.trunkDevices) {
-          circuit.trunkDevices = [...parentCircuit.trunkDevices]
-        }
-        parentCircuit.endpoints = []
-        parentCircuit.branches = []
-        parentCircuit.trunkDevices = []
-        parentCircuit.subCircuitIds = [...(parentCircuit.subCircuitIds ?? []), circuitId]
+      const insertBeforeId = target.insertBeforeNestedCircuitId
+      const insertBeforeIndex = insertBeforeId
+        ? (parentCircuit.subCircuitIds ?? []).indexOf(insertBeforeId)
+        : -1
+      if (insertBeforeId && insertBeforeIndex >= 0) {
+        const nextParentChildren = [...(parentCircuit.subCircuitIds ?? [])]
+        nextParentChildren.splice(insertBeforeIndex, 1, circuitId)
+        parentCircuit.subCircuitIds = nextParentChildren
+        circuit.subCircuitIds = [insertBeforeId]
       } else {
-        parentCircuit.subCircuitIds = [...(parentCircuit.subCircuitIds ?? []), circuitId]
-      }
-      // Include parent so preview wires (e.g. secondary bus bar) for that circuit are drawn
-      if (!changeSet.affectedCircuitIds.includes(target.circuitId)) {
-        changeSet.affectedCircuitIds.push(target.circuitId)
-      }
+        const hasEndpoints = parentCircuit.endpoints.length > 0
+        const hasBranches = (parentCircuit.branches?.length ?? 0) > 0
+        const hasTrunkDevices = (parentCircuit.trunkDevices?.length ?? 0) > 0
 
-      const parentProtection = findProtectionByCircuitIdInProject(project, target.circuitId)
-      if (parentProtection?.subPanelId) {
-        protection.subPanelId = parentProtection.subPanelId
-        parentProtection.subPanelId = undefined
+        if (hasEndpoints || hasBranches || hasTrunkDevices) {
+          circuit.endpoints = [...parentCircuit.endpoints]
+          if (parentCircuit.branches) {
+            circuit.branches = [...parentCircuit.branches]
+          }
+          if (parentCircuit.trunkDevices) {
+            circuit.trunkDevices = [...parentCircuit.trunkDevices]
+          }
+          parentCircuit.endpoints = []
+          parentCircuit.branches = []
+          parentCircuit.trunkDevices = []
+          parentCircuit.subCircuitIds = [...(parentCircuit.subCircuitIds ?? []), circuitId]
+        } else {
+          parentCircuit.subCircuitIds = [...(parentCircuit.subCircuitIds ?? []), circuitId]
+        }
+        // Include parent so preview wires (e.g. secondary bus bar) for that circuit are drawn
+        if (!changeSet.affectedCircuitIds.includes(target.circuitId)) {
+          changeSet.affectedCircuitIds.push(target.circuitId)
+        }
+
+        const parentProtection = findProtectionByCircuitIdInProject(project, target.circuitId)
+        if (parentProtection?.subPanelId) {
+          protection.subPanelId = parentProtection.subPanelId
+          parentProtection.subPanelId = undefined
+        }
       }
     }
   }
@@ -1720,10 +1727,7 @@ export function simulateDropOnProject(
         circuit.id,
         target.secondaryBusInsertIndex
       )
-    } else if (
-      target.type === 'mainBus' &&
-      typeof target.mainBusInsertIndex === 'number'
-    ) {
+    } else if (target.type === 'mainBus' && typeof target.mainBusInsertIndex === 'number') {
       const beforeCount = target.mainBusItemCount ?? 0
       const desiredIndex = clamp(target.mainBusInsertIndex, 0, beforeCount)
       for (let index = beforeCount; index > desiredIndex; index -= 1) {

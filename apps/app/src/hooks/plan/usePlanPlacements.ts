@@ -1,6 +1,5 @@
 import { useMemo } from 'react'
 import { useProjectStore } from '@/stores/projectStore'
-import { getSymbolById } from '@/lib/symbols'
 import { getSymbolCategory } from '@/components/plan/SitplanVisibilityPanel'
 import type { SymbolKey, Placement } from '@/types/schema'
 import type { PlanVisibility } from '@/stores/uiStore'
@@ -9,9 +8,11 @@ import {
   getElectricalPanelsFromProject,
 } from '@/lib/projectV2/electrical'
 import { findPanelById } from '@/lib/panel/panelTree'
+import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
 
 type SitplanPlacementRow = Placement & {
   endpointId?: string
+  trunkDeviceId?: string
   isEarthing?: boolean
   junctionPanelLabel?: string
 }
@@ -28,6 +29,7 @@ export function usePlanPlacements(
     currentProject,
     getPlacementsByFloor,
     getEndpointById,
+    getTrunkDeviceById,
     findCircuitForEndpoint,
     getFloorById,
   } = useProjectStore()
@@ -41,13 +43,12 @@ export function usePlanPlacements(
     let filtered = floorPlacements.filter((placement: SitplanPlacementRow) => {
       if (placement.isEarthing) return hasGround
       if (placement.junctionPanelLabel != null) return true
-      if (!placement.endpointId) return false
-      const endpoint = getEndpointById(placement.endpointId)
-      if (!endpoint || !endpoint.symbol) return false
-      if (endpoint.symbol === 'domotica') return false
-      const symbol = getSymbolById(endpoint.symbol)
-      if (!symbol) return false
-      return symbol.scope === 'situatieplan' || symbol.scope === 'both'
+      const endpoint = placement.endpointId ? getEndpointById(placement.endpointId) : undefined
+      const trunkDevice = placement.trunkDeviceId
+        ? getTrunkDeviceById(placement.trunkDeviceId)?.device
+        : undefined
+      const symbolKey = endpoint?.symbol ?? trunkDevice?.symbol
+      return canSymbolAppearOnSituationPlan(symbolKey)
     })
     if (sitplanPanelFilterId) {
       const selectedPanel = findPanelById(
@@ -57,9 +58,16 @@ export function usePlanPlacements(
       filtered = filtered.filter((placement: SitplanPlacementRow) => {
         if (placement.isEarthing) return selectedPanel?.isMain === true
         if (placement.junctionPanelLabel != null) return true
-        if (!placement.endpointId) return false
-        const info = findCircuitForEndpoint(placement.endpointId)
-        return info?.panel.id === sitplanPanelFilterId
+        if (placement.endpointId) {
+          return findCircuitForEndpoint(placement.endpointId)?.panel.id === sitplanPanelFilterId
+        }
+        if (placement.trunkDeviceId) {
+          const circuitId = getTrunkDeviceById(placement.trunkDeviceId)?.circuit?.id
+          return circuitId
+            ? useProjectStore.getState().findPanelForCircuit(circuitId)?.id === sitplanPanelFilterId
+            : false
+        }
+        return false
       })
     }
     return filtered
@@ -68,6 +76,7 @@ export function usePlanPlacements(
     currentProject,
     getPlacementsByFloor,
     getEndpointById,
+    getTrunkDeviceById,
     findCircuitForEndpoint,
     sitplanPanelFilterId,
   ])
@@ -81,10 +90,13 @@ export function usePlanPlacements(
       if (hiddenIds.has(placement.id)) return false
       if (placement.isEarthing) return planVisibility.panelsVisible
       if (placement.junctionPanelLabel != null) return planVisibility.panelsVisible
-      if (!placement.endpointId) return false
-      const endpoint = getEndpointById(placement.endpointId)
-      if (!endpoint?.symbol) return false
-      const cat = getSymbolCategory(endpoint.symbol as SymbolKey)
+      const endpoint = placement.endpointId ? getEndpointById(placement.endpointId) : undefined
+      const trunkDevice = placement.trunkDeviceId
+        ? getTrunkDeviceById(placement.trunkDeviceId)?.device
+        : undefined
+      const symbolKey = endpoint?.symbol ?? trunkDevice?.symbol
+      if (!symbolKey) return false
+      const cat = getSymbolCategory(symbolKey as SymbolKey)
       if (cat === null) return true
       const flag =
         cat === 'sockets'
@@ -98,7 +110,7 @@ export function usePlanPlacements(
                 : planVisibility.fixedAppliancesVisible
       return flag
     })
-  }, [placements, planVisibility, getEndpointById, activeFloorId, getFloorById])
+  }, [placements, planVisibility, getEndpointById, getTrunkDeviceById, activeFloorId, getFloorById])
 
   return {
     placements,

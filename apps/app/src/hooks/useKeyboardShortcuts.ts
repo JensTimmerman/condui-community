@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { createElement, useEffect, useRef, useCallback } from 'react'
 import { ZOOM_MIN, ZOOM_MAX } from '@/constants/canvasConstants'
 import { useUIStore } from '@/stores/uiStore'
 import { useProjectStore } from '@/stores/projectStore'
@@ -14,14 +14,17 @@ import {
   canDuplicateEendraadSelection,
   runEendraadDuplicate,
 } from '@/lib/eendraad/duplicateSelection'
-import {
-  canDuplicatePlanSelection,
-  runPlanDuplicate,
-} from '@/lib/plan/planDuplicateSelection'
+import { canDuplicatePlanSelection, runPlanDuplicate } from '@/lib/plan/planDuplicateSelection'
 import type { CanvasType, ViewportLayout } from '@/types/ui'
 import type { EditorCapabilities } from '@/lib/viewerMode'
 import { isKeyboardTypingTarget } from '@/lib/ui/keyboardTypingTarget'
 import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
+import { useDialogStore } from '@/stores/dialogStore'
+import HiddenItemsDialog, { type HiddenItem } from '@/components/common/HiddenItemsDialog'
+import { getSymbolById } from '@/lib/symbols'
+import { buildAutoSitplanPlacement } from '@/lib/plan/autoSitplanPlacement'
+import { generateId } from '@/utils/project'
+import i18n from '@/i18n'
 
 /**
  * Hook to handle global keyboard shortcuts for the application.
@@ -228,8 +231,7 @@ export function useKeyboardShortcuts(options?: { capabilities?: EditorCapabiliti
             const panelIdx =
               findPanelIndexAtPoint(mousePos.current.x, mousePos.current.y) ??
               findPanelIndexFromTarget(e.target)
-            const hoveredCanvas =
-              panelIdx != null ? layout.panels[panelIdx]?.canvas : undefined
+            const hoveredCanvas = panelIdx != null ? layout.panels[panelIdx]?.canvas : undefined
             const onPlanCanvas = hoveredCanvas === 'plan'
             const planGetters = {
               getEndpointById: store.getEndpointById,
@@ -267,15 +269,13 @@ export function useKeyboardShortcuts(options?: { capabilities?: EditorCapabiliti
                     ? getElectricalInstallationFromProject(store.currentProject)
                     : undefined
                   )?.mainSupply?.supplyTrunkDevices?.findIndex(
-                    (d: { id: string }) => d.id === id,
+                    (d: { id: string }) => d.id === id
                   ) ?? -1,
                 getGroundTrunkDeviceIndex: (id: string) =>
                   (store.currentProject
                     ? getElectricalInstallationFromProject(store.currentProject)
                     : undefined
-                  )?.groundTrunkDevices?.findIndex(
-                    (d: { id: string }) => d.id === id,
-                  ) ?? -1,
+                  )?.groundTrunkDevices?.findIndex((d: { id: string }) => d.id === id) ?? -1,
               }
               if (canDuplicateEendraadSelection(selDup, getters)) {
                 const dupResult = runEendraadDuplicate(
@@ -293,7 +293,7 @@ export function useKeyboardShortcuts(options?: { capabilities?: EditorCapabiliti
                     setSelection: useUIStore.getState().setSelection,
                   },
                   (protectionId) => store.duplicateProtectionLeft(protectionId),
-                  (fn, opts) => store.withSingleUndoEntry(fn, opts),
+                  (fn, opts) => store.withSingleUndoEntry(fn, opts)
                 )
                 if (dupResult) {
                   duplicated = true
@@ -362,8 +362,8 @@ export function useKeyboardShortcuts(options?: { capabilities?: EditorCapabiliti
         if (e.key === ' ' || e.code === 'Space') {
           const spaceTarget = e.target
           if (spaceTarget instanceof Element && spaceTarget.closest('button')) {
-          return
-        }
+            return
+          }
 
           e.preventDefault()
           dispatchExtendPropertiesPanelFieldBlur()
@@ -385,6 +385,153 @@ export function useKeyboardShortcuts(options?: { capabilities?: EditorCapabiliti
             findPanelIndexFromTarget(e.target)
           const targetPanel =
             idx != null ? layout.panels[idx] : layout.panels.length === 1 ? layout.panels[0] : null
+          if (targetPanel?.canvas === 'plan' && canEditProject) {
+            const ui = useUIStore.getState()
+            const store = useProjectStore.getState()
+            const floorId = ui.activeFloorId
+            const floor = floorId ? store.getFloorById(floorId) : undefined
+            let targetPlacementId: string | undefined
+
+            if (floorId && floor && ui.selection.ids.length > 0) {
+              if (ui.selection.type === 'endpoint') {
+                const endpointId = ui.selection.ids[0]!
+                const endpoint = store.getEndpointById(endpointId)
+                let placement = endpoint?.placements.find(
+                  (candidate) => candidate.floorId === floorId
+                )
+                const repairableSitplanSymbols = new Set([
+                  'junction_box',
+                  'junction_panel',
+                  'transformer',
+                  'rectifier',
+                  'inverter',
+                  'dc_dc_converter',
+                ])
+                if (
+                  !placement &&
+                  endpoint?.symbol &&
+                  repairableSitplanSymbols.has(endpoint.symbol) &&
+                  store.currentProject
+                ) {
+                  const circuitId = store.findCircuitForEndpoint(endpointId)?.circuit.id
+                  if (circuitId) {
+                    placement =
+                      buildAutoSitplanPlacement(store.currentProject, {
+                        circuitId,
+                        floorId,
+                        placementId: generateId(),
+                      }) ?? undefined
+                    if (placement) {
+                      store.addPlacement(endpointId, placement)
+                      if (
+                        ['transformer', 'rectifier', 'dc_dc_converter'].includes(endpoint.symbol)
+                      ) {
+                        store.updateFloor(floorId, {
+                          hiddenSitplanPlacementIds: Array.from(
+                            new Set([...(floor.hiddenSitplanPlacementIds ?? []), placement.id])
+                          ),
+                        })
+                      }
+                    }
+                  }
+                }
+                targetPlacementId = placement?.id
+              } else if (ui.selection.type === 'trunkDevice') {
+                const deviceId = ui.selection.ids[0]!
+                const resolved = store.getTrunkDeviceById(deviceId)
+                const device = resolved?.device
+                let placement = device?.placements?.find(
+                  (candidate) => candidate.floorId === floorId
+                )
+                if (
+                  !placement &&
+                  (device?.type === 'conversion' || device?.symbol === 'junction_box') &&
+                  resolved?.circuit &&
+                  store.currentProject
+                ) {
+                  placement =
+                    buildAutoSitplanPlacement(store.currentProject, {
+                      circuitId: resolved.circuit.id,
+                      floorId,
+                      placementId: generateId(),
+                    }) ?? undefined
+                  if (placement) {
+                    store.updateTrunkDevice(resolved.circuit.id, deviceId, {
+                      placements: [...(device.placements ?? []), placement],
+                    })
+                    if (
+                      ['transformer', 'rectifier', 'dc_dc_converter'].includes(device.symbol)
+                    ) {
+                      store.updateFloor(floorId, {
+                        hiddenSitplanPlacementIds: Array.from(
+                          new Set([...(floor.hiddenSitplanPlacementIds ?? []), placement.id])
+                        ),
+                      })
+                    }
+                  }
+                }
+                targetPlacementId = placement?.id
+              }
+            }
+
+            const refreshedFloor = floorId ? store.getFloorById(floorId) : undefined
+            const hiddenIds = refreshedFloor?.hiddenSitplanPlacementIds ?? []
+            if (floorId && targetPlacementId && hiddenIds.includes(targetPlacementId)) {
+              const rows = store.getPlacementsByFloor(floorId)
+              const rowById = new Map(rows.map((row) => [row.id, row]))
+              const items: HiddenItem[] = hiddenIds.flatMap((hiddenId) => {
+                const row = rowById.get(hiddenId)
+                if (!row) return []
+                const endpoint = row.endpointId ? store.getEndpointById(row.endpointId) : undefined
+                const trunkDevice = row.trunkDeviceId
+                  ? store.getTrunkDeviceById(row.trunkDeviceId)?.device
+                  : undefined
+                const symbolKey = endpoint?.symbol ?? trunkDevice?.symbol
+                const symbol = symbolKey ? getSymbolById(symbolKey) : undefined
+                return [
+                  {
+                    id: hiddenId,
+                    label:
+                      endpoint?.label ||
+                      trunkDevice?.label ||
+                      symbol?.name ||
+                      i18n.t('hiddenItemsDialog.unnamedItem', { defaultValue: 'Unnamed item' }),
+                    subtitle: symbol
+                      ? i18n.t(`symbols.${symbol.id}`, { defaultValue: symbol.name })
+                      : undefined,
+                    icon: symbol
+                      ? createElement('img', {
+                          src: symbol.svgPath,
+                          alt: '',
+                          className: 'w-7 h-7 object-contain dark:invert',
+                        })
+                      : undefined,
+                  },
+                ]
+              })
+              const { openDialog, closeDialog } = useDialogStore.getState()
+              openDialog({
+                type: 'custom',
+                title: i18n.t('contextMenu.showHidden', { defaultValue: 'Show hidden…' }),
+                content: createElement(HiddenItemsDialog, {
+                  items,
+                  initialSelectedIds: [targetPlacementId],
+                  onConfirm: (selectedIds: string[]) => {
+                    const latestFloor = store.getFloorById(floorId)
+                    const remaining = (latestFloor?.hiddenSitplanPlacementIds ?? []).filter(
+                      (hiddenId) => !selectedIds.includes(hiddenId)
+                    )
+                    store.updateFloor(floorId, {
+                      hiddenSitplanPlacementIds: remaining.length > 0 ? remaining : undefined,
+                    })
+                    closeDialog()
+                  },
+                  onCancel: closeDialog,
+                }),
+              })
+              return
+            }
+          }
           if (targetPanel) {
             const canvasesToFit =
               layout.panels.length === 1

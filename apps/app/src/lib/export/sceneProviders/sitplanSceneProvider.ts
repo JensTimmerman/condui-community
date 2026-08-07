@@ -312,6 +312,7 @@ export async function prepareSitplanScene(
   return {
     id: `sitplan-${floorId}`,
     kind: 'sitplan',
+    renderedTheme: targetTheme,
     rootNode: clonedGroup, // Isolated clone, safe to export
     bounds,
     preferredOrientation: 'portrait', // Will be determined by bounds

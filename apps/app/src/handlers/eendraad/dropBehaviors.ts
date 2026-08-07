@@ -23,6 +23,7 @@ import {
   resolveSitplanTargetFloorId,
 } from '@/lib/plan/sitplanTargetFloor'
 import { ensureEarthingSitplanPlacement } from '@/lib/plan/earthingSitplanPlacement'
+import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
 import { generateId, getEndpointTypeFromSymbol, getSymbolKeyFromSymbol } from '@/utils'
 import { getNextAvailableCircuitCode, countPanels } from '@/utils/project'
 import { applyLibraryPresetToEndpoint } from '@/utils/symbolMapping'
@@ -53,6 +54,7 @@ import type { SymbolMetadata } from '@/lib/symbols'
 import type { DropTarget } from '@/lib/layout/findDropTarget'
 import type {
   Endpoint,
+  Floor,
   ProtectionDevice,
   Circuit,
   Panel,
@@ -120,7 +122,12 @@ export interface DropBehaviorCallbacks {
   setSelection: (selection: Selection) => void
   /** Wire-canvas world position where the library symbol was dropped (e.g. for free-floating notes). */
   dropCanvasPosition?: Point
-  getFloorById: (floorId: string) => { id: string; layers?: string[] } | null
+  getFloorById: (floorId: string) => {
+    id: string
+    layers?: string[]
+    hiddenSitplanPlacementIds?: string[]
+  } | null
+  updateFloor: (floorId: string, updates: Partial<Floor>) => void
   getCircuitById: (circuitId: string) => Circuit | null
   getProtectionById: (protectionId: string) => ProtectionDevice | null
   addTrunkDevice: (circuitId: string, device: TrunkDevice) => void
@@ -470,11 +477,7 @@ const protectionBehavior: DropBehavior = {
       targetedCircuit && target.circuitId
         ? findProtectionByCircuitIdInProject(projectPanels(project), target.circuitId)
         : null
-    if (
-      targetedCircuit &&
-      targetedProtection?.directPanelFeeder &&
-      targetedProtection.subPanelId
-    ) {
+    if (targetedCircuit && targetedProtection?.directPanelFeeder && targetedProtection.subPanelId) {
       callbacks.updateProtection(targetedProtection.id, {
         type: protectionType,
         label: autoCircuitCode,
@@ -521,14 +524,24 @@ const protectionBehavior: DropBehavior = {
       // Record nested relationship — ID only, no duplicated object
       const parentCircuit = callbacks.getCircuitById(target.circuitId)
       if (parentCircuit) {
-        moveParentContentToSubCircuit(
-          parentCircuit,
-          target.circuitId,
-          circuitId,
-          protectionId,
-          panel,
-          callbacks
-        )
+        const insertedBetween = target.insertBeforeNestedCircuitId
+          ? insertProtectionBetweenNestedCircuits(
+              parentCircuit,
+              circuitId,
+              target.insertBeforeNestedCircuitId,
+              callbacks
+            )
+          : false
+        if (!insertedBetween) {
+          moveParentContentToSubCircuit(
+            parentCircuit,
+            target.circuitId,
+            circuitId,
+            protectionId,
+            panel,
+            callbacks
+          )
+        }
       }
     }
 
@@ -629,14 +642,24 @@ const rcdBehavior: DropBehavior = {
       // Record nested relationship — ID only, no duplicated object
       const parentCircuit = callbacks.getCircuitById(target.circuitId)
       if (parentCircuit) {
-        moveParentContentToSubCircuit(
-          parentCircuit,
-          target.circuitId,
-          circuitId,
-          protectionId,
-          panel,
-          callbacks
-        )
+        const insertedBetween = target.insertBeforeNestedCircuitId
+          ? insertProtectionBetweenNestedCircuits(
+              parentCircuit,
+              circuitId,
+              target.insertBeforeNestedCircuitId,
+              callbacks
+            )
+          : false
+        if (!insertedBetween) {
+          moveParentContentToSubCircuit(
+            parentCircuit,
+            target.circuitId,
+            circuitId,
+            protectionId,
+            panel,
+            callbacks
+          )
+        }
       }
     }
 
@@ -733,6 +756,23 @@ function moveParentContentToSubCircuit(
     callbacks.updateProtection(parentProtection.id, { subPanelId: undefined })
     callbacks.updateProtection(newProtectionId, { subPanelId })
   }
+}
+
+function insertProtectionBetweenNestedCircuits(
+  parentCircuit: Circuit,
+  newCircuitId: string,
+  existingChildCircuitId: string,
+  callbacks: Pick<DropBehaviorCallbacks, 'updateCircuit'>
+): boolean {
+  const childIds = parentCircuit.subCircuitIds ?? []
+  const childIndex = childIds.indexOf(existingChildCircuitId)
+  if (childIndex < 0) return false
+
+  const nextParentChildren = [...childIds]
+  nextParentChildren.splice(childIndex, 1, newCircuitId)
+  callbacks.updateCircuit(parentCircuit.id, { subCircuitIds: nextParentChildren })
+  callbacks.updateCircuit(newCircuitId, { subCircuitIds: [existingChildCircuitId] })
+  return true
 }
 
 /**
@@ -1059,9 +1099,8 @@ const endpointBehavior: DropBehavior = {
     // Floor + layer: match plan canvas drops (plan uses active floor + layers[0] ?? 'electrical').
     // Do not require floors[0].layers — many floors omit `layers` in data; skipping auto-place
     // left endpoints invisible on every sitplan floor (bug).
-    const symMeta = getSymbolById(symbol.id)
-    // No sitplan ghost for one-line-only symbols; domotica is hidden on plan like usePlanPlacements.
-    if (symMeta?.scope === 'eendraad' || symbol.id === 'domotica') {
+    // Do not create placements for one-line-only or explicitly excluded symbols.
+    if (!canSymbolAppearOnSituationPlan(symbol.id)) {
       return
     }
 
@@ -1095,6 +1134,14 @@ const endpointBehavior: DropBehavior = {
       })
       if (placement) {
         callbacks.addPlacement(endpointId, placement)
+        if (isConversionSymbol(symbol) && symbol.id !== 'inverter') {
+          const floor = callbacks.getFloorById(activeFloorId)
+          callbacks.updateFloor(activeFloorId, {
+            hiddenSitplanPlacementIds: Array.from(
+              new Set([...(floor?.hiddenSitplanPlacementIds ?? []), placement.id])
+            ),
+          })
+        }
       }
     }
   },
@@ -1186,7 +1233,41 @@ const energyConversionBehavior: DropBehavior = {
         label: symbol.name,
         trunkPosition,
       }
+      const activeFloorId = resolveCircuitSitplanTargetFloorId(
+        project,
+        useUIStore.getState().activeFloorId,
+        target.circuitId
+      )
+      if (activeFloorId) {
+        const uiSnap = useUIStore.getState()
+        const preferredPlanPos =
+          getViewportCenterPlanSpaceIfApplicable(
+            uiSnap.viewportLayout,
+            uiSnap.planCanvasViewportPx,
+            uiSnap.activeFloorId,
+            activeFloorId,
+            uiSnap.planView
+          ) ?? undefined
+        const placement = buildAutoSitplanPlacement(project, {
+          circuitId: target.circuitId,
+          floorId: activeFloorId,
+          placementId: generateId(),
+          ...(preferredPlanPos ? { preferredPlanPos } : {}),
+        })
+        if (placement) {
+          trunkDevice.placements = [placement]
+          if (symbol.id !== 'inverter') {
+            const floor = callbacks.getFloorById(activeFloorId)
+            callbacks.updateFloor(activeFloorId, {
+              hiddenSitplanPlacementIds: Array.from(
+                new Set([...(floor?.hiddenSitplanPlacementIds ?? []), placement.id])
+              ),
+            })
+          }
+        }
+      }
       addCircuitTrunkDeviceAtDrop(target, circuit, trunkDevice, callbacks)
+      callbacks.setSelection({ type: 'trunkDevice', ids: [deviceId] })
       return
     }
     endpointBehavior.execute(target, project, symbol, t, callbacks)
@@ -1435,14 +1516,8 @@ const panelBehavior: DropBehavior = {
         if (typeof target.secondaryBusInsertIndex === 'number') {
           const targetRcd = callbacks.getProtectionById(target.protectionId)
           if (targetRcd?.circuits) {
-            const ordered = targetRcd.circuits.filter(
-              (circuit) => circuit.id !== mcbCircuit.id
-            )
-            ordered.splice(
-              clamp(target.secondaryBusInsertIndex, 0, ordered.length),
-              0,
-              mcbCircuit
-            )
+            const ordered = targetRcd.circuits.filter((circuit) => circuit.id !== mcbCircuit.id)
+            ordered.splice(clamp(target.secondaryBusInsertIndex, 0, ordered.length), 0, mcbCircuit)
             callbacks.updateProtection(targetRcd.id, { circuits: ordered })
           }
         }
@@ -1457,10 +1532,7 @@ const panelBehavior: DropBehavior = {
           mcbCircuit.id,
           target.secondaryBusInsertIndex
         )
-      } else if (
-        target.type === 'mainBus' &&
-        typeof target.mainBusInsertIndex === 'number'
-      ) {
+      } else if (target.type === 'mainBus' && typeof target.mainBusInsertIndex === 'number') {
         const beforeCount = target.mainBusItemCount ?? 0
         const desiredIndex = clamp(target.mainBusInsertIndex, 0, beforeCount)
         for (let index = beforeCount; index > desiredIndex; index -= 1) {
@@ -1520,7 +1592,7 @@ const earthingSeparatorBehavior: DropBehavior = {
 
 /**
  * Junction box: supply wire, ground wire, circuit trunk, or endpoint branch (like energy meter).
- * No sitplan. No label.
+ * Branch-positioned boxes also receive a situation-plan placement. No label.
  */
 const junctionBoxBehavior: DropBehavior = {
   validTargets: ['supplyWire', 'groundWire', 'circuit', 'endpoint', 'protection'],
@@ -1559,7 +1631,31 @@ const junctionBoxBehavior: DropBehavior = {
         label: '',
         trunkPosition,
       }
+      const activeFloorId = resolveCircuitSitplanTargetFloorId(
+        project,
+        useUIStore.getState().activeFloorId,
+        target.circuitId
+      )
+      if (activeFloorId) {
+        const uiSnap = useUIStore.getState()
+        const preferredPlanPos =
+          getViewportCenterPlanSpaceIfApplicable(
+            uiSnap.viewportLayout,
+            uiSnap.planCanvasViewportPx,
+            uiSnap.activeFloorId,
+            activeFloorId,
+            uiSnap.planView
+          ) ?? undefined
+        const placement = buildAutoSitplanPlacement(project, {
+          circuitId: target.circuitId,
+          floorId: activeFloorId,
+          placementId: generateId(),
+          ...(preferredPlanPos ? { preferredPlanPos } : {}),
+        })
+        if (placement) trunkDevice.placements = [placement]
+      }
       addCircuitTrunkDeviceAtDrop(target, circuit, trunkDevice, callbacks)
+      callbacks.setSelection({ type: 'trunkDevice', ids: [deviceId] })
     }
   },
 }
@@ -1871,10 +1967,12 @@ export function executeDropBehavior(
   project: DropBehaviorProject,
   t: TFunction,
   callbacks: DropBehaviorCallbacks,
-  analytics: false | {
-    canvas: EditorCanvasAnalytics
-    placementMethod: SymbolPlacementMethod
-  } = { canvas: 'eendraad', placementMethod: 'library_drop' }
+  analytics:
+    | false
+    | {
+        canvas: EditorCanvasAnalytics
+        placementMethod: SymbolPlacementMethod
+      } = { canvas: 'eendraad', placementMethod: 'library_drop' }
 ): void {
   const behavior = dropBehaviors[symbol.id]
   if (!behavior) {

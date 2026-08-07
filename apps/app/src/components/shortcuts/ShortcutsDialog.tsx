@@ -51,6 +51,7 @@ type ShortcutKeyId =
   | 'q'
   | 'w'
   | 'd'
+  | 'r'
   | 'f1'
   | 'f2'
   | 'f3'
@@ -148,6 +149,7 @@ const BASE_SHORTCUT_GROUPS: ShortcutGroup[] = [
       {
         id: 'editing',
         entries: [
+          { id: 'rotateSymbols', keys: ['r'], note: true },
           { id: 'nudgeSymbols', keys: ['arrowKeys'], note: true },
           { id: 'openingWidthType', keys: ['digits', 'period', 'comma', 'backspace'] },
         ],

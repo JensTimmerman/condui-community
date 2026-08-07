@@ -52,6 +52,10 @@ export function useEendraadDragPreview(
 
       const draggingProtectionId = options?.draggingProtectionIdRef?.current
       const prefersMainBus = !!draggingProtectionId || symbol.id === 'panel_distribution'
+      const protectionIds = [...PROTECTION_SYMBOL_IDS]
+      const isProtectionPlacement = protectionIds.includes(
+        symbol.id as (typeof PROTECTION_SYMBOL_IDS)[number]
+      )
       const rawDropTarget = detectDropTarget(
         position,
         symbol.id === 'earthing_separator'
@@ -59,13 +63,13 @@ export function useEendraadDragPreview(
           : {
               preferMainBusOverGroundWire: true,
               preferMainBusOverSupplyWire: prefersMainBus,
+              preferSecondaryBusForNestedProtection: isProtectionPlacement,
             }
       )
 
       // Normalize generic panel-frame hits (type:null with panelId) for protection
       // devices so they behave exactly like drops on the main bus of that panel.
       let dropTarget: DropTarget = rawDropTarget
-      const protectionIds = [...PROTECTION_SYMBOL_IDS]
       if (
         rawDropTarget.type === null &&
         rawDropTarget.panelId &&
@@ -102,7 +106,6 @@ export function useEendraadDragPreview(
         // For protection devices (MCB, RCD, RCBO, FUSE, MAIN_SWITCH, SPD), always
         // show a preview on any supported target: main bus, RCD bus, secondary
         // buses (circuit trunk), existing protection, and the supply wire.
-        const protectionIds = [...PROTECTION_SYMBOL_IDS]
         if (protectionIds.includes(symbol.id as (typeof PROTECTION_SYMBOL_IDS)[number])) {
           if (
             draggingProtectionId &&

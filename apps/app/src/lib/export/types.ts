@@ -85,6 +85,8 @@ export interface EendraadSliceExportMeta {
 export interface ExportScene {
   id: string // e.g. "panel-abc123" or "eendraad-slice-0"
   kind: 'eendraad' | 'panel' | 'sitplan'
+  /** Theme already baked into rootNode. Target-themed SVG assets are injected after conversion. */
+  renderedTheme?: ExportTheme
   rootNode: Konva.Group | Konva.Layer // Isolated clone, not live node
   bounds: SceneBounds // Must match rootNode coordinate space
   preferredOrientation?: 'portrait' | 'landscape'

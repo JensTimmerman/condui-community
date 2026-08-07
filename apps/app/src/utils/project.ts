@@ -723,10 +723,20 @@ export function collectPlacementsOnFloor(
   project: ProjectWithOptionalV2Electrical,
   floorId: string,
 ): Array<
-  Placement & { endpointId?: string; junctionPanelLabel?: string; isEarthing?: boolean }
+  Placement & {
+    endpointId?: string
+    trunkDeviceId?: string
+    junctionPanelLabel?: string
+    isEarthing?: boolean
+  }
 > {
   const result: Array<
-    Placement & { endpointId?: string; junctionPanelLabel?: string; isEarthing?: boolean }
+    Placement & {
+      endpointId?: string
+      trunkDeviceId?: string
+      junctionPanelLabel?: string
+      isEarthing?: boolean
+    }
   > = []
   for (const rootPanel of getElectricalPanelsFromProject(project)) {
     const circuits = collectAllCircuits([rootPanel])
@@ -735,6 +745,13 @@ export function collectPlacementsOnFloor(
         for (const placement of endpoint.placements) {
           if (placement.floorId === floorId) {
             result.push({ ...placement, endpointId: endpoint.id })
+          }
+        }
+      }
+      for (const device of circuit.trunkDevices ?? []) {
+        for (const placement of device.placements ?? []) {
+          if (placement.floorId === floorId) {
+            result.push({ ...placement, trunkDeviceId: device.id })
           }
         }
       }
@@ -750,6 +767,7 @@ export function collectPlacementsOnFloor(
         layer: jp.layer ?? 'default',
         pos: jp.pos,
         rotationDeg: (jp.rotationDeg ?? 0) as Placement['rotationDeg'],
+        rotationMode: jp.rotationMode,
         scale: jp.scale ?? 1,
         junctionPanelLabel: jp.label,
       })
@@ -763,6 +781,7 @@ export function collectPlacementsOnFloor(
         layer: ep.layer ?? 'default',
         pos: ep.pos,
         rotationDeg: (ep.rotationDeg ?? 0) as Placement['rotationDeg'],
+        rotationMode: ep.rotationMode,
         scale: ep.scale ?? 1,
         locked: ep.locked,
         isEarthing: true,

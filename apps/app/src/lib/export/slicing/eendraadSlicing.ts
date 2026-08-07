@@ -31,6 +31,14 @@ const SLICE_LABEL_MARGIN_MM = 2
  */
 export const EENDRAAD_MAX_SCALE_MM_PER_PX = 0.25
 
+/**
+ * Export may shrink a one-wire document by at most this fraction when doing so
+ * removes a sparse trailing page. Keeping this bounded protects label
+ * readability while allowing near-fit diagrams to stay together.
+ */
+const MAX_PAGE_COMPACTION_REDUCTION = 0.15
+const PAGE_COMPACTION_STEP = 0.005
+
 export interface FrameSlice {
   x: number
   y: number
@@ -194,6 +202,11 @@ function computeGlobalScale(sceneBounds: ExportScene['bounds']): number {
   )
 }
 
+interface CoreSlice {
+  left: number
+  right: number
+}
+
 function getSliceWidthPxForScale(scale: number): number {
   const usable = getUsableArea(A4_LANDSCAPE)
   return usable.width / scale
@@ -209,6 +222,155 @@ function getOverlapPx(globalScale: number): number {
 
 function getLabelMarginPx(globalScale: number): number {
   return SLICE_LABEL_MARGIN_MM / globalScale
+}
+
+function getBlocksInRange(blocks: MainBusBlock[], left: number, right: number): MainBusBlock[] {
+  return blocks.filter((block) => block.left < right && block.right > left)
+}
+
+function buildCoreSlices(
+  blocks: MainBusBlock[],
+  sceneBounds: ExportScene['bounds'],
+  globalScale: number
+): CoreSlice[] {
+  const sliceWidthPx = getSliceWidthPxForScale(globalScale)
+  const cutPoints = getCutPoints(blocks, sceneBounds, sliceWidthPx)
+  const sceneRight = sceneBounds.x + sceneBounds.width
+  const slices: CoreSlice[] = []
+  let startX = sceneBounds.x
+
+  while (startX < sceneRight - 1) {
+    const maxEndX = startX + sliceWidthPx
+    let bestEndX = startX
+    for (const cutPoint of cutPoints) {
+      if (cutPoint > startX && cutPoint <= maxEndX) bestEndX = cutPoint
+    }
+    if (bestEndX <= startX) {
+      bestEndX = Math.min(startX + sliceWidthPx, sceneRight)
+    }
+    slices.push({ left: startX, right: bestEndX })
+    startX = bestEndX
+  }
+
+  // Greedy packing can put every available block on the penultimate page and
+  // leave one tiny block alone. Move the smallest possible safe block group to
+  // the tail when both resulting pages still fit and contain at least two
+  // independent main-bus blocks. This changes only page cuts, never layout.
+  if (slices.length >= 2) {
+    const previous = slices[slices.length - 2]!
+    const tail = slices[slices.length - 1]!
+    const previousBlocks = getBlocksInRange(blocks, previous.left, previous.right)
+    const tailBlocks = getBlocksInRange(blocks, tail.left, tail.right)
+
+    if (tailBlocks.length === 1 && previousBlocks.length >= 3) {
+      const candidates = cutPoints
+        .filter((cutPoint) => cutPoint > previous.left && cutPoint < previous.right)
+        .sort((a, b) => b - a)
+      for (const cutPoint of candidates) {
+        const leftBlocks = getBlocksInRange(blocks, previous.left, cutPoint)
+        const rightBlocks = getBlocksInRange(blocks, cutPoint, tail.right)
+        if (
+          cutPoint - previous.left <= sliceWidthPx &&
+          tail.right - cutPoint <= sliceWidthPx &&
+          leftBlocks.length >= 2 &&
+          rightBlocks.length >= 2
+        ) {
+          previous.right = cutPoint
+          tail.left = cutPoint
+          break
+        }
+      }
+    }
+  }
+
+  return slices
+}
+
+function getSlicingMetrics(
+  panelLayout: BottomUpPanelLayout,
+  scene: ExportScene,
+  globalScale: number
+): { pageCount: number; sparseTail: boolean } {
+  const blocks = getMainBusBlocks(panelLayout)
+  if (blocks.length === 0) return { pageCount: 1, sparseTail: false }
+  const slices = buildCoreSlices(blocks, scene.bounds, globalScale)
+  const tail = slices.at(-1)
+  return {
+    pageCount: slices.length,
+    sparseTail:
+      slices.length > 1 && !!tail && getBlocksInRange(blocks, tail.left, tail.right).length <= 2,
+  }
+}
+
+/**
+ * Pick one document-wide scale before rendering. A smaller scale is accepted
+ * only when the existing plan has a sparse tail and the change removes at
+ * least one PDF page. The largest successful scale wins.
+ */
+export function chooseEendraadDocumentScale(
+  panelLayouts: BottomUpPanelLayout[],
+  scenesByPanelId: Map<string, ExportScene>,
+  initialScale: number
+): number {
+  const getDocumentMetrics = (scale: number) => {
+    let pageCount = 0
+    let sparseTailCount = 0
+    for (const panelLayout of panelLayouts) {
+      const scene = scenesByPanelId.get(panelLayout.panel.id)
+      if (!scene) continue
+      const metrics = getSlicingMetrics(panelLayout, scene, scale)
+      pageCount += metrics.pageCount
+      if (metrics.sparseTail) sparseTailCount++
+    }
+    return { pageCount, sparseTailCount }
+  }
+
+  const baseline = getDocumentMetrics(initialScale)
+  if (baseline.sparseTailCount === 0) return initialScale
+
+  const steps = Math.round(MAX_PAGE_COMPACTION_REDUCTION / PAGE_COMPACTION_STEP)
+  for (let step = 1; step <= steps; step++) {
+    const candidateScale = initialScale * (1 - step * PAGE_COMPACTION_STEP)
+    const candidate = getDocumentMetrics(candidateScale)
+    if (
+      candidate.pageCount < baseline.pageCount &&
+      candidate.sparseTailCount < baseline.sparseTailCount
+    ) {
+      return candidateScale
+    }
+  }
+
+  return initialScale
+}
+
+/**
+ * Fast dialog estimate using layout-frame bounds only. It intentionally avoids
+ * cloning Konva scenes or loading SVG/image assets; the actual export remains
+ * authoritative for unusual visual extents.
+ */
+export function estimateEendraadPageCount(panelLayouts: BottomUpPanelLayout[]): number {
+  const scenesByPanelId = new Map<string, ExportScene>()
+  for (const panelLayout of panelLayouts) {
+    scenesByPanelId.set(panelLayout.panel.id, {
+      bounds: {
+        x: panelLayout.frame.x,
+        y: panelLayout.frame.y,
+        width: panelLayout.frame.width,
+        height: panelLayout.frame.height,
+        space: 'scene',
+      },
+    } as ExportScene)
+  }
+
+  const scale = chooseEendraadDocumentScale(
+    panelLayouts,
+    scenesByPanelId,
+    EENDRAAD_MAX_SCALE_MM_PER_PX
+  )
+  return panelLayouts.reduce((count, panelLayout) => {
+    const scene = scenesByPanelId.get(panelLayout.panel.id)
+    return scene ? count + getSlicingMetrics(panelLayout, scene, scale).pageCount : count
+  }, 0)
 }
 
 export async function calculateEendraadSlices(
@@ -252,28 +414,18 @@ export async function calculateEendraadSlices(
     }
   }
 
-  const cutPoints = getCutPoints(blocks, sceneBounds, sliceWidthPx)
+  const coreSlices = buildCoreSlices(blocks, sceneBounds, globalScale)
   const slices: FrameSlice[] = []
-  let startX = sceneBounds.x
   const sceneRight = sceneBounds.x + sceneBounds.width
   const allCircuitIds = new Set(blocks.flatMap((b) => b.circuitIds))
 
-  while (startX < sceneRight - 1) {
-    const maxEndX = startX + sliceWidthPx
-    let bestEndX = startX
-    for (const cp of cutPoints) {
-      if (cp > startX && cp <= maxEndX) bestEndX = cp
-    }
-    if (bestEndX <= startX) {
-      bestEndX = Math.min(startX + sliceWidthPx, sceneRight)
-    }
-
+  for (const coreSlice of coreSlices) {
     const circuitIds = blocks
-      .filter((b) => b.left < bestEndX && b.right > startX)
+      .filter((b) => b.left < coreSlice.right && b.right > coreSlice.left)
       .flatMap((b) => b.circuitIds)
 
-    const sliceContentLeft = startX
-    const sliceContentRight = bestEndX
+    const sliceContentLeft = coreSlice.left
+    const sliceContentRight = coreSlice.right
     const sliceLeft = Math.max(sceneBounds.x, sliceContentLeft - labelMarginPx)
     const sliceRight = Math.min(sceneRight, sliceContentRight + labelMarginPx)
 
@@ -285,7 +437,6 @@ export async function calculateEendraadSlices(
       circuitIds,
       overlapPx,
     })
-    startX = bestEndX
   }
 
   validateSlices(

@@ -126,11 +126,15 @@ function isPlanPlacementSymbolSelected(
   isJunctionPanel: boolean,
   junctionPanelLabel: string | undefined,
   panelId: string | null | undefined,
+  trunkDeviceId?: string,
 ): boolean {
   if (
     (isEarthing && selection.type === 'placement' && selection.ids.includes(placementId)) ||
     (isEarthing && selection.type === 'ground' && selection.ids.includes('ground'))
   ) {
+    return true
+  }
+  if (trunkDeviceId && selection.type === 'trunkDevice' && selection.ids.includes(trunkDeviceId)) {
     return true
   }
   if (
@@ -175,7 +179,9 @@ function isPlanPlacementBreadcrumbHovered(
   endpoint: Endpoint | null | undefined,
   isJunctionPanel: boolean,
   panelId: string | null | undefined,
+  trunkDeviceId?: string,
 ): boolean {
+  if (trunkDeviceId && hover.type === 'trunkDevice' && hover.ids.includes(trunkDeviceId)) return true
   if (isJunctionPanel || !endpoint) return false
   if (hover.type === 'endpoint' && hover.ids.includes(endpoint.id)) return true
   return (
@@ -303,7 +309,7 @@ function PlacementSymbolInner({
   const dragPos = usePlanDragPosition(placement.id)
   const dragRotation = usePlanDragRotation(placement.id)
   const pos = positionOverride ?? dragPos ?? placement.pos
-  const { getEndpointById } = useProjectStore()
+  const { getEndpointById, getTrunkDeviceById } = useProjectStore()
   const currentProject = useProjectStore((s: ProjectState) => s.currentProject)
   const setSelection = useSetSelectionStore()
   const clearSelection = useClearSelectionStore()
@@ -336,10 +342,27 @@ function PlacementSymbolInner({
   // Resolve endpoint and symbol without early return so hook count is stable
   const placementRow = placement as Placement & {
     endpointId?: string
+    trunkDeviceId?: string
     junctionPanelLabel?: string
     isEarthing?: boolean
   }
-  const endpoint = placementRow.endpointId != null ? getEndpointById(placementRow.endpointId) : null
+  const sourceEndpoint = placementRow.endpointId != null ? getEndpointById(placementRow.endpointId) : null
+  const trunkDevice = placementRow.trunkDeviceId
+    ? getTrunkDeviceById(placementRow.trunkDeviceId)?.device ?? null
+    : null
+  const endpoint = useMemo<Endpoint | null>(
+    () => sourceEndpoint ?? (trunkDevice
+      ? {
+          id: trunkDevice.id,
+          type: 'fixed_appliance',
+          label: trunkDevice.label,
+          symbol: trunkDevice.symbol,
+          placements: trunkDevice.placements ?? [],
+          energyConversionProps: trunkDevice.conversionProps,
+        }
+      : null),
+    [sourceEndpoint, trunkDevice]
+  )
   const isEarthing = placementRow.isEarthing === true
   const isJunctionPanel = placementRow.junctionPanelLabel != null
   const symbol = isEarthing
@@ -404,6 +427,7 @@ function PlacementSymbolInner({
         isJunctionPanel,
         placementRow.junctionPanelLabel,
         resolvedPanelId,
+        placementRow.trunkDeviceId,
       ),
     selectionBoolEqual,
   )
@@ -415,6 +439,7 @@ function PlacementSymbolInner({
         endpoint,
         isJunctionPanel,
         resolvedPanelId,
+        placementRow.trunkDeviceId,
       ),
     selectionBoolEqual,
   )
@@ -422,7 +447,7 @@ function PlacementSymbolInner({
   const hvacProps = endpoint?.hvacProps
   const relayProps = endpoint?.relayProps
   const isTransformer = endpoint?.symbol === 'transformer'
-  const conversionProps = endpoint?.energyConversionProps
+  const conversionProps = trunkDevice?.conversionProps ?? endpoint?.energyConversionProps
   const transformerLabel = isTransformer ? (conversionProps?.transformerOverlayLabel || '').trim() : ''
 
   // Base SVG path: switches use getSwitchSymbolPaths; boiler/heating use getFixedApplianceSymbolPath; else symbol.svgPath
@@ -784,13 +809,17 @@ function PlacementSymbolInner({
         pos,
       })
     }
+    if (placementRow.trunkDeviceId) {
+      useUIStore.getState().setHover({ type: 'trunkDevice', ids: [placementRow.trunkDeviceId] })
+      return
+    }
     if (!endpoint) return
     if (endpoint.symbol === 'panel_distribution') {
       const panel =
         currentProject != null ? resolvePanelForDistributionEndpoint(currentProject, endpoint) : null
       if (panel) useUIStore.getState().setHover({ type: 'panel', ids: [panel.id] })
     }
-  }, [currentProject, endpoint, placement.id, placement.rotationDeg, planPlacementDebug, pos, rotationOverrideDeg])
+  }, [currentProject, endpoint, placement.id, placement.rotationDeg, placementRow.trunkDeviceId, planPlacementDebug, pos, rotationOverrideDeg])
 
   const handlePlacementMouseLeave = useCallback(() => {
     setIsHovered(false)
@@ -800,8 +829,10 @@ function PlacementSymbolInner({
         endpointId: endpoint.id,
       })
     }
-    if (endpoint?.symbol === 'panel_distribution') useUIStore.getState().clearHover()
-  }, [endpoint?.id, endpoint?.symbol, endpoint?.type, placement.id, planPlacementDebug])
+    if (placementRow.trunkDeviceId || endpoint?.symbol === 'panel_distribution') {
+      useUIStore.getState().clearHover()
+    }
+  }, [endpoint?.id, endpoint?.symbol, endpoint?.type, placement.id, placementRow.trunkDeviceId, planPlacementDebug])
 
   // Outline/hit dimensions and selection — before early returns so hook count stays stable
   const symbolSize = baseSymbolSizePx * placement.scale

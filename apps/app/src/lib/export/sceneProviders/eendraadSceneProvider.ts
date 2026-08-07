@@ -203,6 +203,7 @@ export async function prepareEendraadScene(
   return {
     id: `eendraad-${panelId}-slice-${sliceIndex}`,
     kind: 'eendraad',
+    renderedTheme: targetTheme,
     rootNode: clonedGroup, // Isolated clone, safe to export
     bounds,
     preferredOrientation: 'landscape',

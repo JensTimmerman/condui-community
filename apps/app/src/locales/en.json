@@ -172,6 +172,7 @@
       "q": "Q",
       "w": "W",
       "d": "D",
+      "r": "R",
       "f1": "F1",
       "f2": "F2",
       "f3": "F3",
@@ -288,6 +289,10 @@
       },
       "openingWidthType": {
         "description": "Set opening width"
+      },
+      "rotateSymbols": {
+        "description": "Rotate selected symbols 90° clockwise",
+        "note": "While hovering the situation plan; disables automatic rotation for those placements"
       },
       "nudgeSymbols": {
         "description": "Nudge selected symbols",

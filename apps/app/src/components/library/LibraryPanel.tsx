@@ -6,6 +6,7 @@ import { useUIStore } from '@/stores/uiStore'
 import { symbolCategories } from '@/lib/symbols'
 import SymbolItem from './SymbolItem'
 import type { SymbolMetadata } from '@/lib/symbols'
+import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
 
 /** Categories shown in the library when panel canvas is maximized */
 const PANEL_VIEW_CATEGORIES = ['protection', 'domotica', 'metering', 'notes', 'grid'] as const
@@ -85,7 +86,7 @@ export default function LibraryPanel({
       return symbols.filter((s) => s.scope === 'eendraad' || s.scope === 'both')
     }
     if (viewMode === 'plan') {
-      return symbols.filter((s) => s.scope === 'situatieplan' || s.scope === 'both')
+      return symbols.filter((s) => canSymbolAppearOnSituationPlan(s.id))
     }
     if (viewMode === 'panel') {
       return symbols.filter(

@@ -1,4 +1,5 @@
 import type { WireSegment } from '@/types/schema'
+import type { LayoutNode } from './layoutTree'
 
 const GEOMETRY_EPSILON = 0.001
 
@@ -34,9 +35,38 @@ export function getChangedPreviewWireSegments(
   previewSegments: WireSegment[],
   currentSegments: WireSegment[],
   panelId: string,
+  previewPanelNode?: LayoutNode,
 ): WireSegment[] {
   const currentPanelSegments = currentSegments.filter((segment) => segment.panelId === panelId)
-  return previewSegments.filter(
+  const secondaryBusRootXByCircuitId = new Map<string, number>()
+  const visit = (node: LayoutNode) => {
+    if (
+      node.type === 'mcb' &&
+      node.circuitIdForWires &&
+      node.children.some((child) => child.type === 'mcb' || child.type === 'secondaryBus')
+    ) {
+      secondaryBusRootXByCircuitId.set(node.circuitIdForWires, node.bounds.x)
+    }
+    node.children.forEach(visit)
+  }
+  if (previewPanelNode) visit(previewPanelNode)
+
+  const normalizedPreviewSegments = previewSegments.flatMap((segment) => {
+    const rootX = segment.circuitId
+      ? secondaryBusRootXByCircuitId.get(segment.circuitId)
+      : undefined
+    const isSecondaryBusBar =
+      segment.type === 'mainBus' &&
+      segment.fromElementType === 'secondaryBus' &&
+      segment.toElementType === 'secondaryBus'
+    if (!isSecondaryBusBar || rootX == null || segment.startPoint.x >= rootX) {
+      return [segment]
+    }
+    if (segment.endPoint.x <= rootX + GEOMETRY_EPSILON) return []
+    return [{ ...segment, startPoint: { ...segment.startPoint, x: rootX } }]
+  })
+
+  return normalizedPreviewSegments.filter(
     (previewSegment) =>
       previewSegment.panelId === panelId &&
       !currentPanelSegments.some((currentSegment) =>

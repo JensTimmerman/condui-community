@@ -1,4 +1,3 @@
-import { getSymbolById } from '@/lib/symbols'
 import {
   getBuildingFloorsFromProject,
   type ProjectWithOptionalV2Building,
@@ -8,6 +7,7 @@ import {
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import type { Endpoint, Panel } from '@/types/schema'
+import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
 
 type SitplanExportProject = ProjectWithOptionalV2Building & ProjectWithOptionalV2Electrical
 
@@ -67,19 +67,14 @@ function findPanelForEndpoint(project: SitplanExportProject, endpointId: string)
 
 function shouldCountEndpointForDuplicateLabels(endpoint: Endpoint): boolean {
   if (!endpoint.label?.trim()) return false
-  if (!endpoint.symbol || endpoint.symbol === 'domotica' || endpoint.symbol === 'panel_distribution') {
+  if (endpoint.symbol === 'panel_distribution') {
     return false
   }
-  const symbol = getSymbolById(endpoint.symbol)
-  if (!symbol) return false
-  return symbol.scope === 'situatieplan' || symbol.scope === 'both'
+  return canSymbolAppearOnSituationPlan(endpoint.symbol)
 }
 
 function shouldCountEndpointForPanelContent(endpoint: Endpoint): boolean {
-  if (!endpoint.symbol || endpoint.symbol === 'domotica') return false
-  const symbol = getSymbolById(endpoint.symbol)
-  if (!symbol) return false
-  return symbol.scope === 'situatieplan' || symbol.scope === 'both'
+  return canSymbolAppearOnSituationPlan(endpoint.symbol)
 }
 
 function collectSitplanPlacements(project: SitplanExportProject): SitplanPlacementRecord[] {

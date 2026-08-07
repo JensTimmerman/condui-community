@@ -7,6 +7,7 @@ import {
   suggestRotationForPlacement,
   type WallFacingSide,
 } from '@/utils/planAutoOrient'
+import { hasExplicitSituationPlanRotation } from '@/lib/plan/situationPlanRotation'
 import type { Point } from '@/types/ui'
 import type {
   Panel,
@@ -85,6 +86,7 @@ function resolveDragEndRotation(
   ctx: PlacementOrientContext,
   wallFacingSide: WallFacingSide,
 ): Rotation | null {
+  if (hasExplicitSituationPlanRotation(placementAtDrop)) return null
   const previewRotation = usePlanDragVisualStore.getState().rotations.get(placementId)
   if (previewRotation != null) return previewRotation
   return suggestRotationForPlacement(placementAtDrop, ctx, wallFacingSide)
@@ -454,13 +456,19 @@ export function usePlanDragHandling(
                 ? { image: planImage, imagePosition: planImagePosition, walls, symbolBaseSizePx: baseSymbolSizePx }
                 : { walls, symbolBaseSizePx: baseSymbolSizePx }
               const tmpPlacement = { ...placement, pos: currentPos }
-              if (endpoint?.type === 'socket') {
+              if (
+                endpoint?.type === 'socket' &&
+                !hasExplicitSituationPlanRotation(tmpPlacement)
+              ) {
                 const suggested = suggestRotationForPlacement(tmpPlacement, ctx)
                 if (suggested != null) {
                   const prev = usePlanDragVisualStore.getState().rotations.get(placement.id)
                   if (prev !== suggested) rotationPatch.set(placement.id, suggested)
                 }
-              } else if (endpoint?.symbol === 'panel_distribution') {
+              } else if (
+                endpoint?.symbol === 'panel_distribution' &&
+                !hasExplicitSituationPlanRotation(tmpPlacement)
+              ) {
                 const suggested = suggestRotationForPlacement(tmpPlacement, ctx, 'top')
                 if (suggested != null) {
                   const prev = usePlanDragVisualStore.getState().rotations.get(placement.id)

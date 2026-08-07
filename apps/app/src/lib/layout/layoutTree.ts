@@ -1416,7 +1416,7 @@ function buildMcbNode(
               type: 'circuit',
               // Per-segment safety margin around the visual core, rendered as
               // the dashed outline in hitbox debug (like other hit zones).
-              padding: 12,
+              padding: 20,
             },
             children: [],
           })

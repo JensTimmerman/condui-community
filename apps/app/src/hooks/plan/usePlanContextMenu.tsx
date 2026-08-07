@@ -15,6 +15,7 @@ import { logger } from '@/lib/logger'
 
 type SitplanPlacementRow = Placement & {
   endpointId?: string
+  trunkDeviceId?: string
   junctionPanelLabel?: string
   isEarthing?: boolean
 }
@@ -25,9 +26,7 @@ import {
   resolvePanelForDistributionEndpoint,
 } from '@/lib/plan/panelDistributionEndpoint'
 import { resolveSelectionToEndpointIds } from '@/lib/plan/selectionResolvers'
-import {
-  getSelectedPlacementsForSelection,
-} from '@/lib/plan/planContextMenuSelection'
+import { getSelectedPlacementsForSelection } from '@/lib/plan/planContextMenuSelection'
 import { buildPlacementAlignmentMoves } from '@/lib/plan/planContextMenuLayout'
 import type { ContextMenuItem } from '@/components/common/ContextMenu'
 import { getContextMenuIcon } from '@/components/common/ContextMenuIcons'
@@ -101,10 +100,11 @@ export function usePlanContextMenu(
 
       const hitGraphicElementId =
         elementId &&
-        (currentProject ? getCompatibilityFloorsFromProject(currentProject) : []).some((floor: Floor) =>
-          (floor.floorPlan?.graphicElements ?? []).some(
-            (entry: PlanGraphicElement) => entry.id === elementId
-          )
+        (currentProject ? getCompatibilityFloorsFromProject(currentProject) : []).some(
+          (floor: Floor) =>
+            (floor.floorPlan?.graphicElements ?? []).some(
+              (entry: PlanGraphicElement) => entry.id === elementId
+            )
         )
           ? elementId
           : null
@@ -134,6 +134,39 @@ export function usePlanContextMenu(
           },
           variant: 'danger',
         })
+        return items
+      }
+
+      const selectedTrunkPlacement =
+        selection.type === 'placement' && selection.ids.length === 1
+          ? getPlacementById(selection.ids[0]!)
+          : undefined
+      if (selectedTrunkPlacement?.trunkDeviceId && activeFloorId) {
+        items.push(
+          {
+            label: t('contextMenu.hideInThisView', 'Hide in this view'),
+            icon: getContextMenuIcon('hideInThisView'),
+            onClick: () => {
+              const floor = getFloorById(activeFloorId)
+              if (!floor) return
+              updateFloor(activeFloorId, {
+                hiddenSitplanPlacementIds: Array.from(
+                  new Set([...(floor.hiddenSitplanPlacementIds ?? []), selectedTrunkPlacement.id])
+                ),
+              })
+              clearSelection()
+            },
+          },
+          {
+            label: t('contextMenu.delete'),
+            icon: getContextMenuIcon('delete'),
+            onClick: () => {
+              deletePlacement(selectedTrunkPlacement.id)
+              clearSelection()
+            },
+            variant: 'danger',
+          }
+        )
         return items
       }
 
@@ -585,12 +618,12 @@ export function usePlanContextMenu(
                           const message = hasContent
                             ? t('panel.deleteConfirmMessage', {
                                 panelNames,
-                              defaultValue:
+                                defaultValue:
                                   'The following panel(s) contain circuits, protections, or sub-panels: {{panelNames}}\n\nDeleting them will also delete all their contents. You can undo this action.\n\nAre you sure you want to continue?',
                               })
                             : t('panel.deleteEmptyPanelMessage', {
                                 panelNames,
-                              defaultValue:
+                                defaultValue:
                                   'Are you sure you want to delete panel(s): {{panelNames}}?\n\nThis will also remove any associated frames and nested panels. You can undo this action.',
                               })
                           openDialog({
@@ -754,11 +787,17 @@ export function usePlanContextMenu(
                   const endpoint = pl.endpointId
                     ? getEndpointByIdFromSnapshot(pl.endpointId)
                     : undefined
+                  const trunkDevice = pl.trunkDeviceId
+                    ? useProjectStore.getState().getTrunkDeviceById(pl.trunkDeviceId)?.device
+                    : undefined
                   const label =
                     endpoint?.label ||
+                    trunkDevice?.label ||
                     endpoint?.symbol ||
+                    trunkDevice?.symbol ||
                     t('hiddenItemsDialog.unnamedItem', 'Unnamed item')
-                  const symbolMeta = endpoint?.symbol ? getSymbolById(endpoint.symbol) : null
+                  const symbolKey = endpoint?.symbol ?? trunkDevice?.symbol
+                  const symbolMeta = symbolKey ? getSymbolById(symbolKey) : null
                   const subtitle = symbolMeta?.id
                     ? t(`symbols.${symbolMeta.id}`, symbolMeta.name)
                     : undefined

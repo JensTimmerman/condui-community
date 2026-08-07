@@ -62,6 +62,24 @@ wire editor narrows available conductor counts from the upstream protection's po
 configuration (for example, a 3-phase feed entering a 2-pole protection becomes a
 single-phase L+N wire in a `3N~` installation).
 
+Circuit trunk devices may optionally contain a `placements` array using the same
+situation-plan placement shape as endpoint placements. This supports physical
+trunk-mounted devices such as transformers, rectifiers, inverters, and DC-DC
+converters. A missing array remains valid and means that the device has no
+situation-plan instance.
+
+When an older project contains a circuit endpoint or circuit trunk device with
+symbol `junction_box` and no placement, the editor creates a visible placement
+while loading. This compatibility repair uses the circuit's known floor when
+possible and otherwise falls back to the project's first floor.
+
+Situation-plan placements store their orientation in `rotationDeg` as a clockwise
+quarter-turn (`0`, `90`, `180`, or `270`). A placement with
+`rotationMode: "explicit"` was rotated by the user and must not be auto-oriented to
+nearby walls. Missing `rotationMode` is backward-compatible and leaves auto-orientation
+available for symbol kinds that support it; a missing or invalid legacy angle is read as
+zero.
+
 Panels may optionally contain `busbarPhases`. Its `main` array stores the repeating
 `L1`/`L2`/`L3` order for the panel's main busbar. Its `secondary` object stores an
 independent repeating order keyed by the stable id of the grouping protection or parent

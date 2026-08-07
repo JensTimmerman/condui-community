@@ -47,9 +47,11 @@ export default function PlacementControls({ placementId }: PlacementControlsProp
   const updateEndpoint = useProjectStore((state: ProjectState) => state.updateEndpoint)
   const getEndpointById = useProjectStore((state: ProjectState) => state.getEndpointById)
   const findCircuitForEndpoint = useProjectStore((state: ProjectState) => state.findCircuitForEndpoint)
-  const endpointPlacement = useProjectStore((state: ProjectState) =>
-    state.getPlacementById(placementId),
-  )
+  const currentProject = useProjectStore((state: ProjectState) => state.currentProject)
+  const getPlacementById = useProjectStore((state: ProjectState) => state.getPlacementById)
+  // getPlacementById decorates stored placements with their owner id and therefore returns a
+  // fresh object. Calling it inside a Zustand selector creates an unstable React snapshot.
+  const endpointPlacement = currentProject ? getPlacementById(placementId) : undefined
   const junctionPanelPlacement =
     useProjectStore((state: ProjectState) =>
       (state.currentProject

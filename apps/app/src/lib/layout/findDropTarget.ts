@@ -26,6 +26,12 @@ import { DOMOTICA_MAX_ENDPOINT_OUTPUTS, DOMOTICA_MIN_ENDPOINT_OUTPUTS } from '@/
 /** Options for findDropTarget / findDropTargetWithDebug (all optional). */
 export interface FindDropTargetOptions {
   /**
+   * While placing a protection, treat the body of a protection already attached
+   * to a secondary bus as the deterministic slot immediately after that item.
+   * The dedicated circuit-nest zone above it remains available for deeper nesting.
+   */
+  preferSecondaryBusForNestedProtection?: boolean
+  /**
    * When true, circuit trunk *symbols* (trunkDevice nodes) never produce a hit.
    * Use while dragging an existing trunk device so only vertical trunk *wire* segments
    * (with circuitTrunkSegmentIndex) resolve the drop slot.
@@ -84,6 +90,8 @@ export interface DropTarget {
   secondaryBusInsertIndex?: number
   /** Number of nested circuits on a secondary bus before the drop */
   secondaryBusItemCount?: number
+  /** Existing sole child that should be reparented below a new protection inserted on its feeder. */
+  insertBeforeNestedCircuitId?: string
   /** Direct wire domain at this drop target when known (e.g. from wire segment under cursor). */
   wireDomain?: string
   /** Domotica output details when dropping on a domotica output wire hit zone */
@@ -123,6 +131,8 @@ interface WalkContext {
   mainBusNode?: LayoutNode
   /** Current secondary bus node when traversing nested-circuit secondary buses */
   secondaryBusNode?: LayoutNode
+  /** Immediate circuit node whose children are currently being traversed. */
+  currentCircuitNode?: LayoutNode
 }
 
 // ─── Node types that use center-based positioning ────────────────────────────
@@ -213,14 +223,17 @@ function isPointInPadded(node: LayoutNode, point: Point): boolean {
  */
 function findCircuitNestDropInPanel(
   panelNode: LayoutNode,
-  position: Point
+  position: Point,
+  mode: 'core' | 'padded' = 'core'
 ): { target: DropTarget; node: LayoutNode } | null {
   const bestMatch: {
     current: { node: LayoutNode; circuitId: string; score: number } | null
   } = { current: null }
 
   const visit = (node: LayoutNode) => {
-    if (node.id?.startsWith('circuit-nest-') && isPointInCore(node, position)) {
+    const inBounds =
+      mode === 'core' ? isPointInCore(node, position) : isPointInPadded(node, position)
+    if (node.id?.startsWith('circuit-nest-') && inBounds) {
       const circuitId = node.id.slice('circuit-nest-'.length)
       if (circuitId) {
         const bounds = getHitZoneBounds(node, 'core')
@@ -291,6 +304,54 @@ function findSecondaryBusDropInPanel(
   return bestMatch.current
 }
 
+function findNestedProtectionSecondaryBusDropInPanel(
+  panelNode: LayoutNode,
+  circuitId: string,
+  ctx: WalkContext
+): DropTarget | null {
+  return findNestedCircuitSecondaryBusDropInPanel(
+    panelNode,
+    (node) => node.circuitIdForWires === circuitId,
+    ctx
+  )
+}
+
+function findNestedCircuitSecondaryBusDropInPanel(
+  panelNode: LayoutNode,
+  matchesCircuit: (node: LayoutNode) => boolean,
+  ctx: WalkContext
+): DropTarget | null {
+  const visit = (node: LayoutNode, walkCtx: WalkContext): DropTarget | null => {
+    if (
+      node.type === 'mcb' &&
+      matchesCircuit(node) &&
+      walkCtx.currentCircuitNode &&
+      walkCtx.circuitId
+    ) {
+      const { insertIndex, itemCount } = computeSecondaryBusInsertIndex(
+        walkCtx.currentCircuitNode,
+        node.bounds.x
+      )
+      return {
+        type: 'circuit',
+        panelId: walkCtx.panelId,
+        circuitId: walkCtx.circuitId,
+        secondaryBusInsertIndex: insertIndex,
+        secondaryBusItemCount: itemCount,
+      }
+    }
+
+    const childCtx = accumulateContext(node, walkCtx)
+    for (const child of node.children) {
+      const match = visit(child, childCtx)
+      if (match) return match
+    }
+    return null
+  }
+
+  return visit(panelNode, ctx)
+}
+
 // ─── Main entry point ────────────────────────────────────────────────────────
 
 /**
@@ -333,7 +394,22 @@ export function findDropTarget(
       }
       if (mainBusResult?.type === 'mainBus') return mainBusResult
     }
-    if (typeof coreResult.secondaryBusInsertIndex === 'number') {
+    if (
+      options?.preferSecondaryBusForNestedProtection &&
+      coreResult.type === 'protection' &&
+      coreResult.protectionId
+    ) {
+      const secondaryBusTarget = findNestedProtectionSecondaryBusDropInPanel(
+        panelNode,
+        coreResult.circuitId!,
+        ctx
+      )
+      if (secondaryBusTarget) return secondaryBusTarget
+    }
+    if (
+      !options?.preferSecondaryBusForNestedProtection &&
+      typeof coreResult.secondaryBusInsertIndex === 'number'
+    ) {
       const circuitNestResult = findCircuitNestDropInPanel(panelNode, position)
       if (circuitNestResult) return circuitNestResult.target
     }
@@ -358,6 +434,18 @@ export function findDropTarget(
         preferMainBusOverSupply
       )
       if (mainBusResult?.type === 'mainBus') return mainBusResult
+    }
+    if (
+      options?.preferSecondaryBusForNestedProtection &&
+      paddedResult.type === 'protection' &&
+      paddedResult.protectionId
+    ) {
+      const secondaryBusTarget = findNestedProtectionSecondaryBusDropInPanel(
+        panelNode,
+        paddedResult.circuitId!,
+        ctx
+      )
+      if (secondaryBusTarget) return secondaryBusTarget
     }
     return paddedResult
   }
@@ -431,7 +519,27 @@ export function findDropTargetWithDebug(
         }
       }
     }
-    if (typeof coreResult.target.secondaryBusInsertIndex === 'number') {
+    if (
+      options?.preferSecondaryBusForNestedProtection &&
+      coreResult.target.type === 'protection' &&
+      coreResult.target.protectionId
+    ) {
+      const secondaryBusTarget = findNestedProtectionSecondaryBusDropInPanel(
+        panelNode,
+        coreResult.target.circuitId!,
+        ctx
+      )
+      if (secondaryBusTarget) {
+        return {
+          target: secondaryBusTarget,
+          debug: { panelId: panelNode.domainId, path: debugPath },
+        }
+      }
+    }
+    if (
+      !options?.preferSecondaryBusForNestedProtection &&
+      typeof coreResult.target.secondaryBusInsertIndex === 'number'
+    ) {
       const circuitNestResult = findCircuitNestDropInPanel(panelNode, position)
       if (circuitNestResult) {
         const matchedNode = circuitNestResult.node
@@ -486,6 +594,23 @@ export function findDropTargetWithDebug(
         return {
           target: mainBusResult.target,
           debug: { panelId: panelNode.domainId, path: mainBusDebugPath },
+        }
+      }
+    }
+    if (
+      options?.preferSecondaryBusForNestedProtection &&
+      paddedResult.target.type === 'protection' &&
+      paddedResult.target.protectionId
+    ) {
+      const secondaryBusTarget = findNestedProtectionSecondaryBusDropInPanel(
+        panelNode,
+        paddedResult.target.circuitId!,
+        ctx
+      )
+      if (secondaryBusTarget) {
+        return {
+          target: secondaryBusTarget,
+          debug: { panelId: panelNode.domainId, path: debugPath },
         }
       }
     }
@@ -707,6 +832,19 @@ function findTarget(
   // Accumulate context from this node (e.g., circuitId from MCB)
   const childCtx = accumulateContext(node, ctx)
 
+  // While placing a protection, the visible MCB body owns its entire hitbox.
+  // Its trunk wire is a child node and geometrically runs underneath the body;
+  // letting child-first traversal win there made the middle of the same symbol
+  // behave like a feeder while its padded edge behaved like a sibling slot.
+  if (
+    options?.preferSecondaryBusForNestedProtection &&
+    node.type === 'mcb' &&
+    node.hitZone?.type === 'protection' &&
+    (mode === 'core' ? isPointInCore(node, position) : isPointInPadded(node, position))
+  ) {
+    return buildDropTarget(node, ctx, position)
+  }
+
   // ALWAYS check children first (depth-first: deeper = higher priority).
   // For core hits, endpoint symbols should outrank wire hit zones. Domotica
   // output wires can sit underneath child symbols; if the wire wins first,
@@ -774,6 +912,16 @@ function findTargetWithDebug(
     matched: false,
   }
   debugPath.push(step)
+
+  if (
+    options?.preferSecondaryBusForNestedProtection &&
+    node.type === 'mcb' &&
+    node.hitZone?.type === 'protection' &&
+    inBounds
+  ) {
+    step.matched = true
+    return { target: buildDropTarget(node, ctx, position) }
+  }
 
   // ALWAYS check children first (depth-first: deeper = higher priority)
   const children = getHitTestChildren(node, mode)
@@ -858,7 +1006,8 @@ function accumulateContext(node: LayoutNode, ctx: WalkContext): WalkContext {
       return {
         ...ctx,
         circuitId,
-        ...(secondaryBusNode ? { secondaryBusNode } : {}),
+        currentCircuitNode: node,
+        secondaryBusNode,
       }
     }
   }
@@ -1027,6 +1176,22 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
       // - circuitId always flows from context when inside a circuit
       target.circuitId = ctx.circuitId
 
+      // A circuit with one nested child is rendered as a vertical feeder rather
+      // than a bus. Dropping a protection on that feeder inserts it between the
+      // parent and child; the child's own tip/trunk remains a target above it.
+      if (
+        target.type === 'circuit' &&
+        ctx.currentCircuitNode &&
+        (node.id?.startsWith('circuit-trunk-') || node.id?.startsWith('circuit-nest-'))
+      ) {
+        const directNestedCircuitIds = ctx.currentCircuitNode.children
+          .filter((child) => child.type === 'mcb' && !!child.circuitIdForWires)
+          .map((child) => child.circuitIdForWires!)
+        if (directNestedCircuitIds.length === 1) {
+          target.insertBeforeNestedCircuitId = directNestedCircuitIds[0]
+        }
+      }
+
       // When inside a branch, propagate branch endpoint context (including [] on empty branches).
       if (ctx.branchEndpoints !== undefined) {
         target.branchEndpoints = ctx.branchEndpoints
@@ -1073,21 +1238,11 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
       // compute insertion index using that secondary bus node. We rely on the
       // walk context (secondaryBusNode) rather than the parent hitZone type so
       // the parent can remain a pure container.
-      if (target.type === 'circuit' && position && ctx.secondaryBusNode) {
-        const { insertIndex, itemCount } = computeSecondaryBusInsertIndex(
-          ctx.secondaryBusNode,
-          position.x
-        )
-        target.secondaryBusInsertIndex = insertIndex
-        target.secondaryBusItemCount = itemCount
-      }
-
-      // Nest slot at trunk top shares the secondary bus Y; resolve sibling index from X.
       if (
         target.type === 'circuit' &&
         position &&
-        node.id?.startsWith('circuit-nest-') &&
-        ctx.secondaryBusNode
+        ctx.secondaryBusNode &&
+        !node.id?.startsWith('circuit-nest-')
       ) {
         const { insertIndex, itemCount } = computeSecondaryBusInsertIndex(
           ctx.secondaryBusNode,
@@ -1096,6 +1251,7 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
         target.secondaryBusInsertIndex = insertIndex
         target.secondaryBusItemCount = itemCount
       }
+
       break
 
     case 'trunkDevice':

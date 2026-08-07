@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { symbols, type SymbolMetadata } from '@/lib/symbols'
 import { fuzzyMatchAny } from '@/utils/search'
+import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
 
 interface LibraryState {
   symbols: SymbolMetadata[]
@@ -88,7 +89,11 @@ export const useLibraryStore = create<LibraryState>()(
       },
 
       getSymbolsByScope: (scope) => {
-        return get().symbols.filter((s) => s.scope === scope || s.scope === 'both')
+        return get().symbols.filter(
+          (s) =>
+            (s.scope === scope || s.scope === 'both') &&
+            (scope !== 'situatieplan' || canSymbolAppearOnSituationPlan(s.id))
+        )
       },
     }),
     {
