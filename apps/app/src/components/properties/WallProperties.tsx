@@ -20,7 +20,8 @@ export function WallProperties({
 }: WallPropertiesProps) {
   const { t } = useTranslation()
   const { updateWall, deleteWall } = useProjectStore()
-  const { theme, setTheme } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
+  const setTheme = useSettingsStore((state) => state.setTheme)
 
   // Calculate wall length
   const wallLength = (() => {

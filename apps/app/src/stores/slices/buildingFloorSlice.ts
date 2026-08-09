@@ -14,6 +14,10 @@ import {
 import { ensureElectricalLayerOnFloor } from '@/lib/plan/floorLayers'
 import { resolvePlanWiringVisibility } from '@/lib/plan/planWiring'
 import {
+  showSituationPlanPlacementInPanel,
+  showSituationPlanPlacementOnPlan,
+} from '@/lib/plan/panelPlanPlacementVisibility'
+import {
   getCompatibilityFloorsFromProject,
   getPlanScaleFromProject,
   getMutableCompatibilityFloorsForProject,
@@ -30,6 +34,8 @@ import {
 import { ensureMutablePlanWiringForProject } from '@/lib/projectV2/planWiring'
 import type { PlanGraphicElement, Point2, Wall } from '@/types/schema'
 import { generateId } from '@/utils/project'
+import { useUIStore } from '@/stores/uiStore'
+import { isCurvedWall } from '@/lib/plan/wallCurve'
 
 export const createBuildingFloorSlice: ProjectSliceCreator = (set, get) => ({
     // Floor actions
@@ -54,7 +60,25 @@ export const createBuildingFloorSlice: ProjectSliceCreator = (set, get) => ({
         if (state.currentProject) {
           const floor = getMutableCompatibilityFloorsForProject(state.currentProject).find((f) => f.id === id)
           if (floor) {
+            const previouslyHidden = new Set(floor.hiddenSitplanPlacementIds ?? [])
             Object.assign(floor, updates)
+            if (Object.prototype.hasOwnProperty.call(updates, 'hiddenSitplanPlacementIds')) {
+              const nextHiddenIds = updates.hiddenSitplanPlacementIds ?? []
+              const nextHidden = new Set(nextHiddenIds)
+              const preferredPanelId = useUIStore.getState().activePanelId
+              for (const placementId of nextHiddenIds) {
+                if (previouslyHidden.has(placementId)) continue
+                showSituationPlanPlacementInPanel(
+                  state.currentProject,
+                  placementId,
+                  preferredPanelId,
+                )
+              }
+              for (const placementId of previouslyHidden) {
+                if (nextHidden.has(placementId)) continue
+                showSituationPlanPlacementOnPlan(state.currentProject, placementId)
+              }
+            }
             if (updates.scale) setPlanScaleForProject(state.currentProject, updates.scale)
             ensureElectricalLayerOnFloor(floor)
             syncBuildingFloorFromCompatibility(state.currentProject, id)
@@ -382,6 +406,8 @@ export const createBuildingFloorSlice: ProjectSliceCreator = (set, get) => ({
       const wall1 = walls.find((w) => w.id === wallId1)
       const wall2 = walls.find((w) => w.id === wallId2)
       if (!wall1 || !wall2 || wall1.points.length < 2 || wall2.points.length < 2) return false
+      // Curves remain standalone entities; their middle point is a geometric control, not a join vertex.
+      if (isCurvedWall(wall1) || isCurvedWall(wall2)) return false
 
       const p1 = wall1.points[pointIndex1]
       const p2 = wall2.points[pointIndex2]
@@ -494,9 +520,10 @@ export const createBuildingFloorSlice: ProjectSliceCreator = (set, get) => ({
                 masterWallThickness: 20,
               }
             }
+            const wall = floor.floorPlan.walls.find((w) => w.id === door.wallId)
+            if (!wall || isCurvedWall(wall)) return
             const newDoor = { ...door, id: generateId() }
             floor.floorPlan.doors.push(newDoor)
-            const wall = floor.floorPlan.walls.find((w) => w.id === door.wallId)
             if (wall && wall.points.length >= 2) {
               const wallDoors = floor.floorPlan.doors.filter((d) => d.wallId === door.wallId)
               const wallWindows = floor.floorPlan.windows.filter((w) => w.wallId === door.wallId)
@@ -616,9 +643,10 @@ export const createBuildingFloorSlice: ProjectSliceCreator = (set, get) => ({
                 masterWallThickness: 20,
               }
             }
+            const wall = floor.floorPlan.walls.find((w) => w.id === window.wallId)
+            if (!wall || isCurvedWall(wall)) return
             const newWindow = { ...window, id: generateId() }
             floor.floorPlan.windows.push(newWindow)
-            const wall = floor.floorPlan.walls.find((w) => w.id === window.wallId)
             if (wall && wall.points.length >= 2) {
               const wallDoors = floor.floorPlan.doors.filter((d) => d.wallId === window.wallId)
               const wallWindows = floor.floorPlan.windows.filter((w) => w.wallId === window.wallId)

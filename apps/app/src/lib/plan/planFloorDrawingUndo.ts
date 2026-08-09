@@ -6,6 +6,7 @@ export type FloorPlanWallDrawingState = {
   isDrawing: boolean
   startPoint: Point2 | null
   rectStartPoint: Point2 | null
+  pendingCurve?: boolean
 }
 
 export type FloorPlanDrawingUndoSnapshot = {

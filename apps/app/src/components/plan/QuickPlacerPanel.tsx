@@ -182,7 +182,7 @@ export const QuickPlacerPanel = forwardRef<HTMLDivElement, QuickPlacerPanelProps
       (s) => (s.selection.type === 'endpoint' ? s.selection.ids : []),
       selectionIdsEqual,
     )
-    const { theme } = useSettingsStore()
+    const theme = useSettingsStore((state) => state.theme)
     const colors = useThemeColors()
     const [collapsed, setCollapsed] = useState(false)
     const compactDockedLayout = renderMode === 'docked'

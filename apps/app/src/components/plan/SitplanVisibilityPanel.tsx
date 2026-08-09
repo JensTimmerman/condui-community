@@ -126,7 +126,7 @@ const defaultVisibility: PlanVisibilityState = {
 
 export default function SitplanVisibilityPanel({ readOnly = false }: { readOnly?: boolean }) {
   const { t } = useTranslation()
-  const { theme } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
   const planVisibility = useUIStore((s) => s.planVisibility)
   const setPlanVisibility = useUIStore((s) => s.setPlanVisibility)
   const setHover = useUIStore((s) => s.setHover)

@@ -3,9 +3,15 @@ import { ZOOM_100 } from '@/constants/canvasConstants'
 import { Group, Image, Rect } from 'react-konva'
 import { getSymbolById, TRANSFORMER_OVERLAY_PATHS } from '@/lib/symbols'
 import { SYMBOL_EXPORT_ATTR_SVG_PATH, loadProcessedSymbol } from '@/lib/symbolImage'
+import {
+  getSurgeProtectionBodyBounds,
+  getSurgeProtectionSymbolPath,
+  getSurgeProtectionSymbolAnchor,
+  getSurgeProtectionSelectionBounds,
+} from '@/lib/surgeProtectionSymbol'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useUIStore } from '@/stores/uiStore'
-import { useHoverIncludes, useIsIdSelected, useSetSelection } from '@/editions/community/communityHooks'
+import { useHoverIncludes, useSetSelection, useTrunkDeviceSelected } from '@/editions/community/communityHooks'
 import { useIsPreviewSelected } from '@/contexts/SelectionPreviewContext'
 import { useCanvasFontFamily, useEffectiveCanvasZoom, useTouchPrimaryDevice } from '@/editions/community/communityHooks'
 import { SymbolTextLabels } from './SymbolTextLabels'
@@ -16,6 +22,9 @@ import {
   getSelectionOutlineProps,
   getHoverOutlineProps,
   getPreviewOutlineProps,
+  getPaddedRectSelectionOutlineProps,
+  getPaddedRectHoverOutlineProps,
+  getPaddedRectPreviewOutlineProps,
   getSecondaryTextColor,
   getTextColor,
 } from './canvasSymbols'
@@ -30,7 +39,13 @@ import type { Point } from '@/types/ui'
 
 type EendraadPointerEvent = {
   cancelBubble: boolean
-  evt: { button?: number; shiftKey?: boolean; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean }
+  evt: {
+    button?: number
+    shiftKey?: boolean
+    altKey?: boolean
+    ctrlKey?: boolean
+    metaKey?: boolean
+  }
 }
 type WindowWithEendraTapSuppression = Window & { __eendraSuppressNextElementTap?: boolean }
 
@@ -67,16 +82,14 @@ export function TrunkDeviceSymbol({
   draggableCircuitTrunk = false,
 }: TrunkDeviceSymbolProps) {
   const setSelection = useSetSelection()
-  const isSelected = useIsIdSelected(device.id)
+  const isSelected = useTrunkDeviceSelected(device)
   const canDragTrunk = useUIStore(
-    (s) =>
-      draggableCircuitTrunk &&
-      s.selection.ids.includes(device.id)
+    (s) => draggableCircuitTrunk && s.selection.ids.includes(device.id)
   )
   const isHoveredFromBreadcrumb = useHoverIncludes('trunkDevice', device.id)
   const canvasZoom = useEffectiveCanvasZoom(ZOOM_100, 'eendraad')
   const touchPrimary = useTouchPrimaryDevice()
-  const { theme } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
   const fontFamily = useCanvasFontFamily()
   const isPreviewSelected = useIsPreviewSelected('trunkDevice', device.id)
   const [processedImage, setProcessedImage] = useState<HTMLImageElement | null>(null)
@@ -99,6 +112,10 @@ export function TrunkDeviceSymbol({
     device.symbol === 'inverter' ||
     device.symbol === 'dc_dc_converter'
   const isProtection = device.type === 'protection'
+  const isSurgeProtection = device.protectionType === 'SPD' || device.symbol === 'spd'
+  const renderedSymbolPath = isSurgeProtection
+    ? getSurgeProtectionSymbolPath(device.surgeProtectionKind)
+    : symbol?.svgPath
   const nameLabelText = (device.label ?? '').trim()
   const showSupplyProtectionNameLabel =
     isHorizontal === true &&
@@ -169,21 +186,15 @@ export function TrunkDeviceSymbol({
             symbolHalfWidth: renderedSymbolSize.width / 2,
           })
         : 0,
-    [
-      device,
-      fontFamily,
-      isHorizontal,
-      renderedSymbolSize.width,
-      wireSegments,
-    ],
+    [device, fontFamily, isHorizontal, renderedSymbolSize.width, wireSegments]
   )
 
   useEffect(() => {
-    if (!symbol) return
-    loadProcessedSymbol(symbol.svgPath, isDark)
+    if (!renderedSymbolPath) return
+    loadProcessedSymbol(renderedSymbolPath, isDark)
       .then(setProcessedImage)
       .catch(() => setProcessedImage(null))
-  }, [symbol, isDark])
+  }, [renderedSymbolPath, isDark])
 
   // Load transformer overlays for trunk devices
   useEffect(() => {
@@ -269,6 +280,20 @@ export function TrunkDeviceSymbol({
   )
 
   const rotateForHorizontal = isHorizontal && isProtection
+  const surgeBodyBounds = getSurgeProtectionBodyBounds(
+    renderedSymbolSize.width,
+    renderedSymbolSize.height,
+    isHorizontal === true
+  )
+  const surgeSelectionBounds = getSurgeProtectionSelectionBounds(
+    renderedSymbolSize.width,
+    renderedSymbolSize.height,
+    isHorizontal === true
+  )
+  const surgeSymbolAnchor = getSurgeProtectionSymbolAnchor(
+    renderedSymbolSize.width,
+    renderedSymbolSize.height
+  )
 
   if (!symbol || !processedImage) return null
 
@@ -302,23 +327,33 @@ export function TrunkDeviceSymbol({
       }
     >
       {/* Invisible hit area — slightly larger than symbol for easy hover/click selection */}
-      <Rect
-        {...getTouchAwareHitAreaProps(
-          ENDPOINT_OUTLINE_SIZE,
-          canvasZoom,
-          isSelected,
-          touchPrimary,
-        )}
-      />
+      {isSurgeProtection ? (
+        <Rect
+          x={surgeBodyBounds.x - (touchPrimary ? 7 : 4)}
+          y={surgeBodyBounds.y - (touchPrimary ? 7 : 4)}
+          width={surgeBodyBounds.width + (touchPrimary ? 14 : 8)}
+          height={surgeBodyBounds.height + (touchPrimary ? 14 : 8)}
+          fill="transparent"
+        />
+      ) : (
+        <Rect
+          {...getTouchAwareHitAreaProps(
+            ENDPOINT_OUTLINE_SIZE,
+            canvasZoom,
+            isSelected,
+            touchPrimary
+          )}
+        />
+      )}
 
       {/* Symbol image — offsetY by orientation; protection on horizontal trunk rotated 90° left */}
       <Image
         image={processedImage}
-        {...{ [SYMBOL_EXPORT_ATTR_SVG_PATH]: symbol.svgPath }}
+        {...{ [SYMBOL_EXPORT_ATTR_SVG_PATH]: renderedSymbolPath }}
         width={renderedSymbolSize.width}
         height={renderedSymbolSize.height}
-        offsetX={renderedSymbolSize.width / 2}
-        offsetY={renderedSymbolSize.height / 2}
+        offsetX={isSurgeProtection ? surgeSymbolAnchor.x : renderedSymbolSize.width / 2}
+        offsetY={isSurgeProtection ? surgeSymbolAnchor.y : renderedSymbolSize.height / 2}
         rotation={rotateForHorizontal ? -90 : 0}
         listening={false}
       />
@@ -413,22 +448,59 @@ export function TrunkDeviceSymbol({
           fontFamily={fontFamily}
           fontSize={10}
           symbolSize={SYMBOL_SIZE}
-          symbolWidth={renderedSymbolSize.width}
-          symbolHeight={renderedSymbolSize.height}
+          symbolWidth={isSurgeProtection && !isHorizontal ? 0 : renderedSymbolSize.width}
+          symbolHeight={
+            isSurgeProtection && !isHorizontal ? surgeBodyBounds.height : renderedSymbolSize.height
+          }
           splitResidualLine={splitProtectionResidualLine}
           onLabelClick={handleClick}
         />
       )}
       {/* Preview highlight (during selection rectangle drag) */}
       {isPreviewSelected && !isSelected && (
-        <Rect {...getPreviewOutlineProps(canvasZoom, ENDPOINT_OUTLINE_SIZE)} />
+        <Rect
+          {...(isSurgeProtection
+            ? getPaddedRectPreviewOutlineProps(
+                canvasZoom,
+                surgeSelectionBounds.x,
+                surgeSelectionBounds.y,
+                surgeSelectionBounds.width,
+                surgeSelectionBounds.height,
+                2
+              )
+            : getPreviewOutlineProps(canvasZoom, ENDPOINT_OUTLINE_SIZE))}
+        />
       )}
       {/* Hover highlight */}
       {isHoveredAny && !isSelected && !isPreviewSelected && (
-        <Rect {...getHoverOutlineProps(canvasZoom, ENDPOINT_OUTLINE_SIZE)} />
+        <Rect
+          {...(isSurgeProtection
+            ? getPaddedRectHoverOutlineProps(
+                canvasZoom,
+                surgeSelectionBounds.x,
+                surgeSelectionBounds.y,
+                surgeSelectionBounds.width,
+                surgeSelectionBounds.height,
+                2
+              )
+            : getHoverOutlineProps(canvasZoom, ENDPOINT_OUTLINE_SIZE))}
+        />
       )}
       {/* Selection outline */}
-      {isSelected && <Rect {...getSelectionOutlineProps(canvasZoom, ENDPOINT_OUTLINE_SIZE)} />}
+      {isSelected && (
+        <Rect
+          {...(isSurgeProtection
+            ? getPaddedRectSelectionOutlineProps(
+                canvasZoom,
+                surgeSelectionBounds.x,
+                surgeSelectionBounds.y,
+                surgeSelectionBounds.width,
+                surgeSelectionBounds.height,
+                2
+              )
+            : getSelectionOutlineProps(canvasZoom, ENDPOINT_OUTLINE_SIZE))}
+        />
+      )}
     </Group>
   )
 }

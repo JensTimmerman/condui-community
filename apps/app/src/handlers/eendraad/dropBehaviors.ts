@@ -1134,14 +1134,6 @@ const endpointBehavior: DropBehavior = {
       })
       if (placement) {
         callbacks.addPlacement(endpointId, placement)
-        if (isConversionSymbol(symbol) && symbol.id !== 'inverter') {
-          const floor = callbacks.getFloorById(activeFloorId)
-          callbacks.updateFloor(activeFloorId, {
-            hiddenSitplanPlacementIds: Array.from(
-              new Set([...(floor?.hiddenSitplanPlacementIds ?? []), placement.id])
-            ),
-          })
-        }
       }
     }
   },
@@ -1212,6 +1204,37 @@ const switchBehavior: DropBehavior = {
   },
 }
 
+function buildVisibleTrunkSitplanPlacement(
+  project: DropBehaviorProject,
+  circuitId: string,
+  preferredPlanPosOverride?: Point,
+): Placement | null {
+  const activeFloorId = resolveCircuitSitplanTargetFloorId(
+    project,
+    useUIStore.getState().activeFloorId,
+    circuitId,
+  )
+  if (!activeFloorId) return null
+
+  const uiSnap = useUIStore.getState()
+  const preferredPlanPos =
+    preferredPlanPosOverride ??
+    getViewportCenterPlanSpaceIfApplicable(
+      uiSnap.viewportLayout,
+      uiSnap.planCanvasViewportPx,
+      uiSnap.activeFloorId,
+      activeFloorId,
+      uiSnap.planView,
+    ) ??
+    undefined
+  return buildAutoSitplanPlacement(project, {
+    circuitId,
+    floorId: activeFloorId,
+    placementId: generateId(),
+    ...(preferredPlanPos ? { preferredPlanPos } : {}),
+  })
+}
+
 /** Energy conversion drop behavior — trunk device on circuit trunk only (not supply wire). */
 const energyConversionBehavior: DropBehavior = {
   validTargets: ['endpoint', 'circuit', 'protection'],
@@ -1230,42 +1253,11 @@ const energyConversionBehavior: DropBehavior = {
         id: deviceId,
         type: 'conversion',
         symbol: symbol.id as TrunkDevice['symbol'],
-        label: symbol.name,
+        label: '',
         trunkPosition,
       }
-      const activeFloorId = resolveCircuitSitplanTargetFloorId(
-        project,
-        useUIStore.getState().activeFloorId,
-        target.circuitId
-      )
-      if (activeFloorId) {
-        const uiSnap = useUIStore.getState()
-        const preferredPlanPos =
-          getViewportCenterPlanSpaceIfApplicable(
-            uiSnap.viewportLayout,
-            uiSnap.planCanvasViewportPx,
-            uiSnap.activeFloorId,
-            activeFloorId,
-            uiSnap.planView
-          ) ?? undefined
-        const placement = buildAutoSitplanPlacement(project, {
-          circuitId: target.circuitId,
-          floorId: activeFloorId,
-          placementId: generateId(),
-          ...(preferredPlanPos ? { preferredPlanPos } : {}),
-        })
-        if (placement) {
-          trunkDevice.placements = [placement]
-          if (symbol.id !== 'inverter') {
-            const floor = callbacks.getFloorById(activeFloorId)
-            callbacks.updateFloor(activeFloorId, {
-              hiddenSitplanPlacementIds: Array.from(
-                new Set([...(floor?.hiddenSitplanPlacementIds ?? []), placement.id])
-              ),
-            })
-          }
-        }
-      }
+      const placement = buildVisibleTrunkSitplanPlacement(project, target.circuitId)
+      if (placement) trunkDevice.placements = [placement]
       addCircuitTrunkDeviceAtDrop(target, circuit, trunkDevice, callbacks)
       callbacks.setSelection({ type: 'trunkDevice', ids: [deviceId] })
       return
@@ -1344,13 +1336,41 @@ const dcEndpointBehavior: DropBehavior = {
       id: deviceId,
       type: 'conversion',
       symbol: 'rectifier',
-      label: rectifierMeta.name,
+      label: '',
       trunkPosition,
     }
     callbacks.addTrunkDevice(circuitId, trunkDevice)
 
     // Now add the DC endpoint using the normal endpoint behavior.
-    endpointBehavior.execute(target, project, symbol, t, callbacks)
+    let addedEndpointId: string | undefined
+    const trackingCallbacks: DropBehaviorCallbacks = {
+      ...callbacks,
+      addEndpoint: (targetCircuitId, endpoint, insertAfterEndpointId, branchOpts) => {
+        addedEndpointId = endpoint.id
+        callbacks.addEndpoint(targetCircuitId, endpoint, insertAfterEndpointId, branchOpts)
+      },
+    }
+    endpointBehavior.execute(target, project, symbol, t, trackingCallbacks)
+
+    const updatedCircuit = callbacks.getCircuitById(circuitId)
+    const addedEndpoint = updatedCircuit?.endpoints.find(
+      (endpoint) => endpoint.id === addedEndpointId,
+    )
+    const endpointPlacement = addedEndpoint?.placements[0]
+    const rectifierPlacement = buildVisibleTrunkSitplanPlacement(
+      project,
+      circuitId,
+      endpointPlacement
+        ? { x: endpointPlacement.pos.x - 80, y: endpointPlacement.pos.y }
+        : undefined,
+    )
+    if (updatedCircuit && rectifierPlacement) {
+      callbacks.updateCircuit(circuitId, {
+        trunkDevices: (updatedCircuit.trunkDevices ?? []).map((device) =>
+          device.id === trunkDevice.id ? { ...device, placements: [rectifierPlacement] } : device,
+        ),
+      })
+    }
   },
 }
 
@@ -1832,6 +1852,32 @@ function addSupplyTrunkDevice(
   }
   const targetPanel = target.panelId ? findPanelById(projectPanels(project), target.panelId) : null
   const panelSupplyCircuit = targetPanel?.circuits?.find((c) => c.code === 'PANEL')
+
+  if (protectionType === 'ROTATING_SWITCH') {
+    const activeFloorId = resolveSitplanTargetFloorId(
+      project,
+      useUIStore.getState().activeFloorId,
+    )
+    if (activeFloorId) {
+      const uiSnap = useUIStore.getState()
+      const preferredPlanPos =
+        getViewportCenterPlanSpaceIfApplicable(
+          uiSnap.viewportLayout,
+          uiSnap.planCanvasViewportPx,
+          uiSnap.activeFloorId,
+          activeFloorId,
+          uiSnap.planView,
+        ) ?? undefined
+      const placement = buildAutoSitplanPlacement(project, {
+        circuitId: panelSupplyCircuit?.id ?? `panel-supply:${target.panelId ?? 'main'}`,
+        floorId: activeFloorId,
+        placementId: generateId(),
+        ...(preferredPlanPos ? { preferredPlanPos } : {}),
+      })
+      if (placement) trunkDevice.placements = [placement]
+    }
+  }
+
   if (targetPanel && !targetPanel.isMain && panelSupplyCircuit) {
     // Sub-panel incoming wire allows only one local protection device.
     if (deviceType === 'protection') {

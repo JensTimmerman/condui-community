@@ -26,6 +26,7 @@ import {
   getBusbarPhaseOrder,
   getPanelIncomingPhaseState,
   getProtectionPhaseConstraint,
+  isPhaseAssignmentLabelVisible,
   supportsExplicitPhaseSelection,
 } from '@/lib/wires/phaseAssignment'
 import CustomDropdown from '@/components/common/CustomDropdown'
@@ -621,15 +622,16 @@ function WireProperties({
 
   const wireDomain = wireSegment.domain ?? 'AC'
   const isDC = wireDomain === 'DC'
+  const phaseSystem = installationForPhase?.nominalVoltage.system
   const inheritedPhaseState = getInheritedCircuitPhaseState(
     circuit,
     panelsForPhase,
-    installationForPhase?.nominalVoltage.system,
+    phaseSystem,
     installationForPhase
   )
   const protectionPhaseConstraint = getProtectionPhaseConstraint(
     getProtectionForCircuit(circuit.id) ?? undefined,
-    installationForPhase?.nominalVoltage.system,
+    phaseSystem,
     wireSegment.phaseAssignment
   )
   const phaseConstraint =
@@ -728,8 +730,13 @@ function WireProperties({
       : (sectionOverride?.phaseAssignment ??
         domainOverride?.phaseAssignment ??
         circuit.phaseAssignment),
-    showPhaseLabel:
-      circuit.showPhaseLabel ?? inheritedPhaseState.showPhaseLabel ?? wireSegment.showPhaseLabel,
+    showPhaseLabel: phaseSystem
+      ? isPhaseAssignmentLabelVisible(
+          wireSegment.phaseAssignment,
+          phaseSystem,
+          circuit.showPhaseLabel ?? inheritedPhaseState.showPhaseLabel ?? wireSegment.showPhaseLabel
+        )
+      : false,
     phaseConstraint,
     // Default visibility: first vertical after a protection, or the bus→feeder stub for panel-only sub-panels.
     defaultWireLabelVisible:

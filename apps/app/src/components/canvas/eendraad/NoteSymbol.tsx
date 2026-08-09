@@ -27,7 +27,7 @@ interface NoteSymbolProps {
 }
 
 export const NoteSymbol = memo(function NoteSymbol({ note, onDragEnd, onDragMove }: NoteSymbolProps) {
-  const { theme } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
   const fontFamily = useCanvasFontFamily()
   const setSelection = useSetSelection()
   const canvasZoom = useEffectiveCanvasZoom(ZOOM_100, 'eendraad')

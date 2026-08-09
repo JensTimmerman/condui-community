@@ -10,7 +10,7 @@ interface MainBusProps {
 }
 
 export function MainBus({ x, y, width, height }: MainBusProps) {
-  const { theme } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
   const isDark = theme.mode === 'dark'
   const busColor = getBusColor(isDark)
   

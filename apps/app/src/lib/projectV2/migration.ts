@@ -306,6 +306,7 @@ function buildingElementsFromFloor(floor: Floor): ElementModelV2[] {
       geometry: wallGeometry(wall),
       properties: {
         v1: wall,
+        curve: wall.curve,
         thickness: wall.thickness,
         masterWallThickness: floorPlan.masterWallThickness,
       },

@@ -371,7 +371,7 @@
     "export": "Project exporteren",
     "customer": "Klant",
     "name": "Projectnaam",
-    "companyNumber": "Ondernemingsnummer",
+    "companyNumber": "Btw-nummer",
     "customerEmail": "E-mail",
     "customerMobile": "Mobiel",
     "customerPhone": "Telefoon",
@@ -527,6 +527,9 @@
     "polesConfig": "Poolconfiguratie",
     "residualCurrentType": "Type differentieel",
     "breakingCapacity": "Kortsluitvermogen",
+    "spdKind": "Symbool",
+    "spdStandard": "Bliksembeveiliging",
+    "spdSparkGap": "Vonkbrug",
     "poles_1P": "1P",
     "poles_1P_N": "1P+N",
     "poles_2P": "2P (L+N)",
@@ -1203,10 +1206,10 @@
           "remediation": "Zorg ervoor dat alle plaatsingen gekoppeld zijn aan eindpunten met geldige stroombaan-ID's (bijv. \"A1\", \"B3\")."
         },
         "hidden-situation-plan-symbols": {
-          "shortTitle": "Verborgen symbolen op situatieplan",
-          "message": "Symbolen van het eendraadsschema zijn verborgen op het situatieplan",
-          "details": "Symbolen op het eendraadsschema moeten zichtbaar blijven op het situatieplan.",
-          "remediation": "Open het situatieplan en maak de verborgen symbolen opnieuw zichtbaar."
+          "shortTitle": "Verborgen toestellen op situatieplan",
+          "message": "Toestellen zijn verborgen op het situatieplan",
+          "details": "Verborgen toestellen worden niet weergegeven op het situatieplan.",
+          "remediation": "Open Verborgen tonen en kies welke toestellen je wilt tonen."
         },
         "sources-consistency": {
           "shortTitle": "Hoofdvoeding oorsprong ontbreekt",
@@ -1457,9 +1460,9 @@
         "details": "De sitplan-plaatsing voor \"{{endpointLabel}}\" moet gekoppeld zijn aan een eindpunt met een geldige stroombaanletter en puntnummer (bijv. \"A1\"). Controleer of dit symbool op een stroombaan staat in het eendraadschema."
       },
       "hiddenSituationPlanSymbolsAreVisible": {
-        "message_one": "{{count}} symbool van het eendraadsschema is verborgen op het situatieplan",
-        "message_other": "{{count}} symbolen van het eendraadsschema zijn verborgen op het situatieplan",
-        "details": "Verborgen symbolen van het eendraadsschema ontbreken op het situatieplan. Maak ze opnieuw zichtbaar voordat je de tekeningen gebruikt."
+        "message_one": "{{count}} toestel is verborgen op het situatieplan",
+        "message_other": "{{count}} toestellen zijn verborgen op het situatieplan",
+        "details": "Verborgen toestellen:\n{{devices}}"
       },
       "cableHasCrossSection": {
         "message": "Stroombaan heeft kabelsegmenten zonder doorsnede",
@@ -1742,6 +1745,7 @@
     "description": "Selecteer één of meer items om opnieuw op het plan te tonen.",
     "confirm": "Tonen",
     "selectAll": "Alles selecteren",
+    "moveToCurrentView": "Naar huidige weergave verplaatsen",
     "none": "Er zijn geen verborgen items in deze weergave.",
     "unnamedItem": "Naamloos item",
     "protectionFallback": "Beveiligingstoestel",

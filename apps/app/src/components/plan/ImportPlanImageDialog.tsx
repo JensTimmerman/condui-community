@@ -121,7 +121,7 @@ function ImportPlanImageDialog({ isOpen, onClose, initialFile = null }: ImportPl
   const { t } = useTranslation()
   const { currentProject, addFloor, updateFloor, getFloorById } = useProjectStore()
   const { activeFloorId, setActiveFloor } = useUIStore()
-  const { theme } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
 
   const [step, setStep] = useState<ImportStep>('upload')
   const [file, setFile] = useState<File | null>(null)

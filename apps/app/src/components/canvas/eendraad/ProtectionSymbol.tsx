@@ -5,7 +5,13 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { useProjectStore } from '@/stores/projectStore'
 import { getSymbolById } from '@/lib/symbols'
 import { protectionTypeToSymbolKey } from '@/lib/protectionKind'
-import { loadProcessedSymbol } from '@/lib/symbolImage'
+import { SYMBOL_EXPORT_ATTR_SVG_PATH, loadProcessedSymbol } from '@/lib/symbolImage'
+import {
+  getSurgeProtectionBodyBounds,
+  getSurgeProtectionSymbolPath,
+  getSurgeProtectionSymbolAnchor,
+  getSurgeProtectionSelectionBounds,
+} from '@/lib/surgeProtectionSymbol'
 import { useIsPreviewSelected } from '@/contexts/SelectionPreviewContext'
 import { logger } from '@/lib/logger'
 import {
@@ -21,6 +27,9 @@ import {
   getSelectionOutlineProps,
   getHoverOutlineProps,
   getPreviewOutlineProps,
+  getPaddedRectSelectionOutlineProps,
+  getPaddedRectHoverOutlineProps,
+  getPaddedRectPreviewOutlineProps,
   getTouchAwareHitAreaProps,
   getSymbolColor,
   getSecondaryTextColor,
@@ -28,12 +37,8 @@ import {
 } from './canvasSymbols'
 import { useTouchPrimaryDevice } from '@/editions/community/communityHooks'
 import { ProtectionOneWireLabels } from './ProtectionOneWireLabels'
-import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
-} from '@/lib/projectV2/electrical'
+import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
 import { getSecondaryBusOrderForCircuit } from '@/lib/eendraad/protectionDragEligibility'
-import { getProtectionPhaseLabel } from '@/lib/wires/phaseAssignment'
 import type { Circuit, ProtectionDevice } from '@/types/schema'
 import type { Point } from '@/types/ui'
 
@@ -71,25 +76,13 @@ export function ProtectionSymbol({
   const canvasZoom = useEffectiveCanvasZoom(ZOOM_100, 'eendraad')
   const meterSelectionStroke = getSelectionOutlineStrokeStyle(canvasZoom).strokeWidth
   const touchPrimary = useTouchPrimaryDevice()
-  const { theme } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
   const fontFamily = useCanvasFontFamily()
   const isPreviewSelected = useIsPreviewSelected('protection', protection.id)
   const [processedImage, setProcessedImage] = useState<HTMLImageElement | null>(null)
   type ProjectStoreState = ReturnType<typeof useProjectStore.getState>
-  const currentProject = useProjectStore((state: ProjectStoreState) => state.currentProject)
-  
   // Subscribe to actual data to make moveInfo reactive
   const circuit = protection.circuits?.[0]
-  const installation = currentProject
-    ? getElectricalInstallationFromProject(currentProject)
-    : undefined
-  const panels = currentProject ? getElectricalPanelsFromProject(currentProject) : []
-  const phaseLabel = getProtectionPhaseLabel(
-    protection,
-    installation?.nominalVoltage.system,
-    panels,
-    installation,
-  )
   const secondaryBusOrder = useProjectStore((state: ProjectStoreState) => {
     if (!circuit || !state.currentProject) return null
     return getSecondaryBusOrderForCircuit(
@@ -207,16 +200,23 @@ export function ProtectionSymbol({
   
   const symbolKey = protectionTypeToSymbolKey(protection.type)
   const symbol = symbolKey ? getSymbolById(symbolKey) : null
+  const isSurgeProtection = protection.type === 'SPD'
+  const renderedSymbolPath = isSurgeProtection
+    ? getSurgeProtectionSymbolPath(protection.surgeProtectionKind)
+    : symbol?.svgPath
+  const surgeBodyBounds = getSurgeProtectionBodyBounds(SYMBOL_SIZE, SYMBOL_SIZE, false)
+  const surgeSelectionBounds = getSurgeProtectionSelectionBounds(SYMBOL_SIZE, SYMBOL_SIZE, false)
+  const surgeSymbolAnchor = getSurgeProtectionSymbolAnchor(SYMBOL_SIZE, SYMBOL_SIZE)
   
   // Load symbol image
   useEffect(() => {
-    if (!symbol) return
+    if (!renderedSymbolPath) return
     const isDark = theme.mode === 'dark'
-    loadProcessedSymbol(symbol.svgPath, isDark).then(setProcessedImage).catch(() => {
-      logger.error('Failed to load symbol:', symbol.svgPath)
+    loadProcessedSymbol(renderedSymbolPath, isDark).then(setProcessedImage).catch(() => {
+      logger.error('Failed to load symbol:', renderedSymbolPath)
       setProcessedImage(null)
     })
-  }, [symbol, theme.mode])
+  }, [renderedSymbolPath, theme.mode])
   
   const handleClick = useCallback((event: unknown) => {
     const e = event as EendraadPointerEvent
@@ -249,7 +249,6 @@ export function ProtectionSymbol({
           fontFamily={fontFamily}
           fontSize={10}
           symbolSize={SYMBOL_SIZE}
-          phaseLabel={phaseLabel}
         />
       </Group>
     )
@@ -377,38 +376,84 @@ export function ProtectionSymbol({
       {renderSymbol && (
         <>
           {/* Invisible hit area - matches outline size for hover detection */}
-          <Rect
-            {...getTouchAwareHitAreaProps(
-              PROTECTION_OUTLINE_SIZE,
-              canvasZoom,
-              isSelected,
-              touchPrimary,
-            )}
-          />
+          {isSurgeProtection ? (
+            <Rect
+              x={surgeBodyBounds.x - (touchPrimary ? 7 : 4)}
+              y={surgeBodyBounds.y - (touchPrimary ? 7 : 4)}
+              width={surgeBodyBounds.width + (touchPrimary ? 14 : 8)}
+              height={surgeBodyBounds.height + (touchPrimary ? 14 : 8)}
+              fill="transparent"
+            />
+          ) : (
+            <Rect
+              {...getTouchAwareHitAreaProps(
+                PROTECTION_OUTLINE_SIZE,
+                canvasZoom,
+                isSelected,
+                touchPrimary,
+              )}
+            />
+          )}
       
           {/* Symbol image */}
           <Image
-            key={`${symbol.svgPath}-${theme.mode}`}
+            key={`${renderedSymbolPath}-${theme.mode}`}
             image={processedImage}
+            {...{ [SYMBOL_EXPORT_ATTR_SVG_PATH]: renderedSymbolPath }}
             width={SYMBOL_SIZE}
             height={SYMBOL_SIZE}
-            offsetX={SYMBOL_SIZE / 2}
-            offsetY={SYMBOL_SIZE / 2}
+            offsetX={isSurgeProtection ? surgeSymbolAnchor.x : SYMBOL_SIZE / 2}
+            offsetY={isSurgeProtection ? surgeSymbolAnchor.y : SYMBOL_SIZE / 2}
             y={0}
             listening={false}
           />
       
           {/* Preview highlight (during selection rectangle drag) */}
           {isPreviewSelected && !isSelected && (
-            <Rect {...getPreviewOutlineProps(canvasZoom, PROTECTION_OUTLINE_SIZE)} />
+            <Rect
+              {...(isSurgeProtection
+                ? getPaddedRectPreviewOutlineProps(
+                    canvasZoom,
+                    surgeSelectionBounds.x,
+                    surgeSelectionBounds.y,
+                    surgeSelectionBounds.width,
+                    surgeSelectionBounds.height,
+                    2,
+                  )
+                : getPreviewOutlineProps(canvasZoom, PROTECTION_OUTLINE_SIZE))}
+            />
           )}
           {/* Hover highlight (from breadcrumb or mouse) */}
           {isHoveredAny && !isSelected && !isPreviewSelected && (
-            <Rect {...getHoverOutlineProps(canvasZoom, PROTECTION_OUTLINE_SIZE)} />
+            <Rect
+              {...(isSurgeProtection
+                ? getPaddedRectHoverOutlineProps(
+                    canvasZoom,
+                    surgeSelectionBounds.x,
+                    surgeSelectionBounds.y,
+                    surgeSelectionBounds.width,
+                    surgeSelectionBounds.height,
+                    2,
+                  )
+                : getHoverOutlineProps(canvasZoom, PROTECTION_OUTLINE_SIZE))}
+            />
           )}
       
           {/* Selection outline */}
-          {isSelected && <Rect {...getSelectionOutlineProps(canvasZoom, PROTECTION_OUTLINE_SIZE)} />}
+          {isSelected && (
+            <Rect
+              {...(isSurgeProtection
+                ? getPaddedRectSelectionOutlineProps(
+                    canvasZoom,
+                    surgeSelectionBounds.x,
+                    surgeSelectionBounds.y,
+                    surgeSelectionBounds.width,
+                    surgeSelectionBounds.height,
+                    2,
+                  )
+                : getSelectionOutlineProps(canvasZoom, PROTECTION_OUTLINE_SIZE))}
+            />
+          )}
         </>
       )}
       
@@ -419,7 +464,8 @@ export function ProtectionSymbol({
         fontFamily={fontFamily}
         fontSize={10}
         symbolSize={SYMBOL_SIZE}
-        phaseLabel={phaseLabel}
+        symbolWidth={isSurgeProtection ? 0 : undefined}
+        symbolHeight={isSurgeProtection ? surgeBodyBounds.height : undefined}
         onLabelClick={handleClick}
       />
     </Group>

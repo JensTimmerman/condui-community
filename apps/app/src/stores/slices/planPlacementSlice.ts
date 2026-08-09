@@ -1,5 +1,5 @@
 import { appendUndoSnapshotInStore, cloneProjectForHistory, getProjectStoreApi, projectHistory } from './projectStoreHistory'
-import type { ProjectSliceCreator } from './projectStoreTypes'
+import type { Project, ProjectSliceCreator } from './projectStoreTypes'
 import { recordSessionAction } from '@/lib/diagnostics/sessionActionLog'
 import { syncSequentialEndpointBranchLabelsToCircuit } from '@/lib/eendraad/automaticEndpointBranchNaming'
 import { syncPlugInPropsForDcEndpoints } from '@/lib/eendraad/endpointInsertAfter'
@@ -24,6 +24,7 @@ import {
 import { withCustomPlacementFlag } from '@/lib/plan/customPlacement'
 import { isMainPanelDistributionEndpoint, resolvePanelForDistributionEndpoint } from '@/lib/plan/panelDistributionEndpoint'
 import { healPlanWiring } from '@/lib/plan/planWiring'
+import { syncPanelAndSituationPlanDeviceVisibility } from '@/lib/plan/panelPlanPlacementVisibility'
 import { getBuildingFloorsFromProject } from '@/lib/projectV2/buildingFloors'
 import {
   getMutablePlanWiringFromProject,
@@ -46,6 +47,41 @@ import type {
   ProtectionDevice,
 } from '@/types/schema'
 import { findCircuitForEndpointInPanel, generateId, getNextAvailableCircuitCode } from '@/utils/project'
+
+type MutablePlacementOwner = {
+  placement: Placement
+  circuitId?: string
+}
+
+/** Resolve every standard situation-plan placement, independent of its electrical owner. */
+function findMutablePlacementOwner(project: Project, placementId: string): MutablePlacementOwner | null {
+  const installation = getMutableElectricalInstallationForProject(project)
+  const installationTrunkDevices = [
+    ...(installation?.mainSupply?.supplyTrunkDevices ?? []),
+    ...(installation?.groundTrunkDevices ?? []),
+  ]
+  for (const device of installationTrunkDevices) {
+    const placement = device.placements?.find((candidate) => candidate.id === placementId)
+    if (placement) return { placement }
+  }
+
+  for (const panel of getMutableElectricalPanelsForProject(project)) {
+    for (const endpoint of getAllEndpoints(panel)) {
+      const placement = endpoint.placements.find((candidate) => candidate.id === placementId)
+      if (!placement) continue
+      const owner = findCircuitForEndpointInPanel(panel, endpoint.id)
+      return { placement, circuitId: owner?.circuit?.id }
+    }
+    for (const circuit of getAllCircuits(panel)) {
+      for (const device of circuit.trunkDevices ?? []) {
+        const placement = device.placements?.find((candidate) => candidate.id === placementId)
+        if (placement) return { placement, circuitId: circuit.id }
+      }
+    }
+  }
+
+  return null
+}
 
 export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
     // Ground trunk device actions (devices on the ground wire)
@@ -955,6 +991,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
             const result = findEndpointById(panel, endpointId)
             if (result) {
               result.endpoint.placements.push(placement)
+              syncPanelAndSituationPlanDeviceVisibility(state.currentProject)
               state.lastWorkedCircuitId = result.circuit.id
               state.isDirty = true
               return
@@ -965,54 +1002,26 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
 
     updatePlacement: (id, updates) =>
       set((state) => {
-        if (state.currentProject) {
-          for (const panel of getMutableElectricalPanelsForProject(state.currentProject)) {
-            const endpoints = getAllEndpoints(panel)
-            for (const endpoint of endpoints) {
-              const placement = endpoint.placements.find((p) => p.id === id)
-              if (placement) {
-                Object.assign(placement, withCustomPlacementFlag(placement, updates))
-                const owner = findCircuitForEndpointInPanel(panel, endpoint.id)
-                if (owner?.circuit?.id) {
-                  state.lastWorkedCircuitId = owner.circuit.id
-                }
-                state.isDirty = true
-                return
-              }
-            }
-            for (const circuit of getAllCircuits(panel)) {
-              for (const device of circuit.trunkDevices ?? []) {
-                const placement = device.placements?.find((candidate) => candidate.id === id)
-                if (!placement) continue
-                Object.assign(placement, withCustomPlacementFlag(placement, updates))
-                state.lastWorkedCircuitId = circuit.id
-                state.isDirty = true
-                return
-              }
-            }
-          }
-        }
+        if (!state.currentProject) return
+        const owner = findMutablePlacementOwner(state.currentProject, id)
+        if (!owner) return
+        Object.assign(owner.placement, withCustomPlacementFlag(owner.placement, updates))
+        if (owner.circuitId) state.lastWorkedCircuitId = owner.circuitId
+        state.isDirty = true
       }),
 
     updatePlacementsBatch: (updates) =>
       set((state) => {
         if (!state.currentProject || updates.length === 0) return
+        let applied = false
         for (const { id, updates: patch } of updates) {
-          let found = false
-          for (const panel of getMutableElectricalPanelsForProject(state.currentProject)) {
-            if (found) break
-            const endpoints = getAllEndpoints(panel)
-            for (const endpoint of endpoints) {
-              const placement = endpoint.placements.find((p) => p.id === id)
-              if (placement) {
-                Object.assign(placement, withCustomPlacementFlag(placement, patch))
-                found = true
-                break
-              }
-            }
-          }
+          const owner = findMutablePlacementOwner(state.currentProject, id)
+          if (!owner) continue
+          Object.assign(owner.placement, withCustomPlacementFlag(owner.placement, patch))
+          if (owner.circuitId) state.lastWorkedCircuitId = owner.circuitId
+          applied = true
         }
-        state.isDirty = true
+        if (applied) state.isDirty = true
       }),
 
     movePlanPlacementsToFloor: (moves, floorId) => {
@@ -1024,9 +1033,8 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
 
         const uniqueMoves = new Map(moves.map((move) => [move.id, move]))
         const installation = getMutableElectricalInstallationForProject(project)
-        const panels = getMutableElectricalPanelsForProject(project)
         const resolved: Array<{
-          kind: 'endpoint' | 'junctionPanel' | 'earthing'
+          kind: 'standard' | 'junctionPanel' | 'earthing'
           placement: Placement | JunctionPanelPlacement | NonNullable<Installation['earthingPlacements']>[number]
           pos?: Placement['pos']
         }> = []
@@ -1052,16 +1060,9 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
             continue
           }
 
-          let endpointPlacement: Placement | undefined
-          for (const panel of panels) {
-            if (endpointPlacement) break
-            for (const endpoint of getAllEndpoints(panel)) {
-              endpointPlacement = endpoint.placements.find((placement) => placement.id === move.id)
-              if (endpointPlacement) break
-            }
-          }
-          if (!endpointPlacement) return
-          resolved.push({ kind: 'endpoint', placement: endpointPlacement, pos: move.pos })
+          const owner = findMutablePlacementOwner(project, move.id)
+          if (!owner) return
+          resolved.push({ kind: 'standard', placement: owner.placement, pos: move.pos })
         }
 
         // Preserve a manual wire when both of its placement endpoints travel together. Routes
@@ -1083,7 +1084,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
 
         resolved.forEach(({ kind, placement, pos }) => {
           const patch = { floorId, ...(pos ? { pos } : {}) }
-          if (kind === 'endpoint') {
+          if (kind === 'standard') {
             Object.assign(
               placement,
               withCustomPlacementFlag(placement as Placement, patch)
@@ -1094,6 +1095,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
         })
 
         healPlanWiring(project)
+        syncPanelAndSituationPlanDeviceVisibility(project)
         syncPlanWiringFromCompatibility(project)
         state.isDirty = true
         applied = true

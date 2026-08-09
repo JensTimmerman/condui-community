@@ -40,7 +40,7 @@ const TITLE_INSIDE_TOP_PADDING = 14
  * on the eendraad canvas.
  */
 export const FrameComponent = memo(function FrameComponent({ frame, panelLayout }: FrameComponentProps) {
-  const { theme } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
   const fontFamily = useCanvasFontFamily()
   const setSelection = useSetSelection()
   const isSelected = useIsTypeAndIdSelected('frame', frame.id)

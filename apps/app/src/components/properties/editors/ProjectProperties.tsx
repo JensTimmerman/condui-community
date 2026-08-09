@@ -417,55 +417,59 @@ export function ProjectProperties({
                 </div>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                  {t('project.companyNumber', 'Company number')}
-                </label>
-                <DebouncedTextInput
-                  type="text"
-                  value={customer?.companyNumber ?? ''}
-                  onCommit={(v) =>
-                    updateProject({
-                      customer: {
-                        name: project.project.name ?? '',
-                        companyNumber: v.trim() === '' ? undefined : v,
-                        email: customer?.email,
-                        mobile: customer?.mobile,
-                        phone: customer?.phone,
-                        meterEanCode: customer?.meterEanCode,
-                        address: customer?.address,
-                        siteAddress: customer?.siteAddress,
-                      },
-                    })
-                  }
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                  {t('project.customerEmail', 'Email')}
-                </label>
-                <DebouncedTextInput
-                  type="email"
-                  value={customer?.email ?? ''}
-                  onCommit={(v) =>
-                    updateProject({
-                      customer: {
-                        name: project.project.name ?? '',
-                        companyNumber: customer?.companyNumber,
-                        email: v.trim() === '' ? undefined : v,
-                        mobile: customer?.mobile,
-                        phone: customer?.phone,
-                        meterEanCode: customer?.meterEanCode,
-                        address: customer?.address,
-                        siteAddress: customer?.siteAddress,
-                      },
-                    })
-                  }
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
-                />
-              </div>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+              <label
+                htmlFor="customer-company-number"
+                className="block text-xs font-medium text-gray-600 dark:text-gray-400"
+              >
+                {t('project.companyNumber', 'Company number')}
+              </label>
+              <label
+                htmlFor="customer-email"
+                className="block text-xs font-medium text-gray-600 dark:text-gray-400"
+              >
+                {t('project.customerEmail', 'Email')}
+              </label>
+              <DebouncedTextInput
+                id="customer-company-number"
+                type="text"
+                value={customer?.companyNumber ?? ''}
+                onCommit={(v) =>
+                  updateProject({
+                    customer: {
+                      name: project.project.name ?? '',
+                      companyNumber: v.trim() === '' ? undefined : v,
+                      email: customer?.email,
+                      mobile: customer?.mobile,
+                      phone: customer?.phone,
+                      meterEanCode: customer?.meterEanCode,
+                      address: customer?.address,
+                      siteAddress: customer?.siteAddress,
+                    },
+                  })
+                }
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
+              />
+              <DebouncedTextInput
+                id="customer-email"
+                type="email"
+                value={customer?.email ?? ''}
+                onCommit={(v) =>
+                  updateProject({
+                    customer: {
+                      name: project.project.name ?? '',
+                      companyNumber: customer?.companyNumber,
+                      email: v.trim() === '' ? undefined : v,
+                      mobile: customer?.mobile,
+                      phone: customer?.phone,
+                      meterEanCode: customer?.meterEanCode,
+                      address: customer?.address,
+                      siteAddress: customer?.siteAddress,
+                    },
+                  })
+                }
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
+              />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -809,51 +813,55 @@ export function ProjectProperties({
                 </div>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                  {t('project.companyNumber', 'Company number')}
-                </label>
-                <DebouncedTextInput
-                  type="text"
-                  value={inspectionAgency?.companyNumber ?? ''}
-                  onCommit={(v) =>
-                    updateProject({
-                      inspectionAgency: {
-                        name: inspectionAgency?.name ?? '',
-                        companyNumber: v.trim() === '' ? undefined : v,
-                        email: inspectionAgency?.email,
-                        mobile: inspectionAgency?.mobile,
-                        phone: inspectionAgency?.phone,
-                        address: inspectionAgency?.address,
-                      },
-                    })
-                  }
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                  {t('project.customerEmail', 'Email')}
-                </label>
-                <DebouncedTextInput
-                  type="email"
-                  value={inspectionAgency?.email ?? ''}
-                  onCommit={(v) =>
-                    updateProject({
-                      inspectionAgency: {
-                        name: inspectionAgency?.name ?? '',
-                        companyNumber: inspectionAgency?.companyNumber,
-                        email: v.trim() === '' ? undefined : v,
-                        mobile: inspectionAgency?.mobile,
-                        phone: inspectionAgency?.phone,
-                        address: inspectionAgency?.address,
-                      },
-                    })
-                  }
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
-                />
-              </div>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+              <label
+                htmlFor="inspection-agency-company-number"
+                className="block text-xs font-medium text-gray-600 dark:text-gray-400"
+              >
+                {t('project.companyNumber', 'Company number')}
+              </label>
+              <label
+                htmlFor="inspection-agency-email"
+                className="block text-xs font-medium text-gray-600 dark:text-gray-400"
+              >
+                {t('project.customerEmail', 'Email')}
+              </label>
+              <DebouncedTextInput
+                id="inspection-agency-company-number"
+                type="text"
+                value={inspectionAgency?.companyNumber ?? ''}
+                onCommit={(v) =>
+                  updateProject({
+                    inspectionAgency: {
+                      name: inspectionAgency?.name ?? '',
+                      companyNumber: v.trim() === '' ? undefined : v,
+                      email: inspectionAgency?.email,
+                      mobile: inspectionAgency?.mobile,
+                      phone: inspectionAgency?.phone,
+                      address: inspectionAgency?.address,
+                    },
+                  })
+                }
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
+              />
+              <DebouncedTextInput
+                id="inspection-agency-email"
+                type="email"
+                value={inspectionAgency?.email ?? ''}
+                onCommit={(v) =>
+                  updateProject({
+                    inspectionAgency: {
+                      name: inspectionAgency?.name ?? '',
+                      companyNumber: inspectionAgency?.companyNumber,
+                      email: v.trim() === '' ? undefined : v,
+                      mobile: inspectionAgency?.mobile,
+                      phone: inspectionAgency?.phone,
+                      address: inspectionAgency?.address,
+                    },
+                  })
+                }
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
+              />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -929,5 +937,4 @@ export function ProjectProperties({
     </div>
   )
 }
-
 

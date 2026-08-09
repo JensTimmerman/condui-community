@@ -32,6 +32,8 @@ import type { ContextMenuItem } from '@/components/common/ContextMenu'
 import { getContextMenuIcon } from '@/components/common/ContextMenuIcons'
 import { confirmDeleteEarthing } from '@/lib/installation/deleteEarthing'
 import { getCompatibilityFloorsFromProject } from '@/lib/projectV2/buildingFloors'
+import { restoreHiddenSituationPlanPlacementsToActiveView } from '@/lib/plan/restoreHiddenSituationPlanPlacements'
+import { hasCustomPlacement } from '@/lib/plan/customPlacement'
 
 /**
  * Hook to generate context menu items for the plan canvas
@@ -80,7 +82,6 @@ export function usePlanContextMenu(
         getPanelByName,
         getPlacementById,
         getPlacementsByFloor,
-        updateEarthingPlacement,
         updateFloor,
         findCircuitForEndpoint,
         withSingleUndoEntry,
@@ -764,6 +765,9 @@ export function usePlanContextMenu(
                 const placementMap = new Map<string, SitplanPlacementRow>(
                   allPlacements.map((p: SitplanPlacementRow) => [p.id, p])
                 )
+                const customPlacementIds = new Set(
+                  allPlacements.filter(hasCustomPlacement).map((placement) => placement.id)
+                )
                 const dialogItems: HiddenItem[] = hiddenInner.flatMap((id: string) => {
                   const pl = placementMap.get(id)
                   if (!pl) return []
@@ -817,36 +821,16 @@ export function usePlanContextMenu(
                   content: (
                     <HiddenItemsDialog
                       items={dialogItems}
-                      onConfirm={(selectedIds) => {
-                        if (selectedIds.length === 0) {
-                          closeDialog()
-                          return
-                        }
-                        // Position symbols next to each other around the click point
-                        const spacing = 40
-                        selectedIds.forEach((placementId, index) => {
-                          const placement = getPlacementById(placementId)
-                          if (!placement) return
-                          const nextPos = {
-                            x: position.x + index * spacing,
-                            y: position.y,
-                          }
-                          if ((placement as { isEarthing?: boolean }).isEarthing) {
-                            updateEarthingPlacement(placementId, { pos: nextPos })
-                          } else {
-                            updatePlacement(placementId, { pos: nextPos })
-                          }
+                      showMoveToCurrentView
+                      getMoveToCurrentViewDefault={(selectedIds) =>
+                        selectedIds.some((id) => !customPlacementIds.has(id))
+                      }
+                      onConfirm={(selectedIds, options) => {
+                        restoreHiddenSituationPlanPlacementsToActiveView(selectedIds, {
+                          moveToActiveView: options.moveToCurrentViewOverridden
+                            ? options.moveToCurrentView
+                            : undefined,
                         })
-
-                        const floorConfirm = activeFloorId ? getFloorById(activeFloorId) : undefined
-                        const existing = floorConfirm?.hiddenSitplanPlacementIds ?? []
-                        const remaining = existing.filter((id: string) => !selectedIds.includes(id))
-                        if (activeFloorId) {
-                          updateFloor(activeFloorId, {
-                            hiddenSitplanPlacementIds: remaining.length > 0 ? remaining : undefined,
-                          })
-                        }
-
                         closeDialog()
                       }}
                       onCancel={closeDialog}

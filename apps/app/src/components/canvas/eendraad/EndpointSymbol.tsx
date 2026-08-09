@@ -113,7 +113,7 @@ export const EndpointSymbol = memo(function EndpointSymbol({
   const isHoveredFromBreadcrumb = useHoverIncludes('endpoint', endpoint.id)
   const canvasZoom = useEffectiveCanvasZoom(ZOOM_100, 'eendraad')
   const touchPrimary = useTouchPrimaryDevice()
-  const { theme } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
   const fontFamily = useCanvasFontFamily()
   const isPreviewSelected = useIsPreviewSelected('endpoint', endpoint.id)
   const [processedImage, setProcessedImage] = useState<HTMLImageElement | null>(null)

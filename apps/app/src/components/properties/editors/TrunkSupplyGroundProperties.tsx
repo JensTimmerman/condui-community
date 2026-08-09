@@ -680,6 +680,7 @@ export function TrunkDeviceProperties({ deviceId }: { deviceId: string }) {
               residualCurrentType={device.residualCurrentType}
               breakingCapacityKa={device.breakingCapacityKa}
               breakingCapacityOption={device.breakingCapacityOption}
+              surgeProtectionKind={device.surgeProtectionKind}
               polesConfig={device.polesConfig}
               poles={device.poles}
               typeDropdownOptions={supplyProtectionTypeOptions}

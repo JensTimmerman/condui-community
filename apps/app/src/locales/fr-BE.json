@@ -527,6 +527,9 @@
     "polesConfig": "Configuration des pôles",
     "residualCurrentType": "Type de courant résiduel",
     "breakingCapacity": "Pouvoir de coupure",
+    "spdKind": "Type de SPD",
+    "spdStandard": "Protection contre la foudre",
+    "spdSparkGap": "Éclateur",
     "poles_1P": "1P",
     "poles_1P_N": "1P+N",
     "poles_2P": "2P (L+N)",
@@ -1194,10 +1197,10 @@
           "remediation": "Assurez-vous que tous les placements sont associés à des points d'extrémité avec des identifiants de circuit valides (par ex. \"A1\", \"B3\")."
         },
         "hidden-situation-plan-symbols": {
-          "shortTitle": "Symboles masqués sur le plan de position",
-          "message": "Des symboles du schéma unifilaire sont masqués sur le plan de position",
-          "details": "Les symboles du schéma unifilaire doivent rester visibles sur le plan de position.",
-          "remediation": "Ouvrez le plan de position et affichez de nouveau les symboles masqués."
+          "shortTitle": "Appareils masqués sur le plan de position",
+          "message": "Des appareils sont masqués sur le plan de position",
+          "details": "Les appareils masqués ne figurent pas sur le plan de position.",
+          "remediation": "Ouvrez Afficher les éléments masqués et choisissez les appareils à afficher."
         },
         "sources-consistency": {
           "shortTitle": "Origine alimentation manquante",
@@ -1445,9 +1448,9 @@
         "details": "Le placement de plan de situation pour \"{{endpointLabel}}\" doit être relié à un point d'extrémité avec une lettre de circuit et un numéro de point valides (ex. \"A1\"). Vérifiez que ce symbole est sur un circuit dans le schéma unifilaire."
       },
       "hiddenSituationPlanSymbolsAreVisible": {
-        "message_one": "{{count}} symbole du schéma unifilaire est masqué sur le plan de position",
-        "message_other": "{{count}} symboles du schéma unifilaire sont masqués sur le plan de position",
-        "details": "Les symboles masqués du schéma unifilaire sont absents du plan de position. Affichez-les de nouveau avant d’utiliser les dessins."
+        "message_one": "{{count}} appareil est masqué sur le plan de position",
+        "message_other": "{{count}} appareils sont masqués sur le plan de position",
+        "details": "Appareils masqués :\n{{devices}}"
       },
       "cableHasCrossSection": {
         "message": "Le circuit a des segments de câble sans section transversale",
@@ -1721,6 +1724,7 @@
     "description": "Sélectionnez un ou plusieurs éléments à afficher de nouveau sur le plan.",
     "confirm": "Afficher",
     "selectAll": "Tout sélectionner",
+    "moveToCurrentView": "Déplacer vers la vue actuelle",
     "none": "Aucun élément n'est masqué dans cette vue.",
     "unnamedItem": "Élément sans nom",
     "protectionFallback": "Dispositif de protection",

@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 export interface HiddenItem {
@@ -12,15 +12,37 @@ interface HiddenItemsDialogProps {
   items: HiddenItem[]
   initialSelectedIds?: string[]
   description?: string
-  onConfirm: (selectedIds: string[]) => void
+  showMoveToCurrentView?: boolean
+  getMoveToCurrentViewDefault?: (selectedIds: string[]) => boolean
+  onConfirm: (
+    selectedIds: string[],
+    options: { moveToCurrentView: boolean; moveToCurrentViewOverridden: boolean }
+  ) => void
   onCancel: () => void
 }
 
-export default function HiddenItemsDialog({ items, initialSelectedIds, description, onConfirm, onCancel }: HiddenItemsDialogProps) {
+export default function HiddenItemsDialog({
+  items,
+  initialSelectedIds,
+  description,
+  showMoveToCurrentView = false,
+  getMoveToCurrentViewDefault,
+  onConfirm,
+  onCancel,
+}: HiddenItemsDialogProps) {
   const { t } = useTranslation()
   const [selectedIds, setSelectedIds] = useState<Set<string>>(
     () => new Set(initialSelectedIds ?? items.map((item) => item.id))
   )
+  const selectedIdList = useMemo(() => Array.from(selectedIds), [selectedIds])
+  const defaultMoveToCurrentView = getMoveToCurrentViewDefault?.(selectedIdList) ?? true
+  const [moveToCurrentView, setMoveToCurrentView] = useState(defaultMoveToCurrentView)
+  const [moveToCurrentViewOverridden, setMoveToCurrentViewOverridden] = useState(false)
+
+  useEffect(() => {
+    setMoveToCurrentView(defaultMoveToCurrentView)
+    setMoveToCurrentViewOverridden(false)
+  }, [defaultMoveToCurrentView])
 
   const allChecked = useMemo(() => {
     if (items.length === 0) return false
@@ -33,6 +55,7 @@ export default function HiddenItemsDialog({ items, initialSelectedIds, descripti
   }, [items, selectedIds, allChecked])
 
   const handleToggleAll = () => {
+    setMoveToCurrentViewOverridden(false)
     if (allChecked) {
       setSelectedIds(new Set())
     } else {
@@ -41,6 +64,7 @@ export default function HiddenItemsDialog({ items, initialSelectedIds, descripti
   }
 
   const handleToggleItem = (id: string) => {
+    setMoveToCurrentViewOverridden(false)
     setSelectedIds((prev) => {
       const next = new Set(prev)
       if (next.has(id)) {
@@ -53,7 +77,7 @@ export default function HiddenItemsDialog({ items, initialSelectedIds, descripti
   }
 
   const handleConfirm = () => {
-    onConfirm(Array.from(selectedIds))
+    onConfirm(selectedIdList, { moveToCurrentView, moveToCurrentViewOverridden })
   }
 
   if (items.length === 0) {
@@ -130,6 +154,21 @@ export default function HiddenItemsDialog({ items, initialSelectedIds, descripti
           </label>
         ))}
       </div>
+
+      {showMoveToCurrentView && (
+        <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+          <input
+            type="checkbox"
+            checked={moveToCurrentView}
+            onChange={(event) => {
+              setMoveToCurrentView(event.target.checked)
+              setMoveToCurrentViewOverridden(true)
+            }}
+            className="rounded border-gray-400"
+          />
+          <span>{t('hiddenItemsDialog.moveToCurrentView', 'Move to current view')}</span>
+        </label>
+      )}
 
       <div className="flex justify-end gap-2">
         <button

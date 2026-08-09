@@ -15,6 +15,7 @@ import {
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { findPanelById, walkPanels } from '@/lib/panel/panelTree'
+import { getSymbolById } from '@/lib/symbols'
 import {
   getEffectiveCircuitPhaseState,
   getInheritedCircuitPhaseState,
@@ -203,6 +204,13 @@ export interface ModuleDisplayInfo {
   kind: 'protection' | 'trunkDevice' | 'domotica'
 }
 
+function getLocalizedPanelDeviceName(symbolId: string | undefined): string | null {
+  if (!symbolId) return null
+  const symbol = getSymbolById(symbolId)
+  if (symbol?.category !== 'energyConversion' && symbol?.id !== 'rotating_switch') return null
+  return i18n.t(`symbols.${symbol.id}`, { defaultValue: symbol.name })
+}
+
 function buildProtectionTooltip(
   pr: ProtectionDevice,
   project: ProjectWithOptionalV2Electrical,
@@ -291,7 +299,11 @@ export function getModuleDisplayInfo(
         break
       }
       case 'SPD': {
-        specLines.push('SPD')
+        if (pr.ratingA != null) specLines.push(`${pr.ratingA}A`)
+        if (pr.breakingCapacityKa != null) specLines.push(`${pr.breakingCapacityKa}kA`)
+        break
+      }
+      case 'ROTATING_SWITCH': {
         break
       }
       default: {
@@ -301,9 +313,11 @@ export function getModuleDisplayInfo(
     }
 
     return {
-      // For panel modules, respect the explicit label; keep it empty until
-      // the circuit actually has endpoints and the store assigns a label.
-      label: pr.label,
+      // A rotating switch needs a useful module title even without a custom label.
+      // Other protection labels retain their existing circuit-driven behaviour.
+      label: pr.type === 'ROTATING_SWITCH'
+        ? pr.label.trim() || getLocalizedPanelDeviceName('rotating_switch') || pr.type
+        : pr.label,
       specLines,
       phaseLabel: getProtectionModulePhaseLabel(pr, panels, system, installation),
       tooltipText: buildProtectionTooltip(pr, project, ref.id),
@@ -317,6 +331,7 @@ export function getModuleDisplayInfo(
 
     const specLines: string[] = []
     const tooltipParts: string[] = []
+    const localizedPanelDeviceName = getLocalizedPanelDeviceName(d.symbol)
 
     if (d.type === 'protection' && d.protectionType) {
       switch (d.protectionType) {
@@ -338,6 +353,7 @@ export function getModuleDisplayInfo(
           break
         }
         case 'SPD': {
+          if (d.ratingA != null) specLines.push(`${d.ratingA}A`)
           if (d.breakingCapacityKa != null) specLines.push(`${d.breakingCapacityKa}kA`)
           break
         }
@@ -347,7 +363,8 @@ export function getModuleDisplayInfo(
         }
       }
       const polesDisplay = d.polesConfig ? polesConfigToDisplay(d.polesConfig) : ''
-      const typeLabel = i18n.t(`protections.type_${d.protectionType}`, { defaultValue: d.protectionType })
+      const typeLabel = localizedPanelDeviceName ??
+        i18n.t(`protections.type_${d.protectionType}`, { defaultValue: d.protectionType })
       const specStr = [
         typeLabel,
         d.curve,
@@ -365,19 +382,20 @@ export function getModuleDisplayInfo(
         tooltipParts.unshift(typeLabel)
       }
     } else {
-      const typeName = d.type.replace(/_/g, ' ')
+      const typeName = localizedPanelDeviceName ?? d.type.replace(/_/g, ' ')
       tooltipParts.push(typeName)
       if (d.polesConfig) tooltipParts.push(polesConfigToDisplay(d.polesConfig) || d.polesConfig)
     }
 
     if (d.notes) tooltipParts.push(d.notes)
 
-    const visibleLabel =
-      (d.label && d.label.trim().length > 0
+    const rotatingSwitchLabel = d.symbol === 'rotating_switch' ? d.label.trim() : ''
+    const visibleLabel = (rotatingSwitchLabel || localizedPanelDeviceName) ??
+      ((d.label && d.label.trim().length > 0
         ? d.label
         : d.type === 'protection' && d.protectionType
           ? i18n.t(`protections.type_${d.protectionType}`, { defaultValue: d.protectionType })
-          : d.type.replace(/_/g, ' ')) || ''
+          : d.type.replace(/_/g, ' ')) || '')
 
     return {
       label: visibleLabel,
@@ -399,7 +417,8 @@ export function getModuleDisplayInfo(
     const { endpoint: ep } = context
 
     const tooltipParts: string[] = [ep.label]
-    const typeName = ep.type.replace(/_/g, ' ')
+    const localizedPanelDeviceName = getLocalizedPanelDeviceName(ep.symbol)
+    const typeName = localizedPanelDeviceName ?? ep.type.replace(/_/g, ' ')
     if (ep.symbol) {
       tooltipParts.push(`${typeName} (${ep.symbol.replace(/_/g, ' ')})`)
     } else {
@@ -408,7 +427,7 @@ export function getModuleDisplayInfo(
     if (ep.notes) tooltipParts.push(ep.notes)
 
     return {
-      label: ep.label,
+      label: localizedPanelDeviceName ?? ep.label,
       specLines: [],
       phaseLabel: getDomoticaModulePhaseLabel(context, panels, system, installation),
       tooltipText: tooltipParts.join('\n'),

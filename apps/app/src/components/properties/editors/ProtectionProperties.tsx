@@ -195,6 +195,46 @@ export function ProtectionProperties({
         }
         onUpdate={handleInstallDateUpdate}
       />
+      <div>
+        <div className="flex items-center gap-2 mb-1">
+          <label className={`${labelClass} mb-0 flex-1`}>
+            {t('protections.label', 'Label')}
+          </label>
+          {firstCircuit ? (
+            <button
+              type="button"
+              onClick={() => {
+                const hide = firstCircuit.eendraadLetterVisible !== false
+                for (const r of circuitsOfProtection ?? []) {
+                  updateCircuit(r.id, { eendraadLetterVisible: hide ? false : true })
+                }
+              }}
+              className={visibilityToggleClass(firstCircuit.eendraadLetterVisible !== false)}
+              title={t('canvas.eendraadNaming.toggleLetterOnOneWire')}
+            >
+              {firstCircuit.eendraadLetterVisible !== false ? (
+                <Eye className="w-4 h-4" />
+              ) : (
+                <EyeOff className="w-4 h-4" />
+              )}
+            </button>
+          ) : null}
+        </div>
+        <DebouncedTextInput
+          type="text"
+          value={protection.label}
+          onCommit={(v) => onUpdate(protectionId, { label: v })}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              e.currentTarget.blur()
+            }
+          }}
+          className={selectClass}
+          placeholder={t('protections.label', 'Label')}
+          disabled={lockMainBusLetterFields}
+        />
+      </div>
       <ProtectionDeviceElectricalFields
         t={t}
         selectClass={selectClass}
@@ -207,6 +247,7 @@ export function ProtectionProperties({
         residualCurrentType={protection.residualCurrentType}
         breakingCapacityKa={protection.breakingCapacityKa}
         breakingCapacityOption={protection.breakingCapacityOption}
+        surgeProtectionKind={protection.surgeProtectionKind}
         polesConfig={protection.polesConfig}
         poles={protection.poles}
         typeDropdownOptions={protectionTypeOptions}
@@ -221,48 +262,6 @@ export function ProtectionProperties({
         onPatch={(patch) => onUpdate(protectionId, patch)}
         isProtectionLabelVisible={isProtectionLabelVisible}
         toggleProtectionLabel={toggleProtectionLabel}
-        renderAfterType={
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <label className={`${labelClass} mb-0 flex-1`}>
-                {t('protections.label', 'Label')}
-              </label>
-              {firstCircuit ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const hide = firstCircuit.eendraadLetterVisible !== false
-                    for (const r of circuitsOfProtection ?? []) {
-                      updateCircuit(r.id, { eendraadLetterVisible: hide ? false : true })
-                    }
-                  }}
-                  className={visibilityToggleClass(firstCircuit.eendraadLetterVisible !== false)}
-                  title={t('canvas.eendraadNaming.toggleLetterOnOneWire')}
-                >
-                  {firstCircuit.eendraadLetterVisible !== false ? (
-                    <Eye className="w-4 h-4" />
-                  ) : (
-                    <EyeOff className="w-4 h-4" />
-                  )}
-                </button>
-              ) : null}
-            </div>
-            <DebouncedTextInput
-              type="text"
-              value={protection.label}
-              onCommit={(v) => onUpdate(protectionId, { label: v })}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  e.currentTarget.blur()
-                }
-              }}
-              className={selectClass}
-              placeholder={t('protections.label', 'Label')}
-              disabled={lockMainBusLetterFields}
-            />
-          </div>
-        }
       />
 
       {/* Notes - for protections with circuits, edit circuit notes (with show/orientation toggles); otherwise edit protection notes */}

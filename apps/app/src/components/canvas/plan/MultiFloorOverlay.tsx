@@ -2,6 +2,7 @@ import { memo, useMemo } from 'react'
 import { Group, Line } from 'react-konva'
 import type { Wall, Floor } from '@/types/schema'
 import { calculatePxPerMeter } from '@/hooks/plan/usePlanScale'
+import { getWallPathPoints } from '@/lib/plan/wallCurve'
 
 interface MultiFloorOverlayProps {
   currentFloor: Floor
@@ -31,7 +32,7 @@ function MultiFloorOverlayComponent({
 
   const getWallLinePoints = (wall: Wall): number[] => {
     const points: number[] = []
-    wall.points.forEach((p) => {
+    getWallPathPoints(wall).forEach((p) => {
       points.push(p.x, p.y)
     })
     return points

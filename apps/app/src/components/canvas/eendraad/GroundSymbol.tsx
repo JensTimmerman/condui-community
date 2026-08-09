@@ -29,7 +29,7 @@ interface GroundSymbolProps {
 }
 
 export function GroundSymbol({ x, y, onDragEnd, onDragMove }: GroundSymbolProps) {
-  const { theme } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
   const setSelection = useSetSelection()
   const canvasZoom = useEffectiveCanvasZoom(ZOOM_100, 'eendraad')
   const touchPrimary = useTouchPrimaryDevice()

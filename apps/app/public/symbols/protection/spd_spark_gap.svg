@@ -5,7 +5,7 @@
    height="48"
    version="1.1"
    id="svg3"
-   sodipodi:docname="spd.svg"
+   sodipodi:docname="spd_spark_gap.svg"
    inkscape:version="1.4.2 (f4327f4, 2025-05-13)"
    xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
    xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
@@ -51,5 +51,12 @@
     <path
        d="m 30.460154,20 -4,4 4,4"
        id="path3" />
+    <path
+       d="M 1.0591218,24 H 16.387514"
+       id="path4"
+       style="stroke-width:2.09273" />
+    <path
+       d="m 13.821004,28 4,-4 -4,-4"
+       id="path5" />
   </g>
 </svg>

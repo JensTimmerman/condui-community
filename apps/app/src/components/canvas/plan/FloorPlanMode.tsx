@@ -27,6 +27,13 @@ import {
 } from '@/lib/plan/openingPlacementDrag'
 import type { ToolMode } from '../../plan/PlanImageTools'
 import type { Floor, Point2, Wall, Stair } from '@/types/schema'
+import {
+  createQuarterCircleWallCurve,
+  getCurvedWallToolHoverFeedback,
+  getCurveRenderMaxSegmentLength,
+  getWallPathPoints,
+  isCurvedWall,
+} from '@/lib/plan/wallCurve'
 import type { PlanView } from '@/stores/uiStore'
 import { getCompatibilityFloorsFromProject } from '@/lib/projectV2/buildingFloors'
 import { resolvePlanCanvasPxPerMeter } from '@/hooks/plan'
@@ -168,11 +175,13 @@ export function FloorPlanMode({
     isDrawing: boolean
     startPoint: Point2 | null
     rectStartPoint: Point2 | null
+    pendingCurve?: boolean
   }>({
     currentPoints: [],
     isDrawing: false,
     startPoint: null,
     rectStartPoint: null,
+    pendingCurve: false,
   })
   const [currentMousePosition, setCurrentMousePosition] = useState<Point2 | null>(null)
   const [stairDrawingPoints, setStairDrawingPoints] = useState<Point2[]>([])
@@ -201,6 +210,7 @@ export function FloorPlanMode({
   const isShiftPressedRef = useRef(false)
   const penPointerDownRef = useRef<Point2 | null>(null)
   const penDidDragRef = useRef(false)
+  const penCurveGestureRef = useRef(false)
   const penLastPointerDownTimeRef = useRef(0)
   const stairLastClickTimeRef = useRef(0)
   const rectPointerDownRef = useRef<Point2 | null>(null)
@@ -282,6 +292,7 @@ export function FloorPlanMode({
       isDrawing: false,
       startPoint: null,
       rectStartPoint: null,
+      pendingCurve: false,
     })
     setCurrentMousePosition(null)
     setProjectedSnapGuides([])
@@ -409,10 +420,10 @@ export function FloorPlanMode({
   }, [activeTool, applyDrawingSnapshot, captureDrawingSnapshot])
 
   const commitWallWithUndo = useCallback(
-    (floorId: string, points: Point2[]) => {
+    (floorId: string, points: Point2[], curve?: Wall['curve']) => {
       withSingleUndoEntry(
         () => {
-          addWall(floorId, { floorId, points, thickness: wallDrawingThicknessCm })
+          addWall(floorId, { floorId, points, curve, thickness: wallDrawingThicknessCm })
           return true
         },
         { sessionLabel: 'add wall' }
@@ -439,7 +450,12 @@ export function FloorPlanMode({
   const commitCurrentPenDrawing = useCallback(() => {
     if (isFinalizingPenRef.current) return false
     if (!activeFloorId) return false
-    if (!wallDrawingState.isDrawing || wallDrawingState.currentPoints.length < 2) return false
+    if (
+      !wallDrawingState.isDrawing ||
+      wallDrawingState.pendingCurve ||
+      wallDrawingState.currentPoints.length < 2
+    )
+      return false
     isFinalizingPenRef.current = true
     commitWallWithUndo(activeFloorId, wallDrawingState.currentPoints)
     resetDrawingState()
@@ -450,9 +466,31 @@ export function FloorPlanMode({
   }, [
     activeFloorId,
     wallDrawingState.isDrawing,
+    wallDrawingState.pendingCurve,
     wallDrawingState.currentPoints,
     commitWallWithUndo,
     resetDrawingState,
+  ])
+
+  useEffect(() => {
+    if (
+      !activeFloorId ||
+      !wallDrawingState.pendingCurve ||
+      wallDrawingState.currentPoints.length < 3
+    )
+      return
+    commitWallWithUndo(
+      activeFloorId,
+      wallDrawingState.currentPoints.slice(0, 3),
+      createQuarterCircleWallCurve()
+    )
+    resetDrawingState()
+  }, [
+    activeFloorId,
+    commitWallWithUndo,
+    resetDrawingState,
+    wallDrawingState.currentPoints,
+    wallDrawingState.pendingCurve,
   ])
 
   const commitCurrentRectangleDrawing = useCallback(() => {
@@ -617,6 +655,7 @@ export function FloorPlanMode({
     let closestWall: Wall | null = null
     let minDistance = Infinity
     for (const wall of walls) {
+      if (isCurvedWall(wall)) continue
       for (let i = 0; i < wall.points.length - 1; i++) {
         const p1 = wall.points[i]
         const p2 = wall.points[i + 1]
@@ -858,7 +897,8 @@ export function FloorPlanMode({
         }
       }
 
-      for (const wall of activeFloor?.floorPlan?.walls ?? []) appendSegments(wall.points)
+      for (const wall of activeFloor?.floorPlan?.walls ?? [])
+        appendSegments(getWallPathPoints(wall))
       for (const stair of activeFloor?.floorPlan?.stairs ?? []) appendSegments(stair.points)
       appendSegments(wallDrawingState.currentPoints, 'drawWall')
       appendSegments(stairDrawingPoints, 'drawStair')
@@ -888,14 +928,17 @@ export function FloorPlanMode({
       const anchors: Point2[] = []
       for (const p of wallDrawingState.currentPoints) anchors.push(p)
       for (const wall of walls) {
-        for (const p of wall.points) anchors.push(p)
+        wall.points.forEach((p, index) => {
+          if (!isCurvedWall(wall) || index !== 1) anchors.push(p)
+        })
       }
 
       const segments: Array<{ a: Point2; b: Point2 }> = []
       for (const wall of walls) {
-        for (let i = 0; i < wall.points.length - 1; i++) {
-          const a = wall.points[i]
-          const b = wall.points[i + 1]
+        const pathPoints = getWallPathPoints(wall)
+        for (let i = 0; i < pathPoints.length - 1; i++) {
+          const a = pathPoints[i]
+          const b = pathPoints[i + 1]
           if (!a || !b) continue
           segments.push({ a, b })
         }
@@ -1072,7 +1115,11 @@ export function FloorPlanMode({
       }
 
       // If the new point closes the loop (near the first point), snap and commit a closed wall immediately.
-      if (nextState.isDrawing && nextState.currentPoints.length >= 3) {
+      if (
+        !wallDrawingState.pendingCurve &&
+        nextState.isDrawing &&
+        nextState.currentPoints.length >= 3
+      ) {
         const first = nextState.currentPoints[0]!
         const lastIndex = nextState.currentPoints.length - 1
         const last = nextState.currentPoints[lastIndex]!
@@ -1096,6 +1143,7 @@ export function FloorPlanMode({
             isDrawing: false,
             startPoint: null,
             rectStartPoint: null,
+            pendingCurve: false,
           })
           return
         }
@@ -1591,7 +1639,11 @@ export function FloorPlanMode({
       if (activeTool === 'drawWall') {
         // If we're already drawing and the user clicks near the first point,
         // close the loop and commit the wall instead of adding another vertex.
-        if (wallDrawingState.isDrawing && wallDrawingState.currentPoints.length >= 3) {
+        if (
+          !wallDrawingState.pendingCurve &&
+          wallDrawingState.isDrawing &&
+          wallDrawingState.currentPoints.length >= 3
+        ) {
           const first = wallDrawingState.currentPoints[0]!
           const dx = canvasPoint.x - first.x
           const dy = canvasPoint.y - first.y
@@ -1639,6 +1691,7 @@ export function FloorPlanMode({
                 isDrawing: false,
                 startPoint: null,
                 rectStartPoint: null,
+                pendingCurve: false,
               })
               scheduleMousePreviewPosition(null)
               clearRectConstraints()
@@ -1656,6 +1709,7 @@ export function FloorPlanMode({
                 isDrawing: false,
                 startPoint: null,
                 rectStartPoint: null,
+                pendingCurve: false,
               })
               scheduleMousePreviewPosition(null)
               clearRectConstraints()
@@ -2106,9 +2160,16 @@ export function FloorPlanMode({
       let hovered: string | null = null
 
       for (const wall of walls) {
-        for (let i = 0; i < wall.points.length - 1; i++) {
-          const p1 = wall.points[i]
-          const p2 = wall.points[i + 1]
+        if (
+          isCurvedWall(wall) &&
+          getCurvedWallToolHoverFeedback(activeTool) === 'suppressed'
+        ) {
+          continue
+        }
+        const pathPoints = getWallPathPoints(wall)
+        for (let i = 0; i < pathPoints.length - 1; i++) {
+          const p1 = pathPoints[i]
+          const p2 = pathPoints[i + 1]
           if (!p1 || !p2) continue
           const dx = p2.x - p1.x
           const dy = p2.y - p1.y
@@ -2166,8 +2227,9 @@ export function FloorPlanMode({
         penLastPointerDownTimeRef.current = now
         penPointerDownRef.current = canvasPoint
         penDidDragRef.current = false
+        penCurveGestureRef.current = !wallDrawingState.isDrawing
         suppressNextClickRef.current = true
-        if (!isDoubleDown) {
+        if (!isDoubleDown || wallDrawingState.pendingCurve) {
           appendPenPoint(canvasPoint, {
             snapTo45Degrees: ('shiftKey' in e.evt && !!e.evt.shiftKey) || isShiftPressedRef.current,
           })
@@ -2266,10 +2328,15 @@ export function FloorPlanMode({
           appendPenPoint(canvasPoint, {
             snapTo45Degrees: !!e?.evt?.shiftKey || isShiftPressedRef.current,
           })
+          if (penCurveGestureRef.current) {
+            setWallDrawingState((prev) => ({ ...prev, pendingCurve: true }))
+          }
         }
+        const startedCurve = penCurveGestureRef.current && penDidDragRef.current
         penPointerDownRef.current = null
         penDidDragRef.current = false
-        scheduleMousePreviewPosition(null)
+        penCurveGestureRef.current = false
+        if (!startedCurve) scheduleMousePreviewPosition(null)
         suppressNextClickRef.current = true
       } else if (activeTool === 'drawWallRect') {
         if (rectPointerDownRef.current && rectDidDragRef.current) {
@@ -2602,12 +2669,27 @@ export function FloorPlanMode({
             wallDrawingState.currentPoints.length > 0 && (
               <>
                 <Line
-                  points={[
-                    ...wallDrawingState.currentPoints.flatMap((p) => [p.x, p.y]),
-                    ...(currentMousePosition
-                      ? [currentMousePosition.x, currentMousePosition.y]
-                      : []),
-                  ]}
+                  points={(() => {
+                    if (
+                      wallDrawingState.pendingCurve &&
+                      wallDrawingState.currentPoints.length === 2 &&
+                      currentMousePosition
+                    ) {
+                      return getWallPathPoints(
+                        {
+                          points: [...wallDrawingState.currentPoints, currentMousePosition],
+                          curve: createQuarterCircleWallCurve(),
+                        },
+                        getCurveRenderMaxSegmentLength(planView.zoom)
+                      ).flatMap((point) => [point.x, point.y])
+                    }
+                    return [
+                      ...wallDrawingState.currentPoints.flatMap((point) => [point.x, point.y]),
+                      ...(currentMousePosition
+                        ? [currentMousePosition.x, currentMousePosition.y]
+                        : []),
+                    ]
+                  })()}
                   stroke="#0284c7"
                   strokeWidth={drawStrokeCanvas}
                   dash={[drawDashCanvas, drawDashCanvas]}
@@ -2615,6 +2697,25 @@ export function FloorPlanMode({
                   lineJoin="round"
                   listening={false}
                 />
+                {wallDrawingState.pendingCurve &&
+                  wallDrawingState.currentPoints.length === 2 &&
+                  currentMousePosition && (
+                    <Line
+                      points={[
+                        wallDrawingState.currentPoints[0]!.x,
+                        wallDrawingState.currentPoints[0]!.y,
+                        wallDrawingState.currentPoints[1]!.x,
+                        wallDrawingState.currentPoints[1]!.y,
+                        currentMousePosition.x,
+                        currentMousePosition.y,
+                      ]}
+                      stroke="#0284c7"
+                      strokeWidth={drawStrokeCanvas * 0.75}
+                      dash={[drawDashCanvas * 0.5, drawDashCanvas * 0.5]}
+                      opacity={0.55}
+                      listening={false}
+                    />
+                  )}
               </>
             )}
 

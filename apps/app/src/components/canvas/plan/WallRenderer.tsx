@@ -25,6 +25,12 @@ import { useTouchPrimaryDevice } from '@/hooks/useTouchPrimaryDevice'
 import { useStoreWithEqualityFn } from 'zustand/traditional'
 import { useUIStore } from '@/stores/uiStore'
 import { indexedPointMapsEqual, parseWallPointIds } from '@/lib/plan/wallPointSelection'
+import {
+  getCurvedWallToolHoverFeedback,
+  getCurveRenderMaxSegmentLength,
+  isCurvedWall,
+  wallWithDerivedPath,
+} from '@/lib/plan/wallCurve'
 
 const INTERACTIVE_HIT_FILL = 'rgba(0,0,0,0.001)'
 import { getWallTotalLength, getWallPathBetweenDistances } from '@/handlers/plan/wallDrawing'
@@ -182,6 +188,7 @@ function WallRendererInner({
   const trackPointerHover = interactionMode !== 'select'
   const selectionColor = getThemeColor(theme, 'selectionColor')
   const selectionPathDimmedColor = getThemeColor(theme, 'selectionPathDimmedColor')
+  const invalidWallToolHoverColor = '#ef4444'
   const pointHandleBaseColor = '#ffffff'
   const pointHandleStrokeColor = '#0284c7'
   const windowColor = theme === 'dark' ? '#0284c7' : '#0284c7'
@@ -206,7 +213,7 @@ function WallRendererInner({
     windowsByWall.set(window.wallId, existing)
   })
 
-  const roomPolygons = getRoomPolygonsFromWalls(walls)
+  const roomPolygons = React.useMemo(() => getRoomPolygonsFromWalls(walls), [walls])
 
   const isInsideAnyRoom = (p: Point2): boolean =>
     roomPolygons.some((poly) => pointInPolygon(p, poly))
@@ -302,6 +309,11 @@ function WallRendererInner({
   const wallOutlineStrokeWidth = getWallOutlineStrokeWidth(pxPerMeter)
 
   React.useEffect(() => {
+    if (walls.length === 0) {
+      setWallVolumeComponents([])
+      return
+    }
+
     let cancelled = false
 
     buildWallVolumeComponents(walls, doors, windows, masterWallThickness, pxPerMeter)
@@ -889,6 +901,29 @@ function WallRendererInner({
     })
   }
 
+  const renderCurveControlGuide = (wall: Wall) => {
+    if (!showPointHandles || !isCurvedWall(wall)) return null
+    const [start, control, end] = wall.points
+    if (!start || !control || !end) return null
+    const guideStrokeWidth = screenPxToCanvasUnits(zoom, 1, 0.75, 1.5)
+    const guideDash = screenPxToCanvasUnits(zoom, 4, 2, 7)
+
+    return (
+      <Line
+        key={`curve-control-guide-${wall.id}`}
+        points={[start.x, start.y, control.x, control.y, end.x, end.y]}
+        stroke={theme === 'dark' ? '#cbd5e1' : '#64748b'}
+        strokeWidth={guideStrokeWidth}
+        dash={[guideDash, guideDash]}
+        lineCap="round"
+        lineJoin="round"
+        opacity={0.65}
+        listening={false}
+        perfectDrawEnabled={false}
+      />
+    )
+  }
+
   return (
     <Group listening={listening}>
       {wallVolumeComponents?.map((component) => {
@@ -908,25 +943,34 @@ function WallRendererInner({
       })}
 
       {/* Render walls */}
-      {orderedWalls.map((wall) => {
+      {orderedWalls.map((sourceWall) => {
+        const curved = isCurvedWall(sourceWall)
+        const wall = wallWithDerivedPath(sourceWall, getCurveRenderMaxSegmentLength(zoom))
         const isSelected = selectedWallIds.includes(wall.id)
-        const selectedSegments = selectedSegmentIndices.get(wall.id) ?? []
+        const selectedSegments = curved ? [] : (selectedSegmentIndices.get(wall.id) ?? [])
         const selectedPointCount = pointIndicesForRender.get(wall.id)?.length ?? 0
         const hasSelectedVertices = selectedPointCount > 0
-        const allPointsSelected = selectedPointCount === wall.points.length
+        const allPointsSelected = selectedPointCount === sourceWall.points.length
         const hasSelectedSegments = selectedSegments.length > 0
         const hasVertexSubselection =
           hasSelectedSegments || (hasSelectedVertices && !allPointsSelected)
         const isHovered = hoveredWallId === wall.id
+        const isInvalidToolHover =
+          curved &&
+          isHovered &&
+          getCurvedWallToolHoverFeedback(interactionMode) === 'invalid'
         const thickness = getWallThickness(wall)
-        const defaultBorderColor = hasVertexSubselection
-          ? selectionPathDimmedColor
-          : isSelected
-            ? selectionColor
-            : isHovered
-              ? selectionPathDimmedColor
-              : baseBorderColor
+        const defaultBorderColor = isInvalidToolHover
+          ? invalidWallToolHoverColor
+          : hasVertexSubselection
+            ? selectionPathDimmedColor
+            : isSelected
+              ? selectionColor
+              : isHovered
+                ? selectionPathDimmedColor
+                : baseBorderColor
         const mergedStyle = wallVolumeStyleByWallId.get(wall.id)
+        const hasMergedWallVolume = mergedStyle != null
         const fillColor = mergedStyle?.fillColor ?? baseFillColor
         const fillThickness = thickness
         const borderThickness = wallOutlineStrokeWidth
@@ -937,6 +981,95 @@ function WallRendererInner({
           SELECTION_OUTLINE_STROKE_PX_MAX
         )
         const borderColor = mergedStyle?.borderColor ?? defaultBorderColor
+
+        if (curved && !hasMergedWallVolume) {
+          const linePts = pointsToLinePoints(wall.points)
+          const capPoints = (atStart: boolean): number[] => {
+            const tangent = getPathEndTangent(wall.points, atStart)
+            if (!tangent) return []
+            const point = atStart ? wall.points[0]! : wall.points[wall.points.length - 1]!
+            const normal = { x: -tangent.y, y: tangent.x }
+            const halfWidth = fillThickness / 2 + wallOutlineStrokeWidth
+            return [
+              point.x - normal.x * halfWidth,
+              point.y - normal.y * halfWidth,
+              point.x + normal.x * halfWidth,
+              point.y + normal.y * halfWidth,
+            ]
+          }
+          const bindCurvedWallPointer = {
+            onDragStart: (event: WallDragEvent) => {
+              if (!isSelected) return
+              event.target.x(0)
+              event.target.y(0)
+              onWallDragStart?.(wall.id, event)
+            },
+            onDragMove: (event: WallDragEvent) => {
+              if (!isSelected) return
+              event.target.x(0)
+              event.target.y(0)
+              onWallDragMove?.(wall.id, event)
+            },
+            onDragEnd: (event: WallDragEvent) => {
+              if (!isSelected) return
+              event.target.x(0)
+              event.target.y(0)
+              onWallDragEnd?.(wall.id, event)
+            },
+            onClick: (event: WallPointerEvent) => onWallClick?.(wall.id, event),
+            onTap: (event: WallPointerEvent) => onWallClick?.(wall.id, event),
+            onMouseMove: trackPointerHover
+              ? (event: WallMouseEvent) => onWallMouseMove?.(wall.id, event)
+              : undefined,
+            onMouseEnter: (event: WallMouseEvent) => onWallMouseMove?.(wall.id, event),
+            onMouseLeave: (event: WallMouseEvent) => onWallMouseLeave?.(event),
+          }
+
+          return (
+            <Group key={`wall-${wall.id}`}>
+              <Line
+                points={linePts}
+                stroke={borderColor}
+                strokeWidth={fillThickness + wallOutlineStrokeWidth * 2}
+                lineCap="butt"
+                lineJoin="round"
+                listening={false}
+                perfectDrawEnabled={false}
+              />
+              <Line
+                points={linePts}
+                stroke={fillColor}
+                strokeWidth={fillThickness}
+                lineCap="butt"
+                lineJoin="round"
+                listening={false}
+                perfectDrawEnabled={false}
+              />
+              {[true, false].map((atStart) => (
+                <Line
+                  key={atStart ? 'curve-cap-start' : 'curve-cap-end'}
+                  points={capPoints(atStart)}
+                  stroke={borderColor}
+                  strokeWidth={wallOutlineStrokeWidth}
+                  lineCap="butt"
+                  listening={false}
+                  perfectDrawEnabled={false}
+                />
+              ))}
+              <Line
+                points={linePts}
+                stroke="rgba(0,0,0,0.001)"
+                strokeWidth={fillThickness + wallOutlineStrokeWidth * 2}
+                lineCap="butt"
+                lineJoin="round"
+                listening={wallsListening}
+                draggable={draggableSelectedWalls && isSelected}
+                {...bindCurvedWallPointer}
+              />
+            </Group>
+          )
+        }
+
         // Detect geometrically closed walls (first and last points coincide).
         const isClosed =
           wall.points.length > 2 &&
@@ -956,7 +1089,7 @@ function WallRendererInner({
           wallDoors.some((door) => selectedDoorIdSet.has(door.id)) ||
           wallWindows.some((window) => selectedWindowIdSet.has(window.id))
         const shouldMeasureWall =
-          showSegmentMeasurements && (isSelected || selectedPoints.length > 0)
+          !curved && showSegmentMeasurements && (isSelected || selectedPoints.length > 0)
         const shouldMeasureOpenings = showSegmentMeasurements && hasSelectedOpeningsOnWall
         const segmentCount = Math.max(0, wall.points.length - 1)
         const measurementSegmentIndices = (() => {
@@ -1102,19 +1235,21 @@ function WallRendererInner({
                 const isFullWall = startDist <= 1e-8 && endDist >= totalLength - 1e-8
                 const segmentIsBrightSelected =
                   hasVertexSubselection && brightSelectedSegmentIndices.has(sourceSegmentIndex)
-                const segmentBorderColor = segmentIsBrightSelected
-                  ? selectionColor
-                  : hasVertexSubselection
-                    ? selectionPathDimmedColor
-                    : isSelected
-                      ? selectionColor
-                      : isHovered
-                        ? selectionPathDimmedColor
-                        : borderColor
+                const segmentBorderColor = isInvalidToolHover
+                  ? invalidWallToolHoverColor
+                  : segmentIsBrightSelected
+                    ? selectionColor
+                    : hasVertexSubselection
+                      ? selectionPathDimmedColor
+                      : isSelected
+                        ? selectionColor
+                        : isHovered
+                          ? selectionPathDimmedColor
+                          : borderColor
 
                 return (
                   <React.Fragment key={`seg-${segIdx}`}>
-                    {!wallVolumeComponents && (
+                    {!hasMergedWallVolume && (
                       <>
                         <Line
                           points={linePts}
@@ -1164,7 +1299,7 @@ function WallRendererInner({
                         />
                       </>
                     )}
-                    {wallVolumeComponents && (
+                    {hasMergedWallVolume && (
                       <Line
                         points={linePts}
                         stroke="rgba(0,0,0,0.001)"
@@ -1203,7 +1338,7 @@ function WallRendererInner({
                         onMouseLeave={(e) => onWallMouseLeave?.(e)}
                       />
                     )}
-                    {wallVolumeComponents && defaultBorderColor !== baseBorderColor && (
+                    {hasMergedWallVolume && defaultBorderColor !== baseBorderColor && (
                       <Line
                         points={linePts}
                         stroke={segmentBorderColor}
@@ -1220,7 +1355,7 @@ function WallRendererInner({
             )}
 
             {/* Hybrid butt/square cap: outer-stroke-only bar centered under the user vertex */}
-            {!wallVolumeComponents &&
+            {!hasMergedWallVolume &&
               !isClosed &&
               wall.points.length >= 2 &&
               (() => {
@@ -1348,6 +1483,9 @@ function WallRendererInner({
           />
         )
       })}
+
+      {/* Curve construction guides identify the otherwise detached control handles. */}
+      {orderedWalls.map((wall) => renderCurveControlGuide(wall))}
 
       {/* Vertices are the final visual and hit-test pass so openings can never cover them. */}
       {orderedWalls.map((wall) => renderWallPointHandles(wall))}

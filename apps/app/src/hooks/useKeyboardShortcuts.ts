@@ -25,6 +25,8 @@ import { getSymbolById } from '@/lib/symbols'
 import { buildAutoSitplanPlacement } from '@/lib/plan/autoSitplanPlacement'
 import { generateId } from '@/utils/project'
 import i18n from '@/i18n'
+import { restoreHiddenSituationPlanPlacementsToActiveView } from '@/lib/plan/restoreHiddenSituationPlanPlacements'
+import { hasCustomPlacement } from '@/lib/plan/customPlacement'
 
 /**
  * Hook to handle global keyboard shortcuts for the application.
@@ -420,18 +422,9 @@ export function useKeyboardShortcuts(options?: { capabilities?: EditorCapabiliti
                         circuitId,
                         floorId,
                         placementId: generateId(),
-                      }) ?? undefined
+                    }) ?? undefined
                     if (placement) {
                       store.addPlacement(endpointId, placement)
-                      if (
-                        ['transformer', 'rectifier', 'dc_dc_converter'].includes(endpoint.symbol)
-                      ) {
-                        store.updateFloor(floorId, {
-                          hiddenSitplanPlacementIds: Array.from(
-                            new Set([...(floor.hiddenSitplanPlacementIds ?? []), placement.id])
-                          ),
-                        })
-                      }
                     }
                   }
                 }
@@ -459,15 +452,6 @@ export function useKeyboardShortcuts(options?: { capabilities?: EditorCapabiliti
                     store.updateTrunkDevice(resolved.circuit.id, deviceId, {
                       placements: [...(device.placements ?? []), placement],
                     })
-                    if (
-                      ['transformer', 'rectifier', 'dc_dc_converter'].includes(device.symbol)
-                    ) {
-                      store.updateFloor(floorId, {
-                        hiddenSitplanPlacementIds: Array.from(
-                          new Set([...(floor.hiddenSitplanPlacementIds ?? []), placement.id])
-                        ),
-                      })
-                    }
                   }
                 }
                 targetPlacementId = placement?.id
@@ -479,6 +463,9 @@ export function useKeyboardShortcuts(options?: { capabilities?: EditorCapabiliti
             if (floorId && targetPlacementId && hiddenIds.includes(targetPlacementId)) {
               const rows = store.getPlacementsByFloor(floorId)
               const rowById = new Map(rows.map((row) => [row.id, row]))
+              const customPlacementIds = new Set(
+                rows.filter(hasCustomPlacement).map((row) => row.id)
+              )
               const items: HiddenItem[] = hiddenIds.flatMap((hiddenId) => {
                 const row = rowById.get(hiddenId)
                 if (!row) return []
@@ -516,13 +503,20 @@ export function useKeyboardShortcuts(options?: { capabilities?: EditorCapabiliti
                 content: createElement(HiddenItemsDialog, {
                   items,
                   initialSelectedIds: [targetPlacementId],
-                  onConfirm: (selectedIds: string[]) => {
-                    const latestFloor = store.getFloorById(floorId)
-                    const remaining = (latestFloor?.hiddenSitplanPlacementIds ?? []).filter(
-                      (hiddenId) => !selectedIds.includes(hiddenId)
-                    )
-                    store.updateFloor(floorId, {
-                      hiddenSitplanPlacementIds: remaining.length > 0 ? remaining : undefined,
+                  showMoveToCurrentView: true,
+                  getMoveToCurrentViewDefault: (selectedIds: string[]) =>
+                    selectedIds.some((id) => !customPlacementIds.has(id)),
+                  onConfirm: (
+                    selectedIds: string[],
+                    options: {
+                      moveToCurrentView: boolean
+                      moveToCurrentViewOverridden: boolean
+                    },
+                  ) => {
+                    restoreHiddenSituationPlanPlacementsToActiveView(selectedIds, {
+                      moveToActiveView: options.moveToCurrentViewOverridden
+                        ? options.moveToCurrentView
+                        : undefined,
                     })
                     closeDialog()
                   },

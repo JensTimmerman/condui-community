@@ -313,7 +313,7 @@ function PlacementSymbolInner({
   const currentProject = useProjectStore((s: ProjectState) => s.currentProject)
   const setSelection = useSetSelectionStore()
   const clearSelection = useClearSelectionStore()
-  const { theme } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
   const planPlacementDebug = useSettingsStore((s) => s.planPlacementDebug)
   const colors = useThemeColors()
   const fontFamily = useCanvasFontFamily()
@@ -1087,13 +1087,7 @@ function PlacementSymbolInner({
         // Final update on drag end
         if (wasMulti && onMultiSelectDrag) {
           onMultiSelectDrag(placement.id, newPos)
-          const { selection } = useUIStore.getState()
-          if (onMultiSelectDragEnd) {
-            const isFirstInSelection =
-              (selection.type === 'endpoint' && selection.ids[0] === endpoint?.id) ||
-              (selection.type === 'placement' && selection.ids[0] === placement.id)
-            if (isFirstInSelection) onMultiSelectDragEnd()
-          }
+          onMultiSelectDragEnd?.()
         } else if (suppressKonvaDragEndRef.current) {
           e.target.position({ x: pos.x, y: pos.y })
         } else {

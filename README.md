@@ -36,11 +36,11 @@ backup, uptime guarantee, automatic server maintenance, or data recovery service
 
 ## Run as a container
 
-The supplied `Dockerfile` builds a standard OCI-compatible Linux container image. Docker is the
-simplest tested way to run a production-style local instance:
+The published OCI image is available from GitHub Container Registry. Docker Compose pulls the
+current image whenever you explicitly start or update the installation:
 
 ```bash
-docker compose up --build
+docker compose up -d
 ```
 
 Open <http://localhost:8080> after the container has started. Stop it with:
@@ -49,15 +49,25 @@ Open <http://localhost:8080> after the container has started. Stop it with:
 docker compose down
 ```
 
-Other OCI-compatible tools can use the same image definition. For example, with Podman:
+This does not install a background auto-updater. Running `docker compose up -d` again checks GHCR,
+pulls a changed image, and recreates the container when necessary.
+
+Other OCI-compatible tools can use the same image. For example, with Podman:
 
 ```bash
-podman build -t condui-community:local .
-podman run --rm -p 8080:8080 condui-community:local
+podman pull ghcr.io/xoliul/condui-community:latest
+podman run --rm -p 8080:8080 ghcr.io/xoliul/condui-community:latest
 ```
 
 The container serves the application and the local file-conversion endpoints it needs. It does not
 require a database or a separate backend service.
+
+To build the image from the checked-out source instead:
+
+```bash
+docker build -t condui-community:local .
+docker run --rm -p 8080:8080 condui-community:local
+```
 
 ## Run from source
 
@@ -88,11 +98,10 @@ The archive structure and compatibility expectations are documented in
 
 ## Updates
 
-Pull the latest source and rebuild the image to update a self-hosted installation:
+Run the normal Compose command again to check for and install a newer published image:
 
 ```bash
-git pull
-docker compose up --build -d
+docker compose up -d
 ```
 
 Back up important project archives before updating. Compatibility with supported project archives is

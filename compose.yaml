@@ -1,7 +1,7 @@
 services:
   condui:
-    build: .
-    image: condui-community:local
+    image: ghcr.io/xoliul/condui-community:latest
+    pull_policy: always
     restart: unless-stopped
     ports:
       - "8080:8080"

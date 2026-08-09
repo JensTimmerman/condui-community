@@ -6,6 +6,8 @@ import {
 import type { ProjectWithOptionalV2Building } from '@/lib/projectV2/buildingFloors'
 import type { Panel, SymbolKey } from '@/types/schema'
 import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
+import { hasCustomPlacement } from '@/lib/plan/customPlacement'
+import { getSituationPlanPlacementIdsHiddenByPanel } from '@/lib/plan/panelPlanPlacementVisibility'
 
 export type ProjectWithSituationPlanPlacements = ProjectWithOptionalV2Electrical &
   ProjectWithOptionalV2Building
@@ -16,7 +18,9 @@ export interface HiddenSituationPlanPlacement {
   floorName: string
   endpointId: string
   endpointLabel: string
+  circuitLabel: string
   symbol?: SymbolKey
+  isCustomPlacement: boolean
 }
 
 /**
@@ -31,6 +35,7 @@ export function getHiddenSituationPlanPlacements(
     floors.map((floor) => [floor.id, new Set(floor.hiddenSitplanPlacementIds ?? [])])
   )
   const floorNameById = new Map(floors.map((floor) => [floor.id, floor.name]))
+  const hiddenByPanel = getSituationPlanPlacementIdsHiddenByPanel(project)
   const seenPlacementIds = new Set<string>()
   const hidden: HiddenSituationPlanPlacement[] = []
 
@@ -49,6 +54,7 @@ export function getHiddenSituationPlanPlacements(
           for (const placement of endpoint.placements) {
             if (seenPlacementIds.has(placement.id)) continue
             if (!hiddenByFloor.get(placement.floorId)?.has(placement.id)) continue
+            if (hiddenByPanel.has(placement.id)) continue
             seenPlacementIds.add(placement.id)
             hidden.push({
               placementId: placement.id,
@@ -56,7 +62,9 @@ export function getHiddenSituationPlanPlacements(
               floorName: floorNameById.get(placement.floorId) ?? placement.floorId,
               endpointId: endpoint.id,
               endpointLabel: endpoint.label,
+              circuitLabel: circuit.code?.trim() ?? '',
               symbol: endpoint.symbol,
+              isCustomPlacement: hasCustomPlacement(placement),
             })
           }
         }
@@ -65,6 +73,7 @@ export function getHiddenSituationPlanPlacements(
           for (const placement of device.placements ?? []) {
             if (seenPlacementIds.has(placement.id)) continue
             if (!hiddenByFloor.get(placement.floorId)?.has(placement.id)) continue
+            if (hiddenByPanel.has(placement.id)) continue
             seenPlacementIds.add(placement.id)
             hidden.push({
               placementId: placement.id,
@@ -72,7 +81,9 @@ export function getHiddenSituationPlanPlacements(
               floorName: floorNameById.get(placement.floorId) ?? placement.floorId,
               endpointId: device.id,
               endpointLabel: device.label,
+              circuitLabel: circuit.code?.trim() ?? '',
               symbol: device.symbol,
+              isCustomPlacement: hasCustomPlacement(placement),
             })
           }
         }

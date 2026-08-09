@@ -1,6 +1,11 @@
 import type { Door, Point2, Wall, Window } from '@/types/schema'
 import { computeOpeningGeometry } from '@/handlers/plan/wallDrawing'
 import { pointInPolygon } from '@/lib/geometry'
+import {
+  CURVE_WALL_VOLUME_MAX_SEGMENT_LENGTH,
+  isCurvedWall,
+  wallWithDerivedPath,
+} from '@/lib/plan/wallCurve'
 import { getOpeningRenderMetrics } from './openingPlanScale'
 import {
   loadClipperModule,
@@ -9,10 +14,14 @@ import {
   type ClipperVariant,
 } from './clipper2Runtime'
 
-const CLIPPER_PRECISION = 3
+// The vendored Clipper binding exposes integer-valued results even for its D APIs.
+// Explicit fixed-point scaling preserves three decimal places deterministically.
+const CLIPPER_COORDINATE_SCALE = 1000
+const CLIPPER_PRECISION = 0
 const WALL_CUTOUT_PAD = 1
 const AREA_EPSILON = 1e-3
 const JUNCTION_EPSILON = 1
+const CURVE_TOPOLOGY_EPSILON = 1e-3
 const JUNCTION_MITER_LIMIT = 6
 const WIDTH_TAPER_LENGTH_CM = 5
 const WIDTH_TAPER_MAX_ANGLE_RADIANS = (10 * Math.PI) / 180
@@ -28,7 +37,8 @@ export interface WallVolumeComponent {
 
 export function selectWallVolumeOutlinePaths(
   paths: Array<{ points: Point2[]; area: number }>,
-  openingCutouts: Point2[][] = []
+  openingCutouts: Point2[][] = [],
+  simplifyPaths = true
 ): Point2[][] {
   if (paths.length === 0) return []
   const dominantPath = paths.reduce((largest, path) =>
@@ -47,7 +57,7 @@ export function selectWallVolumeOutlinePaths(
       center.y /= path.points.length
       return !openingCutouts.some((cutout) => pointInPolygon(center, cutout))
     })
-    .map((path) => simplifyWallVolumePath(path.points))
+    .map((path) => (simplifyPaths ? simplifyWallVolumePath(path.points) : path.points))
 }
 
 export type OpeningCornerFusionMember = {
@@ -97,6 +107,7 @@ type WallVertexNode = {
   wallId: string
   point: Point2
   halfThickness: number
+  curveEndpoint: boolean
   crossSections: Array<{ normal: Point2; direction: Point2 }>
 }
 
@@ -239,7 +250,11 @@ function collectWallVertexNodes(
   for (const wall of walls) {
     const halfThickness = resolveWallThicknessPx(wall, masterWallThickness, pxPerMeter) / 2
     const lastIndex = wall.points.length - 1
+    const curveEndpoint = wall.curve?.kind === 'rationalQuadratic'
     for (let index = 0; index < wall.points.length; index += 1) {
+      // Flattened curve samples describe shape, not editable/topological wall vertices.
+      // Only the two curve ends may participate in wall junctions.
+      if (wall.curve?.kind === 'rationalQuadratic' && index !== 0 && index !== lastIndex) continue
       const point = wall.points[index]
       if (!point) continue
       if (
@@ -257,7 +272,7 @@ function collectWallVertexNodes(
       if (previousSection) crossSections.push(previousSection)
       if (nextSection) crossSections.push(nextSection)
       if (crossSections.length > 0) {
-        nodes.push({ wallId: wall.id, point, halfThickness, crossSections })
+        nodes.push({ wallId: wall.id, point, halfThickness, curveEndpoint, crossSections })
       }
     }
   }
@@ -289,7 +304,11 @@ function clusterNearbyNodes<T extends { wallId: string; point: Point2; halfThick
       const nodeA = nodes[a]!
       const nodeB = nodes[b]!
       if (!canJoin(nodeA, nodeB)) continue
-      const threshold = nodeA.halfThickness + nodeB.halfThickness + JUNCTION_EPSILON
+      const threshold =
+        ('curveEndpoint' in nodeA && nodeA.curveEndpoint) ||
+        ('curveEndpoint' in nodeB && nodeB.curveEndpoint)
+          ? CURVE_TOPOLOGY_EPSILON
+          : nodeA.halfThickness + nodeB.halfThickness + JUNCTION_EPSILON
       if (Math.hypot(nodeA.point.x - nodeB.point.x, nodeA.point.y - nodeB.point.y) <= threshold) {
         union(a, b)
       }
@@ -304,6 +323,102 @@ function clusterNearbyNodes<T extends { wallId: string; point: Point2; halfThick
   return Array.from(clusters.values()).filter(isValidCluster)
 }
 
+/**
+ * Prefer authored connectivity over a loose endpoint that merely overlaps the same area.
+ * The wall bodies will still union, but the loose endpoint must not turn a real corner/chain
+ * into an artificial three-way projected junction.
+ */
+function findExactConnectedJunctionNodes(cluster: WallVertexNode[]): WallVertexNode[] | null {
+  if (cluster.length < 2) return null
+
+  const continuousNodes = cluster.filter((node) => node.crossSections.length >= 2)
+  if (continuousNodes.length > 0 && continuousNodes.length < cluster.length) {
+    return continuousNodes
+  }
+
+  const exactGroups: WallVertexNode[][] = []
+  for (const node of cluster) {
+    const group = exactGroups.find((candidate) =>
+      candidate.some((member) => {
+        return (
+          Math.hypot(member.point.x - node.point.x, member.point.y - node.point.y) <=
+          CURVE_TOPOLOGY_EPSILON
+        )
+      })
+    )
+    if (group) group.push(node)
+    else exactGroups.push([node])
+  }
+
+  const preferred = exactGroups.reduce((best, candidate) => {
+    const incidentCount = candidate.reduce((sum, node) => sum + node.crossSections.length, 0)
+    const bestIncidentCount = best.reduce((sum, node) => sum + node.crossSections.length, 0)
+    return incidentCount > bestIncidentCount ? candidate : best
+  })
+  const preferredIncidentCount = preferred.reduce((sum, node) => sum + node.crossSections.length, 0)
+
+  return preferredIncidentCount >= 2 && preferred.length < cluster.length ? preferred : null
+}
+
+function preferExactConnectedJunctionNodes(cluster: WallVertexNode[]): WallVertexNode[] {
+  return findExactConnectedJunctionNodes(cluster) ?? cluster
+}
+
+/**
+ * Render a loose straight endpoint from the exact connected node it overlaps. This leaves the
+ * authored wall untouched while preventing its butt cap from poking through the authoritative
+ * corner as a triangular tooth.
+ */
+export function snapLooseWallEndpointsToConnectedJunctions(
+  walls: Wall[],
+  masterWallThickness: number,
+  pxPerMeter: number | null | undefined
+): Wall[] {
+  const replacements = new Map<string, Map<number, Point2>>()
+  const clusters = clusterNearbyNodes(
+    collectWallVertexNodes(walls, masterWallThickness, pxPerMeter)
+  )
+
+  for (const cluster of clusters) {
+    const authoritative = findExactConnectedJunctionNodes(cluster)
+    if (!authoritative) continue
+    const anchor = authoritative[0]!.point
+
+    for (const node of cluster) {
+      if (
+        authoritative.includes(node) ||
+        node.curveEndpoint ||
+        node.crossSections.length !== 1 ||
+        authoritative.some((member) => member.wallId === node.wallId)
+      ) {
+        continue
+      }
+      const wall = walls.find((candidate) => candidate.id === node.wallId)
+      if (!wall) continue
+      const endpointIndex =
+        wall.points[0] === node.point
+          ? 0
+          : wall.points[wall.points.length - 1] === node.point
+            ? wall.points.length - 1
+            : -1
+      if (endpointIndex < 0) continue
+      const byIndex = replacements.get(wall.id) ?? new Map<number, Point2>()
+      byIndex.set(endpointIndex, anchor)
+      replacements.set(wall.id, byIndex)
+    }
+  }
+
+  if (replacements.size === 0) return walls
+  return walls.map((wall) => {
+    const byIndex = replacements.get(wall.id)
+    if (!byIndex) return wall
+    return {
+      ...wall,
+      points: wall.points.map((point, index) => byIndex.get(index) ?? point),
+    }
+  })
+}
+
 /** Polygons that bridge visually adjoining wall vertices, including unequal wall widths. */
 export function buildWallJunctionPolygons(
   walls: Wall[],
@@ -311,7 +426,23 @@ export function buildWallJunctionPolygons(
   pxPerMeter: number | null | undefined
 ): Point2[][] {
   return clusterNearbyNodes(collectWallVertexNodes(walls, masterWallThickness, pxPerMeter)).flatMap(
-    (cluster) => {
+    (nearbyCluster) => {
+      const cluster = preferExactConnectedJunctionNodes(nearbyCluster)
+      if (new Set(cluster.map((node) => node.wallId)).size < 2) return []
+      if (
+        cluster.length === 2 &&
+        cluster.every((node) => node.crossSections.length === 1) &&
+        Math.abs(cluster[0]!.halfThickness - cluster[1]!.halfThickness) <= 1e-6 &&
+        Math.hypot(
+          cluster[0]!.point.x - cluster[1]!.point.x,
+          cluster[0]!.point.y - cluster[1]!.point.y
+        ) <= 1e-6
+      ) {
+        // The expansion source tracer already joins an exact, equal-width two-wall chain.
+        // Adding a second projected junction polygon can create a tiny detached sliver when
+        // one side is a tessellated curve whose final chord only approximates its tangent.
+        return []
+      }
       const polygons: Point2[][] = []
       const incidentDirections = new Set(
         cluster.flatMap((node) =>
@@ -416,7 +547,9 @@ export function buildWallJunctionTrimPolygons(
   pxPerMeter: number | null | undefined
 ): Point2[][] {
   return clusterNearbyNodes(collectWallVertexNodes(walls, masterWallThickness, pxPerMeter)).flatMap(
-    (cluster) => {
+    (nearbyCluster) => {
+      const cluster = preferExactConnectedJunctionNodes(nearbyCluster)
+      if (new Set(cluster.map((node) => node.wallId)).size < 2) return []
       const polygons: Point2[][] = []
       for (let aIndex = 0; aIndex < cluster.length; aIndex += 1) {
         for (let bIndex = aIndex + 1; bIndex < cluster.length; bIndex += 1) {
@@ -829,6 +962,7 @@ export function buildOpeningCornerFusions(
         wallId: wall.id,
         point,
         halfThickness,
+        curveEndpoint: false,
         crossSections: [section],
         kind,
         id: opening.id,
@@ -911,7 +1045,10 @@ function createPathsD(module: ClipperModule, paths: Point2[][]): ClipperPathsD {
     if (path.length < 2) continue
     const flat: number[] = []
     for (const point of path) {
-      flat.push(point.x, point.y)
+      flat.push(
+        Math.round(point.x * CLIPPER_COORDINATE_SCALE),
+        Math.round(point.y * CLIPPER_COORDINATE_SCALE)
+      )
     }
     const clipperPath = module.MakePathD(flat)
     clipperPaths.push_back(clipperPath)
@@ -930,6 +1067,7 @@ function makeVertexKey(point: Point2): string {
 }
 
 type VisualWallEdge = {
+  wallId: string
   a: Point2
   b: Point2
   aKey: string
@@ -965,9 +1103,15 @@ function traceVisualWallChain(
     visitedEdges.add(currentEdgeKey)
     currentKey = appendEdgePoint(path, currentEdge, currentKey)
 
-    const candidates = edgesByNode.get(currentKey) ?? []
-    if (candidates.length !== 2) break
-    const nextEdge = candidates.find((edge) => !visitedEdges.has(edgeKey(edge)))
+    const nodeEdges = edgesByNode.get(currentKey) ?? []
+    const candidates = nodeEdges.filter((edge) => !visitedEdges.has(edgeKey(edge)))
+    const sameWallCandidates = candidates.filter((edge) => edge.wallId === currentEdge.wallId)
+    const nextEdge =
+      nodeEdges.length === 2 && candidates.length === 1
+        ? candidates[0]
+        : sameWallCandidates.length === 1
+          ? sameWallCandidates[0]
+          : undefined
     if (!nextEdge) break
     currentEdge = nextEdge
   }
@@ -979,11 +1123,12 @@ export function buildVisualWallExpansionSources(walls: Wall[]): Point2[][] {
   const edgesByNode = new Map<string, VisualWallEdge[]>()
   const allEdges: VisualWallEdge[] = []
 
-  const addEdge = (a: Point2, b: Point2) => {
+  const addEdge = (wallId: string, a: Point2, b: Point2) => {
     const dx = b.x - a.x
     const dy = b.y - a.y
     if (dx * dx + dy * dy < 1e-8) return
     const edge: VisualWallEdge = {
+      wallId,
       a,
       b,
       aKey: makeVertexKey(a),
@@ -997,10 +1142,10 @@ export function buildVisualWallExpansionSources(walls: Wall[]): Point2[][] {
   for (const wall of walls) {
     const sourcePoints = getExpansionSourcePoints(wall.points)
     for (let index = 0; index < sourcePoints.length - 1; index += 1) {
-      addEdge(sourcePoints[index]!, sourcePoints[index + 1]!)
+      addEdge(wall.id, sourcePoints[index]!, sourcePoints[index + 1]!)
     }
     if (isClosedWall(wall.points) && sourcePoints.length >= 3) {
-      addEdge(sourcePoints[sourcePoints.length - 1]!, sourcePoints[0]!)
+      addEdge(wall.id, sourcePoints[sourcePoints.length - 1]!, sourcePoints[0]!)
     }
   }
 
@@ -1013,7 +1158,14 @@ export function buildVisualWallExpansionSources(walls: Wall[]): Point2[][] {
     const aDegree = edgesByNode.get(edge.aKey)?.length ?? 0
     const bDegree = edgesByNode.get(edge.bKey)?.length ?? 0
     if (aDegree === 2 && bDegree === 2) continue
-    const startKey = aDegree === 2 && bDegree !== 2 ? edge.bKey : edge.aKey
+    const startKey =
+      aDegree === 1 && bDegree !== 1
+        ? edge.aKey
+        : bDegree === 1 && aDegree !== 1
+          ? edge.bKey
+          : aDegree === 2 && bDegree !== 2
+            ? edge.bKey
+            : edge.aKey
     const path = traceVisualWallChain(edge, startKey, edgesByNode, visitedEdges)
     if (path.length >= 2) paths.push(path)
   }
@@ -1039,13 +1191,19 @@ function readPathsD(
       for (let pointIndex = 0; pointIndex < path.size(); pointIndex += 1) {
         const point = path.get(pointIndex)
         try {
-          points.push({ x: point.x, y: point.y })
+          points.push({
+            x: point.x / CLIPPER_COORDINATE_SCALE,
+            y: point.y / CLIPPER_COORDINATE_SCALE,
+          })
         } finally {
           point.delete?.()
         }
       }
       if (points.length >= 3) {
-        result.push({ points, area: module.AreaPathD(path) })
+        result.push({
+          points,
+          area: module.AreaPathD(path) / (CLIPPER_COORDINATE_SCALE * CLIPPER_COORDINATE_SCALE),
+        })
       }
     } finally {
       path.delete?.()
@@ -1133,12 +1291,18 @@ export async function buildWallVolumeComponents(
 
 export async function buildWallVolumeComponentsForVariant(
   variant: ClipperVariant | undefined,
-  walls: Wall[],
+  sourceWalls: Wall[],
   doors: Door[],
   windows: Window[],
   masterWallThickness: number,
   pxPerMeter: number | null | undefined
 ): Promise<WallVolumeComponent[]> {
+  const curvedWallIds = new Set(
+    sourceWalls.filter((wall) => isCurvedWall(wall)).map((wall) => wall.id)
+  )
+  const walls = sourceWalls.map((wall) =>
+    wallWithDerivedPath(wall, CURVE_WALL_VOLUME_MAX_SEGMENT_LENGTH)
+  )
   if (walls.length === 0) return []
 
   const module = await loadClipperModule(variant)
@@ -1189,17 +1353,20 @@ export async function buildWallVolumeComponentsForVariant(
     }
 
     const componentWalls = componentIndexes.map((index) => wallInfos[index]!)
+    const renderedWalls = snapLooseWallEndpointsToConnectedJunctions(
+      componentWalls.map((info) => info.wall),
+      masterWallThickness,
+      pxPerMeter
+    )
+    const renderedWallById = new Map(renderedWalls.map((wall) => [wall.id, wall]))
     const componentWallIds = new Set(componentWalls.map((info) => info.wall.id))
+    const componentContainsCurve = componentWalls.some((info) => curvedWallIds.has(info.wall.id))
     const hasComponentOpenings =
       doors.some((door) => componentWallIds.has(door.wallId)) ||
       windows.some((window) => componentWallIds.has(window.wallId))
     const directVariableMiter = hasComponentOpenings
       ? null
-      : buildVariableWidthWallChainPath(
-          componentWalls.map((info) => info.wall),
-          masterWallThickness,
-          pxPerMeter
-        )
+      : buildVariableWidthWallChainPath(renderedWalls, masterWallThickness, pxPerMeter)
     if (directVariableMiter) {
       components.push({
         id: componentWalls.map((info) => info.wall.id).join('|'),
@@ -1217,7 +1384,7 @@ export async function buildWallVolumeComponentsForVariant(
     for (const info of componentWalls) {
       wallsByThickness.set(info.thickness, [
         ...(wallsByThickness.get(info.thickness) ?? []),
-        info.wall,
+        renderedWallById.get(info.wall.id) ?? info.wall,
       ])
     }
 
@@ -1230,7 +1397,7 @@ export async function buildWallVolumeComponentsForVariant(
       const wallPaths = createPathsD(module, sourcePaths)
       const expanded = module.InflatePathsD(
         wallPaths,
-        thickness / 2,
+        (thickness / 2) * CLIPPER_COORDINATE_SCALE,
         module.JoinType.Miter,
         endType,
         2,
@@ -1265,26 +1432,29 @@ export async function buildWallVolumeComponentsForVariant(
     }
 
     expandedWallPolygons.push(
-      ...buildWallJunctionPolygons(
-        componentWalls.map((info) => info.wall),
-        masterWallThickness,
-        pxPerMeter
-      )
+      ...buildWallJunctionPolygons(renderedWalls, masterWallThickness, pxPerMeter)
     )
 
     for (const info of componentWalls) {
       for (const door of doorsByWall.get(info.wall.id) ?? []) {
-        const rect = rectangleFromOpening(info.wall, door.width, door.position, info.thickness)
+        const renderedWall = renderedWallById.get(info.wall.id) ?? info.wall
+        const rect = rectangleFromOpening(renderedWall, door.width, door.position, info.thickness)
         if (rect) openingCutouts.push(rect)
       }
       for (const window of windowsByWall.get(info.wall.id) ?? []) {
-        const rect = rectangleFromOpening(info.wall, window.width, window.position, info.thickness)
+        const renderedWall = renderedWallById.get(info.wall.id) ?? info.wall
+        const rect = rectangleFromOpening(
+          renderedWall,
+          window.width,
+          window.position,
+          info.thickness
+        )
         if (rect) openingCutouts.push(rect)
       }
     }
     openingCutouts.push(
       ...buildOpeningCornerFusions(
-        componentWalls.map((info) => info.wall),
+        renderedWalls,
         doors,
         windows,
         masterWallThickness,
@@ -1292,11 +1462,7 @@ export async function buildWallVolumeComponentsForVariant(
       ).map((fusion) => fusion.cutoutPolygon)
     )
     openingCutouts.push(
-      ...buildWallJunctionTrimPolygons(
-        componentWalls.map((info) => info.wall),
-        masterWallThickness,
-        pxPerMeter
-      )
+      ...buildWallJunctionTrimPolygons(renderedWalls, masterWallThickness, pxPerMeter)
     )
     if (expandedWallPolygons.length === 0) continue
 
@@ -1326,10 +1492,17 @@ export async function buildWallVolumeComponentsForVariant(
       components.push({
         id: componentWalls.map((info) => info.wall.id).join('|'),
         wallIds: componentWalls.map((info) => info.wall.id),
-        fillPaths: merged.map((path) => simplifyWallVolumePath(path.points)),
+        // A curve is already deliberately tessellated. The legacy simplifier's large
+        // plan-space tolerance turns those samples into visible staircase chords and
+        // repeatedly filtering them is needlessly expensive.
+        fillPaths: merged.map((path) =>
+          componentContainsCurve ? path.points : simplifyWallVolumePath(path.points)
+        ),
         outlinePaths: hasComponentOpenings
-          ? selectWallVolumeOutlinePaths(merged, openingCutouts)
-          : merged.map((path) => simplifyWallVolumePath(path.points)),
+          ? selectWallVolumeOutlinePaths(merged, openingCutouts, !componentContainsCurve)
+          : merged.map((path) =>
+              componentContainsCurve ? path.points : simplifyWallVolumePath(path.points)
+            ),
       })
     } finally {
       mergedPaths.delete?.()

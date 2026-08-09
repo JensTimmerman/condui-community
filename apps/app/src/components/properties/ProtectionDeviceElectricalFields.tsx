@@ -4,7 +4,6 @@
  * and supply/circuit {@link TrunkDevice} rows (type === 'protection').
  * Keeps dropdown behaviour and option lists in one place.
  */
-import type { ReactNode } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
 import type { TFunction } from 'i18next'
 import type {
@@ -12,6 +11,7 @@ import type {
   ProtectionType,
   PolesConfig,
   ResidualCurrentType,
+  SurgeProtectionKind,
 } from '@/types/schema'
 import CustomDropdown, { type CustomDropdownOption } from '@/components/common/CustomDropdown'
 import { getSymbolsByCategory } from '@/lib/symbols'
@@ -38,6 +38,10 @@ import {
   PROTECTION_TYPE_TO_SYMBOL_ID,
   protectionTypeToSymbolKey,
 } from '@/lib/protectionKind'
+import {
+  SPD_SPARK_GAP_SYMBOL_PATH,
+  SPD_STANDARD_SYMBOL_PATH,
+} from '@/lib/surgeProtectionSymbol'
 
 export type { ProtectionLabelKey as ProtectionDiagramLabelKey } from '@/lib/protectionLabels'
 export {
@@ -76,6 +80,7 @@ export interface ProtectionDeviceElectricalFieldsProps {
   residualCurrentType?: ResidualCurrentType
   breakingCapacityKa?: number
   breakingCapacityOption?: string
+  surgeProtectionKind?: SurgeProtectionKind
   polesConfig?: PolesConfig
   poles?: number
   typeDropdownOptions: CustomDropdownOption[]
@@ -87,13 +92,12 @@ export interface ProtectionDeviceElectricalFieldsProps {
     residualCurrentType?: ResidualCurrentType | undefined
     breakingCapacityKa?: number
     breakingCapacityOption?: string
+    surgeProtectionKind?: SurgeProtectionKind
     polesConfig?: PolesConfig
     poles?: number
   }) => void
   isProtectionLabelVisible: (key: ProtectionLabelKey) => boolean
   toggleProtectionLabel: (key: ProtectionLabelKey) => void
-  /** Insert panel-only fields (e.g. human label) between type and pole configuration. */
-  renderAfterType?: ReactNode
 }
 
 export function ProtectionDeviceElectricalFields({
@@ -108,6 +112,7 @@ export function ProtectionDeviceElectricalFields({
   residualCurrentType,
   breakingCapacityKa,
   breakingCapacityOption,
+  surgeProtectionKind,
   polesConfig,
   poles,
   typeDropdownOptions,
@@ -115,7 +120,6 @@ export function ProtectionDeviceElectricalFields({
   onPatch,
   isProtectionLabelVisible,
   toggleProtectionLabel,
-  renderAfterType,
 }: ProtectionDeviceElectricalFieldsProps) {
   const isRCD = protectionType === 'RCD'
   const isRCBO = protectionType === 'RCBO'
@@ -167,7 +171,52 @@ export function ProtectionDeviceElectricalFields({
         />
       </div>
 
-      {renderAfterType}
+      {isSPD && (
+        <div>
+          <label className={labelClass}>{t('protections.spdKind', 'SPD type')}</label>
+          <div className="mt-1 grid grid-cols-2 gap-2" role="radiogroup">
+            {([
+              {
+                value: 'standard' as const,
+                label: t('protections.spdStandard', 'Lightning protection'),
+                symbolPath: SPD_STANDARD_SYMBOL_PATH,
+              },
+              {
+                value: 'sparkGap' as const,
+                label: t('protections.spdSparkGap', 'Spark gap'),
+                symbolPath: SPD_SPARK_GAP_SYMBOL_PATH,
+              },
+            ] satisfies Array<{
+              value: SurgeProtectionKind
+              label: string
+              symbolPath: string
+            }>).map((option) => {
+              const selected = (surgeProtectionKind ?? 'standard') === option.value
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  onClick={() => onPatch({ surgeProtectionKind: option.value })}
+                  className={`flex min-w-0 flex-col items-center justify-center rounded-md border-2 px-2 py-2 text-xs font-medium transition-colors ${
+                    selected
+                      ? 'border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-300'
+                      : 'border-gray-300 text-gray-700 hover:border-sky-300 dark:border-gray-600 dark:text-gray-300'
+                  }`}
+                >
+                  <span className="flex h-11 items-center justify-center" aria-hidden="true">
+                    <img src={option.symbolPath} alt="" className="h-10 w-10 dark:invert" />
+                  </span>
+                  <span className="mt-1 text-center text-[10px] leading-tight">
+                    {option.label}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {(isRCD || isRCBO || isMCB || isSPD || isRotatingSwitch) && (
         <div>

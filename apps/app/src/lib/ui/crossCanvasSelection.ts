@@ -1,4 +1,4 @@
-import type { Endpoint, Placement } from '@/types/schema'
+import type { Endpoint, Placement, TrunkDevice } from '@/types/schema'
 import type { Selection } from '@/types/ui'
 
 /**
@@ -11,6 +11,18 @@ export function endpointSelectionMatches(selection: Selection, endpoint: Endpoin
   if (selection.type !== 'placement') return false
   const wanted = new Set(selection.ids)
   return (endpoint.placements ?? []).some((p) => wanted.has(p.id))
+}
+
+/** Whether a trunk device should render as selected for a plan placement selection. */
+export function trunkDeviceSelectionMatches(
+  selection: Selection,
+  device: TrunkDevice,
+): boolean {
+  if (!selection.ids.length) return false
+  if (selection.ids.includes(device.id)) return true
+  if (selection.type !== 'placement') return false
+  const wanted = new Set(selection.ids)
+  return (device.placements ?? []).some((placement) => wanted.has(placement.id))
 }
 
 /** Map sitplan placement selection to endpoint ids for layout bounds / hit testing. */

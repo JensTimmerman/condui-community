@@ -1,5 +1,5 @@
 import { memo, useCallback, useRef, useEffect, useState } from 'react'
-import { Rect, Group, Text, Image, Line } from 'react-konva'
+import { Circle, Rect, Group, Text, Image, Line } from 'react-konva'
 import { useUIStore } from '@/stores/uiStore'
 import { useThemeColors } from '@/lib/theme/hooks'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -15,8 +15,10 @@ import Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import { DOMOTICA_CONTROL_OVERLAY_PATHS, getSwitchSymbolPaths, getSymbolById, getDomainForSymbol } from '@/lib/symbols'
 import { loadProcessedSymbol } from '@/lib/symbolImage'
+import { getSurgeProtectionSymbolPath } from '@/lib/surgeProtectionSymbol'
 import { logger } from '@/lib/logger'
 import { useIsMarqueeSelecting, useIsPreviewSelected } from '@/contexts/SelectionPreviewContext'
+import { getSpdPanelModuleLayout } from './spdPanelModuleLayout'
 
 const DRAG_THRESHOLD = 8
 const RESIZE_HANDLE_W = 10
@@ -117,6 +119,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
   const fontFamily = useCanvasFontFamily()
   const getEndpointById = useProjectStore((s: ProjectState) => s.getEndpointById)
   const getTrunkDeviceById = useProjectStore((s: ProjectState) => s.getTrunkDeviceById)
+  const getProtectionById = useProjectStore((s: ProjectState) => s.getProtectionById)
   const currentProject = useProjectStore((s: ProjectState) => s.currentProject)
   const groupRef = useRef<Konva.Group>(null)
   const isDragging = useRef(false)
@@ -500,6 +503,9 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
   const domoticaMainType = domoticaProps?.mainDeviceType
 
   const trunkInfo = moduleRef.kind === 'trunkDevice' ? getTrunkDeviceById(moduleRef.id) : undefined
+  const protectionDevice = moduleRef.kind === 'protection'
+    ? getProtectionById(moduleRef.id)
+    : undefined
   const isEnergyMeterDevice = !!trunkInfo && trunkInfo.device.symbol === 'energy_meter'
   const energyMeterCircuitLabel =
     isEnergyMeterDevice && trunkInfo?.circuit?.code ? trunkInfo.circuit.code : info.label
@@ -511,10 +517,29 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
   const energyDomains = isEnergyConversionModule && energyDeviceSymbol
     ? getDomainForSymbol(energyDeviceSymbol)
     : null
+  const isRotatingSwitchModule =
+    trunkInfo?.device.symbol === 'rotating_switch' ||
+    protectionDevice?.type === 'ROTATING_SWITCH'
+  const rotatingSwitchSymbolMeta = isRotatingSwitchModule
+    ? getSymbolById('rotating_switch')
+    : null
+  const spdDevice = protectionDevice?.type === 'SPD'
+    ? protectionDevice
+    : trunkInfo?.device.protectionType === 'SPD'
+      ? trunkInfo.device
+      : null
+  const isSpdModule = spdDevice != null
+  const spdRawLabel = spdDevice?.label.trim() ?? ''
+  const hasSpdLabel = spdRawLabel.length > 0 && spdRawLabel.toUpperCase() !== 'SPD'
+  const spdSymbolPath = spdDevice
+    ? getSurgeProtectionSymbolPath(spdDevice.surgeProtectionKind)
+    : null
 
   const [acSymbolImage, setAcSymbolImage] = useState<HTMLImageElement | null>(null)
   const [dcSymbolImage, setDcSymbolImage] = useState<HTMLImageElement | null>(null)
   const [energyDeviceImage, setEnergyDeviceImage] = useState<HTMLImageElement | null>(null)
+  const [rotatingSwitchImage, setRotatingSwitchImage] = useState<HTMLImageElement | null>(null)
+  const [spdSymbolImage, setSpdSymbolImage] = useState<HTMLImageElement | null>(null)
 
   // Load AC/DC domain symbols for energy conversion modules (panel view)
   useEffect(() => {
@@ -542,6 +567,26 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
       .then(setEnergyDeviceImage)
       .catch(() => setEnergyDeviceImage(null))
   }, [energySymbolMeta?.svgPath, isEnergyConversionModule, themeMode])
+
+  useEffect(() => {
+    if (!isRotatingSwitchModule || !rotatingSwitchSymbolMeta?.svgPath) {
+      setRotatingSwitchImage(null)
+      return
+    }
+    loadProcessedSymbol(rotatingSwitchSymbolMeta.svgPath, themeMode === 'dark')
+      .then(setRotatingSwitchImage)
+      .catch(() => setRotatingSwitchImage(null))
+  }, [isRotatingSwitchModule, rotatingSwitchSymbolMeta?.svgPath, themeMode])
+
+  useEffect(() => {
+    if (!spdSymbolPath) {
+      setSpdSymbolImage(null)
+      return
+    }
+    loadProcessedSymbol(spdSymbolPath, themeMode === 'dark')
+      .then(setSpdSymbolImage)
+      .catch(() => setSpdSymbolImage(null))
+  }, [spdSymbolPath, themeMode])
 
   // Load domotica main symbol image for panel modules
   useEffect(() => {
@@ -649,6 +694,54 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
         perfectDrawEnabled={false}
         listening={false}
       />
+      {isSpdModule && (() => {
+        const { symbolSize, symbolX, symbolY, specsY, specsHeight } =
+          getSpdPanelModuleLayout({
+            moduleWidth: effectiveModuleWidth,
+            topBandHeight,
+            centerBandHeight,
+            bottomBandTop,
+            padding: MODULE_BAND_PADDING,
+            hasLabel: hasSpdLabel,
+          })
+
+        return (
+          <Group name="panel-spd-graphic" listening={false}>
+            {spdSymbolImage && (
+              <Image
+                name="panel-spd-symbol"
+                image={spdSymbolImage}
+                x={symbolX}
+                y={symbolY}
+                width={symbolSize}
+                height={symbolSize}
+                offsetX={symbolSize / 2}
+                listening={false}
+              />
+            )}
+            {visibleSpecLines.length > 0 && (
+              <Text
+                ref={specTextRef}
+                x={textSidePadding}
+                y={specsY}
+                width={textWidth}
+                height={specsHeight}
+                text={visibleSpecLines.join('\n')}
+                fontSize={SPEC_FONT_SIZE}
+                lineHeight={SPEC_LINE_HEIGHT / SPEC_FONT_SIZE}
+                fontFamily={fontFamily}
+                fill={secondaryColor}
+                perfectDrawEnabled={false}
+                listening={false}
+                wrap="word"
+                ellipsis={true}
+                align="center"
+                verticalAlign="middle"
+              />
+            )}
+          </Group>
+        )
+      })()}
       {/* Energy conversion domain indicators (AC/DC) for trunk devices */}
       {isEnergyConversionModule && energyDomains && (
         (() => {
@@ -721,6 +814,91 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
           )
         })()
       )}
+      {isRotatingSwitchModule && (
+        (() => {
+          const padding = 3
+          const centerTop = topBandHeight
+          const dialRadius = Math.max(
+            4.5,
+            Math.min(centerBandHeight * 0.29, effectiveModuleWidth * 0.23),
+          )
+          const dialX = effectiveModuleWidth / 2
+          const dialY = centerTop + centerBandHeight / 2
+          const positionFontSize = SPEC_FONT_SIZE
+          const symbolSize = Math.max(
+            6,
+            Math.min(topBandHeight - padding * 2, effectiveModuleWidth * 0.34),
+          )
+          return (
+            <Group name="panel-rotating-switch-graphic" listening={false}>
+              {rotatingSwitchImage && (
+                <Image
+                  name="panel-rotating-switch-symbol"
+                  image={rotatingSwitchImage}
+                  x={(effectiveModuleWidth - symbolSize) / 2}
+                  y={(topBandHeight - symbolSize) / 2}
+                  width={symbolSize}
+                  height={symbolSize}
+                  listening={false}
+                />
+              )}
+              <Text
+                x={dialX - dialRadius * 1.75 - positionFontSize * 0.65}
+                y={dialY - dialRadius * 1.15 + positionFontSize}
+                width={positionFontSize * 1.3}
+                text="0"
+                fontSize={positionFontSize}
+                fontFamily={fontFamily}
+                fill={secondaryColor}
+                align="center"
+                listening={false}
+              />
+              <Text
+                x={dialX - positionFontSize * 0.65}
+                y={dialY - dialRadius * 1.45 - positionFontSize * 0.35}
+                width={positionFontSize * 1.3}
+                text="1"
+                fontSize={positionFontSize}
+                fontFamily={fontFamily}
+                fill={secondaryColor}
+                align="center"
+                listening={false}
+              />
+              <Circle
+                x={dialX}
+                y={dialY}
+                radius={dialRadius}
+                stroke={secondaryColor}
+                strokeWidth={1.2}
+                fill={bg}
+                perfectDrawEnabled={false}
+                listening={false}
+              />
+              <Line
+                points={[
+                  dialX,
+                  dialY + dialRadius * 0.72,
+                  dialX,
+                  dialY - dialRadius * 0.72,
+                ]}
+                stroke={secondaryColor}
+                strokeWidth={Math.max(1.4, dialRadius * 0.24)}
+                lineCap="round"
+                perfectDrawEnabled={false}
+                listening={false}
+              />
+              <Circle
+                x={dialX}
+                y={dialY}
+                radius={Math.max(1.1, dialRadius * 0.16)}
+                fill={secondaryColor}
+                perfectDrawEnabled={false}
+                listening={false}
+              />
+            </Group>
+          )
+        })()
+      )}
       {/* Label - prominent, bold */}
       <Text
         ref={labelTextRef}
@@ -728,7 +906,13 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
         y={topTextY}
         width={textWidth}
         height={topTextHeight}
-        text={energyMeterCircuitLabel}
+        text={
+          isRotatingSwitchModule
+            ? ''
+            : isSpdModule
+              ? (hasSpdLabel ? spdRawLabel : '')
+              : energyMeterCircuitLabel
+        }
         fontSize={LABEL_FONT_SIZE}
         fontStyle={isEnergyMeterDevice ? 'italic bold' : 'bold'}
         fontFamily={fontFamily}
@@ -741,7 +925,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
         verticalAlign="middle"
       />
       {/* Spec block - vertically centered as one multiline text box. */}
-      {visibleSpecLines.length > 0 && (
+      {visibleSpecLines.length > 0 && !isSpdModule && (
         <Text
           ref={specTextRef}
           x={textSidePadding}

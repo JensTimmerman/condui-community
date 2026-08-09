@@ -37,6 +37,15 @@ function isPointArray(value: unknown): value is Array<{ x: number; y: number }> 
   return Array.isArray(value) && value.every(isPoint)
 }
 
+function wallCurveFromProperties(value: unknown): Wall['curve'] | undefined {
+  if (!isRecord(value)) return undefined
+  if (value.kind !== 'rationalQuadratic') return undefined
+  if (typeof value.weight !== 'number' || !Number.isFinite(value.weight) || value.weight <= 0) {
+    return undefined
+  }
+  return { kind: 'rationalQuadratic', weight: value.weight }
+}
+
 function isWall(value: unknown): value is Wall {
   return isRecord(value) && typeof value.id === 'string' && isPointArray(value.points)
 }
@@ -406,6 +415,7 @@ function elementsFromFloor(floor: Floor): ElementModelV2[] {
       geometry: wallGeometry(wall),
       properties: {
         v1: wall,
+        curve: wall.curve,
         thickness: wall.thickness,
         masterWallThickness: floorPlan.masterWallThickness,
       },
@@ -477,6 +487,7 @@ function nativeFloorPlanFromBuildingElements(
           id: element.sourceRefs?.[0]?.id ?? element.id.replace(/^elem_wall_/, ''),
           floorId,
           points: element.geometry.points,
+          curve: wallCurveFromProperties(element.properties?.curve),
         })
       }
       const properties = element.properties

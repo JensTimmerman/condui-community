@@ -85,6 +85,9 @@ export const WIRE_INSETS: Record<string, WireInsets> = {
 
   energy_meter: { top: 8, bottom: 8, left: 6, right: 6 },
 
+  // An SPD is tapped off the trunk; the trunk itself remains uninterrupted.
+  spd: _,
+
   // Stop a feeder from below at the enlarged one-wire panel body's lower edge.
   panel_distribution: { top: 0, bottom: 6.5, left: 0, right: 0 },
 
@@ -153,7 +156,7 @@ const CATEGORY: Record<string, string> = {
 export function getWireInsets(
   nodeType: string,
   symbolId?: string,
-  lightPointProps?: LightPointDeviceProps,
+  lightPointProps?: LightPointDeviceProps
 ): WireInsets {
   if (symbolId === 'light_point' && showLightPointDecentralOverlay(lightPointProps)) {
     return LIGHT_POINT_DECENTRAL_INSETS
@@ -178,7 +181,7 @@ export function applyWireInset(
   otherEnd: { x: number; y: number },
   nodeType: string,
   symbolId?: string,
-  lightPointProps?: LightPointDeviceProps,
+  lightPointProps?: LightPointDeviceProps
 ): { x: number; y: number } {
   // Domotica uses custom wire geometry (boxLeft/boxRight/top/bottom) and should not be auto-inset.
   if (symbolId === 'domotica') {

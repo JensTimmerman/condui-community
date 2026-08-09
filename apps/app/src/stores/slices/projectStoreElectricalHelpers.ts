@@ -13,9 +13,11 @@ import { dedupeAllPanelsProtectionsInProject } from '@/lib/eendraad/mainBusOrder
 import { ensureInstallationFeedTopology } from '@/lib/feedTopology'
 import { healSupplyTrunkMisplacedOnMainGrid } from '@/lib/panel/healSupplyTrunkGrid'
 import { healEarthingSitplanPlacements } from '@/lib/plan/earthingSitplanPlacement'
+import { healEnergyConversionSitplanPlacements } from '@/lib/plan/energyConversionSitplanPlacement'
 import { healJunctionBoxSitplanPlacements } from '@/lib/plan/junctionBoxSitplanPlacement'
 import { healProjectFloorsElectricalLayers } from '@/lib/plan/floorLayers'
 import { healPlanWiring } from '@/lib/plan/planWiring'
+import { syncPanelAndSituationPlanDeviceVisibility } from '@/lib/plan/panelPlanPlacementVisibility'
 import {
   getMutableCompatibilityFloorsForProject,
   healSharedPlanScale,
@@ -92,7 +94,14 @@ export function hydrateProjectForEditor(project: ProjectInput): {
   normalizeFloorPlanAssets(runtimeProject)
   healProjectFloorsElectricalLayers(runtimeProject)
   const healedEarthingSitplan = healEarthingSitplanPlacements(runtimeProject)
+  // Repair impossible legacy state before the conversion-placement healer makes
+  // unclaimed conversion devices visible on the situation plan.
+  const synchronizedPanelPlanVisibilityBeforePlacementHealing =
+    syncPanelAndSituationPlanDeviceVisibility(runtimeProject)
+  const healedEnergyConversionSitplan = healEnergyConversionSitplanPlacements(runtimeProject)
   const healedJunctionBoxSitplan = healJunctionBoxSitplanPlacements(runtimeProject)
+  const synchronizedPanelPlanVisibility =
+    syncPanelAndSituationPlanDeviceVisibility(runtimeProject)
   const healedPlanWiring = healPlanWiring(runtimeProject)
   syncValidationFromCompatibility(runtimeProject)
   stripLazyElementGraphForRuntime(runtimeProject)
@@ -115,7 +124,10 @@ export function hydrateProjectForEditor(project: ProjectInput): {
       removedDuplicatePanelGridRefs ||
       healedSharedPlanScale ||
       healedEarthingSitplan ||
+      synchronizedPanelPlanVisibilityBeforePlacementHealing ||
+      healedEnergyConversionSitplan ||
       healedJunctionBoxSitplan ||
+      synchronizedPanelPlanVisibility ||
       healedPlanWiring,
   }
 }

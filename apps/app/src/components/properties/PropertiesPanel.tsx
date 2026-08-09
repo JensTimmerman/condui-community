@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
 import { useUIStore, type UIState } from '@/stores/uiStore'
 import { useProjectStore, type ProjectState } from '@/stores/projectStore'
-import PlacementControls from './PlacementControls'
 import { WallProperties } from './WallProperties'
 import { OpeningProperties } from './OpeningProperties'
 import { StairProperties } from './StairProperties'
@@ -73,6 +72,7 @@ export default function PropertiesPanel({
     endpoint,
     frame,
     placementEndpoint,
+    placementTrunkDevice,
     titleEndpoint,
     titleTrunkDevice,
     sameJunctionPanelId,
@@ -91,6 +91,7 @@ export default function PropertiesPanel({
     updatePanelGrid,
     getEndpointById,
     getPlacementById,
+    getTrunkDeviceById,
     getEendraadNoteById,
     getSitplanNoteById,
   } = useProjectStore(
@@ -98,6 +99,7 @@ export default function PropertiesPanel({
       const placement =
         selection.type === 'placement' ? state.getPlacementById(selectedId) : undefined
       const placementEndpointId = placement?.endpointId
+      const placementTrunkDeviceId = placement?.trunkDeviceId
       const trunkDeviceRows =
         selection.type === 'trunkDevice'
           ? selection.ids.map((id) => state.getTrunkDeviceById(id)).filter(Boolean)
@@ -116,6 +118,9 @@ export default function PropertiesPanel({
         frame: selection.type === 'frame' ? state.getFrameById(selectedId) : undefined,
         placementEndpoint: placementEndpointId
           ? state.getEndpointById(placementEndpointId)
+          : undefined,
+        placementTrunkDevice: placementTrunkDeviceId
+          ? state.getTrunkDeviceById(placementTrunkDeviceId)?.device
           : undefined,
         titleEndpoint:
           selection.type === 'endpoint' ? state.getEndpointById(selectedId) : undefined,
@@ -139,6 +144,7 @@ export default function PropertiesPanel({
         updatePanelGrid: state.updatePanelGrid,
         getEndpointById: state.getEndpointById,
         getPlacementById: state.getPlacementById,
+        getTrunkDeviceById: state.getTrunkDeviceById,
         getEendraadNoteById: state.getEendraadNoteById,
         getSitplanNoteById: state.getSitplanNoteById,
       }
@@ -169,6 +175,7 @@ export default function PropertiesPanel({
             titleLookups: {
               endpoint: titleEndpoint,
               placementEndpoint,
+              placementTrunkDevice,
               graphicElement: titleGraphicElement,
               trunkDevice: titleTrunkDevice,
               sameJunctionPanelId,
@@ -180,6 +187,7 @@ export default function PropertiesPanel({
       stairOnlyPointSelection,
       titleEndpoint,
       placementEndpoint,
+      placementTrunkDevice,
       titleGraphicElement,
       titleTrunkDevice,
       sameJunctionPanelId,
@@ -257,7 +265,11 @@ export default function PropertiesPanel({
         )}
         {selection.type === 'placement' &&
           (() => {
-            const target = getSelectedPlacementTarget(id, { getEndpointById, getPlacementById })
+            const target = getSelectedPlacementTarget(id, {
+              getEndpointById,
+              getPlacementById,
+              getTrunkDeviceById,
+            })
             if (target.type === 'ground') return <GroundProperties key="ground-sitplan" />
             if (target.type === 'endpoint') {
               return (
@@ -270,7 +282,10 @@ export default function PropertiesPanel({
                 />
               )
             }
-            return <PlacementControls key={target.placementId} placementId={target.placementId} />
+            if (target.type === 'trunkDevice') {
+              return <TrunkDeviceProperties key={target.deviceId} deviceId={target.deviceId} />
+            }
+            return null
           })()}
         {selection.type === 'wire' && (
           <WirePropertiesWithLayout key={id} wireSegmentId={id} onUpdate={updateCircuit} />

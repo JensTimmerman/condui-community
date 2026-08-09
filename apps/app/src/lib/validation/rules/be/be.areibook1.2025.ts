@@ -41,7 +41,7 @@ export const beAreiBook1_2025: RulePack = {
     {
       id: 'be.areibook1.2025.hidden-situation-plan-symbols',
       title: 'Hidden situation-plan symbols',
-      severity: 'error',
+      severity: 'info',
       appliesTo: ['board'],
       checks: [{ name: 'hiddenSituationPlanSymbolsAreVisible' }],
       message: 'validation.rules.be.areibook1.2025.hidden-situation-plan-symbols.message',

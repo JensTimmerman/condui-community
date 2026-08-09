@@ -1,5 +1,6 @@
 import type { Wall } from '@/types/schema'
 import { resolveWallThicknessPx } from '@/lib/plan/wallVolumeGeometry'
+import { getWallPathPoints } from '@/lib/plan/wallCurve'
 
 /** Plan-space axis-aligned bounds for a thick wall segment (canvas units). */
 export type WallObstacleRect = { left: number; right: number; top: number; bottom: number }
@@ -16,7 +17,7 @@ export function buildWallObstacleRects(
 ): WallObstacleRect[] {
   const rects: WallObstacleRect[] = []
   for (const wall of walls) {
-    const pts = wall.points
+    const pts = getWallPathPoints(wall)
     const halfThickness = resolveWallThicknessPx(wall, masterWallThickness, pxPerMeter) / 2 + extraPadPx
     for (let i = 0; i < pts.length - 1; i++) {
       const a = pts[i]!

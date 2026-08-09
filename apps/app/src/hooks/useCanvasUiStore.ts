@@ -1,9 +1,12 @@
 import { startTransition, useCallback, useEffect, useRef } from 'react'
 import { useStoreWithEqualityFn } from 'zustand/traditional'
 import { useUIStore } from '@/stores/uiStore'
-import type { Endpoint } from '@/types/schema'
+import type { Endpoint, TrunkDevice } from '@/types/schema'
 import type { Selection } from '@/types/ui'
-import { endpointSelectionMatches } from '@/lib/ui/crossCanvasSelection'
+import {
+  endpointSelectionMatches,
+  trunkDeviceSelectionMatches,
+} from '@/lib/ui/crossCanvasSelection'
 
 /** Raw store setter (for effects); use in plan click handlers for immediate symbol feedback. */
 export const useSetSelectionStore = () => useUIStore((s) => s.setSelection)
@@ -110,6 +113,14 @@ export function useEndpointSelected(endpoint: Endpoint): boolean {
   return useStoreWithEqualityFn(
     useUIStore,
     (s) => endpointSelectionMatches(s.selection, endpoint),
+    selectionBoolEqual,
+  )
+}
+
+export function useTrunkDeviceSelected(device: TrunkDevice): boolean {
+  return useStoreWithEqualityFn(
+    useUIStore,
+    (s) => trunkDeviceSelectionMatches(s.selection, device),
     selectionBoolEqual,
   )
 }

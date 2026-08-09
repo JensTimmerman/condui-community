@@ -57,7 +57,7 @@ export function PanelSymbol({
   onDragEnd,
   getCanvasPositionFromEvent,
 }: PanelSymbolProps) {
-  const { theme } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
   const fontFamily = useCanvasFontFamily()
   const setSelection = useSetSelection()
   const setHover = useSetHover()

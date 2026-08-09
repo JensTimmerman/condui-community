@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { CanvasType, Point } from '@/types/ui'
-import { ZOOM_100, ZOOM_MIN, ZOOM_MAX, zoomToDisplayPercent } from '@/constants/canvasConstants'
+import { ZOOM_MIN, ZOOM_MAX, zoomToDisplayPercent } from '@/constants/canvasConstants'
 import { preventCanvasToolbarMouseFocus } from '@/lib/ui/preventCanvasToolbarMouseFocus'
 import { useCanvasOverlayScale } from '@/contexts/CanvasOverlayScaleContext'
 import { useUIStore } from '@/stores/uiStore'
@@ -25,7 +25,7 @@ function ToolbarIcon({ src, className = 'h-6 w-6' }: { src: string; className?: 
   return (
     <span
       aria-hidden="true"
-      className={`inline-block bg-current ${className}`}
+      className={`block bg-current ${className}`}
       style={{
         WebkitMask: `url("${src}") center / contain no-repeat`,
         mask: `url("${src}") center / contain no-repeat`,
@@ -67,10 +67,6 @@ function ViewNavigationToolbar({
     const newZoom = Math.max(ZOOM_MIN, zoom / 1.25)
     onZoomChange(newZoom)
   }, [zoom, onZoomChange])
-
-  const handleResetZoom = useCallback(() => {
-    onZoomChange(ZOOM_100)
-  }, [onZoomChange])
 
   const handleToggleMaximize = useCallback(() => {
     if (onToggleMaximize) {
@@ -127,28 +123,13 @@ function ViewNavigationToolbar({
     )
   }
 
-  const findFocusIcon = (
-    <ToolbarIcon src={ICON_FIND_FOCUS} className="h-5 w-5" />
-  )
-
-  const resetZoomButton = (
-    <button
-      type="button"
-      onPointerDown={preventCanvasToolbarMouseFocus}
-      onClick={handleResetZoom}
-      className="px-2 py-1 text-xs font-medium rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-gray-700 dark:text-gray-300"
-      title={`${t('canvas.resetZoom')} (0)`}
-      aria-label={t('canvas.resetZoom')}
-    >
-      100%
-    </button>
-  )
+  const findFocusIcon = <ToolbarIcon src={ICON_FIND_FOCUS} className="h-5 w-5" />
 
   return (
     <div
       data-canvas-overlay-anchor="right"
       data-canvas-overlay-position={position}
-      className={`absolute ${positionClasses[position]} z-10 flex items-center gap-1 bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm rounded-md shadow-lg px-2 py-1.5 border border-gray-200 dark:border-gray-700`}
+      className={`absolute ${positionClasses[position]} z-10 flex items-center gap-1 bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm rounded-md shadow-lg px-2 py-1 border border-gray-200 dark:border-gray-700`}
       style={{ transform: `scale(${overlayScale})`, transformOrigin }}
     >
       <button
@@ -156,11 +137,11 @@ function ViewNavigationToolbar({
         onPointerDown={preventCanvasToolbarMouseFocus}
         onClick={handleZoomOut}
         disabled={zoom <= ZOOM_MIN}
-        className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-gray-700 dark:text-gray-300"
+        className="flex h-8 w-8 items-center justify-center rounded hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-gray-700 dark:text-gray-300"
         title={`${t('canvas.zoomOut')} (-)`}
         aria-label={t('canvas.zoomOut')}
       >
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="block h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -170,7 +151,7 @@ function ViewNavigationToolbar({
         </svg>
       </button>
 
-      <div className="px-2 py-1 min-w-[60px] text-center text-sm font-medium text-gray-700 dark:text-gray-300">
+      <div className="flex h-8 min-w-[60px] items-center justify-center px-2 text-center text-sm font-medium text-gray-700 dark:text-gray-300">
         {zoomPercentage}%
       </div>
 
@@ -179,11 +160,11 @@ function ViewNavigationToolbar({
         onPointerDown={preventCanvasToolbarMouseFocus}
         onClick={handleZoomIn}
         disabled={zoom >= ZOOM_MAX}
-        className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-gray-700 dark:text-gray-300"
+        className="flex h-8 w-8 items-center justify-center rounded hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-gray-700 dark:text-gray-300"
         title={`${t('canvas.zoomIn')} (+)`}
         aria-label={t('canvas.zoomIn')}
       >
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="block h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -193,20 +174,34 @@ function ViewNavigationToolbar({
         </svg>
       </button>
 
-      <div className="w-px h-6 bg-gray-300 dark:bg-gray-600 mx-1" />
+      <div className="mx-1 h-5 w-px bg-gray-300 dark:bg-gray-600" />
 
       <button
         type="button"
         onPointerDown={preventCanvasToolbarMouseFocus}
         onClick={onFitToView}
-        className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-gray-700 dark:text-gray-300"
+        className="flex h-8 w-8 items-center justify-center rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-gray-700 dark:text-gray-300"
         title={`${t('canvas.fitToView')} (F)`}
         aria-label={t('canvas.fitToView')}
       >
         {findFocusIcon}
       </button>
 
-      {resetZoomButton}
+      {canToggleMaximize && (
+        <button
+          type="button"
+          onPointerDown={preventCanvasToolbarMouseFocus}
+          onClick={handleToggleMaximize}
+          className="flex h-8 w-8 items-center justify-center rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-gray-700 dark:text-gray-300"
+          title={isMaximized ? restoreLabel : maximizeLabel}
+          aria-label={isMaximized ? restoreLabel : maximizeLabel}
+        >
+          <ToolbarIcon
+            src={isMaximized ? ICON_RESTORE_LAYOUT : ICON_MAXIMIZE_CANVAS}
+            className="h-5 w-5"
+          />
+        </button>
+      )}
     </div>
   )
 }

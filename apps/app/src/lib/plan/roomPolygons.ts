@@ -1,4 +1,5 @@
 import type { Point2, Wall } from '@/types/schema'
+import { getWallPathPoints } from '@/lib/plan/wallCurve'
 
 // Merge only nearly identical endpoints (same vertex when walls meet)
 const KEY_SCALE = 100
@@ -14,7 +15,7 @@ function key(p: Point2): string {
 export function getRoomPolygonsFromWalls(walls: Wall[]): Point2[][] {
   const segments: { a: Point2; b: Point2 }[] = []
   for (const wall of walls) {
-    const pts = wall.points
+    const pts = getWallPathPoints(wall)
     for (let i = 0; i < pts.length - 1; i++) {
       const a = pts[i]!
       const b = pts[i + 1]!

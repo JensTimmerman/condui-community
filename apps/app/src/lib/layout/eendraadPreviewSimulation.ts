@@ -967,7 +967,7 @@ function simulateTrunkDeviceOnCircuit(
     id: deviceId,
     type,
     symbol: symbol.id as TrunkDevice['symbol'],
-    label: symbol.name ?? '',
+    label: type === 'conversion' ? '' : symbol.name ?? '',
     trunkPosition,
   }
 

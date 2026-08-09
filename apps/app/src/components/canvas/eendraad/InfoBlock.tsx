@@ -82,7 +82,8 @@ export function InfoBlock({
   interactive = true,
 }: InfoBlockProps) {
   const { t } = useTranslation()
-  const { theme, language } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
+  const language = useSettingsStore((state) => state.language)
   const fontFamily = useCanvasFontFamily()
   const colors = useThemeColors()
   const setSelection = useSetSelection()

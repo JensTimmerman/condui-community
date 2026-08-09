@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import { Group, Rect, Line, Circle, Image } from 'react-konva'
-import { useSettingsStore } from '@/stores/settingsStore'
 import { getSymbolById } from '@/lib/symbols'
 import type { SymbolMetadata } from '@/lib/symbols'
 import type { Point } from '@/types/ui'
@@ -26,7 +25,6 @@ export function DragPreview({
   wireSegments,
   symbolData,
 }: DragPreviewProps) {
-  useSettingsStore()
   const previewColor = '#0284c7' // Blue for preview
   const previewOpacity = 0.6
   const [symbolImage, setSymbolImage] = useState<HTMLImageElement | null>(null)

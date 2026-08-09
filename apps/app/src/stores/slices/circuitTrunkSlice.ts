@@ -30,6 +30,7 @@ import { clamp } from '@/lib/geometry'
 import { mutateTrunkDeviceRelocation } from '@/lib/layout/eendraadPreviewSimulation'
 import { findPanelById } from '@/lib/panel/panelTree'
 import { healPlanWiring } from '@/lib/plan/planWiring'
+import { syncPanelAndSituationPlanDeviceVisibility } from '@/lib/plan/panelPlanPlacementVisibility'
 import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
@@ -311,6 +312,7 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
               } else {
                 result.circuit.trunkDevices.push(device)
               }
+              syncPanelAndSituationPlanDeviceVisibility(state.currentProject)
               state.isDirty = true
               return
             }
@@ -720,6 +722,7 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
           devices.forEach((item, index) => {
             item.trunkPosition = index
           })
+          syncPanelAndSituationPlanDeviceVisibility(state.currentProject)
           state.isDirty = true
         }
       }),

@@ -1,3 +1,4 @@
+import { startTransition } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18n from '@/i18n'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -22,7 +23,9 @@ export function EditorPreferencesToolbar() {
   const changeLanguage = (value: string) => {
     const nextLanguage = normalizeSupportedLanguage(value) ?? 'nl-BE'
     setLanguage(nextLanguage)
-    void i18n.changeLanguage(nextLanguage)
+    startTransition(() => {
+      void i18n.changeLanguage(nextLanguage)
+    })
 
     if (typeof window === 'undefined') return
     const pathWithoutLanguage = stripLanguagePrefixFromPath(window.location.pathname)

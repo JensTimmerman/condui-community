@@ -27,7 +27,7 @@ export function usePlanImage(
   activeFloor: Floor | null,
   canvasRef: React.RefObject<{ fitToView: () => void } | null>
 ) {
-  const { theme } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
   const activeFloorIdRef = useRef<string | null>(null)
   activeFloorIdRef.current = activeFloor?.id ?? null
 

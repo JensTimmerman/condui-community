@@ -53,7 +53,7 @@ interface PanelFrameProps {
 
 export function PanelFrame({ panelLayout, children }: PanelFrameProps) {
   const { t } = useTranslation()
-  const { theme } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
   const fontFamily = useCanvasFontFamily()
   const setSelection = useSetSelection()
   const setHover = useSetHover()

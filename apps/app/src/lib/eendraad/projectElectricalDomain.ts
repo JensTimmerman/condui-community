@@ -952,9 +952,14 @@ const OPTIONAL_PANEL_ENDPOINT_SYMBOLS = new Set([
   'dc_dc_converter',
 ])
 
+/** Symbols whose endpoint representation may be shown in the distribution-panel grid. */
+export function symbolCanAppearInPanelGrid(symbol: string | undefined): boolean {
+  return symbol != null && OPTIONAL_PANEL_ENDPOINT_SYMBOLS.has(symbol)
+}
+
 /** Endpoints that users may explicitly include in the panel view. */
 export function endpointCanAppearInPanelGrid(endpoint: Endpoint): boolean {
-  return endpoint.symbol != null && OPTIONAL_PANEL_ENDPOINT_SYMBOLS.has(endpoint.symbol)
+  return symbolCanAppearInPanelGrid(endpoint.symbol)
 }
 
 /** One-wire trunk devices that represent DIN-panel equipment rather than sources or storage. */

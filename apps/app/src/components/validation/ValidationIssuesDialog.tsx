@@ -33,11 +33,10 @@ import {
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { findPanelById } from '@/lib/panel/panelTree'
-import { useDialogStore } from '@/stores/dialogStore'
-import HiddenItemsDialog, { type HiddenItem } from '@/components/common/HiddenItemsDialog'
-import { getSymbolById } from '@/lib/symbols'
-import { getHiddenSituationPlanPlacements } from '@/lib/plan/hiddenSituationPlanPlacements'
-import { getCompatibilityFloorsFromProject } from '@/lib/projectV2/buildingFloors'
+import {
+  HIDDEN_SITUATION_PLAN_RULE_ID,
+  openHiddenSituationPlanValidationDialog,
+} from './hiddenSituationPlanValidationDialog'
 
 interface ValidationIssuesDialogProps {
   showHeader?: boolean
@@ -353,65 +352,11 @@ function ValidationIssuesDialog({
   }
 
   const handleIssueClick = (issue: Issue) => {
-    if (issue.ruleId === 'be.areibook1.2025.hidden-situation-plan-symbols' && currentProject) {
-      const hiddenPlacements = getHiddenSituationPlanPlacements(currentProject)
-      if (hiddenPlacements.length === 0) {
+    if (issue.ruleId === HIDDEN_SITUATION_PLAN_RULE_ID && currentProject) {
+      if (!openHiddenSituationPlanValidationDialog(currentProject, t)) {
         onClose()
         return
       }
-
-      const ui = useUIStore.getState()
-      if (!ui.viewportLayout.panels.some((panel) => panel.canvas === 'plan')) {
-        ui.setPanelCanvas(0, 'plan')
-      }
-      ui.setActiveFloor(hiddenPlacements[0]!.floorId)
-
-      const dialogItems: HiddenItem[] = hiddenPlacements.map((hidden) => {
-        const symbolMeta = hidden.symbol ? getSymbolById(hidden.symbol) : undefined
-        const symbolLabel = symbolMeta?.id
-          ? t(`symbols.${symbolMeta.id}`, symbolMeta.name)
-          : undefined
-        return {
-          id: hidden.placementId,
-          label:
-            hidden.endpointLabel ||
-            hidden.symbol ||
-            t('hiddenItemsDialog.unnamedItem', 'Unnamed item'),
-          subtitle: [hidden.floorName, symbolLabel].filter(Boolean).join(' · '),
-          icon: symbolMeta ? (
-            <img src={symbolMeta.svgPath} alt="" className="w-7 h-7 object-contain dark:invert" />
-          ) : undefined,
-        }
-      })
-
-      const { openDialog, closeDialog } = useDialogStore.getState()
-      onClose()
-      openDialog({
-        type: 'custom',
-        title: t('contextMenu.showHidden', 'Show hidden…'),
-        content: (
-          <HiddenItemsDialog
-            items={dialogItems}
-            onConfirm={(selectedIds) => {
-              const selected = new Set(selectedIds)
-              const latestProject = useProjectStore.getState().currentProject
-              if (latestProject) {
-                for (const floor of getCompatibilityFloorsFromProject(latestProject)) {
-                  const existing = floor.hiddenSitplanPlacementIds ?? []
-                  const remaining = existing.filter((id) => !selected.has(id))
-                  if (remaining.length !== existing.length) {
-                    useProjectStore.getState().updateFloor(floor.id, {
-                      hiddenSitplanPlacementIds: remaining.length > 0 ? remaining : undefined,
-                    })
-                  }
-                }
-              }
-              closeDialog()
-            }}
-            onCancel={closeDialog}
-          />
-        ),
-      })
       trackGoogleAnalyticsEvent('validation_issue_focus', {
         rule_id: issue.ruleId,
         severity: issue.severity,
@@ -1043,6 +988,18 @@ function ValidationIssuesDialog({
                           <p className="mb-1.5 text-sm text-gray-600 dark:text-gray-400">
                             {issue.message}
                           </p>
+                          {issue.ruleId === HIDDEN_SITUATION_PLAN_RULE_ID && (
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                handleIssueClick(issue)
+                              }}
+                              className="mb-1.5 inline-flex rounded-md border border-sky-300 px-2.5 py-1 text-xs font-semibold text-sky-700 transition-colors hover:bg-sky-50 dark:border-sky-700 dark:text-sky-300 dark:hover:bg-sky-950/40"
+                            >
+                              {t('contextMenu.showHidden', 'Show hidden…')}
+                            </button>
+                          )}
                           {issue.details && (
                             <div className="mb-1.5">
                               <button

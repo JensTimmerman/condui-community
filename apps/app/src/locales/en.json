@@ -527,6 +527,9 @@
     "polesConfig": "Pole configuration",
     "residualCurrentType": "Residual current type",
     "breakingCapacity": "Breaking capacity",
+    "spdKind": "SPD type",
+    "spdStandard": "Lightning protection",
+    "spdSparkGap": "Spark gap",
     "poles_1P": "1P",
     "poles_1P_N": "1P+N",
     "poles_2P": "2P (L+N)",
@@ -1200,10 +1203,10 @@
           "remediation": "Ensure all placements are associated with endpoints that have valid circuit identifiers (e.g., \"A1\", \"B3\")."
         },
         "hidden-situation-plan-symbols": {
-          "shortTitle": "Hidden situation-plan symbols",
-          "message": "One-wire symbols are hidden on the situation plan",
-          "details": "Symbols used on the one-wire diagram must remain visible on the situation plan.",
-          "remediation": "Open the situation plan and show the hidden symbols again."
+          "shortTitle": "Hidden situation-plan devices",
+          "message": "Devices are hidden on the situation plan",
+          "details": "Hidden devices are omitted from the situation plan.",
+          "remediation": "Open Show hidden and choose which devices to show."
         },
         "sources-consistency": {
           "shortTitle": "Main supply origin missing",
@@ -1454,9 +1457,9 @@
         "details": "The sitplan placement for \"{{endpointLabel}}\" must be linked to an endpoint that has a valid circuit letter and point number (e.g. \"A1\"). Check that this symbol is on a circuit on the one-line diagram."
       },
       "hiddenSituationPlanSymbolsAreVisible": {
-        "message_one": "{{count}} symbol from the one-wire diagram is hidden on the situation plan",
-        "message_other": "{{count}} symbols from the one-wire diagram are hidden on the situation plan",
-        "details": "Hidden one-wire symbols are omitted from the situation plan. Show them again before using the drawings."
+        "message_one": "{{count}} device is hidden on the situation plan",
+        "message_other": "{{count}} devices are hidden on the situation plan",
+        "details": "Hidden devices:\n{{devices}}"
       },
       "cableHasCrossSection": {
         "message": "Circuit has cable segments without cross-section",
@@ -1695,6 +1698,7 @@
     "description": "Select one or more items to show again on the plan.",
     "confirm": "Show",
     "selectAll": "Select all",
+    "moveToCurrentView": "Move to current view",
     "none": "There are no hidden items in this view.",
     "unnamedItem": "Unnamed item",
     "protectionFallback": "Protection device",

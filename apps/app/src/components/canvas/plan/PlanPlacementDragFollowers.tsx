@@ -51,7 +51,7 @@ export function PlanPlacementSocketWaterproofH({
   baseSymbolSizePx: number
   fontFamily: string
 }) {
-  const { theme } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
   const dragPos = usePlanDragPosition(placement.id)
   const placementPos = dragPos ?? placement.pos
   if (!endpoint.socketProps?.waterproof || !placementPos) return null
@@ -92,7 +92,7 @@ export function PlanPlacementLightWaterproofH({
   baseSymbolSizePx: number
   fontFamily: string
 }) {
-  const { theme } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
   const dragPos = usePlanDragPosition(placement.id)
   const placementPos = dragPos ?? placement.pos
   if (

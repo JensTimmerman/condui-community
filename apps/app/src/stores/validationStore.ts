@@ -7,6 +7,7 @@ import { loadRulePack } from '@/lib/validation/core/rulepack-loader'
 import { getValidationSignature } from '@/lib/validation/validationTrigger'
 import { trackGoogleAnalyticsEvent } from '@/lib/analytics/googleAnalytics'
 import { logger } from '@/lib/logger'
+import { useProjectStore } from '@/stores/projectStore'
 
 type ValidatableProject = Parameters<typeof validateProject>[0] & {
   project: {
@@ -54,7 +55,7 @@ export interface ValidationState {
    * pending run is in flight, because they see `pendingSignature` matching
    * the current signature.
    */
-  markProjectOpened: (project: ValidatableProject) => void
+  markProjectOpened: () => void
   revalidate: () => void
   getStatus: () => ValidationStatus
   getErrorCount: () => number
@@ -193,7 +194,12 @@ export const useValidationStore = create<ValidationState>()(
       }
     },
 
-    markProjectOpened: (project: ValidatableProject) => {
+    markProjectOpened: () => {
+      // Project hydration can repair imported data (including situation-plan
+      // visibility). Always validate that canonical editor snapshot; accepting
+      // the caller's pre-hydration object here previously produced stale issues.
+      const project = useProjectStore.getState().currentProject as ValidatableProject | null
+      if (!project) return
       const sig = getValidationSignature(project)
 
       // If we already validated this exact project+signature, nothing to do.

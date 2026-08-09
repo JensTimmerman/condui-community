@@ -146,6 +146,7 @@ export function protectionCreationTemplateFromDevice(
     residualCurrentType: protection.residualCurrentType,
     breakingCapacityKa: protection.breakingCapacityKa,
     breakingCapacityOption: protection.breakingCapacityOption,
+    surgeProtectionKind: protection.surgeProtectionKind,
     polesConfig,
     poles: polesConfig ? polesFromConfig(polesConfig) : protection.poles,
   }
@@ -208,6 +209,7 @@ export function getDefaultProtectionProps(
         polesConfig: effectivePolesConfig,
         poles,
         breakingCapacityKa: 20,
+        surgeProtectionKind: 'standard',
       }
     case 'FUSE':
       return { polesConfig: '1P', poles: 1, ratingA: 10 }
@@ -215,6 +217,8 @@ export function getDefaultProtectionProps(
       return { polesConfig: effectivePolesConfig, poles, ratingA: 63 }
     case 'ROTATING_SWITCH':
       return {
+        polesConfig: effectivePolesConfig,
+        poles,
         symbolLabelDisplay: {
           visibility: { ...ROTATING_SWITCH_LABEL_VISIBILITY },
         },
@@ -294,6 +298,7 @@ export function getDefaultTrunkDeviceProtectionProps(
         polesConfig: effectivePolesConfig,
         poles,
         breakingCapacityKa: 20,
+        surgeProtectionKind: 'standard',
       }
     case 'FUSE':
       return { polesConfig: '1P', poles: 1, ratingA: 10 }
@@ -301,6 +306,8 @@ export function getDefaultTrunkDeviceProtectionProps(
       return { polesConfig: effectivePolesConfig, poles, ratingA: 63 }
     case 'ROTATING_SWITCH':
       return {
+        polesConfig: effectivePolesConfig,
+        poles,
         symbolLabelDisplay: {
           visibility: { ...ROTATING_SWITCH_LABEL_VISIBILITY },
         },

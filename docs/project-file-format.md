@@ -47,6 +47,11 @@ structural one-wire carrier for a secondary panel connected directly to a busbar
 retains the feeder circuit and `subPanelId`, but readers must not interpret it as a
 physical protection device or render a protection symbol.
 
+SPD protection records and SPD trunk devices may optionally contain
+`surgeProtectionKind`. The accepted values are `standard` for one-arrow lightning
+protection and `sparkGap` for the two-arrow spark gap. A missing value is
+backward-compatible and renders as `standard`.
+
 Electrical circuits may optionally contain `phaseAssignment`. The value identifies the
 active AC phases carried by that circuit (`L1`, `L2`, `L3`, and optionally `N`) and its
 shape (`single_phase`, `phase_to_phase`, or `three_phase`). The same optional field may
@@ -73,12 +78,25 @@ symbol `junction_box` and no placement, the editor creates a visible placement
 while loading. This compatibility repair uses the circuit's known floor when
 possible and otherwise falls back to the project's first floor.
 
+Situation-plan placement is optional for transformers, rectifiers, inverters,
+DC-DC converters, solar panels, and batteries. Their absence is not a project
+integrity error. When loading older conversion devices without placements, the
+editor creates visible placements. Conversion placements stored as hidden by an
+older editor version are automatically made visible while loading.
+
 Situation-plan placements store their orientation in `rotationDeg` as a clockwise
 quarter-turn (`0`, `90`, `180`, or `270`). A placement with
 `rotationMode: "explicit"` was rotated by the user and must not be auto-oriented to
 nearby walls. Missing `rotationMode` is backward-compatible and leaves auto-orientation
 available for symbol kinds that support it; a missing or invalid legacy angle is read as
 zero.
+
+Situation-plan wall elements may optionally contain a `curve` property with
+`kind: "rationalQuadratic"` and a positive numeric `weight`. A curved wall stores
+exactly three geometry points in start, control, end order. The weight
+`0.7071067811865476` produces an exact quarter circle when the two control legs are
+equal and perpendicular. Missing curve metadata means the wall points form an ordinary
+polyline. Doors, windows, and bare openings must not reference a curved wall.
 
 Panels may optionally contain `busbarPhases`. Its `main` array stores the repeating
 `L1`/`L2`/`L3` order for the panel's main busbar. Its `secondary` object stores an

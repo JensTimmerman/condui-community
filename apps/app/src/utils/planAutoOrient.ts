@@ -14,6 +14,7 @@
 
 import type { Placement, Rotation, Wall } from '@/types/schema'
 import { clamp } from '@/lib/geometry'
+import { getWallPathPoints } from '@/lib/plan/wallCurve'
 
 const SYMBOL_BASE_SIZE = 40
 const OPACITY_THRESHOLD = 128
@@ -232,7 +233,7 @@ function getQuadrantWallScoresFromWalls(
   let minDist = Infinity
 
   for (const wall of walls) {
-    const pts = wall.points
+    const pts = getWallPathPoints(wall)
     if (!pts || pts.length < 2) continue
 
     for (let i = 0; i < pts.length - 1; i++) {

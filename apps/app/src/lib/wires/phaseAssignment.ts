@@ -740,7 +740,21 @@ export function getPhaseAssignmentLabel(
   return formatPhaseAssignment(assignment) || undefined
 }
 
-/** Resolve an explicitly chosen phase for the protection label; legacy inference stays quiet. */
+/**
+ * Narrowed phase sets are labelled by default. An explicit false remains a
+ * user override, while true can also expose the complete installation set.
+ */
+export function isPhaseAssignmentLabelVisible(
+  assignment: CircuitPhaseAssignment | undefined,
+  system: VoltageSystem,
+  configuredVisibility?: boolean
+): boolean {
+  if (!getPhaseAssignmentLabel(assignment, system)) return false
+  if (configuredVisibility != null) return configuredVisibility
+  return phaseAssignmentDiffersFromInstallation(assignment, system)
+}
+
+/** Resolve the phase annotation shown beside a protection. */
 export function getProtectionPhaseLabel(
   protection: ProtectionDevice,
   system: VoltageSystem,
@@ -753,7 +767,11 @@ export function getProtectionPhaseLabel(
     return [
       {
         assignment: effective.assignment,
-        visible: circuit.showPhaseLabel ?? inherited.showPhaseLabel,
+        visible: isPhaseAssignmentLabelVisible(
+          effective.assignment,
+          system,
+          circuit.showPhaseLabel ?? inherited.showPhaseLabel
+        ),
       },
     ]
   })

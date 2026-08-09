@@ -1,3 +1,4 @@
+import { startTransition } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSettingsStore } from '@/stores/settingsStore'
 import i18n from '@/i18n'
@@ -29,7 +30,9 @@ export function SettingsPanel({
 
   const handleLanguageChange = (newLanguage: string) => {
     setLanguage(newLanguage)
-    i18n.changeLanguage(newLanguage)
+    startTransition(() => {
+      void i18n.changeLanguage(newLanguage)
+    })
     localStorage.setItem('eendra-language', newLanguage)
   }
 

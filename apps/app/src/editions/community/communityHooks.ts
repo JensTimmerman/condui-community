@@ -18,6 +18,7 @@ export {
   useIsTypeAndIdSelected,
   useIsWireSelected,
   useEndpointSelected,
+  useTrunkDeviceSelected,
   useHoverIncludes,
   useInfoBlockBoxSelected,
 } from '@/hooks/useCanvasUiStore'

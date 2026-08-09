@@ -18,6 +18,7 @@ import type {
   Wall,
 } from '@/types/schema'
 import { getElectricalInstallationFromProject, getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
+import { getPlanPlacementSelectionIds } from '@/lib/plan/planMarqueeSelection'
 
 interface UsePlanDragHandlingResult {
   isDraggingRef: React.MutableRefObject<boolean>
@@ -59,6 +60,7 @@ interface UsePlanDragHandlingResult {
 
 type PlacementRow = Placement & {
   endpointId?: string
+  trunkDeviceId?: string
   junctionPanelLabel?: string
   isEarthing?: boolean
 }
@@ -229,15 +231,9 @@ export function usePlanDragHandling(
           selection.ids.forEach((placementId) => {
             const row = floorPlacements.find((p: PlacementRow) => p.id === placementId)
             if (!row) return
-            const isJunctionPanel = row.junctionPanelLabel != null
-            const placement = isJunctionPanel ? row : (() => {
-              if (!row.endpointId) return undefined
-              const endpoint = getEndpointById(row.endpointId)
-              return endpoint?.placements.find((p: Placement) => p.id === placementId)
-            })()
-            if (placement && !(placement.locked ?? false)) {
-              dragInitialPositionsRef.current.set(placementId, { ...placement.pos })
-              initDragLabelOffset(placement.id, placement.pos, labelPositions)
+            if (!(row.locked ?? false)) {
+              dragInitialPositionsRef.current.set(placementId, { ...row.pos })
+              initDragLabelOffset(row.id, row.pos, labelPositions)
             }
           })
         } else {
@@ -296,13 +292,7 @@ export function usePlanDragHandling(
             const floorPlacements = getPlacementsByFloor(activeFloorId ?? '')
             const row = floorPlacements.find((p: PlacementRow) => p.id === placementId)
             if (!row) return
-            const isJunctionPanel = row.junctionPanelLabel != null
-            const placement = isJunctionPanel ? row : (() => {
-              if (!row.endpointId) return undefined
-              const endpoint = getEndpointById(row.endpointId)
-              return endpoint?.placements.find((p: Placement) => p.id === placementId)
-            })()
-            if (placement && !(placement.locked ?? false)) {
+            if (!(row.locked ?? false)) {
               const updatedPos = snapPos({ x: initialPos.x + deltaX, y: initialPos.y + deltaY })
               newDragPositions.set(placementId, updatedPos)
               newLabelPositions.set(placementId, calculateDragLabelPosition(placementId, updatedPos))
@@ -598,13 +588,14 @@ export function usePlanDragHandling(
                 )
               })
             }
-          } else if (placementRow.endpointId) {
-            const endpoint = getEndpointById(placementRow.endpointId)
-            if (!endpoint) return
-            candidateIds.push(endpoint.id)
-            candidateIds.push(placementRow.id)
+          } else if (placementRow.endpointId || placementRow.trunkDeviceId) {
+            candidateIds.push(...getPlanPlacementSelectionIds(placementRow))
 
-            if (endpoint.symbol === 'panel_distribution') {
+            const endpoint = placementRow.endpointId
+              ? getEndpointById(placementRow.endpointId)
+              : undefined
+
+            if (endpoint?.symbol === 'panel_distribution') {
               const panel = store.getPanelByName(endpoint.label)
               if (panel) {
                 candidateIds.push(panel.id)

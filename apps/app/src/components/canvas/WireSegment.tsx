@@ -59,7 +59,10 @@ import {
 import type { WireTranslateFn } from '@/lib/wires/wireFingerprint'
 import { shouldShowDomainChangeMarker } from '@/lib/wires/domainChangeMarker'
 import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
-import { getPhaseAssignmentLabel } from '@/lib/wires/phaseAssignment'
+import {
+  getPhaseAssignmentLabel,
+  isPhaseAssignmentLabelVisible,
+} from '@/lib/wires/phaseAssignment'
 
 type WireSegmentPointerEvent = KonvaEventObject<MouseEvent | TouchEvent>
 
@@ -76,21 +79,74 @@ interface WireSegmentProps {
   onSelect?: (wireSegmentId: string) => void
 }
 
+const LocalizedWireTextLabel = memo(function LocalizedWireTextLabel({
+  wireSegment,
+  wireLabelOffsetAlongWire,
+  fontFamily,
+  color,
+  onLabelClick,
+  onLabelMouseEnter,
+  onLabelMouseLeave,
+}: {
+  wireSegment: WireSegment
+  wireLabelOffsetAlongWire: number
+  fontFamily: string
+  color: string
+  onLabelClick: (event: unknown) => void
+  onLabelMouseEnter: () => void
+  onLabelMouseLeave: () => void
+}) {
+  const { t } = useTranslation()
+  const translateWire = t as unknown as WireTranslateFn
+
+  return (
+    <WireTextLabel
+      text={formatWireLabel(wireSegment, {
+        otherLabel: t('wires.other', 'Other'),
+      })}
+      fireClassText={
+        isFireClassLabelVisibleForSegment(wireSegment)
+          ? getWireFireClassLabel(wireSegment.cable)
+          : undefined
+      }
+      wireLengthText={
+        isWireLengthLabelVisibleForSegment(wireSegment)
+          ? getWireLengthLabel(wireSegment, translateWire)
+          : undefined
+      }
+      startPoint={wireSegment.startPoint}
+      endPoint={wireSegment.wireLabelEndPoint ?? wireSegment.endPoint}
+      config={{
+        orientation: getWireLabelOrientationForSegment(wireSegment),
+        align: getWireLabelAlignForSegment(wireSegment),
+        distanceFromWire: WIRE_LABEL_DISTANCE_FROM_WIRE,
+        offsetAlongWire: wireLabelOffsetAlongWire,
+        labelAnchor: getSupplyWireLabelAnchor(wireSegment),
+      }}
+      fontSize={WIRE_LABEL_FONT_SIZE}
+      fontFamily={fontFamily}
+      color={color}
+      onLabelClick={onLabelClick}
+      onLabelMouseEnter={onLabelMouseEnter}
+      onLabelMouseLeave={onLabelMouseLeave}
+    />
+  )
+})
+
 export const WireSegmentComponent = memo(function WireSegmentComponent({
   wireSegment,
   onSelect,
 }: WireSegmentProps) {
-  const { t } = useTranslation()
   const setSelection = useSetSelection()
   const isSelected = useIsWireSelected(wireSegment.id)
   const canvasZoom = useEffectiveCanvasZoom(ZOOM_100, 'eendraad')
   const isExporting = useUIStore((s) => s.isExporting)
-  const { theme } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
   const colors = useThemeColors()
   const fontFamily = useCanvasFontFamily()
   const isPreviewSelected = useIsPreviewSelected('wire', wireSegment.id)
-  const { currentProject, getEndpointById, getTrunkDeviceById } = useProjectStore()
-  const translateWire = t as unknown as WireTranslateFn
+  const { currentProject, getEndpointById, getTrunkDeviceById, getProtectionById } =
+    useProjectStore()
   const [acSymbolImage, setAcSymbolImage] = useState<HTMLImageElement | null>(null)
   const [dcSymbolImage, setDcSymbolImage] = useState<HTMLImageElement | null>(null)
   const [isHovered, setIsHovered] = useState(false)
@@ -346,7 +402,12 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
     !wireSegment.circuitId
   const incomingPanelPhaseLabel =
     (isSubPanelIncomingPhaseSegment || isRootSupplyPhaseSegment) &&
-    wireSegment.showPhaseLabel === true &&
+    phaseSystem &&
+    isPhaseAssignmentLabelVisible(
+      wireSegment.phaseAssignment,
+      phaseSystem,
+      wireSegment.showPhaseLabel
+    ) &&
     isVertical
       ? getPhaseAssignmentLabel(wireSegment.phaseAssignment, phaseSystem)
       : undefined
@@ -354,6 +415,23 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
   const incomingPanelPhaseLabelY =
     Math.max(wireSegment.startPoint.y, wireSegment.endPoint.y) +
     (isRootSupplyPhaseSegment ? 4 : -10)
+  const isProtectionInputPhaseSegment =
+    wireSegment.type === 'vertical' &&
+    !!wireSegment.circuitId &&
+    wireSegment.toElementType === 'protection'
+  const protectionPhaseLabel =
+    isProtectionInputPhaseSegment &&
+    phaseSystem &&
+    isPhaseAssignmentLabelVisible(
+      wireSegment.phaseAssignment,
+      phaseSystem,
+      wireSegment.showPhaseLabel
+    )
+      ? getPhaseAssignmentLabel(wireSegment.phaseAssignment, phaseSystem)
+      : undefined
+  const protectionPhaseLabelWidth = 48
+  const protectionPhaseLabelOffsetY =
+    getProtectionById(wireSegment.toElementId ?? '')?.type === 'SPD' ? 14 : 4
 
   const isDark = theme?.mode === 'dark'
   useEffect(() => {
@@ -501,30 +579,9 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
 
       {/* Cable label (vertical circuit wires, supply trunk, main supply drop) */}
       {showCableLabel && (
-        <WireTextLabel
-          text={formatWireLabel(wireSegment, {
-            otherLabel: t('wires.other', 'Other'),
-          })}
-          fireClassText={
-            isFireClassLabelVisibleForSegment(wireSegment)
-              ? getWireFireClassLabel(wireSegment.cable)
-              : undefined
-          }
-          wireLengthText={
-            isWireLengthLabelVisibleForSegment(wireSegment)
-              ? getWireLengthLabel(wireSegment, translateWire)
-              : undefined
-          }
-          startPoint={wireSegment.startPoint}
-          endPoint={wireSegment.wireLabelEndPoint ?? wireSegment.endPoint}
-          config={{
-            orientation: getWireLabelOrientationForSegment(wireSegment),
-            align: getWireLabelAlignForSegment(wireSegment),
-            distanceFromWire: WIRE_LABEL_DISTANCE_FROM_WIRE,
-            offsetAlongWire: wireLabelOffsetAlongWire,
-            labelAnchor: getSupplyWireLabelAnchor(wireSegment),
-          }}
-          fontSize={WIRE_LABEL_FONT_SIZE}
+        <LocalizedWireTextLabel
+          wireSegment={wireSegment}
+          wireLabelOffsetAlongWire={wireLabelOffsetAlongWire}
           fontFamily={fontFamily}
           color={colors.wireColor}
           onLabelClick={handleClick}
@@ -552,6 +609,29 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
             fontFamily={fontFamily}
             fill={colors.wireColor}
             align={isRootSupplyPhaseSegment ? 'left' : 'right'}
+          />
+        </Group>
+      )}
+
+      {protectionPhaseLabel && (
+        <Group
+          x={wireSegment.endPoint.x}
+          y={wireSegment.endPoint.y + protectionPhaseLabelOffsetY}
+          name="export-strip-label"
+          onClick={handleClick}
+          onTap={handleClick}
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
+        >
+          <Text
+            x={-protectionPhaseLabelWidth - 3}
+            y={0}
+            width={protectionPhaseLabelWidth}
+            text={protectionPhaseLabel}
+            fontSize={8}
+            fontFamily={fontFamily}
+            fill={colors.wireColor}
+            align="right"
           />
         </Group>
       )}

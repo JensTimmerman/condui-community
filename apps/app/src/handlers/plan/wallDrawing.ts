@@ -4,6 +4,7 @@ import { getOpeningsBySegment, getSegmentInfos } from '@/lib/plan/constraints'
 import { detectAttachment } from '@/lib/plan/pointAttachment'
 import { findLineIntersection } from '@/lib/plan/intersectionDetection'
 import { clamp, distance, lerp, projectPointToSegment } from '@/lib/geometry'
+import { getWallPathPoints, isCurvedWall } from '@/lib/plan/wallCurve'
 
 type WallPointAttachment = NonNullable<ReturnType<typeof detectAttachment>>
 
@@ -380,6 +381,7 @@ export function handleClipWall(
   clickPoint?: Point2
 ): { walls: Wall[]; trimmedSegment?: Point2[] } {
   if (wall.points.length < 2) return { walls: [wall] }
+  if (isCurvedWall(wall)) return { walls: [wall] }
   const isClosed =
     wall.points.length >= 4 &&
     distance(wall.points[0]!, wall.points[wall.points.length - 1]!) < 1e-6
@@ -409,13 +411,17 @@ export function handleClipWall(
   for (const otherWall of allWalls) {
     if (otherWall.id === wall.id) continue
 
-    // crossings against every segment
-    for (let j = 0; j < otherWall.points.length - 1; j++) {
+    // Curves store start/control/end, but only their derived centerline is wall geometry.
+    // Never let the two visual control-guide legs become clipping terminators.
+    const otherWallPath = getWallPathPoints(otherWall)
+
+    // crossings against every actual wall-path segment
+    for (let j = 0; j < otherWallPath.length - 1; j++) {
       const iPoint = findLineIntersection(
         segStart,
         segEnd,
-        otherWall.points[j]!,
-        otherWall.points[j + 1]!
+        otherWallPath[j]!,
+        otherWallPath[j + 1]!
       )
       if (iPoint) {
         const proj = projectPointToSegment(iPoint, segStart, segEnd)

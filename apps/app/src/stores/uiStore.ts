@@ -683,6 +683,9 @@ export const useUIStore = create<UIState>()(
       setActivePlanTool: (tool) =>
         set((state) => {
           state.activePlanTool = tool
+          if (tool === 'move') {
+            state.selection = { type: null, ids: [], wireMetadata: undefined }
+          }
         }),
 
       setPlanWallDrawingThicknessCm: (thicknessCm) =>

@@ -3,6 +3,8 @@ import type { CheckContext, CheckResult, Issue, Offender, SitplanMapping, Panel 
 import { i18n, VALIDATION_DEBUG, projectPanels } from './common'
 import { logger } from '@/lib/logger'
 import { getHiddenSituationPlanPlacements } from '@/lib/plan/hiddenSituationPlanPlacements'
+import { getSymbolById } from '@/lib/symbols'
+import { getSituationPlanPlacementIdsHiddenByPanel } from '@/lib/plan/panelPlanPlacementVisibility'
 
 /**
  * Check if a placement has valid circuit point identifier
@@ -13,6 +15,10 @@ function placementHasValidIdentifier(
 ): CheckResult | Issue[] {
   const { scope, query, project } = context
   if (scope.type !== 'placement') {
+    return { passed: true }
+  }
+
+  if (getSituationPlanPlacementIdsHiddenByPanel(project).has(scope.id)) {
     return { passed: true }
   }
 
@@ -122,18 +128,28 @@ function hiddenSituationPlanSymbolsAreVisible(context: CheckContext): CheckResul
 
   const hidden = getHiddenSituationPlanPlacements(project)
   if (hidden.length === 0) return { passed: true }
+  const hiddenDeviceLines = hidden
+    .map((item) => {
+      const symbol = item.symbol ? getSymbolById(item.symbol) : undefined
+      const typeLabel = symbol
+        ? i18n.t(`symbols.${symbol.id}`, { defaultValue: symbol.name })
+        : item.symbol
+      const label = item.endpointLabel.trim() || typeLabel || item.endpointId
+      return `• ${label}${item.circuitLabel ? ` · ${item.circuitLabel}` : ''}`
+    })
+    .join('\n')
 
   return {
     passed: false,
     offenders: [{ kind: 'board', id: anchorPanel.id, viewHint: 'sitplan' }],
     message: i18n.t('validation.primitives.hiddenSituationPlanSymbolsAreVisible.message', {
       count: hidden.length,
-      defaultValue: `${hidden.length} symbols from the one-wire diagram are hidden on the situation plan`,
+      defaultValue: `${hidden.length} devices are hidden on the situation plan`,
     }),
     details: i18n.t('validation.primitives.hiddenSituationPlanSymbolsAreVisible.details', {
       count: hidden.length,
-      defaultValue:
-        'Hidden one-wire symbols are omitted from the situation plan. Open Show hidden and restore them before using the drawings.',
+      devices: hiddenDeviceLines,
+      defaultValue: `Hidden devices:\n${hiddenDeviceLines}`,
     }),
   }
 }

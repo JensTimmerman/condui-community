@@ -145,6 +145,7 @@ export type ProtectionType =
   | 'OTHER'
 export type CurveType = 'B' | 'C' | 'D' | 'F' | 'K' | 'MA' | 'Z' | 'unknown'
 export type ResidualCurrentType = 'AC' | 'A' | 'F' | 'B'
+export type SurgeProtectionKind = 'standard' | 'sparkGap'
 export type PolesConfig = '1P' | '1P+N' | '2P' | '3P' | '3P+N' | '4P'
 
 export type SymbolLabelPosition = 'right' | 'left' | 'top' | 'bottom'
@@ -171,6 +172,8 @@ export interface ProtectionDevice {
   breakingCapacityKa?: number // For MCB/RCBO - breaking capacity in kA
   /** Unique breaking-capacity dropdown value (`3000` vs `3`, etc.). */
   breakingCapacityOption?: string
+  /** SPD type. Missing values use the one-arrow lightning-protection symbol. */
+  surgeProtectionKind?: SurgeProtectionKind
   polesConfig?: PolesConfig // Human-readable poles config (e.g. '2P', '1P+N', '4P')
   poles?: number // Numeric pole count (derived from polesConfig for backward compat)
   notes?: string
@@ -197,6 +200,7 @@ export type ProtectionCreationTemplate = Pick<
   | 'residualCurrentType'
   | 'breakingCapacityKa'
   | 'breakingCapacityOption'
+  | 'surgeProtectionKind'
   | 'polesConfig'
   | 'poles'
 >
@@ -454,6 +458,8 @@ export interface TrunkDevice {
   breakingCapacityKa?: number
   /** Unique breaking-capacity dropdown value (`3000` vs `3`, etc.). */
   breakingCapacityOption?: string
+  /** SPD type. Missing values use the one-arrow lightning-protection symbol. */
+  surgeProtectionKind?: SurgeProtectionKind
   polesConfig?: PolesConfig
   poles?: number
   notes?: string
@@ -780,10 +786,19 @@ export interface AttachedPoint {
   t: number // Position along parent wall (0-1, where 0 = start, 1 = end)
 }
 
+export interface WallCurve {
+  kind: 'rationalQuadratic'
+  /** Weight applied to the middle control point. sqrt(1/2) yields an exact quarter circle for equal perpendicular legs. */
+  weight: number
+}
+
 export interface Wall {
   id: string
   floorId: string // Redundant but useful for queries
+  /** Straight-wall vertices, or [start, control, end] when curve is present. */
   points: Point2[] // At least 2 points (start, end)
+  /** Standalone three-point curved wall. Curved walls intentionally cannot own openings. */
+  curve?: WallCurve
   thickness?: number // Override master thickness (optional)
   attachedPoints?: AttachedPoint[] // Points from other walls attached to this wall
 }

@@ -21,7 +21,7 @@ interface CircuitLabelProps {
 }
 
 export function CircuitLabel({ x, y, label, align = 'center' }: CircuitLabelProps) {
-  const { theme } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
   const fontFamily = useCanvasFontFamily()
   const isDark = theme.mode === 'dark'
   const textColor = getTextColor(isDark)

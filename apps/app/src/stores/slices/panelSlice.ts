@@ -27,6 +27,7 @@ import { findPanelById } from '@/lib/panel/panelTree'
 import { applyPanelRowChange } from '@/components/canvas/panel/panelRowChange'
 import { getViewportCenterPlanSpaceIfApplicable } from '@/lib/plan/autoSitplanPlacement'
 import { getCompatibilityFloorsFromProject } from '@/lib/projectV2/buildingFloors'
+import { syncPanelAndSituationPlanDeviceVisibility } from '@/lib/plan/panelPlanPlacementVisibility'
 import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
@@ -462,6 +463,9 @@ export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
           changed = true
         }
         if (!changed) return
+        syncPanelAndSituationPlanDeviceVisibility(state.currentProject, {
+          kind: 'hide', panelId, moduleRefKey,
+        })
         state.isDirty = true
       }),
 
@@ -494,6 +498,9 @@ export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
           changed = true
         }
         if (!changed) return
+        syncPanelAndSituationPlanDeviceVisibility(state.currentProject, {
+          kind: 'show', panelId, moduleRefKey,
+        })
         state.isDirty = true
       }),
 

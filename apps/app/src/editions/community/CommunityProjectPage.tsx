@@ -47,7 +47,7 @@ export default function CommunityProjectPage() {
       const ui = useUIStore.getState()
       projectStore.setCurrentProjectStorageMode('local')
       projectStore.setProject(project as unknown as import('@/types/schema').Project)
-      useValidationStore.getState().markProjectOpened(project as unknown as import('@/types/schema').Project)
+      useValidationStore.getState().markProjectOpened()
       const saved = loadLocalProjectEditorState(id)
       if (saved?.canvasViews?.eendraad) ui.setEendraadView(saved.canvasViews.eendraad)
       if (saved?.canvasViews?.plan) ui.setPlanView(saved.canvasViews.plan)

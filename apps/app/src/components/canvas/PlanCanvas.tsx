@@ -28,6 +28,7 @@ import {
   type FloorPlanClipboardPayload,
 } from '@/lib/plan/floorPlanClipboard'
 import { endpointSymbolVisibleOnSitplan } from '@/lib/plan/planSymbolVisibility'
+import { resolvePlanMarqueePlacementOwner } from '@/lib/plan/planMarqueeSelection'
 import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
 import { getTouchPointHitRadiusCanvas } from '@/lib/canvas/touchHitZones'
 import { getSymbolById, type SymbolMetadata } from '@/lib/symbols'
@@ -138,6 +139,11 @@ import {
 } from '@/lib/plan/wallSelectionDeletion'
 import { resolveOpeningPositionSnap } from '@/lib/plan/openingPositionSnap'
 import { dragWallShapeDimension, resizeWallShapeSegment } from '@/lib/plan/wallShapeResize'
+import {
+  getCurvedWallToolHoverFeedback,
+  getWallPathPoints,
+  isCurvedWall,
+} from '@/lib/plan/wallCurve'
 import type { OpeningOnSegment } from '@/lib/plan/constraints'
 import { snapPlacementCenterToGrid, snapToGrid } from '@/utils/plan/gridSnap'
 import {
@@ -981,7 +987,11 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
       }
 
       for (const wall of activeFloor.floorPlan.walls) {
-        appendSegments('w', wall.id, wall.points)
+        const excludesWallPoint = wall.points.some((_point, index) =>
+          excludedKeys.has(`w:${wall.id}:${index}`)
+        )
+        if (isCurvedWall(wall) && excludesWallPoint) continue
+        appendSegments('w', wall.id, getWallPathPoints(wall))
       }
       for (const stair of activeFloor.floorPlan.stairs ?? []) {
         appendSegments('s', stair.id, stair.points)
@@ -1009,7 +1019,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
     gridSize,
     tempPxPerMeter
   )
-  const { theme } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
   const fontFamily = useCanvasFontFamily()
   const touchPrimary = useTouchPrimaryDevice()
   const selectedWallIds = useMemo(
@@ -2184,12 +2194,9 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
   const handleWallHover = useCallback(
     (wallId: string | null, pointer: Point2 | null) => {
       if (!shouldHandleWallHover) return
-      applyHoveredWallId((prev) => (prev === wallId ? prev : wallId))
-
-      // Select tool only needs hover highlight — skip preview work on every pointer move.
-      if (activeTool === 'select') return
 
       if (!wallId || !pointer || !activeFloor?.floorPlan) {
+        applyHoveredWallId((prev) => (prev === null ? prev : null))
         applyClipPreviewPoints((prev) => (prev === null ? prev : null))
         applyOpeningPreview(null)
         applyInsertPointPreview(null)
@@ -2198,6 +2205,23 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
 
       const wall = activeFloor.floorPlan.walls.find((w: Wall) => w.id === wallId)
       if (!wall) {
+        applyHoveredWallId((prev) => (prev === null ? prev : null))
+        applyClipPreviewPoints((prev) => (prev === null ? prev : null))
+        applyOpeningPreview(null)
+        applyInsertPointPreview(null)
+        return
+      }
+
+      const curvedHoverFeedback = isCurvedWall(wall)
+        ? getCurvedWallToolHoverFeedback(activeTool)
+        : 'default'
+      const nextHoveredWallId = curvedHoverFeedback === 'suppressed' ? null : wallId
+      applyHoveredWallId((prev) => (prev === nextHoveredWallId ? prev : nextHoveredWallId))
+
+      // Select tool only needs hover highlight — skip preview work on every pointer move.
+      if (activeTool === 'select') return
+
+      if (isCurvedWall(wall)) {
         applyClipPreviewPoints((prev) => (prev === null ? prev : null))
         applyOpeningPreview(null)
         applyInsertPointPreview(null)
@@ -2398,12 +2422,16 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
       const sourceWall = walls.find((w) => w.id === wallId)
       const sourcePoint = sourceWall?.points[pointIndex]
       if (!sourceWall || !sourcePoint) return []
+      if (isCurvedWall(sourceWall) && pointIndex === 1) {
+        return [{ wallId, pointIndex }]
+      }
 
       const connectedWallIds = getSegmentConnectedWallIds(walls, wallId)
       const targets: Array<{ wallId: string; pointIndex: number }> = []
       for (const w of walls) {
         if (!connectedWallIds.has(w.id)) continue
         w.points.forEach((p, idx) => {
+          if (isCurvedWall(w) && idx === 1) return
           if (pointsEqual(p, sourcePoint)) {
             targets.push({ wallId: w.id, pointIndex: idx })
           }
@@ -2461,6 +2489,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
       for (const wall of activeFloor.floorPlan.walls) {
         for (let pointIndex = 0; pointIndex < wall.points.length; pointIndex++) {
           if (excludedKeys.has(`w:${wall.id}:${pointIndex}`)) continue
+          if (isCurvedWall(wall) && pointIndex === 1) continue
           const anchor = wall.points[pointIndex]
           if (anchor) anchors.push(anchor)
         }
@@ -2577,6 +2606,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
           for (let pointIndex = 0; pointIndex < wall.points.length; pointIndex++) {
             const p = wall.points[pointIndex]
             if (!p) continue
+            if (isCurvedWall(wall) && pointIndex === 1) continue
             const key = `${wall.id}:${pointIndex}`
             // Never project-snap against vertices that are currently being dragged.
             if (excludedAnchorKeys.has(key)) continue
@@ -2585,9 +2615,10 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
         }
         const segments: Array<{ a: Point2; b: Point2 }> = []
         for (const wall of walls) {
-          for (let i = 0; i < wall.points.length - 1; i++) {
-            const a = wall.points[i]
-            const b = wall.points[i + 1]
+          const pathPoints = getWallPathPoints(wall)
+          for (let i = 0; i < pathPoints.length - 1; i++) {
+            const a = pathPoints[i]
+            const b = pathPoints[i + 1]
             if (!a || !b) continue
             segments.push({ a, b })
           }
@@ -4542,11 +4573,12 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
 
         for (const wall of activeFloor.floorPlan.walls) {
           if (!wall.points.length) continue
-          const pts = wall.points
+          const sourcePoints = wall.points
+          const pts = getWallPathPoints(wall)
 
           // Check which vertices fall inside the rectangle.
           const vertexIndicesInRect: number[] = []
-          pts.forEach((p: Point2, idx: number) => {
+          sourcePoints.forEach((p: Point2, idx: number) => {
             if (p.x >= rect.x && p.x <= rectRight && p.y >= rect.y && p.y <= rectBottom) {
               vertexIndicesInRect.push(idx)
             }
@@ -4644,6 +4676,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
         (
           placementRow: Placement & {
             endpointId?: string
+            trunkDeviceId?: string
             junctionPanelLabel?: string
             isEarthing?: boolean
           }
@@ -4725,19 +4758,22 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
             return
           }
 
-          // Regular endpoint-backed placements
-          if (!placementRow.endpointId) return
+          // Regular endpoint- and trunk-device-backed placements
+          const owner = resolvePlanMarqueePlacementOwner(
+            placementRow,
+            getEndpointById,
+            (id) => store.getTrunkDeviceById(id)?.device
+          )
+          if (!owner) return
 
-          const endpoint = getEndpointById(placementRow.endpointId)
-          const socketCount =
-            (endpoint?.type === 'socket' ? endpoint.socketProps?.socketCount : undefined) || 1
+          const { endpoint, socketCount, symbol } = owner
 
           const bounds = getPlacementWorldBoundsMemo(
             placementRow.pos,
             placementRow.rotationDeg,
             placementRow.scale,
             socketCount,
-            endpoint?.symbol
+            symbol
           )
 
           const intersects =
@@ -6431,6 +6467,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
       floorPlacements.forEach((row: Placement) => {
         const placement = row as Placement & {
           endpointId?: string
+          trunkDeviceId?: string
           junctionPanelLabel?: string
           isEarthing?: boolean
         }
@@ -6501,35 +6538,32 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
           return
         }
 
-        // Regular endpoint-backed placements
-        const endpointId = placement.endpointId
-        if (!endpointId) return
-        const endpoint = getEndpointById(endpointId)
-        if (!endpoint) return
+        // Keep persistent selection bounds in sync with marquee hit-testing for
+        // both endpoint- and trunk-device-backed placements.
+        const owner = resolvePlanMarqueePlacementOwner(
+          placement,
+          getEndpointById,
+          (id) => store.getTrunkDeviceById(id)?.device
+        )
+        if (!owner) return
 
-        const candidateIds: string[] = []
-
-        // Endpoint id itself (typical 'endpoint' selection)
-        candidateIds.push(endpoint.id)
-        // Placement id (for 'placement' selection / multiplied endpoints)
-        candidateIds.push(placement.id)
+        const { endpoint, selectionIds, socketCount, symbol } = owner
+        const candidateIds = [...selectionIds]
 
         // Panel symbols: also include panel id so panel selection contributes to bounds
-        if (endpoint.symbol === 'panel_distribution' && store.currentProject) {
+        if (endpoint?.symbol === 'panel_distribution' && store.currentProject) {
           const panel = resolvePanelForDistributionEndpoint(store.currentProject, endpoint)
           if (panel) candidateIds.push(panel.id)
         }
 
         if (!isAnyIdSelected(candidateIds)) return
 
-        const socketCount =
-          (endpoint.type === 'socket' ? endpoint.socketProps?.socketCount : undefined) || 1
         const bounds = getPlacementWorldBoundsMemo(
           pos,
           placement.rotationDeg,
           placement.scale,
           socketCount,
-          endpoint.symbol
+          symbol
         )
         minX = Math.min(minX, bounds.left)
         minY = Math.min(minY, bounds.top)
@@ -7124,7 +7158,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
                       if (canvasPoint) {
                         const walls = activeFloor.floorPlan.walls
                         const wall = walls.find((w: Wall) => w.id === wallId)
-                        if (wall) {
+                        if (wall && !isCurvedWall(wall)) {
                           const segmentIndex = getNearestSegmentIndex(wall, canvasPoint)
                           const newPoints = handleInsertPoint(
                             wall,
@@ -7143,7 +7177,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
                     ) {
                       const walls = activeFloor.floorPlan.walls
                       const wall = walls.find((w: Wall) => w.id === wallId)
-                      if (wall) {
+                      if (wall && !isCurvedWall(wall)) {
                         const { walls: newWalls } = handleClipWall(
                           wall,
                           walls,
@@ -7151,24 +7185,30 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
                         )
                         const isNoOp = newWalls.length === 1 && newWalls[0]?.id === wall.id
                         if (!isNoOp) {
-                          deleteWall(wallId)
-                          const minLengthSq = 100
-                          newWalls.forEach((w) => {
-                            const pts = w.points
-                            let degenerate = pts.length < 2
-                            if (!degenerate && pts.length === 2) {
-                              const dx = pts[1]!.x - pts[0]!.x
-                              const dy = pts[1]!.y - pts[0]!.y
-                              degenerate = dx * dx + dy * dy < minLengthSq
-                            }
-                            if (!degenerate) {
-                              addWall(activeFloorId, {
-                                floorId: activeFloorId,
-                                points: w.points,
-                                thickness: w.thickness,
+                          withSingleUndoEntry(
+                            () => {
+                              deleteWall(wallId)
+                              const minLengthSq = 100
+                              newWalls.forEach((w) => {
+                                const pts = w.points
+                                let degenerate = pts.length < 2
+                                if (!degenerate && pts.length === 2) {
+                                  const dx = pts[1]!.x - pts[0]!.x
+                                  const dy = pts[1]!.y - pts[0]!.y
+                                  degenerate = dx * dx + dy * dy < minLengthSq
+                                }
+                                if (!degenerate) {
+                                  addWall(activeFloorId, {
+                                    floorId: activeFloorId,
+                                    points: w.points,
+                                    thickness: w.thickness,
+                                  })
+                                }
                               })
-                            }
-                          })
+                              return true
+                            },
+                            { sessionLabel: 'clip wall' }
+                          )
                           applySelection({ type: null, ids: [] })
                           applyClipPreviewPoints(null)
                         }
@@ -7189,7 +7229,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
                       (isWallScopedOrSelected || isMultiSelect)
                     ) {
                       const wall = activeFloor.floorPlan.walls.find((w: Wall) => w.id === wallId)
-                      if (wall && wall.points.length >= 2) {
+                      if (wall && !isCurvedWall(wall) && wall.points.length >= 2) {
                         const segmentIndex = getNearestSegmentIndex(wall, canvasPoint)
                         if (segmentIndex >= 0 && segmentIndex < wall.points.length - 1) {
                           const endpointIndices = [segmentIndex, segmentIndex + 1]

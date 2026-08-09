@@ -12,7 +12,11 @@ import {
   getBuildingFloorsFromProject,
   type ProjectWithOptionalV2Building,
 } from '@/lib/projectV2/buildingFloors'
-import type { ProjectWithOptionalV2Electrical } from '@/lib/projectV2/electrical'
+import {
+  getElectricalPanelsFromProject,
+  type ProjectWithOptionalV2Electrical,
+} from '@/lib/projectV2/electrical'
+import { getAllCircuits } from '@/lib/eendraad/projectElectricalDomain'
 
 const ORIGIN_X = 400
 const ORIGIN_Y = 300
@@ -132,11 +136,27 @@ export function buildAutoSitplanPlacement(
 
   const layer = 'layers' in floor && Array.isArray(floor.layers) ? floor.layers[0] ?? 'electrical' : 'electrical'
   const allPlacements = collectPlacementsOnFloor(project, opts.floorId)
+  const trunkCircuitIdByDeviceId = new Map<string, string>()
+  for (const panel of getElectricalPanelsFromProject(project)) {
+    for (const circuit of getAllCircuits(panel)) {
+      for (const device of circuit.trunkDevices ?? []) {
+        trunkCircuitIdByDeviceId.set(device.id, circuit.id)
+      }
+    }
+  }
+  const circuitIdForPlacement = (
+    placement: Placement & { endpointId?: string; trunkDeviceId?: string },
+  ) => {
+    if (placement.endpointId) {
+      return findCircuitForEndpointInProject(project, placement.endpointId)?.circuit.id
+    }
+    return placement.trunkDeviceId
+      ? trunkCircuitIdByDeviceId.get(placement.trunkDeviceId)
+      : undefined
+  }
 
   const placementsForCircuit = allPlacements.filter((pl) => {
-    if (!pl.endpointId) return false
-    const info = findCircuitForEndpointInProject(project, pl.endpointId)
-    return info?.circuit.id === opts.circuitId
+    return circuitIdForPlacement(pl) === opts.circuitId
   })
 
   let posX = ORIGIN_X
@@ -150,9 +170,7 @@ export function buildAutoSitplanPlacement(
   } else {
     const rowYByCircuit = new Map<string, number>()
     for (const pl of allPlacements) {
-      if (!pl.endpointId) continue
-      const info = findCircuitForEndpointInProject(project, pl.endpointId)
-      const cid = info?.circuit.id
+      const cid = circuitIdForPlacement(pl)
       if (!cid || rowYByCircuit.has(cid)) continue
       rowYByCircuit.set(cid, pl.pos.y)
     }

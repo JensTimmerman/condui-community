@@ -29,7 +29,7 @@ interface SupplySymbolProps {
 }
 
 export function SupplySymbol({ x, y }: SupplySymbolProps) {
-  const { theme } = useSettingsStore()
+  const theme = useSettingsStore((state) => state.theme)
   const fontFamily = useCanvasFontFamily()
   type ProjectStoreState = ReturnType<typeof useProjectStore.getState>
   const installation = useProjectStore((s: ProjectStoreState) =>

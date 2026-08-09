@@ -92,9 +92,7 @@ export default function CommunityDemoProjectPage() {
 
         if (cancelled) return
         projectStore.setProject(project as unknown as import('@/types/schema').Project)
-        useValidationStore.getState().markProjectOpened(
-          project as unknown as import('@/types/schema').Project,
-        )
+        useValidationStore.getState().markProjectOpened()
         ui.setActiveFloor(getBuildingFloorsFromProject(project)[0]?.id ?? null)
         await preloadProjectRasterImages(project, { concurrency: 2, signal: decodeAbort.signal })
         if (cancelled || useProjectStore.getState().currentProject?.project.id !== demoProjectId) return

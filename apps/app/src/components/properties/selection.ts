@@ -11,6 +11,7 @@ import type {
   PlanGraphicElement,
   ProtectionDevice,
   Stair,
+  TrunkDevice,
   Wall,
   Window,
 } from '@/types/schema'
@@ -194,17 +195,25 @@ export function getStairOnlyPointSelection(selection: Selection): {
 
 export function getSelectedPlacementTarget(
   placementId: string,
-  { getEndpointById, getPlacementById }: Pick<ProjectState, 'getEndpointById' | 'getPlacementById'>
+  {
+    getEndpointById,
+    getPlacementById,
+    getTrunkDeviceById,
+  }: Pick<ProjectState, 'getEndpointById' | 'getPlacementById' | 'getTrunkDeviceById'>
 ):
   | { type: 'ground' }
   | { type: 'endpoint'; endpointId: string; endpoint: Endpoint }
-  | { type: 'placement'; placementId: string } {
+  | { type: 'trunkDevice'; deviceId: string; device: TrunkDevice }
+  | { type: 'unresolved' } {
   const placement = getPlacementById(placementId)
   if (placement?.isEarthing) return { type: 'ground' }
   const endpointId = placement?.endpointId
   const endpoint = endpointId ? getEndpointById(endpointId) : undefined
   if (endpointId && endpoint) return { type: 'endpoint', endpointId, endpoint }
-  return { type: 'placement', placementId }
+  const deviceId = placement?.trunkDeviceId
+  const device = deviceId ? getTrunkDeviceById(deviceId)?.device : undefined
+  if (deviceId && device) return { type: 'trunkDevice', deviceId, device }
+  return { type: 'unresolved' }
 }
 
 export function getSelectedNote(
@@ -317,6 +326,30 @@ function panelTitleForEndpoint(endpoint: Endpoint | undefined, t: TFunction): st
   return panelT(t, 'endpoints.title', 'Endpoint')
 }
 
+function panelTitleForTrunkDevice(device: TrunkDevice | undefined, t: TFunction): string {
+  const pt = (key: string, defaultValue?: string) => panelT(t, key, defaultValue)
+  if (!device) return pt('endpoints.notFound', 'Device not found')
+  if (device.symbol === 'earthing_separator')
+    return pt('symbols.earthing_separator', 'Earthing Separator')
+  if (device.symbol === 'junction_panel')
+    return pt('junctionPanel.propertiesTitle', 'Junction panel')
+  if (device.type === 'protection') {
+    return pt(
+      `protections.${device.protectionType || 'MCB'}`,
+      device.protectionType || 'Protection'
+    )
+  }
+  if (device.type === 'energy_meter') return pt('symbols.energy_meter', 'Energy meter')
+  if (device.type === 'conversion') {
+    if (device.symbol === 'transformer') return pt('symbols.transformer', 'Transformer')
+    if (device.symbol === 'rectifier') return pt('symbols.rectifier', 'Rectifier')
+    if (device.symbol === 'inverter') return pt('symbols.inverter', 'Inverter')
+    if (device.symbol === 'dc_dc_converter')
+      return pt('symbols.dc_dc_converter', 'DC-DC Converter')
+  }
+  return pt('supply.trunkDevice', 'Supply wire device')
+}
+
 export function getPropertiesPanelTitle({
   selection,
   stairOnlyPointSelection,
@@ -328,6 +361,7 @@ export function getPropertiesPanelTitle({
   titleLookups?: {
     endpoint?: Endpoint
     placementEndpoint?: Endpoint
+    placementTrunkDevice?: TrunkDevice
     graphicElement?: PlanGraphicElement
     trunkDevice?: NonNullable<ReturnType<ProjectState['getTrunkDeviceById']>>['device']
     sameJunctionPanelId?: string | null
@@ -372,7 +406,10 @@ export function getPropertiesPanelTitle({
       if (titleLookups?.placementEndpoint) {
         return panelTitleForEndpoint(titleLookups.placementEndpoint, t)
       }
-      return pt('placement.properties', 'Placement Properties')
+      if (titleLookups?.placementTrunkDevice) {
+        return panelTitleForTrunkDevice(titleLookups.placementTrunkDevice, t)
+      }
+      return fallback
     }
     case 'note':
       return pt('notes.title', 'Note / Label')
@@ -398,29 +435,7 @@ export function getPropertiesPanelTitle({
     case 'endpoint':
       return panelTitleForEndpoint(titleLookups?.endpoint, t)
     case 'trunkDevice': {
-      const device = titleLookups?.trunkDevice
-      if (!device) return pt('endpoints.notFound', 'Device not found')
-      if (device.symbol === 'earthing_separator')
-        return pt('symbols.earthing_separator', 'Earthing Separator')
-      if (device.symbol === 'junction_panel')
-        return pt('junctionPanel.propertiesTitle', 'Junction panel')
-      if (device.type === 'protection') {
-        return pt(
-          `protections.${device.protectionType || 'MCB'}`,
-          device.protectionType || 'Protection'
-        )
-      }
-      if (device.type === 'energy_meter') {
-        return pt('symbols.energy_meter', 'Energy meter')
-      }
-      if (device.type === 'conversion') {
-        if (device.symbol === 'transformer') return pt('symbols.transformer', 'Transformer')
-        if (device.symbol === 'rectifier') return pt('symbols.rectifier', 'Rectifier')
-        if (device.symbol === 'inverter') return pt('symbols.inverter', 'Inverter')
-        if (device.symbol === 'dc_dc_converter')
-          return pt('symbols.dc_dc_converter', 'DC-DC Converter')
-      }
-      return pt('supply.trunkDevice', 'Supply wire device')
+      return panelTitleForTrunkDevice(titleLookups?.trunkDevice, t)
     }
     case 'wire':
       return pt('wires.title', 'Wire Properties')

@@ -156,6 +156,13 @@ export const PROTECTION_LABEL_MAX_WIDTH = 220
 export const PROTECTION_LABEL_DEFAULT_BOX_WIDTH = 80
 export const PROTECTION_LABEL_FREE_OVERFLOW_WIDTH = 15
 export const PROTECTION_LABEL_X_OFFSET_FROM_MCB = -20
+// Right-align the label just outside the SPD body, whose left edge sits about
+// 29px left of the trunk at the standard 30px symbol size.
+export const SPD_PROTECTION_LABEL_X_OFFSET_FROM_TRUNK = -32
+export const SPD_PROTECTION_LABEL_Y_OFFSET = 2
+// Keep the established circuit-column reserve when tightening the visual label
+// offset, otherwise the trunk shifts left and cancels out the visible move.
+const SPD_PROTECTION_LABEL_LEFT_RESERVE_EXTRA = 32
 export const PROTECTION_LABEL_CLEARANCE = 8
 export const PROTECTION_TECHNICAL_LABEL_OFFSET_FROM_SYMBOL = 5
 
@@ -954,10 +961,23 @@ function getProtectionLabelLeftReserve(protection: ProtectionDevice | undefined)
   if (estimatedLabelWidth === 0) return 0
 
   const renderedLabelWidth = Math.max(PROTECTION_LABEL_DEFAULT_BOX_WIDTH, estimatedLabelWidth)
-  return Math.max(
+  const labelReserve = Math.max(
     0,
     renderedLabelWidth - PROTECTION_LABEL_DEFAULT_BOX_WIDTH + PROTECTION_LABEL_FREE_OVERFLOW_WIDTH
   )
+  return protection.type === 'SPD'
+    ? labelReserve + SPD_PROTECTION_LABEL_LEFT_RESERVE_EXTRA
+    : labelReserve
+}
+
+export function getProtectionLabelXOffset(protection: ProtectionDevice): number {
+  return protection.type === 'SPD'
+    ? SPD_PROTECTION_LABEL_X_OFFSET_FROM_TRUNK
+    : PROTECTION_LABEL_X_OFFSET_FROM_MCB
+}
+
+export function getProtectionLabelYOffset(protection: ProtectionDevice): number {
+  return protection.type === 'SPD' ? SPD_PROTECTION_LABEL_Y_OFFSET : 0
 }
 
 function getProtectionLabelRightReach(protection: ProtectionDevice | undefined): number {
@@ -1968,6 +1988,7 @@ function calculateBottomUpPanelLayout(
           const nestedLabel = (protection?.label ?? '').trim()
           const nestedLetterVisible = cl.circuit.eendraadLetterVisible !== false
           if (
+            protection &&
             nestedLabel &&
             nestedLetterVisible &&
             !elements.find((e) => e.id === `label-${cl.circuit.id}`)
@@ -1976,8 +1997,8 @@ function calculateBottomUpPanelLayout(
               id: `label-${cl.circuit.id}`,
               type: 'label',
               position: {
-                x: mcbX + PROTECTION_LABEL_X_OFFSET_FROM_MCB, // LOCAL coordinates
-                y: mcbY,
+                x: mcbX + getProtectionLabelXOffset(protection), // LOCAL coordinates
+                y: mcbY + getProtectionLabelYOffset(protection),
               },
               circuitId: cl.circuit.id,
               label: nestedLabel,
@@ -2244,8 +2265,8 @@ function calculateBottomUpPanelLayout(
           id: `label-${cl.circuit.id}`,
           type: 'label',
           position: {
-            x: mcbX + PROTECTION_LABEL_X_OFFSET_FROM_MCB, // LOCAL coordinates
-            y: mcbY,
+            x: mcbX + getProtectionLabelXOffset(cl.protection), // LOCAL coordinates
+            y: mcbY + getProtectionLabelYOffset(cl.protection),
           },
           circuitId: cl.circuit.id,
           label: displayLabel,

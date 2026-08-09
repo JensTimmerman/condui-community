@@ -92,7 +92,13 @@ const synonymMap: Record<string, string[]> = {
  * Normalize search query - lowercase and trim
  */
 function normalizeQuery(query: string): string {
-  return query.toLowerCase().trim()
+  return query
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ')
 }
 
 /**
@@ -103,8 +109,9 @@ function getSynonyms(term: string): string[] {
   // Also check if any synonym map contains this term
   const allSynonyms = new Set<string>([normalized])
   for (const [, values] of Object.entries(synonymMap)) {
-    if (values.includes(normalized)) {
-      values.forEach(v => allSynonyms.add(v))
+    const normalizedValues = values.map(normalizeQuery)
+    if (normalizedValues.includes(normalized)) {
+      normalizedValues.forEach(v => allSynonyms.add(v))
     }
   }
   return Array.from(allSynonyms)
@@ -150,8 +157,40 @@ export function fuzzyMatch(text: string, query: string): boolean {
   const normalizedText = normalizeQuery(text)
   const searchTerms = expandSearchQuery(query)
   
-  // Check if any search term is contained in the text
-  return searchTerms.some(term => normalizedText.includes(term))
+  const textTokens = normalizedText.split(' ').filter(Boolean)
+
+  return searchTerms.some(term => {
+    if (normalizedText.includes(term)) return true
+    const queryTokens = term.split(' ').filter(Boolean)
+    return queryTokens.length > 0 && queryTokens.every(queryToken =>
+      textTokens.some(textToken => fuzzyTokenMatch(textToken, queryToken))
+    )
+  })
+}
+
+function fuzzyTokenMatch(textToken: string, queryToken: string): boolean {
+  if (textToken.includes(queryToken) || queryToken.includes(textToken)) return true
+  const shortestLength = Math.min(textToken.length, queryToken.length)
+  if (shortestLength < 5) return false
+  const allowedDistance = shortestLength >= 10 ? 2 : 1
+  return levenshteinDistance(textToken, queryToken) <= allowedDistance
+}
+
+function levenshteinDistance(left: string, right: string): number {
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index)
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = [leftIndex]
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      const substitutionCost = left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1
+      current[rightIndex] = Math.min(
+        current[rightIndex - 1]! + 1,
+        previous[rightIndex]! + 1,
+        previous[rightIndex - 1]! + substitutionCost
+      )
+    }
+    previous.splice(0, previous.length, ...current)
+  }
+  return previous[right.length]!
 }
 
 /**

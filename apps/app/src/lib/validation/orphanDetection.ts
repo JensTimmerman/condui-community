@@ -33,7 +33,7 @@ import type { Issue, Offender } from './core/types'
 import { findCircuitInProject, resolveFrameContentItems } from '@/lib/eendraad/frameContent'
 import { endpointSupportsMultiplier } from '@/utils/endpointMultipliers'
 import { isActualEndpoint } from '@/utils/symbolMapping'
-import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
+import { symbolRequiresSituationPlanPlacement } from '@/lib/plan/situationPlanSymbolEligibility'
 import { resolvePanelForDistributionEndpoint } from '@/lib/plan/panelDistributionEndpoint'
 import { panelGridModuleRefKey } from '@/components/canvas/panel/panelGridLayout'
 import {
@@ -102,9 +102,9 @@ function compatibleMultiplierMerge(
   return a.type === b.type && a.symbol === b.symbol
 }
 
-/** Same idea as usePlanPlacements: these endpoints should be visible on the sitplan when placed. */
+/** Optional plan symbols are valid with zero placements and must never be reported as orphans. */
 function endpointExpectedOnSitplan(ep: Circuit['endpoints'][number]): boolean {
-  return canSymbolAppearOnSituationPlan(ep.symbol)
+  return symbolRequiresSituationPlanPlacement(ep.symbol)
 }
 
 /** Single detected orphan for UI: banner, inspector, focus and quarantine */
