@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 48 48"
+   width="48"
+   height="48"
+   version="1.1"
+   id="svg6"
+   sodipodi:docname="source_changeover.svg"
+   inkscape:version="1.4.2 (f4327f4, 2025-05-13)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs6" />
+  <sodipodi:namedview
+     id="namedview6"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="24.3125"
+     inkscape:cx="24"
+     inkscape:cy="24"
+     inkscape:window-width="2560"
+     inkscape:window-height="1369"
+     inkscape:window-x="-8"
+     inkscape:window-y="-8"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="g6" />
+  <g
+     fill="none"
+     stroke="#000"
+     stroke-width="2"
+     stroke-linecap="round"
+     stroke-linejoin="round"
+     id="g6">
+    <line
+       x1="4.482192"
+       y1="24"
+       x2="21.759453"
+       y2="24"
+       id="line4"
+       style="stroke-width:2;stroke-dasharray:none" />
+    <ellipse
+       cx="24.354755"
+       cy="38.082264"
+       id="circle5"
+       rx="2.4038808"
+       ry="2.4600697"
+       style="stroke-width:1.94546" />
+    <line
+       x1="27.102749"
+       y1="38.141205"
+       x2="42.079773"
+       y2="38.141205"
+       id="line6"
+       style="stroke-width:1.91309;stroke-dasharray:none" />
+    <circle
+       cx="3.1311057"
+       cy="23.917738"
+       r="2.2355857"
+       fill="#000000"
+       id="circle8"
+       style="stroke-width:1.78847" />
+    <line
+       x1="26.748854"
+       y1="9.8018732"
+       x2="41.981224"
+       y2="9.8018732"
+       id="line9"
+       style="stroke-width:1.92934;stroke-dasharray:none" />
+    <circle
+       cx="24.190231"
+       cy="23.917738"
+       r="2.2355857"
+       fill="#000000"
+       id="circle10"
+       style="stroke-width:1.78847" />
+    <ellipse
+       cx="44.632389"
+       cy="38.082264"
+       id="ellipse10"
+       rx="2.4038808"
+       ry="2.4600697"
+       style="stroke-width:1.94546" />
+    <ellipse
+       cx="24.354755"
+       cy="9.7429323"
+       id="ellipse11"
+       rx="2.4038808"
+       ry="2.4600697"
+       style="stroke-width:1.94546" />
+    <ellipse
+       cx="44.632389"
+       cy="9.7429323"
+       id="ellipse12"
+       rx="2.4038808"
+       ry="2.4600697"
+       style="stroke-width:1.94546" />
+  </g>
+</svg>

@@ -10,7 +10,8 @@ import { exportToPDF, type ExportContext, type ExportProgressCallbacks } from '@
 import { normalizeExportOptions, type ExportOptions } from '@/lib/export/types'
 import { buildLayoutTree } from '@/lib/layout/layoutTree'
 import { deriveWires } from '@/lib/layout/deriveWires'
-import { getElectricalInstallationFromProject, getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
+import { resolveSupplyDeviceMounting } from '@/lib/panel/auxiliarySupplyEnclosures'
+import { getElectricalInstallationFromProject, getElectricalPanelsFromProject, getSupplyAssembliesFromProject } from '@/lib/projectV2/electrical'
 import { getOneWireSegmentsFromProject } from '@/lib/projectV2/annotations'
 
 export function useExportDialog() {
@@ -42,6 +43,8 @@ export function useExportDialog() {
           tree,
           getElectricalPanelsFromProject(currentProject),
           getElectricalInstallationFromProject(currentProject),
+          getSupplyAssembliesFromProject(currentProject),
+          (deviceId) => resolveSupplyDeviceMounting(currentProject, deviceId),
         )
       }
       const context: ExportContext = {

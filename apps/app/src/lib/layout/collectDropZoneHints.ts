@@ -14,14 +14,24 @@ import type { LayoutNode, LayoutTree } from '@/lib/layout/layoutTree'
 import type { Circuit, Endpoint, Panel, ProtectionDevice } from '@/types/schema'
 import type { Point } from '@/types/ui'
 import {
+  getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
+import { getSupplyFeedDevicesForPanel } from '@/lib/feedTopology'
+import { findPanelById } from '@/lib/panel/panelTree'
+import {
+  getDirectConverterChangeoverInsertIndex,
+  panelHasPopulatedDirectConverterBackup,
+} from '@/lib/supplyAssembly/directConverterBackupUpgrade'
+import { getPanelFeedOrganization } from '@/lib/panel/panelFeedOrganization'
+import { canCreateSupplyTopologyFromDrop } from '@/lib/supplyTopologyFeature'
 
 export interface DropZoneHintMatch {
   panelId?: string
   supplyFeedScope?: 'shared' | 'root'
   supplyDeviceInsertIndex?: number
+  supplyConverterDcBranch?: 'right' | 'top'
   circuitId?: string
   /** Vertical trunk insertion slot (aligns with DropTarget.circuitTrunkSegmentIndex). */
   circuitTrunkSegmentIndex?: number
@@ -33,6 +43,13 @@ export interface DropZoneHint {
   y: number
   targetType: NonNullable<DropTarget['type']>
   match?: DropZoneHintMatch
+  outline?: {
+    x: number
+    y: number
+    width: number
+    height: number
+    cornerRadius: number
+  }
 }
 
 interface HintWalkContext {
@@ -293,6 +310,7 @@ function isSupplyWireSlotSegment(node: LayoutNode, panelNode: LayoutNode): boole
   if (node.type !== 'wire' || node.hitZone?.type !== 'supplyWire') return false
 
   const id = node.id ?? ''
+  if (id.startsWith('supply-changeover-load-slot-')) return true
   const panelId = panelNode.domainId ?? panelNode.id
   if (id.includes('supply-wire-vertical')) return false
 
@@ -302,6 +320,7 @@ function isSupplyWireSlotSegment(node: LayoutNode, panelNode: LayoutNode): boole
 
   const suffix = supplySegmentSuffix(id, panelId)
   if (suffix != null) {
+    if (suffix === 'stub-root' || suffix === 'stub-shared') return true
     if (suffix === 'entry-root' || suffix === 'entry-shared') return false
     if (suffix.endsWith('-root') || suffix.endsWith('-shared')) return false
     return suffix === 'entry' || /^\d+$/.test(suffix) || suffix === 'supply' || suffix === 'stub'
@@ -319,11 +338,20 @@ function buildHintMatch(
   hitType: NonNullable<DropTarget['type']>,
   ctx: HintWalkContext
 ): DropZoneHintMatch | undefined {
-  if (hitType === 'supplyWire') {
+  if (
+    hitType === 'supplyWire' ||
+    hitType === 'supplyBackupWire' ||
+    hitType === 'supplyBackupOutputWire' ||
+    hitType === 'supplyChangeoverGridWire' ||
+    hitType === 'supplyConverterGridWire' ||
+    hitType === 'supplyConverterBackupWire' ||
+    hitType === 'supplyConverterDcWire'
+  ) {
     return {
       panelId: node.hitZone?.supplyPanelId ?? ctx.panelId,
       supplyFeedScope: node.hitZone?.supplyFeedScope ?? 'shared',
       supplyDeviceInsertIndex: node.hitZone?.supplyInsertIndex,
+      supplyConverterDcBranch: node.hitZone?.supplyConverterDcBranch,
     }
   }
   if (hitType === 'mainBus' || hitType === 'circuit' || hitType === 'rcd') {
@@ -383,12 +411,51 @@ function shouldIncludeHintNode(
   if (node.hitZone?.type !== hitType) return false
 
   if (hitType === 'supplyWire') {
+    if (symbol.id === 'source_changeover' && node.hitZone?.supplyFeedScope !== 'root') {
+      return false
+    }
+    if (
+      symbol.id === 'source_changeover' &&
+      panelHasPopulatedDirectConverterBackup(project, node.hitZone?.supplyPanelId ?? ctx.panelId)
+    ) {
+      return false
+    }
+    if (symbol.id === 'source_changeover') {
+      const panelId = node.hitZone?.supplyPanelId ?? ctx.panelId
+      const installation = getElectricalInstallationFromProject(project)
+      const panel = findPanelById(getElectricalPanelsFromProject(project), panelId)
+      const acceptsAnyGridFeedSegment = Boolean(
+        panel && getPanelFeedOrganization(project, panel) === 'split-backup'
+      )
+      const preferredInsertIndex = installation
+        ? getDirectConverterChangeoverInsertIndex(
+            getSupplyFeedDevicesForPanel(
+              installation,
+              getElectricalPanelsFromProject(project),
+              panelId,
+              'root'
+            )
+          )
+        : null
+      if (
+        !acceptsAnyGridFeedSegment &&
+        preferredInsertIndex !== null &&
+        node.hitZone?.supplyInsertIndex !== preferredInsertIndex
+      ) {
+        return false
+      }
+    }
     if (node.type === 'trunkDevice' || node.type === 'supply') return false
     if (!isSupplyWireSlotSegment(node, panelNode)) return false
   }
 
   if (TRUNK_ONLY_ON_CIRCUIT_SYMBOLS.has(symbol.id)) {
-    if (hitType === 'supplyWire') return false
+    if (hitType === 'supplyWire') {
+      return (
+        (symbol.id === 'inverter' || symbol.id === 'rectifier') &&
+        node.hitZone?.supplyFeedScope === 'root'
+      )
+    }
     if (node.id?.startsWith('circuit-nest-')) return false
     if (node.id?.startsWith('circuit-trunk-') && hitType === 'circuit') return true
   }
@@ -397,11 +464,12 @@ function shouldIncludeHintNode(
     if (hitType === 'protection') return false
     if (node.type === 'mcb' || node.type === 'rcd') return false
     if (hitType === 'circuit') {
+      const circuit = ctx.circuitId ? findCircuitInProject(project, ctx.circuitId) : undefined
+      if (circuit?.supplySource?.kind === 'converter-backup') return false
       if (node.type === 'branch' || node.type === 'trunkDevice') return false
       if (node.id?.startsWith('circuit-trunk-')) return false
       if (node.id?.startsWith('circuit-nest-')) return true
       if (node.id?.startsWith('secondary-bus-segment-')) {
-        const circuit = ctx.circuitId ? findCircuitInProject(project, ctx.circuitId) : undefined
         return (circuit?.subCircuitIds?.length ?? 0) >= 2
       }
       return false
@@ -677,6 +745,33 @@ export function collectDropZoneHints(
   layoutTree: LayoutTree,
   project: ProjectWithOptionalV2Electrical
 ): DropZoneHint[] {
+  if (symbol.busFeedKind) {
+    if (!canCreateSupplyTopologyFromDrop(symbol, 'mainBus')) return []
+    return layoutTree.panels.flatMap((panelNode) => {
+      const panel = panelNode.domainRef as Panel | undefined
+      if (!panel || panel.isMain === false) return []
+      const bus = panelNode.children.find(
+        (node) => node.type === 'busBar' && node.hitZone?.type === 'mainBus'
+      )
+      if (!bus) return []
+      const horizontalPadding = 12
+      const verticalPadding = 14
+      return [{
+        nodeId: `panel-bus-feed-invitation-${panelNode.id}`,
+        x: bus.bounds.x + bus.bounds.width / 2,
+        y: bus.bounds.y + bus.bounds.height / 2,
+        targetType: 'mainBus' as const,
+        match: { panelId: panel.id },
+        outline: {
+          x: bus.bounds.x - horizontalPadding,
+          y: bus.bounds.y - verticalPadding,
+          width: bus.bounds.width + horizontalPadding * 2,
+          height: bus.bounds.height + verticalPadding * 2,
+          cornerRadius: 8,
+        },
+      }]
+    })
+  }
   const behavior = dropBehaviors[symbol.id]
   if (!behavior) return []
 
@@ -704,5 +799,7 @@ export function collectDropZoneHints(
 
   appendTrunkTopSlotHints(symbol, project, layoutTree, trunkSegmentCounts, rawHints)
 
-  return dedupeSupplyWireHints(rawHints)
+  return dedupeSupplyWireHints(rawHints).filter((hint) =>
+    canCreateSupplyTopologyFromDrop(symbol, hint.targetType)
+  )
 }

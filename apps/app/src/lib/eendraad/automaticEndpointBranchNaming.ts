@@ -62,6 +62,7 @@ export function endpointBranchLabelsWouldChange(circuit: Circuit, circuitCodeFor
  * manual protection labels, not sequential branch numbering.
  */
 export function syncSequentialEndpointBranchLabelsToCircuit(circuit: Circuit): void {
+  if (circuit.supplySource?.kind === 'converter-backup') return
   const code = getEndpointBranchLabelPrefix(circuit)
   if (!code) return
   const branches = circuit.branches
@@ -83,5 +84,8 @@ export function applyAutomaticEndpointBranchLabelsToCircuit(circuit: Circuit): v
 }
 
 export function applyAutomaticEndpointBranchLabelsToPanel(panel: Panel): void {
-  forEachCircuitOnPanel(panel, syncSequentialEndpointBranchLabelsToCircuit)
+  forEachCircuitOnPanel(panel, (circuit) => {
+    if (circuit.supplySource?.kind === 'converter-backup') return
+    syncSequentialEndpointBranchLabelsToCircuit(circuit)
+  })
 }

@@ -4,11 +4,23 @@ import { getSymbolById } from '@/lib/symbols'
 import type { SymbolMetadata } from '@/lib/symbols'
 import type { Point } from '@/types/ui'
 import type { BottomUpLayoutResult } from '@/lib/layout/bottomUpLayout'
-import { LAYOUT_CONSTANTS } from '@/lib/layout/bottomUpLayout'
+import { getPanelDiagramId, LAYOUT_CONSTANTS } from '@/lib/layout/bottomUpLayout'
 import type { WireSegment } from '@/types/schema'
 import type { DropTarget } from '@/lib/layout/findDropTarget'
 import { isFixedApplianceSymbol } from '@/utils/symbolMapping'
 import { getDomoticaDropContextForCircuit, type DomoticaDropContext } from '@/lib/layout/domoticaDrop'
+import { getMainBusOrder } from '@/lib/eendraad/mainBusOrder'
+import {
+  getCircuitBusSectionId,
+  getProtectionBusSectionId,
+  hasExplicitPanelBusSections,
+} from '@/lib/panel/panelBusSections'
+import { getPanelBusFeedKind } from '@/lib/panel/panelFeedOrganization'
+import {
+  calculatePanelBusFeedPreview,
+  getLeftBiasedBusFeedStubX,
+  PANEL_BUS_FEED_GAP,
+} from '@/lib/panel/panelBusFeedPreview'
 
 interface DragPreviewProps {
   position: Point
@@ -33,7 +45,10 @@ export function DragPreview({
   // Try to find panel by panelId first, or infer from drop target
   let targetPanel = null
   if (dropTarget?.panelId) {
-    targetPanel = layout?.panels.find(p => p.panel.id === dropTarget.panelId) || null
+    targetPanel =
+      layout?.panels.find((p) => p.diagramId === dropTarget.diagramId) ??
+      layout?.panels.find((p) => p.panel.id === dropTarget.panelId) ??
+      null
   } else if (dropTarget && layout) {
     // Try to infer panel from drop target (e.g., circuitId, endpointId)
     if (dropTarget.circuitId) {
@@ -95,7 +110,11 @@ export function DragPreview({
   // Find wire segments being hovered for highlighting
   const hoveredWireSegments: WireSegment[] = []
   if (dropTarget.panelId) {
-    const panelWires = wireSegments.filter(ws => ws.panelId === dropTarget.panelId)
+    const panelWires = wireSegments.filter(
+      (ws) =>
+        ws.panelId === dropTarget.panelId &&
+        (!dropTarget.diagramId || (ws.diagramId ?? ws.panelId) === dropTarget.diagramId)
+    )
     
     // Domotica-specific wire highlight: highlight the exact output wire that will
     // receive the new endpoint/switch.
@@ -140,7 +159,9 @@ export function DragPreview({
         .forEach(w => hoveredWireSegments.push(w))
     } else if (dropTarget.type === 'endpoint' && dropTarget.endpointId) {
       // Find the endpoint element from layout to get its position
-      const targetPanelLayout = layout.panels.find(p => p.panel.id === dropTarget.panelId)
+      const targetPanelLayout =
+        layout.panels.find((p) => p.diagramId === dropTarget.diagramId) ??
+        layout.panels.find((p) => p.panel.id === dropTarget.panelId)
       if (targetPanelLayout) {
         const endpointElement = targetPanelLayout.elements.find(
           e => e.type === 'endpoint' && e.endpointId === dropTarget.endpointId
@@ -286,7 +307,8 @@ export function DragPreview({
             const verticalWires = wireSegments.filter(
               s => s.circuitId === dropTarget.circuitId &&
                    s.type === 'vertical' &&
-                   s.panelId === panelLayout.panel.id
+                   s.panelId === panelLayout.panel.id &&
+                   (s.diagramId ?? s.panelId) === getPanelDiagramId(panelLayout)
             )
             if (verticalWires.length === 0) continue
 
@@ -460,7 +482,8 @@ export function DragPreview({
             const verticalWires = wireSegments.filter(
               s => s.circuitId === dropTarget.circuitId &&
                    s.type === 'vertical' &&
-                   s.panelId === panelLayout.panel.id
+                   s.panelId === panelLayout.panel.id &&
+                   (s.diagramId ?? s.panelId) === getPanelDiagramId(panelLayout)
             )
             if (verticalWires.length === 0) continue
 
@@ -545,7 +568,8 @@ export function DragPreview({
             const verticalWire = wireSegments.find(
               s => s.circuitId === dropTarget.circuitId && 
                    s.type === 'vertical' && 
-                   s.panelId === panelLayout.panel.id
+                   s.panelId === panelLayout.panel.id &&
+                   (s.diagramId ?? s.panelId) === getPanelDiagramId(panelLayout)
             )
             
             if (!verticalWire) {
@@ -763,7 +787,147 @@ export function DragPreview({
       {dropTarget.type === 'mainBus' && (() => {
         // Show preview on main bus
         for (const panelLayout of layout.panels) {
-          if (panelLayout.panel.id === dropTarget.panelId) {
+          if (
+            panelLayout.panel.id === dropTarget.panelId &&
+            (!dropTarget.diagramId || panelLayout.diagramId === dropTarget.diagramId)
+          ) {
+            if (symbolData?.busFeedKind) {
+              const busY = panelLayout.mainBus.y
+              const busStartX = panelLayout.mainBus.x
+              const busEndX = busStartX + panelLayout.mainBus.width
+              const stubLength = 28
+              const order = getMainBusOrder(panelLayout.panel)
+              const items = order.flatMap((item) => {
+                const element = panelLayout.elements.find((candidate) =>
+                  item.type === 'protection'
+                    ? candidate.protectionId === item.id
+                    : candidate.circuitId === item.id,
+                )
+                if (!element) return []
+                const busSectionId =
+                  item.type === 'protection'
+                    ? getProtectionBusSectionId(
+                        panelLayout.panel,
+                        panelLayout.panel.protections.find(
+                          (protection) => protection.id === item.id,
+                        ) ?? {},
+                      )
+                    : getCircuitBusSectionId(
+                        panelLayout.panel,
+                        panelLayout.panel.circuits.find((circuit) => circuit.id === item.id) ?? {},
+                      )
+                return [{
+                  x: element.position.x,
+                  kind: hasExplicitPanelBusSections(panelLayout.panel)
+                    ? getPanelBusFeedKind(panelLayout.panel, busSectionId)
+                    : 'grid' as const,
+                }]
+              })
+              const referencedId = dropTarget.protectionId ?? dropTarget.circuitId
+              const referencedIndex = referencedId
+                ? order.findIndex((item) => item.id === referencedId)
+                : -1
+              const insertIndex =
+                typeof dropTarget.mainBusInsertIndex === 'number'
+                  ? dropTarget.mainBusInsertIndex
+                  : referencedIndex >= 0
+                    ? referencedIndex
+                    : 0
+              const feedPreview = calculatePanelBusFeedPreview(
+                items,
+                insertIndex,
+                symbolData.busFeedKind,
+                busStartX,
+                busEndX,
+                !hasExplicitPanelBusSections(panelLayout.panel),
+              )
+              const introducedRun = feedPreview.introducedKind
+                ? feedPreview.resultRuns.find(
+                    (run) =>
+                      run.kind === feedPreview.introducedKind &&
+                      run.endX > feedPreview.affectedStartX,
+                  )
+                : undefined
+              const stubX = introducedRun
+                ? getLeftBiasedBusFeedStubX(introducedRun.startX, introducedRun.endX)
+                : undefined
+              const highlightedRuns = feedPreview.resultRuns.flatMap((run) => {
+                if (feedPreview.action === 'merge') return [run]
+                const startX = Math.max(run.startX, feedPreview.affectedStartX)
+                return run.endX > startX ? [{ ...run, startX }] : []
+              })
+              return (
+                <>
+                  {highlightedRuns.map((run, index) => {
+                    const gap = feedPreview.action === 'merge' ? 0 : PANEL_BUS_FEED_GAP / 2
+                    const isFirstResultRun = run.startX === feedPreview.resultRuns[0]?.startX
+                    const isLastResultRun = run.endX === feedPreview.resultRuns.at(-1)?.endX
+                    return (
+                      <Line
+                        key={`feed-preview-run-${index}`}
+                        points={[
+                          run.startX + (!isFirstResultRun ? gap : 0),
+                          busY,
+                          run.endX + (!isLastResultRun ? -gap : 0),
+                          busY,
+                        ]}
+                        stroke={previewColor}
+                        strokeWidth={feedPreview.action === 'merge' ? 10 : 8}
+                        opacity={previewOpacity}
+                        lineCap="round"
+                        listening={false}
+                      />
+                    )
+                  })}
+                  {feedPreview.resultCutXs.map((cutX) => (
+                    <Line
+                      key={`feed-preview-cut-${cutX}`}
+                      points={[cutX, busY - 13, cutX, busY + 13]}
+                      stroke={previewColor}
+                      strokeWidth={2}
+                      opacity={previewOpacity}
+                      dash={[4, 3]}
+                      listening={false}
+                    />
+                  ))}
+                  {stubX != null && (
+                    <Line
+                      points={[stubX, busY, stubX, busY + stubLength]}
+                      stroke={previewColor}
+                      strokeWidth={3}
+                      opacity={previewOpacity}
+                      dash={[6, 3]}
+                      listening={false}
+                    />
+                  )}
+                  {stubX != null && symbolImage && (
+                    <Group x={stubX} y={busY + stubLength + 12}>
+                      <Rect
+                        x={-15}
+                        y={-15}
+                        width={30}
+                        height={30}
+                        stroke={previewColor}
+                        strokeWidth={2}
+                        dash={[4, 3]}
+                        cornerRadius={3}
+                        opacity={previewOpacity}
+                        listening={false}
+                      />
+                      <Image
+                        image={symbolImage}
+                        width={22}
+                        height={22}
+                        offsetX={11}
+                        offsetY={11}
+                        opacity={previewOpacity}
+                        listening={false}
+                      />
+                    </Group>
+                  )}
+                </>
+              )
+            }
             return (
               <>
                 {/* Preview highlight on main bus */}
@@ -797,7 +961,10 @@ export function DragPreview({
       {dropTarget.type === 'supplyWire' && (() => {
         // Show preview on supply wire for energy meter or protection device
         for (const panelLayout of layout.panels) {
-          if (panelLayout.panel.id !== dropTarget.panelId) continue
+          if (
+            panelLayout.panel.id !== dropTarget.panelId ||
+            (dropTarget.diagramId && panelLayout.diagramId !== dropTarget.diagramId)
+          ) continue
           
           const supplyElement = panelLayout.elements.find(e => e.type === 'supply')
           if (!supplyElement) continue

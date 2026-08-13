@@ -962,10 +962,14 @@ export function endpointCanAppearInPanelGrid(endpoint: Endpoint): boolean {
   return symbolCanAppearInPanelGrid(endpoint.symbol)
 }
 
-/** One-wire trunk devices that represent DIN-panel equipment rather than sources or storage. */
+/** One-wire trunk devices that have a physical representation in the panel view. */
 export function trunkDeviceCanAppearInPanelGrid(device: TrunkDevice): boolean {
-  if (device.symbol === 'solar_panel' || device.symbol === 'battery') return false
-  return device.type === 'protection' || device.type === 'energy_meter' || device.type === 'conversion'
+  return (
+    device.type === 'protection' ||
+    device.type === 'energy_meter' ||
+    device.type === 'conversion' ||
+    device.type === 'changeover'
+  )
 }
 
 /** Structural direct-panel feeder carriers are topology-only, never physical DIN modules. */
@@ -1034,7 +1038,9 @@ export function panelGridModuleIsVisibleByDefault(
   if (ref.kind === 'protection') {
     for (const candidatePanel of allPanels) {
       const protection = findProtectionById(candidatePanel, ref.id)
-      if (protection) return protectionCanAppearInPanelGrid(protection)
+      if (protection) {
+        return protectionCanAppearInPanelGrid(protection)
+      }
     }
     return false
   }
@@ -1049,7 +1055,20 @@ export function panelGridModuleIsVisibleByDefault(
     const circuit = getAllCircuits(panel).find((candidate) => candidate.id === ref.circuitId)
     device = circuit?.trunkDevices?.find((d) => d.id === ref.id)
   }
-  return device?.type === 'protection'
+  if (
+    device?.type === 'protection' &&
+    device.protectionType === 'FUSE' &&
+    (device.supplyPath === 'converter-dc' || device.supplyPath === 'converter-dc-top')
+  ) {
+    return false
+  }
+  if (device?.type === 'protection') return true
+  if (device?.type === 'changeover' || device?.symbol === 'source_changeover') return true
+  return (
+    ref.scope === 'supply' &&
+    (device?.supplyPath === 'backup' ||
+      device?.supplyPath === 'converter-branch')
+  )
 }
 export function panelGridModuleRefKey(ref: PanelGridModuleRef): string {
   if (ref.kind === 'protection') return `protection:${ref.id}`

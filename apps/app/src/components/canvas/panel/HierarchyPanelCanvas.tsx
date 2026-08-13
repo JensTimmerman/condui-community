@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Group, Rect, Line, Text } from 'react-konva'
+import { Group, Rect, Line, Text, Image as KonvaImage } from 'react-konva'
 import Konva from 'konva'
 import BaseCanvas, { type BaseCanvasHandle } from '../BaseCanvas'
 import ViewNavigationToolbar from '../ViewNavigationToolbar'
@@ -30,6 +30,7 @@ import {
   panelGridModuleRefKey,
   resolveModuleWidthCols,
   CELL_W,
+  canResizeModulePlacement,
   CELL_H,
   ROW_GAP,
   ROW_STRIDE,
@@ -47,6 +48,7 @@ import {
   buildFullPanelScene,
   PANEL_SCENE_FRAME_MARGIN,
   PANEL_SCENE_SHARED_SUPPLY_ID,
+  getConverterBackupFeedMarkerGeometry,
   type BuiltPanelScene,
   type PanelSceneSurface,
 } from '@/lib/panel/panelScene'
@@ -54,7 +56,7 @@ import { applyPanelSceneFilter, type PanelSceneFilter } from '@/lib/panel/applyP
 import { generateId } from '@/utils'
 import { getNextAvailableCircuitCode } from '@/utils/project'
 import { addToSelection } from '@/utils/selection'
-import { ensureInstallationFeedTopology, getPanelFeedProjection } from '@/lib/feedTopology'
+import { getPanelFeedProjection } from '@/lib/feedTopology'
 import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
@@ -87,14 +89,109 @@ import type {
 import type { ProjectState } from '@/stores/projectStore'
 import type { CanvasDropMeta, Point, Selection as CanvasSelection } from '@/types/ui'
 import type { ContextMenuItem } from '@/components/common/ContextMenu'
-import type { SymbolMetadata } from '@/lib/symbols'
+import { getSymbolById, type SymbolMetadata } from '@/lib/symbols'
+import { loadProcessedSymbol } from '@/lib/symbolImage'
 import type { EditorCapabilities } from '@/lib/viewerMode'
 import { polesFromConfig } from '@/constants/poleConfig'
 import { clamp, rectContainsRect } from '@/lib/geometry'
 import { upsertPanelGridSlotPosition } from '@/lib/panel/panelSupplySlots'
 import { collectCircuits, getLastAssignableCircuit } from '@/lib/panel/panelTree'
+import {
+  isAuxiliaryMountableSupplyDevice,
+  planAuxiliarySupplyEnclosureGrid,
+} from '@/lib/panel/auxiliarySupplyEnclosures'
 
 type Project = NonNullable<ProjectState['currentProject']>
+
+function ConverterBackupFeedMarker({
+  surface,
+  debugMode,
+}: {
+  surface: PanelSceneSurface
+  debugMode: boolean
+}) {
+  const colors = useThemeColors()
+  const themeMode = useSettingsStore((state) => state.theme.mode)
+  const getTrunkDeviceById = useProjectStore((state: ProjectState) => state.getTrunkDeviceById)
+  const converterId = surface.converterBackupSourceFeed?.converterId
+  const converter = converterId ? getTrunkDeviceById(converterId)?.device : undefined
+  const symbolPath = getSymbolById(converter?.symbol ?? 'inverter')?.svgPath
+  const [symbolImage, setSymbolImage] = useState<HTMLImageElement | null>(null)
+  const geometry = getConverterBackupFeedMarkerGeometry(surface)
+
+  useEffect(() => {
+    if (!symbolPath) {
+      setSymbolImage(null)
+      return
+    }
+    loadProcessedSymbol(symbolPath, themeMode === 'dark')
+      .then(setSymbolImage)
+      .catch(() => setSymbolImage(null))
+  }, [symbolPath, themeMode])
+
+  if (!geometry) return null
+  const half = geometry.symbolSize / 2
+  return (
+    <Group name={`virtual-converter-feed-${surface.panel?.id ?? surface.id}`} listening={false}>
+      {geometry.wirePaths.map((points, index) => (
+        <Line
+          key={`virtual-converter-feed-wire-${index}`}
+          points={points}
+          stroke={colors.supplyWire}
+          strokeWidth={1.5}
+          lineCap="square"
+          lineJoin="round"
+          listening={false}
+        />
+      ))}
+      {symbolImage ? (
+        <KonvaImage
+          image={symbolImage}
+          x={geometry.sourceX - half}
+          y={geometry.sourceY - half}
+          width={geometry.symbolSize}
+          height={geometry.symbolSize}
+          listening={false}
+        />
+      ) : (
+        <>
+          <Rect
+            x={geometry.sourceX - half}
+            y={geometry.sourceY - half}
+            width={geometry.symbolSize}
+            height={geometry.symbolSize}
+            stroke={colors.supplyWire}
+            strokeWidth={1.5}
+            listening={false}
+          />
+          <Line
+            points={[
+              geometry.sourceX - half,
+              geometry.sourceY + half,
+              geometry.sourceX + half,
+              geometry.sourceY - half,
+            ]}
+            stroke={colors.supplyWire}
+            strokeWidth={1.5}
+            listening={false}
+          />
+        </>
+      )}
+      {debugMode && (
+        <Rect
+          x={geometry.sourceX - half - 4}
+          y={geometry.sourceY - half - 4}
+          width={geometry.symbolSize + 8}
+          height={geometry.symbolSize + 8}
+          stroke="#06b6d4"
+          strokeWidth={1}
+          dash={[4, 3]}
+          listening={false}
+        />
+      )}
+    </Group>
+  )
+}
 
 function findPanelRecursive(panels: Panel[], id: string): Panel | undefined {
   for (const panel of panels) {
@@ -103,79 +200,6 @@ function findPanelRecursive(panels: Panel[], id: string): Panel | undefined {
     if (nested) return nested
   }
   return undefined
-}
-
-function getManualWidthProps(slot?: PanelGridSlot) {
-  return slot?.moduleWidthManual === true && slot.moduleWidth != null
-    ? { moduleWidth: slot.moduleWidth, moduleWidthManual: true as const }
-    : {}
-}
-
-function reindexTrunkDevices(devices: TrunkDevice[] | undefined): void {
-  devices?.forEach((device, index) => {
-    device.trunkPosition = index
-  })
-}
-
-function moveSupplyDeviceFeedOwner(
-  project: Project,
-  deviceId: string,
-  target: { scope: 'shared' } | { scope: 'root'; panelId: string },
-  insertIndex?: number
-): boolean {
-  const installation = getElectricalInstallationFromProject(project)
-  if (!installation) return false
-  const panels = getElectricalPanelsFromProject(project)
-  const topology = ensureInstallationFeedTopology(installation, panels)
-  const sharedDevices = installation.mainSupply.supplyTrunkDevices ?? []
-  let movedDevice: TrunkDevice | undefined
-
-  const sharedIndex = sharedDevices.findIndex((device) => device.id === deviceId)
-  if (sharedIndex >= 0) {
-    movedDevice = sharedDevices.splice(sharedIndex, 1)[0]
-  }
-
-  for (const feed of topology.rootFeeds) {
-    const devices = feed.trunkDevices ?? []
-    const index = devices.findIndex((device) => device.id === deviceId)
-    if (index >= 0) {
-      movedDevice = devices.splice(index, 1)[0]
-      feed.trunkDevices = devices
-      break
-    }
-  }
-
-  if (!movedDevice) return false
-
-  if (target.scope === 'shared') {
-    const targetIndex = clamp(insertIndex ?? sharedDevices.length, 0, sharedDevices.length)
-    sharedDevices.splice(targetIndex, 0, movedDevice)
-  } else {
-    const feed =
-      topology.rootFeeds.find((item) => item.panelId === target.panelId) ??
-      (() => {
-        const created = {
-          id: `root-feed-${target.panelId}`,
-          kind: 'root_panel' as const,
-          connectorId: topology.rootConnector.id,
-          panelId: target.panelId,
-          cable: topology.sharedFeed.cable ?? installation.mainSupply.cable,
-          trunkDevices: [] as TrunkDevice[],
-          segmentCables: [],
-        }
-        topology.rootFeeds.push(created)
-        return created
-      })()
-    if (!feed.trunkDevices) feed.trunkDevices = []
-    const targetIndex = clamp(insertIndex ?? feed.trunkDevices.length, 0, feed.trunkDevices.length)
-    feed.trunkDevices.splice(targetIndex, 0, movedDevice)
-  }
-
-  topology.sharedFeed.trunkDevices = [...sharedDevices]
-  reindexTrunkDevices(sharedDevices)
-  reindexTrunkDevices(topology.sharedFeed.trunkDevices)
-  for (const feed of topology.rootFeeds) reindexTrunkDevices(feed.trunkDevices)
-  return true
 }
 
 function moduleRefMatchesSelection(ref: PanelGridModuleRef, selection: CanvasSelection): boolean {
@@ -265,9 +289,7 @@ function applyPanelRewireOperation({
   if (!operation) return false
 
   if (operation.kind === 'promotePanelToRootSupply') {
-    useProjectStore
-      .getState()
-      .movePanelSupply(operation.panelId, { type: 'supply' })
+    useProjectStore.getState().movePanelSupply(operation.panelId, { type: 'supply' })
     useUIStore.getState().setSelection({ type: 'panel', ids: [operation.panelId] })
     return true
   }
@@ -539,6 +561,10 @@ function buildPanelWirePathRegions(surfaces: PanelSceneSurface[]): PanelWirePath
       )
       continue
     }
+    if (surface.kind === 'auxiliary') {
+      addRegion(`${surface.id}:auxiliary`, surface, surface.y + PANEL_FRAME_MARGIN, surface.rows)
+      continue
+    }
     addRegion(
       `${surface.id}:main`,
       surface,
@@ -578,6 +604,8 @@ interface HierarchyDragPreview {
   height: number
   ref?: PanelGridModuleRef
   invalid?: boolean
+  createAuxiliary?: boolean
+  deviceIds?: string[]
   items?: Array<{
     ref: PanelGridModuleRef
     x: number
@@ -677,6 +705,21 @@ export function HierarchyPanelCanvas({
   const leftDragPansCanvas = useSettingsStore((s) => s.leftDragPansCanvas)
   const updatePanelGridSlots = useProjectStore((s: ProjectState) => s.updatePanelGridSlots)
   const updateSupplyPanelSlots = useProjectStore((s: ProjectState) => s.updateSupplyPanelSlots)
+  const createAuxiliarySupplyEnclosure = useProjectStore(
+    (s: ProjectState) => s.createAuxiliarySupplyEnclosure
+  )
+  const moveSupplyDeviceToAuxiliaryEnclosure = useProjectStore(
+    (s: ProjectState) => s.moveSupplyDeviceToAuxiliaryEnclosure
+  )
+  const moveSupplyDeviceToPanelEnclosure = useProjectStore(
+    (s: ProjectState) => s.moveSupplyDeviceToPanelEnclosure
+  )
+  const moveSupplyDeviceToGridEnclosure = useProjectStore(
+    (s: ProjectState) => s.moveSupplyDeviceToGridEnclosure
+  )
+  const updateAuxiliaryElectricalEnclosure = useProjectStore(
+    (s: ProjectState) => s.updateAuxiliaryElectricalEnclosure
+  )
   const rewireModules = useProjectStore((s: ProjectState) => s.rewireModules)
   const [tooltip, setTooltip] = useState<ModuleTooltipData | null>(null)
   void tooltip
@@ -711,7 +754,7 @@ export function HierarchyPanelCanvas({
       getPanelGridModules,
       includeDescendants: true,
       hierarchyFeedFromTop,
-      sharedSupplyLabel: t('panelCanvas.supplyPanel', 'Supply panel'),
+      sharedSupplyLabel: t('panelCanvas.supplyPanel', 'Grid panel'),
     })
   }, [currentProject, panelOptions, getPanelGridModules, hierarchyFeedFromTop, t])
 
@@ -741,6 +784,10 @@ export function HierarchyPanelCanvas({
   )
   const selectedSupplyPanelIds = useMemo(
     () => (selection.type === 'supplyPanel' ? selection.ids : []),
+    [selection]
+  )
+  const selectedAuxiliaryEnclosureIds = useMemo(
+    () => (selection.type === 'auxiliaryEnclosure' ? selection.ids : []),
     [selection]
   )
   const selectedPanels = useMemo(
@@ -831,13 +878,7 @@ export function HierarchyPanelCanvas({
       }
       return surface.panel
     },
-    [
-      currentProject,
-      getSurfaceRewireId,
-      panelOptions,
-      rewireOriginRef,
-      scene,
-    ]
+    [currentProject, getSurfaceRewireId, panelOptions, rewireOriginRef, scene]
   )
 
   const resetHierarchyRewireState = useCallback(() => {
@@ -913,10 +954,7 @@ export function HierarchyPanelCanvas({
           const top =
             surface.y +
             surface.mainPanelY -
-            Math.max(
-              HIERARCHY_PANEL_FRAME_HIT_MARGIN,
-              HIERARCHY_PANEL_FRAME_TITLE_HIT_HEIGHT
-            )
+            Math.max(HIERARCHY_PANEL_FRAME_HIT_MARGIN, HIERARCHY_PANEL_FRAME_TITLE_HIT_HEIGHT)
           const bottom =
             surface.y +
             surface.mainPanelY +
@@ -931,14 +969,7 @@ export function HierarchyPanelCanvas({
             continue
           }
           const surfaceId = getSurfaceRewireId(surface)
-          if (
-            validatePanelRewireOperation(
-              surface.panel,
-              currentProject,
-              rewireOriginRef,
-              null
-            )
-          ) {
+          if (validatePanelRewireOperation(surface.panel, currentProject, rewireOriginRef, null)) {
             foundFrameSurfaceId = surfaceId
             break
           }
@@ -1064,25 +1095,15 @@ export function HierarchyPanelCanvas({
       finalTargetY = targetPlacement.surface.y + targetPlacement.y
     }
 
-    const targetPanel = resolveHierarchyRewirePanel(
-      rewireOriginSurfaceId,
-      rewireTargetSurfaceId
-    )
+    const targetPanel = resolveHierarchyRewirePanel(rewireOriginSurfaceId, rewireTargetSurfaceId)
     const operation = targetPanel
-      ? getPanelRewireOperation(
-          targetPanel,
-          currentProject,
-          rewireOriginRef,
-          rewireTargetRef
-        )
+      ? getPanelRewireOperation(targetPanel, currentProject, rewireOriginRef, rewireTargetRef)
       : null
     const promotionPanelId =
       operation?.kind === 'promotePanelToRootSupply' ? operation.panelId : null
     if (promotionPanelId && !targetPlacement) {
       const targetSurface = scene.surfaces.find(
-        (surface) =>
-          surface.kind === 'panel' &&
-          surface.panel?.id === promotionPanelId
+        (surface) => surface.kind === 'panel' && surface.panel?.id === promotionPanelId
       )
       if (targetSurface) {
         finalTargetX = targetSurface.x + targetSurface.width / 2
@@ -1278,6 +1299,24 @@ export function HierarchyPanelCanvas({
       }
     }
 
+    if (selection.type === 'auxiliaryEnclosure' && selectedAuxiliaryEnclosureIds.length > 0) {
+      const selectedSurfaces = scene.surfaces.filter(
+        (surface) =>
+          surface.kind === 'auxiliary' && selectedAuxiliaryEnclosureIds.includes(surface.id)
+      )
+      if (selectedSurfaces.length === 0) return null
+      const minX = Math.min(...selectedSurfaces.map((surface) => surface.x))
+      const minY = Math.min(...selectedSurfaces.map((surface) => surface.y))
+      const maxX = Math.max(...selectedSurfaces.map((surface) => surface.x + surface.width))
+      const maxY = Math.max(...selectedSurfaces.map((surface) => surface.y + surface.height))
+      return {
+        x: minX - padding,
+        y: minY - padding,
+        width: maxX - minX + padding * 2,
+        height: maxY - minY + padding * 2,
+      }
+    }
+
     const placementsInScene = scene.surfaces.flatMap((surface) =>
       surface.placements.map((placement) => ({
         ref: placement.ref,
@@ -1289,7 +1328,7 @@ export function HierarchyPanelCanvas({
     )
 
     return getModuleSelectionBounds(placementsInScene, selection, padding)
-  }, [scene, selection, selectedPanelIds])
+  }, [scene, selection, selectedAuxiliaryEnclosureIds, selectedPanelIds])
 
   const onFindHierarchyElementsInRectangle = useCallback(
     (rect: { x: number; y: number; width: number; height: number }) => {
@@ -1445,6 +1484,20 @@ export function HierarchyPanelCanvas({
       if (ref.kind !== 'trunkDevice' || ref.scope !== 'supply') return null
 
       for (const surface of scene.surfaces) {
+        if (surface.kind === 'auxiliary' && surface.enclosure) {
+          const inside =
+            position.x >= surface.x - 10 &&
+            position.x <= surface.x + surface.width + 10 &&
+            position.y >= surface.y - 10 &&
+            position.y <= surface.y + surface.height + 10
+          if (!inside) continue
+          const ownerPanelId = surface.enclosure.ownerPanelId
+          const ownerPanel = ownerPanelId
+            ? panelOptions.find((option) => option.panel.id === ownerPanelId)?.panel
+            : undefined
+          if (!ownerPanel || !isAuxiliaryMountableSupplyDevice(currentProject, ref.id)) return null
+          return { surface, panel: ownerPanel, area: 'auxiliary' as const }
+        }
         if (surface.kind === 'shared_supply') {
           const frameLeft = surface.x
           const frameRight = surface.x + surface.width
@@ -1708,7 +1761,7 @@ export function HierarchyPanelCanvas({
 
   const handleHierarchyModuleDragMove = useCallback(
     (
-      surface: HierarchySurface & { panel: Panel },
+      surface: HierarchySurface,
       placement: ModulePlacement & { inSupplyPanel?: boolean },
       rawX: number,
       rawY: number
@@ -1728,8 +1781,10 @@ export function HierarchyPanelCanvas({
 
       if (placement.ref.kind === 'trunkDevice' && placement.ref.scope === 'supply') {
         const canvasPos = { x: surface.x + rawX, y: surface.y + rawY }
-        const target = detectHierarchyModuleDropTarget(canvasPos, placement.ref)
-        const currentArea = placement.inSupplyPanel ? 'supply' : 'main'
+        const detectedTarget = detectHierarchyModuleDropTarget(canvasPos, placement.ref)
+        const target = detectedTarget
+        const currentArea =
+          surface.kind === 'auxiliary' ? 'auxiliary' : placement.inSupplyPanel ? 'supply' : 'main'
         const targetSurfaceId = target ? (target.surface.panel?.id ?? target.surface.id) : null
         const currentSurfaceId = surface.panel?.id ?? surface.id
         if (target && (targetSurfaceId !== currentSurfaceId || target.area !== currentArea)) {
@@ -1757,7 +1812,12 @@ export function HierarchyPanelCanvas({
                 row * ROW_STRIDE
               : target.surface.y + target.surface.mainPanelY + PANEL_FRAME_MARGIN + row * ROW_STRIDE
           const invalid = target.surface.placements.some((other) => {
-            const otherArea = other.inSupplyPanel === true ? 'supply' : 'main'
+            const otherArea =
+              target.surface.kind === 'auxiliary'
+                ? 'auxiliary'
+                : other.inSupplyPanel === true
+                  ? 'supply'
+                  : 'main'
             if (otherArea !== target.area) return false
             if (panelGridModuleRefKey(other.ref) === key) return false
             if (other.row !== row) return false
@@ -1780,6 +1840,93 @@ export function HierarchyPanelCanvas({
             height: placement.height,
             ref: placement.ref,
             invalid,
+          })
+          return
+        }
+        const ownerPanelId =
+          surface.enclosure?.ownerPanelId ??
+          surface.panel?.id ??
+          panelOptions.find((option) => option.isRoot && option.panel.isMain)?.panel.id
+        const creationPlacements = selectedPlacements.length >= 2 ? selectedPlacements : [placement]
+        const creationDeviceIds = creationPlacements.flatMap((candidate) =>
+          candidate.ref.kind === 'trunkDevice' && candidate.ref.scope === 'supply'
+            ? [candidate.ref.id]
+            : []
+        )
+        const completeEligibleSelection =
+          (selection.ids.length <= 1 || creationPlacements.length === selection.ids.length) &&
+          creationDeviceIds.length === creationPlacements.length &&
+          currentProject != null &&
+          creationDeviceIds.every((deviceId) =>
+            isAuxiliaryMountableSupplyDevice(currentProject, deviceId)
+          )
+        const plannedGrid =
+          currentProject && completeEligibleSelection
+            ? planAuxiliarySupplyEnclosureGrid(currentProject, creationDeviceIds)
+            : null
+        const isInsideSurface = scene?.surfaces.some(
+          (candidate) =>
+            canvasPos.x >= candidate.x &&
+            canvasPos.x <= candidate.x + candidate.width &&
+            canvasPos.y >= candidate.y &&
+            canvasPos.y <= candidate.y + candidate.height
+        )
+        if (!target && !isInsideSurface && ownerPanelId && currentProject && scene) {
+          const fallbackColumns = Math.max(
+            1,
+            creationPlacements.reduce(
+              (sum, candidate) => sum + Math.max(1, Math.round(candidate.width / CELL_W)),
+              0
+            )
+          )
+          const previewWidth =
+            (plannedGrid?.columns ?? fallbackColumns) * CELL_W + PANEL_FRAME_MARGIN * 2
+          const previewHeight =
+            (plannedGrid?.rows ?? 1) * CELL_H +
+            Math.max(0, (plannedGrid?.rows ?? 1) - 1) * ROW_GAP +
+            PANEL_FRAME_MARGIN * 2
+          const existingOwnerEnclosure = scene.surfaces.find(
+            (candidate) =>
+              candidate.kind === 'auxiliary' && candidate.enclosure?.ownerPanelId === ownerPanelId
+          )
+          const sharedSurface = scene.surfaces.find(
+            (candidate) => candidate.kind === 'shared_supply'
+          )
+          const ownerSurface = scene.surfaces.find(
+            (candidate) => candidate.kind === 'panel' && candidate.panel?.id === ownerPanelId
+          )
+          const transitionY = existingOwnerEnclosure
+            ? existingOwnerEnclosure.y
+            : sharedSurface && ownerSurface && sharedSurface.y < ownerSurface.y
+              ? ownerSurface.y
+              : sharedSurface && ownerSurface
+                ? ownerSurface.y + ownerSurface.height
+                : Math.max(0, canvasPos.y - PANEL_FRAME_MARGIN - CELL_H / 2)
+          setModuleDragLive({
+            panelId: surfaceTargetId,
+            x: canvasPos.x,
+            y: canvasPos.y,
+            width: placement.width,
+            height: placement.height,
+            ref: placement.ref,
+            items: creationPlacements.map((candidate) => ({
+              ref: candidate.ref,
+              x: surface.x + candidate.x + (rawX - placement.x),
+              y: surface.y + candidate.y + (rawY - placement.y),
+              width: candidate.width,
+              height: candidate.height,
+            })),
+          })
+          setModuleDragPreview({
+            panelId: '__new_auxiliary__',
+            x: Math.max(0, canvasPos.x - PANEL_FRAME_MARGIN - placement.width / 2),
+            y: Math.max(0, transitionY),
+            width: previewWidth,
+            height: previewHeight,
+            ref: placement.ref,
+            createAuxiliary: true,
+            deviceIds: creationDeviceIds,
+            invalid: plannedGrid == null,
           })
           return
         }
@@ -1987,12 +2134,19 @@ export function HierarchyPanelCanvas({
         invalid,
       })
     },
-    [detectHierarchyModuleDropTarget, isHierarchyRefInSelection, selection.ids.length]
+    [
+      currentProject,
+      detectHierarchyModuleDropTarget,
+      isHierarchyRefInSelection,
+      panelOptions,
+      scene,
+      selection.ids.length,
+    ]
   )
 
   const handleHierarchyModuleDragEnd = useCallback(
     (
-      surface: HierarchySurface & { panel: Panel },
+      surface: HierarchySurface,
       placement: ModulePlacement & { inSupplyPanel?: boolean },
       rawX: number,
       rawY: number
@@ -2038,10 +2192,32 @@ export function HierarchyPanelCanvas({
         const supplyRef = placement.ref
         if (preview?.invalid) return
         const canvasPos = { x: surface.x + rawX, y: surface.y + rawY }
-        const target = detectHierarchyModuleDropTarget(canvasPos, supplyRef)
-        const currentArea = placement.inSupplyPanel ? 'supply' : 'main'
+        const detectedTarget = detectHierarchyModuleDropTarget(canvasPos, supplyRef)
+        const target = detectedTarget
+        const currentArea =
+          surface.kind === 'auxiliary' ? 'auxiliary' : placement.inSupplyPanel ? 'supply' : 'main'
         const targetSurfaceId = target ? (target.surface.panel?.id ?? target.surface.id) : null
         const currentSurfaceId = surface.panel?.id ?? surface.id
+        if (preview?.createAuxiliary) {
+          const ownerPanelId = surface.enclosure?.ownerPanelId ?? surface.panel?.id
+          const deviceIds = preview.deviceIds ?? [supplyRef.id]
+          if (
+            !ownerPanelId ||
+            !currentProject ||
+            deviceIds.length === 0 ||
+            deviceIds.some(
+              (deviceId) => !isAuxiliaryMountableSupplyDevice(currentProject, deviceId)
+            )
+          ) {
+            return
+          }
+          const enclosureId = createAuxiliarySupplyEnclosure(deviceIds, ownerPanelId, {
+            x: preview.x,
+            y: preview.y,
+          })
+          if (enclosureId) setSelection({ type: 'auxiliaryEnclosure', ids: [enclosureId] })
+          return
+        }
         if (target && (targetSurfaceId !== currentSurfaceId || target.area !== currentArea)) {
           const targetCols =
             target.area === 'supply' ? target.surface.supplyCols : target.surface.cols
@@ -2056,64 +2232,29 @@ export function HierarchyPanelCanvas({
           const snapped = snapToGrid(localX, localY + CELL_H / 2)
           const row = clamp(targetRows - 1, 0, snapped.row)
           const col = clamp(targetMaxCol, 0, snapped.col)
-          const sourcePanel =
-            panel ??
-            panelOptions.find((option) => option.isRoot && option.panel.isMain)?.panel ??
-            target.panel
-          const sourceMainSlots = sourcePanel.gridView?.slots ?? []
-          const sourceSupplySlots = sourcePanel.gridView?.supplyPanelSlots ?? []
-          const sourceMainSlot = sourceMainSlots.find(
-            (slot) => panelGridModuleRefKey(slot.module) === key
-          )
-          const sourceSupplySlot = sourceSupplySlots.find(
-            (slot) => panelGridModuleRefKey(slot.module) === key
-          )
-          const manual = getManualWidthProps(sourceMainSlot ?? sourceSupplySlot)
-
-          if (sourcePanel.id !== target.panel.id) {
-            updatePanelGridSlots(
-              sourcePanel.id,
-              sourceMainSlots.filter((slot) => panelGridModuleRefKey(slot.module) !== key)
-            )
-            updateSupplyPanelSlots(
-              sourcePanel.id,
-              sourceSupplySlots.filter((slot) => panelGridModuleRefKey(slot.module) !== key)
-            )
+          if (target.area === 'auxiliary') {
+            moveSupplyDeviceToAuxiliaryEnclosure(supplyRef.id, target.surface.id, row, col)
+            return
           }
 
-          useProjectStore.setState((state: ProjectState) => {
-            if (!state.currentProject) return
-            const moved = moveSupplyDeviceFeedOwner(
-              state.currentProject,
-              supplyRef.id,
-              target.area === 'main'
-                ? { scope: 'root', panelId: target.panel.id }
-                : { scope: 'shared' }
-            )
-            if (moved) state.isDirty = true
-          })
-
-          const targetMainSlots = target.panel.gridView?.slots ?? []
-          const targetSupplySlots = target.panel.gridView?.supplyPanelSlots ?? []
-          if (target.area === 'main') {
-            updateSupplyPanelSlots(
-              target.panel.id,
-              targetSupplySlots.filter((slot) => panelGridModuleRefKey(slot.module) !== key)
-            )
-            updatePanelGridSlots(target.panel.id, [
-              ...targetMainSlots.filter((slot) => panelGridModuleRefKey(slot.module) !== key),
-              { row, col, module: supplyRef, ...manual },
-            ])
-          } else {
-            updatePanelGridSlots(
-              target.panel.id,
-              targetMainSlots.filter((slot) => panelGridModuleRefKey(slot.module) !== key)
-            )
-            updateSupplyPanelSlots(target.panel.id, [
-              ...targetSupplySlots.filter((slot) => panelGridModuleRefKey(slot.module) !== key),
-              { row, col, module: supplyRef, ...manual },
-            ])
+          if (target.area === 'supply') {
+            moveSupplyDeviceToGridEnclosure(supplyRef.id, target.panel.id, row, col)
+            return
           }
+          moveSupplyDeviceToPanelEnclosure(supplyRef.id, target.panel.id, row, col)
+          return
+        }
+
+        if (surface.kind === 'auxiliary') {
+          const localX = rawX - PANEL_FRAME_MARGIN
+          const localY = rawY - PANEL_FRAME_MARGIN
+          const snapped = snapToGrid(localX, localY + CELL_H / 2)
+          moveSupplyDeviceToAuxiliaryEnclosure(
+            supplyRef.id,
+            surface.id,
+            clamp(snapped.row, 0, surface.rows - 1),
+            clamp(maxCol, 0, snapped.col)
+          )
           return
         }
       }
@@ -2290,6 +2431,7 @@ export function HierarchyPanelCanvas({
         return
       }
 
+      if (!panel) return
       const existingMainSlots = panel.gridView?.slots ?? []
       const previousSlot = existingMainSlots.find(
         (slot) => panelGridModuleRefKey(slot.module) === key
@@ -2361,24 +2503,44 @@ export function HierarchyPanelCanvas({
     },
     [
       currentProject,
+      createAuxiliarySupplyEnclosure,
       detectHierarchyModuleDropTarget,
       isHierarchyRefInSelection,
       moduleDragPreview,
+      moveSupplyDeviceToAuxiliaryEnclosure,
+      moveSupplyDeviceToGridEnclosure,
+      moveSupplyDeviceToPanelEnclosure,
       panelOptions,
       selection.ids.length,
       updatePanelGridSlots,
       updateSupplyPanelSlots,
+      setSelection,
     ]
   )
 
   const handleHierarchyModuleResize = useCallback(
     (
-      surface: HierarchySurface & { panel: Panel },
+      surface: HierarchySurface,
       placement: ModulePlacement & { inSupplyPanel?: boolean },
       newWidthCols: number
     ) => {
       const panel = surface.panel
       const key = panelGridModuleRefKey(placement.ref)
+
+      if (surface.kind === 'auxiliary' && surface.enclosure) {
+        updateAuxiliaryElectricalEnclosure(surface.id, {
+          gridView: {
+            ...surface.enclosure.gridView,
+            slots: surface.enclosure.gridView.slots.map((slot) =>
+              panelGridModuleRefKey(slot.module) === key
+                ? { ...slot, moduleWidth: newWidthCols, moduleWidthManual: true }
+                : slot
+            ),
+          },
+        })
+        return
+      }
+      if (!panel) return
 
       if (placement.inSupplyPanel) {
         const existingSupplySlots = panel.gridView?.supplyPanelSlots ?? []
@@ -2411,29 +2573,29 @@ export function HierarchyPanelCanvas({
       }
       updatePanelGridSlots(panel.id, nextMainSlots)
     },
-    [updatePanelGridSlots, updateSupplyPanelSlots]
+    [updateAuxiliaryElectricalEnclosure, updatePanelGridSlots, updateSupplyPanelSlots]
   )
 
   const getHierarchyMaxWidth = useCallback(
-    (
-      surface: HierarchySurface & { panel: Panel },
-      placement: ModulePlacement & { inSupplyPanel?: boolean }
-    ) => {
-      if (placement.inSupplyPanel) {
-        return Math.max(1, surface.cols - placement.col)
-      }
-
-      let maxCol = surface.cols
-      const key = panelGridModuleRefKey(placement.ref)
-      for (const other of surface.placements) {
-        if (other.inSupplyPanel) continue
-        if (panelGridModuleRefKey(other.ref) === key) continue
-        if (other.row === placement.row && other.col > placement.col) {
-          maxCol = Math.min(maxCol, other.col)
-        }
-      }
-      return Math.max(1, maxCol - placement.col)
+    (surface: HierarchySurface, placement: ModulePlacement & { inSupplyPanel?: boolean }) => {
+      const totalCols = placement.inSupplyPanel ? surface.supplyCols : surface.cols
+      return Math.max(1, totalCols - placement.col)
     },
+    []
+  )
+
+  const isHierarchyResizeWidthValid = useCallback(
+    (
+      surface: HierarchySurface,
+      placement: ModulePlacement & { inSupplyPanel?: boolean },
+      newWidthCols: number
+    ) =>
+      canResizeModulePlacement(
+        placement,
+        surface.placements,
+        newWidthCols,
+        placement.inSupplyPanel ? surface.supplyCols : surface.cols
+      ),
     []
   )
 
@@ -2528,7 +2690,7 @@ export function HierarchyPanelCanvas({
                   <Text
                     x={8}
                     y={8}
-                    text={t('panelCanvas.supplyPanel', 'Supply panel')}
+                    text={t('panelCanvas.supplyPanel', 'Grid panel')}
                     fontSize={14}
                     fontStyle="bold"
                     fontFamily={fontFamily}
@@ -2586,6 +2748,79 @@ export function HierarchyPanelCanvas({
                     )
                   })()}
                 </Group>
+              ) : surface.kind === 'auxiliary' ? (
+                <>
+                  <Rect
+                    x={0}
+                    y={0}
+                    width={surface.width}
+                    height={surface.height}
+                    stroke={
+                      selectedAuxiliaryEnclosureIds.includes(surface.id)
+                        ? colors.moduleBorderSelected
+                        : colors.panelSupplyStroke
+                    }
+                    strokeWidth={selectedAuxiliaryEnclosureIds.includes(surface.id) ? 3 : 2}
+                    fill={colors.panelFrameFill}
+                    cornerRadius={4}
+                    name={`auxiliaryEnclosure-${surface.id}`}
+                    onMouseDown={startPanelFrameSelectionRect}
+                    onClick={(event) => {
+                      if (shouldIgnorePanelFrameClick(event.evt)) {
+                        event.cancelBubble = true
+                        return
+                      }
+                      event.cancelBubble = true
+                      setSelection({ type: 'auxiliaryEnclosure', ids: [surface.id] })
+                    }}
+                    onTap={(event) => {
+                      event.cancelBubble = true
+                      setSelection({ type: 'auxiliaryEnclosure', ids: [surface.id] })
+                    }}
+                  />
+                  <Text
+                    x={8}
+                    y={8}
+                    width={surface.width - 16}
+                    text={surface.label || t('panelCanvas.virtualEnclosure', 'Supply enclosure')}
+                    fontSize={14}
+                    fontStyle="bold"
+                    fontFamily={fontFamily}
+                    fill={colors.panelFrameStroke}
+                    listening={false}
+                  />
+                  {Array.from({ length: surface.rows }).map((_, rowIndex) => (
+                    <Rect
+                      key={`auxiliary-rail-${surface.id}-${rowIndex}`}
+                      x={PANEL_FRAME_MARGIN}
+                      y={PANEL_FRAME_MARGIN + rowIndex * ROW_STRIDE}
+                      width={surface.contentWidth}
+                      height={CELL_H}
+                      fill="transparent"
+                      stroke={colors.panelFrameStroke}
+                      opacity={0.16}
+                      strokeWidth={1}
+                      listening={false}
+                    />
+                  ))}
+                  {Array.from({ length: surface.rows }).map((_, rowIndex) =>
+                    Array.from({ length: surface.cols + 1 }).map((_, colIndex) => (
+                      <Line
+                        key={`auxiliary-grid-${surface.id}-${rowIndex}-${colIndex}`}
+                        points={[
+                          PANEL_FRAME_MARGIN + colIndex * CELL_W,
+                          PANEL_FRAME_MARGIN + rowIndex * ROW_STRIDE,
+                          PANEL_FRAME_MARGIN + colIndex * CELL_W,
+                          PANEL_FRAME_MARGIN + rowIndex * ROW_STRIDE + CELL_H,
+                        ]}
+                        stroke={colors.panelFrameStroke}
+                        opacity={0.08}
+                        strokeWidth={0.75}
+                        listening={false}
+                      />
+                    ))
+                  )}
+                </>
               ) : (
                 <>
                   <Rect
@@ -2644,7 +2879,7 @@ export function HierarchyPanelCanvas({
                         <Text
                           x={8}
                           y={surface.supplyPanelY + 8}
-                          text={t('panelCanvas.supplyPanel', 'Supply panel')}
+                          text={t('panelCanvas.supplyPanel', 'Grid panel')}
                           fontSize={14}
                           fontStyle="bold"
                           fontFamily={fontFamily}
@@ -2837,6 +3072,8 @@ export function HierarchyPanelCanvas({
                 </>
               )}
 
+              <ConverterBackupFeedMarker surface={surface} debugMode={panelRelationDebug} />
+
               {surface.placements.map((placement) => {
                 const surfaceTargetId = surface.panel?.id ?? surface.id
                 const previewItem =
@@ -2905,6 +3142,16 @@ export function HierarchyPanelCanvas({
                       canDragItems
                         ? (_ref, newWidthCols) =>
                             handleHierarchyModuleResize(
+                              surface as HierarchySurface & { panel: Panel },
+                              placement,
+                              newWidthCols
+                            )
+                        : undefined
+                    }
+                    isResizeWidthValid={
+                      canDragItems
+                        ? (_ref, newWidthCols) =>
+                            isHierarchyResizeWidthValid(
                               surface as HierarchySurface & { panel: Panel },
                               placement,
                               newWidthCols
@@ -3005,6 +3252,20 @@ export function HierarchyPanelCanvas({
               )}
             </Group>
           ))}
+          {moduleDragPreview?.createAuxiliary && (
+            <Rect
+              x={moduleDragPreview.x}
+              y={moduleDragPreview.y}
+              width={moduleDragPreview.width}
+              height={moduleDragPreview.height}
+              stroke={moduleDragPreview.invalid ? '#ef4444' : colors.hoverColor}
+              strokeWidth={2}
+              dash={[10, 5]}
+              fill="transparent"
+              cornerRadius={4}
+              listening={false}
+            />
+          )}
           {directPanelFeederConnectors.map((connector, index) => (
             <Line
               key={`direct-panel-feeder-${index}`}
@@ -3026,6 +3287,9 @@ export function HierarchyPanelCanvas({
             if (!scene) return null
 
             const sharedSurface = scene.surfaces.find((item) => item.kind === 'shared_supply')
+            const auxiliarySurfaces = scene.surfaces.filter(
+              (surface) => surface.kind === 'auxiliary'
+            )
             const mergedPlacements = [
               ...(sharedSurface
                 ? sharedSurface.placements.map((placement) => ({
@@ -3034,6 +3298,13 @@ export function HierarchyPanelCanvas({
                     y: placement.y + sharedSurface.y,
                   }))
                 : []),
+              ...auxiliarySurfaces.flatMap((surface) =>
+                surface.placements.map((placement) => ({
+                  ...placement,
+                  x: placement.x + surface.x,
+                  y: placement.y + surface.y,
+                }))
+              ),
               ...panelSurfaces.flatMap((surface) =>
                 surface.placements.map((placement) => ({
                   ...placement,
@@ -3043,7 +3314,7 @@ export function HierarchyPanelCanvas({
               ),
             ]
             const mergedSupplyPanelRefKeys = new Set(
-              panelSurfaces.flatMap((surface) =>
+              [...panelSurfaces, ...auxiliarySurfaces].flatMap((surface) =>
                 surface.placements
                   .filter((placement) => placement.inSupplyPanel === true)
                   .map((placement) => panelGridModuleRefKey(placement.ref))

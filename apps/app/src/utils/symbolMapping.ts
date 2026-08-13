@@ -196,6 +196,7 @@ export function getSymbolKeyFromSymbol(symbol: SymbolMetadata): SymbolKey | unde
   if (
     id === 'domotica' ||
     id === 'energy_meter' ||
+    id === 'source_changeover' ||
     id === 'junction_box' ||
     id === 'junction_panel' ||
     id === 'transformer' ||
@@ -385,6 +386,7 @@ export function isSupplyTrunkInsertable(symbol: SymbolMetadata): boolean {
   const id = symbol.id
   return (
     id === 'energy_meter' ||
+    id === 'source_changeover' ||
     id === 'mcb' ||
     id === 'rcd' ||
     id === 'rcbo'
@@ -395,7 +397,12 @@ export function isSupplyTrunkInsertable(symbol: SymbolMetadata): boolean {
  * Whether an existing trunk device type is trunk-insertable (for runtime checks)
  */
 export function isTrunkDeviceType(type: string): boolean {
-  return type === 'energy_meter' || type === 'protection' || type === 'conversion'
+  return (
+    type === 'energy_meter' ||
+    type === 'protection' ||
+    type === 'changeover' ||
+    type === 'conversion'
+  )
 }
 
 /**

@@ -5,13 +5,12 @@ import { logger } from '@/lib/logger'
  * Renders a selectable wire segment with properties
  */
 
-import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Line, Group, Circle, Image, Text } from 'react-konva'
+import { Line, Group, Circle, Text as KonvaText } from 'react-konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import { useUIStore } from '@/stores/uiStore'
 import { useProjectStore } from '@/stores/projectStore'
-import { useSettingsStore } from '@/stores/settingsStore'
 import { useThemeColors } from '@/lib/theme/hooks'
 import { useIsPreviewSelected } from '@/contexts/SelectionPreviewContext'
 import {
@@ -45,7 +44,8 @@ import {
 } from '@/lib/wireLabelVisibility'
 import { getWireLengthLabel } from '@/lib/wires/wireFingerprint'
 import { getDomainForSymbol, getSymbolById } from '@/lib/symbols'
-import { loadProcessedSymbol } from '@/lib/symbolImage'
+import { DomainMarker } from '@/components/canvas/eendraad/DomainMarker'
+import { CatalogSymbolImage } from '@/components/canvas/eendraad/CatalogSymbolImage'
 import {
   WIRE_LABEL_DISTANCE_FROM_WIRE,
   WIRE_LABEL_FONT_SIZE,
@@ -59,10 +59,9 @@ import {
 import type { WireTranslateFn } from '@/lib/wires/wireFingerprint'
 import { shouldShowDomainChangeMarker } from '@/lib/wires/domainChangeMarker'
 import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
-import {
-  getPhaseAssignmentLabel,
-  isPhaseAssignmentLabelVisible,
-} from '@/lib/wires/phaseAssignment'
+import { getPhaseAssignmentLabel, isPhaseAssignmentLabelVisible } from '@/lib/wires/phaseAssignment'
+import { getLeftBiasedBusFeedStubX } from '@/lib/panel/panelBusFeedPreview'
+import { orderWireSegmentsForRendering } from './wireRenderOrder'
 
 type WireSegmentPointerEvent = KonvaEventObject<MouseEvent | TouchEvent>
 
@@ -137,28 +136,71 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
   wireSegment,
   onSelect,
 }: WireSegmentProps) {
+  const { t } = useTranslation()
   const setSelection = useSetSelection()
-  const isSelected = useIsWireSelected(wireSegment.id)
+  const isWireSelected = useIsWireSelected(wireSegment.id)
+  const selectedBusSection = useUIStore((state) => state.selection.busSectionMetadata)
   const canvasZoom = useEffectiveCanvasZoom(ZOOM_100, 'eendraad')
   const isExporting = useUIStore((s) => s.isExporting)
-  const theme = useSettingsStore((state) => state.theme)
   const colors = useThemeColors()
   const fontFamily = useCanvasFontFamily()
   const isPreviewSelected = useIsPreviewSelected('wire', wireSegment.id)
   const { currentProject, getEndpointById, getTrunkDeviceById, getProtectionById } =
     useProjectStore()
-  const [acSymbolImage, setAcSymbolImage] = useState<HTMLImageElement | null>(null)
-  const [dcSymbolImage, setDcSymbolImage] = useState<HTMLImageElement | null>(null)
   const [isHovered, setIsHovered] = useState(false)
 
   // Determine line properties based on wire type
   const isBusBar = wireSegment.type === 'mainBus'
+  const selectsBusSection = Boolean(wireSegment.busSectionId)
+  const isSelected = selectsBusSection
+    ? Boolean(
+        isBusBar &&
+        wireSegment.busSectionId &&
+        selectedBusSection?.panelId === wireSegment.panelId &&
+        selectedBusSection.busSectionId === wireSegment.busSectionId
+      )
+    : isWireSelected
   const isThick = wireSegment.type === 'trunk' || isBusBar
   const lineWidth = isThick ? 6 : 2
-  const lineCap: 'butt' | 'round' = isBusBar ? 'round' : 'butt'
+  // Square caps extend half a stroke beyond each supply segment. Orthogonal segments are
+  // separate Konva lines, so this closes their corners without rounding the visible joint.
+  const lineCap: 'butt' | 'round' | 'square' = isBusBar
+    ? 'round'
+    : wireSegment.isSupplyTrunk || wireSegment.supplyConnectionId
+      ? 'square'
+      : 'butt'
   const lineColor = colors.wireColor
-
-  // Bus bars (mainBus type) are not selectable - they don't need wire properties
+  const busFeedStubX = getLeftBiasedBusFeedStubX(
+    wireSegment.startPoint.x,
+    wireSegment.endPoint.x
+  )
+  const busFeedMarkerDistance = Math.max(
+    0,
+    wireSegment.endPoint.x - wireSegment.startPoint.x
+  )
+  const busFeedMarkerPosition = (() => {
+    switch (wireSegment.busFeedMarkerSide) {
+      case 'left':
+        return { x: wireSegment.startPoint.x - 24, y: wireSegment.startPoint.y - 10 }
+      case 'right':
+        return { x: wireSegment.endPoint.x + 4, y: wireSegment.startPoint.y - 10 }
+      case 'below-left':
+        return { x: busFeedStubX - busFeedMarkerDistance, y: wireSegment.startPoint.y + 20 }
+      case 'below-right':
+        return { x: busFeedStubX + busFeedMarkerDistance, y: wireSegment.startPoint.y + 20 }
+      case 'below':
+        return {
+          x: (wireSegment.startPoint.x + wireSegment.endPoint.x) / 2 - 10,
+          y: wireSegment.startPoint.y + 10,
+        }
+      default:
+        return { x: wireSegment.endPoint.x, y: wireSegment.endPoint.y + 11 }
+    }
+  })()
+  const busFeedMarkerLabel =
+    wireSegment.busFeedKind === 'backup'
+      ? t('feedOrganization.backupMarker', 'Backup')
+      : t('feedOrganization.gridMarker', 'Grid')
 
   const selectedColor = colors.selectionColor
   const previewColor = colors.selectionColor
@@ -198,6 +240,10 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
       isGround: wireSegment.fromElementType === 'ground',
       ...(wireSegment.supplyWireRole && { supplyWireRole: wireSegment.supplyWireRole }),
       ...(wireSegment.supplyFeedScope && { supplyFeedScope: wireSegment.supplyFeedScope }),
+      ...(wireSegment.supplyAssemblyId && { supplyAssemblyId: wireSegment.supplyAssemblyId }),
+      ...(wireSegment.supplyConnectionId && {
+        supplyConnectionId: wireSegment.supplyConnectionId,
+      }),
       ...(wireSegment.isSupplyTrunk &&
         wireSegment.supplySegmentIndex !== undefined && {
           supplySegmentIndex: wireSegment.supplySegmentIndex,
@@ -225,6 +271,8 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
       wireSegment.isSupplyTrunk,
       wireSegment.supplyWireRole,
       wireSegment.supplyFeedScope,
+      wireSegment.supplyAssemblyId,
+      wireSegment.supplyConnectionId,
       wireSegment.supplySegmentIndex,
       wireSegment.fromElementType,
       wireSegment.fromElementId,
@@ -240,8 +288,17 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
   const handleClick = useCallback(
     (e: unknown) => {
       const event = e as WireSegmentPointerEvent
-      // Bus bars are not selectable
-      if (isBusBar) {
+      if (selectsBusSection) {
+        if (!wireSegment.busSectionId) return
+        event.cancelBubble = true
+        setSelection({
+          type: 'busSection',
+          ids: [wireSegment.busSectionId],
+          busSectionMetadata: {
+            panelId: wireSegment.panelId,
+            busSectionId: wireSegment.busSectionId,
+          },
+        })
         return
       }
       event.cancelBubble = true
@@ -314,12 +371,12 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
         }
       }
     },
-    [wireSegment, setSelection, onSelect, isBusBar, wireMeta]
+    [wireSegment, setSelection, onSelect, selectsBusSection, wireMeta]
   )
 
   const handleMouseEnter = useCallback(() => {
-    if (!isBusBar) setIsHovered(true)
-  }, [isBusBar])
+    if (!isBusBar || wireSegment.busSectionId) setIsHovered(true)
+  }, [isBusBar, wireSegment.busSectionId])
 
   const handleMouseLeave = useCallback(() => {
     setIsHovered(false)
@@ -331,7 +388,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
     wireSegment.endPoint.x,
     wireSegment.endPoint.y,
   ]
-  const showHoverHighlight = !isBusBar && isHovered && !isSelected && !isPreviewSelected
+  const showHoverHighlight = isHovered && !isSelected && !isPreviewSelected
 
   // Calculate hit area (expand for easier clicking)
   const hitAreaPadding = 5
@@ -401,20 +458,30 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
     wireSegment.supplyFeedScope === 'root' &&
     !wireSegment.circuitId
   const incomingPanelPhaseLabel =
-    (isSubPanelIncomingPhaseSegment || isRootSupplyPhaseSegment) &&
+    (wireSegment.forcePhaseLabel || isSubPanelIncomingPhaseSegment || isRootSupplyPhaseSegment) &&
     phaseSystem &&
-    isPhaseAssignmentLabelVisible(
-      wireSegment.phaseAssignment,
-      phaseSystem,
-      wireSegment.showPhaseLabel
-    ) &&
-    isVertical
+    (wireSegment.forcePhaseLabel ||
+      isPhaseAssignmentLabelVisible(
+        wireSegment.phaseAssignment,
+        phaseSystem,
+        wireSegment.showPhaseLabel
+      ))
       ? getPhaseAssignmentLabel(wireSegment.phaseAssignment, phaseSystem)
       : undefined
   const incomingPanelPhaseLabelWidth = 48
   const incomingPanelPhaseLabelY =
-    Math.max(wireSegment.startPoint.y, wireSegment.endPoint.y) +
-    (isRootSupplyPhaseSegment ? 4 : -10)
+    wireSegment.phaseLabelAnchor?.y ??
+    (isVertical
+      ? wireSegment.isSubPanelSupply
+        ? Math.min(wireSegment.startPoint.y, wireSegment.endPoint.y) + 4
+        : Math.max(wireSegment.startPoint.y, wireSegment.endPoint.y) +
+          (isRootSupplyPhaseSegment ? 4 : -10)
+      : (wireSegment.startPoint.y + wireSegment.endPoint.y) / 2 - 12)
+  const incomingPanelPhaseLabelX =
+    wireSegment.phaseLabelAnchor?.x ??
+    (isVertical
+      ? wireSegment.startPoint.x
+      : (wireSegment.startPoint.x + wireSegment.endPoint.x) / 2)
   const isProtectionInputPhaseSegment =
     wireSegment.type === 'vertical' &&
     !!wireSegment.circuitId &&
@@ -422,38 +489,17 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
   const protectionPhaseLabel =
     isProtectionInputPhaseSegment &&
     phaseSystem &&
-    isPhaseAssignmentLabelVisible(
-      wireSegment.phaseAssignment,
-      phaseSystem,
-      wireSegment.showPhaseLabel
-    )
+    wireSegment.showPhaseLabel === true
       ? getPhaseAssignmentLabel(wireSegment.phaseAssignment, phaseSystem)
       : undefined
   const protectionPhaseLabelWidth = 48
   const protectionPhaseLabelOffsetY =
     getProtectionById(wireSegment.toElementId ?? '')?.type === 'SPD' ? 14 : 4
 
-  const isDark = theme?.mode === 'dark'
-  useEffect(() => {
-    if (!shouldDrawDomainLabelOnWire) {
-      setAcSymbolImage(null)
-      setDcSymbolImage(null)
-      return
-    }
-    loadProcessedSymbol('/symbols/energy-conversion/symbol_AC.svg', isDark)
-      .then(setAcSymbolImage)
-      .catch(() => setAcSymbolImage(null))
-    loadProcessedSymbol('/symbols/energy-conversion/symbol_DC.svg', isDark)
-      .then(setDcSymbolImage)
-      .catch(() => setDcSymbolImage(null))
-  }, [isDark, shouldDrawDomainLabelOnWire])
-
-  const domainIconImage = domainLabelText === 'DC' ? dcSymbolImage : acSymbolImage
   const domainLabelOffsetX = isTrunkConversionOutput && isWireLabelVisible ? 10 : 0
   const domainLabelX =
     wireSegment.startPoint.x + (isBranchConversionOutput ? 7 : 10) + domainLabelOffsetX
   const domainLabelY = wireSegment.startPoint.y - 4
-  const domainIconSize = 11
 
   let hitArea: { x: number; y: number; width: number; height: number } | null = null
 
@@ -486,11 +532,11 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
         strokeWidth={isSelected || isPreviewSelected ? wireSelectionStroke : lineWidth}
         lineCap={lineCap}
         lineJoin="round"
-        onClick={isBusBar ? undefined : handleClick}
-        onTap={isBusBar ? undefined : handleClick}
-        onMouseEnter={isBusBar ? undefined : handleMouseEnter}
-        onMouseLeave={isBusBar ? undefined : handleMouseLeave}
-        listening={!isBusBar}
+        onClick={isBusBar && !wireSegment.busSectionId ? undefined : handleClick}
+        onTap={isBusBar && !wireSegment.busSectionId ? undefined : handleClick}
+        onMouseEnter={isBusBar && !wireSegment.busSectionId ? undefined : handleMouseEnter}
+        onMouseLeave={isBusBar && !wireSegment.busSectionId ? undefined : handleMouseLeave}
+        listening={!isBusBar || Boolean(wireSegment.busSectionId)}
       />
 
       {!isExporting && secondaryBusReferenceLabel && isHorizontal && (
@@ -534,7 +580,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
             lineJoin="round"
             listening={false}
           />
-          <Text
+          <KonvaText
             x={secondaryBusReferenceTextLeft}
             y={0}
             width={secondaryBusReferenceTextWidth}
@@ -548,8 +594,8 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
         </Group>
       )}
 
-      {/* Invisible hit area for easier clicking - only for non-bus bars */}
-      {hitArea && !isBusBar && (
+      {/* Invisible hit area for easier clicking */}
+      {hitArea && (!isBusBar || wireSegment.busSectionId) && (
         <Line
           points={wireLinePoints}
           stroke="transparent"
@@ -562,6 +608,32 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
           onMouseLeave={handleMouseLeave}
           listening={true}
         />
+      )}
+
+      {wireSegment.showBusFeedMarker && wireSegment.busFeedKind && (
+        <Group
+          x={busFeedMarkerPosition.x}
+          y={busFeedMarkerPosition.y}
+          listening={false}
+        >
+          <CatalogSymbolImage
+            symbolId={wireSegment.busFeedKind === 'backup' ? 'backup_feed' : 'mains'}
+            width={20}
+            height={20}
+            fallbackStroke={lineColor}
+          />
+          <KonvaText
+            x={-30}
+            y={14}
+            width={60}
+            text={busFeedMarkerLabel}
+            fontSize={7}
+            fontFamily={fontFamily}
+            fill={lineColor}
+            align="center"
+            listening={false}
+          />
+        </Group>
       )}
 
       {/* Hover highlight — dashed yellow line, matches selectable symbol hover */}
@@ -590,9 +662,9 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
         />
       )}
 
-      {incomingPanelPhaseLabel && isVertical && (
+      {incomingPanelPhaseLabel && (
         <Group
-          x={wireSegment.startPoint.x}
+          x={incomingPanelPhaseLabelX}
           y={incomingPanelPhaseLabelY}
           name="export-strip-label"
           onClick={handleClick}
@@ -600,15 +672,31 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
         >
-          <Text
-            x={isRootSupplyPhaseSegment ? 5 : -incomingPanelPhaseLabelWidth - 5}
+          <KonvaText
+            x={
+              wireSegment.phaseLabelAnchor
+                ? 0
+                : isVertical
+                ? isRootSupplyPhaseSegment
+                  ? 5
+                  : -incomingPanelPhaseLabelWidth - 5
+                : -incomingPanelPhaseLabelWidth / 2
+            }
             y={0}
             width={incomingPanelPhaseLabelWidth}
             text={incomingPanelPhaseLabel}
             fontSize={8}
             fontFamily={fontFamily}
             fill={colors.wireColor}
-            align={isRootSupplyPhaseSegment ? 'left' : 'right'}
+            align={
+              wireSegment.phaseLabelAnchor
+                ? 'left'
+                : isVertical
+                  ? isRootSupplyPhaseSegment
+                    ? 'left'
+                    : 'right'
+                  : 'center'
+            }
           />
         </Group>
       )}
@@ -623,7 +711,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
         >
-          <Text
+          <KonvaText
             x={-protectionPhaseLabelWidth - 3}
             y={0}
             width={protectionPhaseLabelWidth}
@@ -762,30 +850,13 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
       )}
 
       {/* Domain-change marker immediately after a trunk or branch conversion device. */}
-      {shouldDrawDomainLabelOnWire && domainIconImage && (
-        <>
-          <Text
-            x={domainLabelX - domainIconSize / 2}
-            y={domainLabelY - 9}
-            width={domainIconSize}
-            text={domainLabelText}
-            fontSize={6}
-            fontFamily={fontFamily}
-            fill={colors.wireColor}
-            align="center"
-            listening={false}
-          />
-          <Image
-            image={domainIconImage}
-            x={domainLabelX}
-            y={domainLabelY}
-            width={domainIconSize}
-            height={domainIconSize}
-            offsetX={domainIconSize / 2}
-            offsetY={domainIconSize / 2}
-            listening={false}
-          />
-        </>
+      {shouldDrawDomainLabelOnWire && (
+        <DomainMarker
+          domain={domainLabelText}
+          x={domainLabelX}
+          y={domainLabelY - 1}
+          color={colors.wireColor}
+        />
       )}
     </Group>
   )
@@ -796,14 +867,23 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
  */
 export const WireSegments = memo(function WireSegments({
   panelId,
+  diagramId,
   wireSegments,
 }: {
   panelId: string
+  diagramId?: string
   wireSegments: WireSegment[]
 }) {
   const panelWires = useMemo(
-    () => wireSegments.filter((ws) => ws.panelId === panelId),
-    [panelId, wireSegments]
+    () =>
+      orderWireSegmentsForRendering(
+        wireSegments.filter(
+          (ws) =>
+            ws.panelId === panelId &&
+            (!diagramId || (ws.diagramId ?? ws.panelId) === diagramId)
+        )
+      ),
+    [diagramId, panelId, wireSegments]
   )
 
   return (

@@ -2283,6 +2283,8 @@ export function FloorPlanMode({
       resolveStairDrawingSnap,
       resolveNearbyLineSnap,
       resolveOpeningAnchor,
+      wallDrawingState.isDrawing,
+      wallDrawingState.pendingCurve,
     ]
   )
 

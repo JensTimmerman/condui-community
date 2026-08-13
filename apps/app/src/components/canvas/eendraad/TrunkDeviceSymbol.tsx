@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { ZOOM_100 } from '@/constants/canvasConstants'
-import { Group, Image, Rect } from 'react-konva'
-import { getSymbolById, TRANSFORMER_OVERLAY_PATHS } from '@/lib/symbols'
+import { Group, Image, Rect, Text } from 'react-konva'
+import { getSwitchSymbolPaths, getSymbolById, TRANSFORMER_OVERLAY_PATHS } from '@/lib/symbols'
 import { SYMBOL_EXPORT_ATTR_SVG_PATH, loadProcessedSymbol } from '@/lib/symbolImage'
 import {
   getSurgeProtectionBodyBounds,
@@ -10,6 +10,7 @@ import {
   getSurgeProtectionSelectionBounds,
 } from '@/lib/surgeProtectionSymbol'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useProjectStore } from '@/stores/projectStore'
 import { useUIStore } from '@/stores/uiStore'
 import { useHoverIncludes, useSetSelection, useTrunkDeviceSelected } from '@/editions/community/communityHooks'
 import { useIsPreviewSelected } from '@/contexts/SelectionPreviewContext'
@@ -26,6 +27,7 @@ import {
   getPaddedRectHoverOutlineProps,
   getPaddedRectPreviewOutlineProps,
   getSecondaryTextColor,
+  getSymbolColor,
   getTextColor,
 } from './canvasSymbols'
 import { ProtectionOneWireLabels } from './ProtectionOneWireLabels'
@@ -34,8 +36,16 @@ import { getCertificationSideLabelExtraOffsetPx } from '@/lib/conversionSideLabe
 import { getVisibleCertificationLabelParts } from '@/lib/certificationLabels'
 import { getVisibleConversionLabelParts } from '@/lib/conversionLabels'
 import { isSymbolLabelVisible } from '@/lib/symbolLabels'
-import type { TrunkDevice } from '@/types/schema'
+import type { SymbolLabelPosition, TrunkDevice } from '@/types/schema'
 import type { Point } from '@/types/ui'
+import { getSupplyInverterMultiplier } from '@/utils/inverterMultipliers'
+import { DomainMarker } from './DomainMarker'
+import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
+import {
+  getPhaseAssignmentLabel,
+  phaseAssignmentDiffersFromInstallation,
+} from '@/lib/wires/phaseAssignment'
+import { getSupplyConverterAcPhaseAssignment } from '@/lib/supplyAssembly/supplyConverterPhases'
 
 type EendraadPointerEvent = {
   cancelBubble: boolean
@@ -58,6 +68,8 @@ interface TrunkDeviceSymbolProps {
   showDeviceLabelLeft?: boolean
   /** Split a wide residual-current line to avoid adjacent supply-label collisions. */
   splitProtectionResidualLine?: boolean
+  /** Override protection label placement for a wire branch with a fixed orientation. */
+  protectionLabelPosition?: SymbolLabelPosition
   /** Drop target uses cursor position on drag end (same as protection / endpoint). */
   getCanvasPositionFromEvent?: (e: unknown) => Point | null
   onDragMove?: (newPos: Point) => void
@@ -76,6 +88,7 @@ export function TrunkDeviceSymbol({
   isHorizontal,
   showDeviceLabelLeft = false,
   splitProtectionResidualLine = false,
+  protectionLabelPosition,
   getCanvasPositionFromEvent,
   onDragMove,
   onDragEnd,
@@ -103,26 +116,60 @@ export function TrunkDeviceSymbol({
     useState<HTMLImageElement | null>(null)
 
   const symbol = getSymbolById(device.symbol)
+  const isInlineSwitch = symbol?.category === 'switches'
   const isDark = theme?.mode === 'dark'
+  const phaseSystem = useProjectStore((state) =>
+    state.currentProject
+      ? getElectricalInstallationFromProject(state.currentProject)?.nominalVoltage.system
+      : undefined
+  )
   const isTransformer = device.symbol === 'transformer'
   const conversionProps = device.conversionProps
+  const inverterMultiplier = getSupplyInverterMultiplier(device)
   const isConversionSymbol =
     device.symbol === 'transformer' ||
     device.symbol === 'rectifier' ||
     device.symbol === 'inverter' ||
     device.symbol === 'dc_dc_converter'
+  const converterAcPhaseAssignment =
+    isConversionSymbol && phaseSystem
+      ? getSupplyConverterAcPhaseAssignment(device, phaseSystem)
+      : undefined
+  const converterAcPhaseLabel =
+    phaseSystem && phaseAssignmentDiffersFromInstallation(converterAcPhaseAssignment, phaseSystem)
+      ? getPhaseAssignmentLabel(converterAcPhaseAssignment, phaseSystem)
+      : undefined
   const isProtection = device.type === 'protection'
   const isSurgeProtection = device.protectionType === 'SPD' || device.symbol === 'spd'
+  const switchSymbolPaths = isInlineSwitch
+    ? getSwitchSymbolPaths(device.symbol, {
+        poles: Math.min(4, Math.max(1, device.poles ?? 1)) as 1 | 2 | 3 | 4,
+        twoPole: device.symbol === 'switch_2p_twoway',
+      })
+    : undefined
   const renderedSymbolPath = isSurgeProtection
     ? getSurgeProtectionSymbolPath(device.surgeProtectionKind)
-    : symbol?.svgPath
+    : (switchSymbolPaths?.basePath ?? symbol?.svgPath)
   const nameLabelText = (device.label ?? '').trim()
+  const isVerticalSupplyProtection =
+    isProtection && device.supplyPath === 'converter-grid'
   const showSupplyProtectionNameLabel =
-    isHorizontal === true &&
-    isProtection &&
+    (isHorizontal === true || isVerticalSupplyProtection) &&
+    (isProtection || device.symbol === 'source_changeover') &&
     nameLabelText.length > 0 &&
     isSymbolLabelVisible(device.symbolLabelDisplay, 'supplyProtectionNameLabel', true)
   const wireSegments = useEendraadWireSegments()
+  const hasConnectedTopWire =
+    isConversionSymbol &&
+    wireSegments.some(
+      (segment) =>
+        segment.domain === 'DC' &&
+        segment.type === 'vertical' &&
+        !!segment.supplyConnectionId &&
+        Math.abs(segment.startPoint.x - position.x) < 1 &&
+        Math.min(segment.startPoint.y, segment.endPoint.y) < position.y &&
+        Math.max(segment.startPoint.y, segment.endPoint.y) <= position.y + 1
+    )
   const conversionLabelParts = getVisibleConversionLabelParts(device)
   const certificationLabelParts = getVisibleCertificationLabelParts(device)
   const notesText = (device.notes ?? '').trim()
@@ -135,15 +182,18 @@ export function TrunkDeviceSymbol({
   const placeNotesOnTop = isDomoticaDevice || isHorizontal === true || forceProtectionLabelStack
   const stackedRightLabelItems = useMemo(
     () => [
-      ...(isConversionSymbol
+      ...(isConversionSymbol || device.symbol === 'solar_panel'
         ? conversionLabelParts.map((part) => ({ key: part.key, text: part.text }))
         : []),
-      ...certificationLabelParts.map((part) => ({ key: part.key, text: part.text })),
+      ...(!placeNotesOnTop
+        ? certificationLabelParts.map((part) => ({ key: part.key, text: part.text }))
+        : []),
       ...(!placeNotesOnTop && showNotesLabel ? [{ key: 'trunkDeviceNotes', text: notesText }] : []),
     ],
     [
       certificationLabelParts,
       conversionLabelParts,
+      device.symbol,
       isConversionSymbol,
       notesText,
       placeNotesOnTop,
@@ -279,7 +329,18 @@ export function TrunkDeviceSymbol({
     [device.id, setSelection]
   )
 
-  const rotateForHorizontal = isHorizontal && isProtection
+  const rotateForHorizontal = isHorizontal && isProtection && !isInlineSwitch
+  const protectionLabelSource = isInlineSwitch
+    ? {
+        ...device,
+        protectionType: undefined,
+        ratingA: undefined,
+        curve: undefined,
+        sensitivityMa: undefined,
+        breakingCapacityKa: undefined,
+        breakingCapacityOption: undefined,
+      }
+    : device
   const surgeBodyBounds = getSurgeProtectionBodyBounds(
     renderedSymbolSize.width,
     renderedSymbolSize.height,
@@ -357,6 +418,105 @@ export function TrunkDeviceSymbol({
         rotation={rotateForHorizontal ? -90 : 0}
         listening={false}
       />
+      {device.symbol === 'source_changeover' &&
+        isSymbolLabelVisible(device.symbolLabelDisplay, 'changeoverPort1Label', true) &&
+        (device.changeoverProps?.port1Label ?? '1').trim().length > 0 && (
+          <Text
+            x={renderedSymbolSize.width / 2 - 162}
+            y={-(renderedSymbolSize.height * 7) / 24 - 11}
+            width={160}
+            text={device.changeoverProps?.port1Label ?? '1'}
+            align="right"
+            fontSize={8}
+            fontFamily={fontFamily}
+            fill={getSecondaryTextColor(isDark ?? false)}
+            listening={false}
+          />
+        )}
+      {device.symbol === 'source_changeover' &&
+        isSymbolLabelVisible(device.symbolLabelDisplay, 'changeoverPort2Label', true) &&
+        (device.changeoverProps?.port2Label ?? '2').trim().length > 0 && (
+          <Text
+            x={renderedSymbolSize.width / 2 - 162}
+            y={(renderedSymbolSize.height * 7) / 24 + 2}
+            width={160}
+            text={device.changeoverProps?.port2Label ?? '2'}
+            align="right"
+            fontSize={8}
+            fontFamily={fontFamily}
+            fill={getSecondaryTextColor(isDark ?? false)}
+            listening={false}
+          />
+        )}
+      {isConversionSymbol &&
+        (device.supplyPath === 'backup' || device.supplyPath === 'converter-branch') && (
+          <>
+            <DomainMarker
+              domain="AC"
+              x={-renderedSymbolSize.width / 2 - 6}
+              y={-5.5}
+              color={getSecondaryTextColor(isDark ?? false)}
+            />
+            <DomainMarker
+              domain="AC"
+              x={7}
+              y={renderedSymbolSize.height / 2 + 6}
+              color={getSecondaryTextColor(isDark ?? false)}
+            />
+            <DomainMarker
+              domain="DC"
+              x={renderedSymbolSize.width / 2 + 6}
+              y={-5.5}
+              color={getSecondaryTextColor(isDark ?? false)}
+            />
+            {hasConnectedTopWire && (
+              <DomainMarker
+                domain="DC"
+                x={7}
+                y={-renderedSymbolSize.height / 2 - 6}
+                color={getSecondaryTextColor(isDark ?? false)}
+              />
+            )}
+            {converterAcPhaseLabel && (
+              <>
+                <Text
+                  x={-renderedSymbolSize.width / 2 - 30}
+                  y={2}
+                  width={24}
+                  text={converterAcPhaseLabel}
+                  align="right"
+                  fontSize={6}
+                  fontFamily={fontFamily}
+                  fill={getSecondaryTextColor(isDark ?? false)}
+                  listening={false}
+                />
+                <Text
+                  x={-30}
+                  y={renderedSymbolSize.height / 2 + 3}
+                  width={24}
+                  text={converterAcPhaseLabel}
+                  align="right"
+                  fontSize={6}
+                  fontFamily={fontFamily}
+                  fill={getSecondaryTextColor(isDark ?? false)}
+                  listening={false}
+                />
+              </>
+            )}
+          </>
+        )}
+      {inverterMultiplier > 1 && (
+        <Text
+          text={`${inverterMultiplier}x`}
+          x={ENDPOINT_OUTLINE_SIZE / 2 - 2}
+          y={-ENDPOINT_OUTLINE_SIZE / 2 - 10}
+          fontSize={8}
+          fontStyle="bold"
+          fill={getSymbolColor(theme?.mode === 'dark')}
+          align="right"
+          listening={false}
+        />
+      )}
 
       {/* Transformer overlays on trunk device */}
       {isTransformer && transformerSafetyImage && (
@@ -407,7 +567,7 @@ export function TrunkDeviceSymbol({
           symbolHeight={renderedSymbolSize.height}
         />
       )}
-      {placeNotesOnTop && topStackLabelItems.length > 0 && (
+      {placeNotesOnTop && topStackLabelItems.length > 0 && !hasConnectedTopWire && (
         <SymbolTextLabels
           items={topStackLabelItems}
           config={{ position: 'top', layout: 'stack' }}
@@ -416,6 +576,20 @@ export function TrunkDeviceSymbol({
           fontSize={8}
           symbolWidth={renderedSymbolSize.width}
           symbolHeight={renderedSymbolSize.height}
+        />
+      )}
+      {placeNotesOnTop && topStackLabelItems.length > 0 && hasConnectedTopWire && (
+        <Text
+          x={-164}
+          y={-renderedSymbolSize.height / 2 - topStackLabelItems.length * 10 - 4}
+          width={160}
+          text={topStackLabelItems.map((item) => item.text).join('\n')}
+          align="right"
+          fontFamily={fontFamily}
+          fontSize={8}
+          lineHeight={1.25}
+          fill={getSecondaryTextColor(isDark ?? false)}
+          listening={false}
         />
       )}
       {showSupplyProtectionNameLabel && (
@@ -442,7 +616,17 @@ export function TrunkDeviceSymbol({
       )}
       {isProtection && (
         <ProtectionOneWireLabels
-          source={device}
+          source={
+            protectionLabelPosition
+              ? {
+                  ...protectionLabelSource,
+                  symbolLabelDisplay: {
+                    ...protectionLabelSource.symbolLabelDisplay,
+                    position: protectionLabelPosition,
+                  },
+                }
+              : protectionLabelSource
+          }
           defaultPosition={isHorizontal ? 'bottom' : 'right'}
           textColor={getSecondaryTextColor(isDark ?? false)}
           fontFamily={fontFamily}

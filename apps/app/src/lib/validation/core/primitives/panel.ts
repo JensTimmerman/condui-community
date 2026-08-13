@@ -204,8 +204,7 @@ function protectionPhaseCompatibility(context: CheckContext): Issue[] {
 
   for (const protection of panel.protections) {
     const assignments = (protection.circuits ?? []).map(
-      (circuit) =>
-        getEffectiveCircuitPhaseState(circuit, panels, system, installation).assignment
+      (circuit) => getEffectiveCircuitPhaseState(circuit, panels, system, installation).assignment
     )
     if (assignments.length === 0) {
       assignments.push(panelIncoming.assignment ?? fullAssignment)
@@ -428,7 +427,7 @@ function panelHasLocalIsolationHint(
 /** Non-household board markings must show the grounded network system. */
 function nonHouseholdPanelShowsGroundedNetwork(
   context: CheckContext,
-  _params?: Record<string, unknown>,
+  _params?: Record<string, unknown>
 ): CheckResult {
   const { scope, query, project } = context
   if (scope.type !== 'board') return { passed: true }
@@ -439,10 +438,7 @@ function nonHouseholdPanelShowsGroundedNetwork(
   const panel = query.getPanelById(scope.id)
   if (!panel) return { passed: true }
 
-  const groundedNetworkSystem = resolveEffectiveEarthingSystem(
-    panel,
-    projectPanels(project),
-  )
+  const groundedNetworkSystem = resolveEffectiveEarthingSystem(panel, projectPanels(project))
   if (installation?.panelNetTypeLabelsEnabled === true && groundedNetworkSystem) {
     return { passed: true }
   }
@@ -465,7 +461,7 @@ function nonHouseholdPanelShowsGroundedNetwork(
 /** Non-household board markings must include board sequence numbering. */
 function nonHouseholdPanelNumberingIsShown(
   context: CheckContext,
-  _params?: Record<string, unknown>,
+  _params?: Record<string, unknown>
 ): CheckResult {
   const { scope, query, project } = context
   if (scope.type !== 'board') return { passed: true }
@@ -552,6 +548,76 @@ function checkDuplicatePanelProtectionLabels(
       tags: ['naming', 'panel', 'consistency'],
     })
   }
+  return issues
+}
+
+function checkConverterBackupLabels(
+  context: CheckContext,
+  _params?: Record<string, unknown>
+): Issue[] {
+  const { scope, project } = context
+  if (scope.type !== 'board') return []
+
+  let panel: Panel | undefined
+  const visit = (panels: Panel[]) => {
+    for (const candidate of panels) {
+      if (candidate.id === scope.id) {
+        panel = candidate
+        return
+      }
+      visit(candidate.subPanels ?? [])
+      if (panel) return
+    }
+  }
+  visit(projectPanels(project))
+  if (!panel) return []
+
+  const issues: Issue[] = []
+  const pushIssue = (kind: 'protection' | 'endpoint', id: string, protection: ProtectionDevice) => {
+    const offenderKind = kind === 'protection' ? ('protection' as const) : ('device' as const)
+    issues.push({
+      id: `be.areibook1.2025.converter-backup-labels:board:${panel!.id}:${kind}:${id}`,
+      ruleId: 'be.areibook1.2025.converter-backup-labels',
+      severity: 'error',
+      jurisdiction: projectInstallation(project)?.address?.country ?? 'BE',
+      rulesetVersion: '2025',
+      scope: { type: 'board', id: panel!.id },
+      offenders: [{ kind: offenderKind, id, viewHint: 'eendraad' }],
+      message: i18n.t(`validation.primitives.converterBackupLabels.${kind}.message`, {
+        defaultValue:
+          kind === 'protection'
+            ? 'Backup-supply protection is not labeled'
+            : 'Backup-supply endpoint is not labeled',
+      }),
+      details: i18n.t(`validation.primitives.converterBackupLabels.${kind}.details`, {
+        protectionLabel: protection.label || protection.type,
+        defaultValue:
+          kind === 'protection'
+            ? 'Protections on an inverter backup-supply branch are not named automatically. Add a clear manual label.'
+            : 'Endpoints on an inverter backup-supply branch are not named automatically. Add a clear manual label.',
+      }),
+      citations: [],
+      tags: ['naming', 'supply', 'backup'],
+    })
+  }
+
+  for (const protection of panel.protections ?? []) {
+    const backupCircuits = (protection.circuits ?? []).filter(
+      (circuit) => circuit.supplySource?.kind === 'converter-backup'
+    )
+    if (backupCircuits.length === 0) continue
+    if (!(protection.label ?? '').trim()) {
+      pushIssue('protection', protection.id, protection)
+    }
+    for (const circuit of backupCircuits) {
+      for (const endpoint of circuit.endpoints) {
+        if (!(endpoint.label ?? '').trim()) {
+          pushIssue('endpoint', endpoint.id, protection)
+        }
+      }
+    }
+  }
+
   return issues
 }
 
@@ -682,6 +748,12 @@ function checkEendraadOrphans(context: CheckContext, _params?: Record<string, un
           col: opts.col,
           defaultValue: `Supply device "{{label}}" is on the main panel grid (row {{row}}, column {{col}}) but must be in the supply strip only.`,
         }),
+      splitBusWithoutBackupSupply: (opts) =>
+        i18n.t('validation.orphanDetection.splitBusWithoutBackupSupply', {
+          panelName: opts.panelName,
+          busSectionCount: opts.busSectionCount,
+          defaultValue: `Panel "{{panelName}}" has {{busSectionCount}} bus sections but no connected backup supply. Merge it back onto one grid feed.`,
+        }),
     }
   )
 }
@@ -691,5 +763,6 @@ registerPrimitive('panelHasLocalIsolationHint', panelHasLocalIsolationHint)
 registerPrimitive('nonHouseholdPanelShowsGroundedNetwork', nonHouseholdPanelShowsGroundedNetwork)
 registerPrimitive('nonHouseholdPanelNumberingIsShown', nonHouseholdPanelNumberingIsShown)
 registerPrimitive('checkDuplicatePanelProtectionLabels', checkDuplicatePanelProtectionLabels)
+registerPrimitive('checkConverterBackupLabels', checkConverterBackupLabels)
 registerPrimitive('checkEendraadOrphans', checkEendraadOrphans)
 registerPrimitive('protectionPhaseCompatibility', protectionPhaseCompatibility)

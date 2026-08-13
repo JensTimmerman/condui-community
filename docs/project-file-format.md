@@ -39,13 +39,93 @@ The root document contains these portable domains:
 | `relationships`          | Directed links between elements.                                                                      |
 | `views`                  | Floor-plan, one-wire, panel, and export view definitions.                                             |
 | `assets`                 | Metadata and references for floor-plan and other project-owned files.                                 |
-| `disciplines.electrical` | Installation, panels, devices, plan wiring, and one-wire annotations.                                 |
+| `disciplines.electrical` | Installation, panels, devices, plan wiring, one-wire annotations, and optional supply assemblies.     |
 | `validation`             | Optional quarantined data retained for recovery and diagnostics.                                      |
 
 Within `disciplines.electrical`, a protection record with `directPanelFeeder: true` is a
 structural one-wire carrier for a secondary panel connected directly to a busbar. It
 retains the feeder circuit and `subPanelId`, but readers must not interpret it as a
 physical protection device or render a protection symbol.
+
+`disciplines.electrical.supplyAssemblies` optionally stores source-side electrical
+topology before a root feed or panel input. Each assembly owns a versioned port graph,
+its incoming attachment, load handoffs, inverter grouping, and connection properties.
+`auxiliaryEnclosures` optionally stores referenced non-panel electrical enclosures.
+An auxiliary enclosure may persist `ownerPanelId`, `panelViewPosition`, and a
+`gridView` whose slots arrange supply devices in a virtual frame on the panel canvas.
+The hierarchy derives the frame's vertical transition band between the shared supply
+and its owning main panel; the persisted position remains a horizontal placement hint
+and a compatibility value for older editors.
+It is a visual mounting boundary rather than another distribution panel. A supply
+trunk device may persist `panelMounting` with `kind: "grid"`, `kind: "panel"`, or
+`kind: "auxiliary"`; this device-owned value is authoritative for which panel-canvas
+frame contains it and does not change its electrical feed order or ownership. Grid
+slots remain layout data only. Older files that stored the same mounting on a mirrored
+supply-node `mounting.enclosure` remain accepted and are promoted to device-owned
+mounting when edited. Deleting the
+virtual frame returns its mounted devices to the owning panel's first available grid
+positions, using the panel overflow band when necessary, without deleting or rewiring
+them. Missing arrays mean that the project has no supply-assembly data. The
+existing one-wire, panel, and situation-plan canvases derive the representations they
+need from the same topology.
+
+A physical supply-assembly node may contain `deviceId`, referencing its canonical
+supply-trunk device record. The device record owns editable physical presentation and
+equipment data such as symbol, label, rating, manufacturer, model, serial information,
+and situation-plan placements. The graph node owns electrical ports, conductors,
+connections, and topology-specific behavior. The referenced device owns physical
+panel-canvas mounting. Node-level `label`,
+`symbol`, and equipment-property values remain readable as legacy fallback snapshots,
+but readers must prefer the referenced device and must not require those snapshots to
+be synchronized after edits. Virtual utility, handoff, and distribution nodes may omit
+`deviceId`.
+
+An assembly may contain `oneWireGeometry`. Its node positions and optional connection
+waypoints are independent geometry on the existing one-wire canvas; they are not
+properties of the utility source or main panel.
+
+A supply-trunk device may use `type: "changeover"` with
+`symbol: "source_changeover"`. It occupies the same ordered one-wire supply slots as
+other trunk devices; it is not free-positioned canvas geometry. A changeover and its
+branch devices belong to a root-panel feed and must not be stored on the shared feed
+before the root-panel boundary.
+Supply-trunk devices may contain `supplyPath: "backup"` for the converter,
+`"backup-output"` for serial protection between the converter backup output and the
+changeover, `"changeover-grid"` for serial devices on the grid-only lower lane between
+the changeover and the converter grid tap, or `"converter-grid"` for serial protection
+on the vertical connection between the grid tap and the converter grid input. A
+changeover-less grid-connected storage branch uses
+`"converter-branch"` for its inverter or rectifier and `"converter-dc"` for a battery
+or solar source connected to its DC port. Missing `supplyPath` (or `"serial"`) means
+the ordinary grid-to-panel path. A converter and its branch devices are mirrored by
+nodes in the corresponding supply assembly; the graph connections remain the
+electrical source of truth for protected AC and DC paths. Direct storage branches use
+the explicit `grid_connected_storage_branch` preset intent and do not require a
+changeover. They may optionally feed one protected load circuit from the converter's
+backup AC port. That circuit persists `supplySource: { kind: "converter-backup",
+converterId }`; the matching assembly handoff initially targets `circuit-input` and may
+be retargeted to `panel-input` when the circuit feeds a neighboring secondary panel.
+Missing `supplySource` retains the ordinary bus-fed circuit behavior.
+
+Load-time compatibility repair must preserve supply devices and assembly graphs it
+cannot assign unambiguously. Inconsistent ownership, a missing converter counterpart,
+or an unsupported graph must be reported for validation or manual repair; readers must
+not silently delete or flatten those records while opening the project.
+
+Supply changeovers may persist independent `changeoverProps.port1Label` and
+`changeoverProps.port2Label` display text. Their visibility uses the device's generic
+`symbolLabelDisplay.visibility` map. Supply-assembly connections may carry independent
+`wireProperties`; one-wire segments derived from those connections retain the assembly
+and connection identity so edits to inverter inputs, backup outputs, changeover inputs,
+and separate DC branches do not mutate the ordinary main-supply wire settings.
+Supply-wire conversion devices may persist one shared
+`conversionProps.acPhaseAssignment`. It applies to every AC port of that converter and
+to the corresponding assembly connections, independently of the selected cable's core
+count. A multiplied inverter may instead persist ordered
+`conversionProps.acPhaseAssignments`, mapped one-to-one to its ordered physical units.
+Two-unit inverter groups use those independent assignments; three-unit groups derive a
+locked full three-phase set and distribute one line phase per unit. A missing value
+inherits the installation voltage system.
 
 SPD protection records and SPD trunk devices may optionally contain
 `surgeProtectionKind`. The accepted values are `standard` for one-arrow lightning
@@ -84,6 +164,18 @@ integrity error. When loading older conversion devices without placements, the
 editor creates visible placements. Conversion placements stored as hidden by an
 older editor version are automatically made visible while loading.
 
+An inverter trunk device may contain `conversionProps.serialNumbers`. The ordered
+array maps one-to-one to the device's ordered situation-plan placements and represents
+multiple physical inverter units rendered as one multiplied symbol in the one-wire
+view. A missing array keeps the legacy single-unit `serialNumber` behavior. Readers
+must preserve placement, serial, and per-unit AC phase ordering together when adding or
+removing units. Supported supply-inverter unit counts are one, two, and three.
+
+Supply-trunk devices on a hybrid inverter's secondary DC branch use
+`supplyPath: "converter-dc-top"`; the original right-hand DC chain continues to use
+`"converter-dc"`. Devices within either branch remain ordered by their position in the
+owning supply trunk array.
+
 Situation-plan placements store their orientation in `rotationDeg` as a clockwise
 quarter-turn (`0`, `90`, `180`, or `270`). A placement with
 `rotationMode: "explicit"` was rotated by the user and must not be auto-oriented to
@@ -108,6 +200,25 @@ two consecutive positions, producing `L1-L2`, `L3-L1`, `L2-L3`, then repeating f
 default order. Devices with more poles follow the same rule: they start at the current
 pole offset, list consecutive phases in that order, and advance the offset by their pole
 count (for example `2P, 3P, 2P` produces `L1-L2`, `L3-L1-L2`, `L3-L1`).
+
+Panels may optionally contain `busSections`, representing independently supplied
+top-level busbar sections inside one physical panel. `primaryBusSectionId` identifies
+the default section for legacy or unassigned top-level devices. Top-level protections
+and unprotected circuits may reference a section through `busSectionId`; circuits
+below a protection inherit the protection's section. A section's optional `role`
+(`normal`, `backup`, or `custom`) is a presentation hint only. Its optional
+`phaseOrder` controls independent automatic phase sequencing and may contain a single
+line phase for a single-phase bus in a multi-phase installation. Missing
+`busSections` retains the historical single main bus and does not add persisted
+placeholder data.
+
+A root feed may optionally target one explicit bus section through `busSectionId`.
+A supply-assembly attachment or load handoff may use `panel-bus-input` with `panelId`
+and `busSectionId`. The existing `panel-input` attachment remains accepted and means
+the panel's primary or implicit legacy bus. Incoming source capability and conductor
+availability are derived from the targeted feed or handoff; the bus section's display
+role must not be interpreted as electrical source truth. Multiple uncoordinated
+incoming supplies to the same explicit section are invalid.
 
 Phase choices are filtered by the installation's nominal voltage system: `3~` exposes
 only `L1`, `L2`, and `L3` combinations and never `N`. The phase assignment controls are

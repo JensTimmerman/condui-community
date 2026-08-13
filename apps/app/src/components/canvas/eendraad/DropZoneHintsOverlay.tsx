@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Group, Circle } from 'react-konva'
+import { Group, Circle, Rect } from 'react-konva'
 import {
   collectDropZoneHints,
   resolveActiveDropZoneHintNodeId,
@@ -59,17 +59,29 @@ export function DropZoneHintsOverlay({
   return (
     <Group listening={false} name="drop-zone-hints">
       {visibleHints.map((hint) => (
-        <Circle
-          key={hint.nodeId}
-          x={hint.x}
-          y={hint.y}
-          radius={HINT_RADIUS}
-          fill={PREVIEW_FILL}
-          stroke={PREVIEW_STROKE}
-          strokeWidth={1.5}
-          dash={PREVIEW_DASH}
-          listening={false}
-        />
+        hint.outline ? (
+          <Rect
+            key={hint.nodeId}
+            {...hint.outline}
+            fill={PREVIEW_FILL}
+            stroke={PREVIEW_STROKE}
+            strokeWidth={2}
+            dash={PREVIEW_DASH}
+            listening={false}
+          />
+        ) : (
+          <Circle
+            key={hint.nodeId}
+            x={hint.x}
+            y={hint.y}
+            radius={HINT_RADIUS}
+            fill={PREVIEW_FILL}
+            stroke={PREVIEW_STROKE}
+            strokeWidth={1.5}
+            dash={PREVIEW_DASH}
+            listening={false}
+          />
+        )
       ))}
     </Group>
   )

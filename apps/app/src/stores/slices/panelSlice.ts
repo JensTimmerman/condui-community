@@ -22,6 +22,7 @@ import {
 } from '@/lib/eendraad/projectElectricalDomain'
 import { ensureInstallationFeedTopology } from '@/lib/feedTopology'
 import { ejectSupplyTrunkFromMainGridSlot, healSupplyTrunkMisplacedOnMainGridForPanel } from '@/lib/panel/healSupplyTrunkGrid'
+import { setSupplyDeviceMounting } from '@/lib/panel/auxiliarySupplyEnclosures'
 import { cascadeMainEarthingToPanels, inheritEarthingFromMainForNewPanel } from '@/lib/panel/panelEarthingSync'
 import { findPanelById } from '@/lib/panel/panelTree'
 import { applyPanelRowChange } from '@/components/canvas/panel/panelRowChange'
@@ -46,6 +47,10 @@ import {
   DEFAULT_PANEL_GRID_COLUMNS,
   DEFAULT_PANEL_GRID_ROWS,
 } from '@/lib/panel/panelGridDefaults'
+import {
+  applyPanelBusFeedBoundaryInProject,
+  setPanelFeedOrganizationInProject,
+} from '@/lib/panel/panelFeedOrganization'
 
 export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
     // Panel actions
@@ -244,6 +249,35 @@ export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
         }
       }),
 
+    setPanelFeedOrganization: (panelId, organization) => {
+      let changed = false
+      set((state) => {
+        if (!state.currentProject) return
+        changed = setPanelFeedOrganizationInProject(
+          state.currentProject,
+          panelId,
+          organization,
+        )
+        if (changed) state.isDirty = true
+      })
+      return changed
+    },
+
+    setPanelBusFeedBoundary: (panelId, kind, mainBusInsertIndex) => {
+      let changed = false
+      set((state) => {
+        if (!state.currentProject) return
+        changed = applyPanelBusFeedBoundaryInProject(
+          state.currentProject,
+          panelId,
+          kind,
+          mainBusInsertIndex,
+        )
+        if (changed) state.isDirty = true
+      })
+      return changed
+    },
+
     movePanelSupply: (panelId, target) =>
       set((state) => {
         const project = state.currentProject
@@ -392,6 +426,9 @@ export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
           return
         const panel = findPanelById(getMutableElectricalPanelsForProject(state.currentProject), panelId)!
         if (ejectSupplyTrunkFromMainGridSlot(panel, state.currentProject, moduleRef)) {
+          if (moduleRef.kind === 'trunkDevice' && moduleRef.scope === 'supply') {
+            setSupplyDeviceMounting(state.currentProject, moduleRef.id, { kind: 'grid' })
+          }
           state.isDirty = true
         }
       }),
@@ -429,6 +466,12 @@ export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
                   module: moduleRef,
                 },
               ]
+              if (moduleRef.kind === 'trunkDevice' && moduleRef.scope === 'supply') {
+                setSupplyDeviceMounting(state.currentProject, moduleRef.id, {
+                  kind: 'panel',
+                  panelId,
+                })
+              }
               state.isDirty = true
               return
             }

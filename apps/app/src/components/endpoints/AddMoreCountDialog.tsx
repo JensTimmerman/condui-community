@@ -12,8 +12,13 @@ import {
 import { getSymbolById } from '@/lib/symbols'
 import { getEndpointMultiplier } from '@/utils/endpointMultipliers'
 import { createSyncEndpointMultiplierDeps, syncEndpointMultiplierCount } from '@/lib/eendraad/syncEndpointMultiplierCount'
-import type { Endpoint } from '@/types/schema'
+import type { Endpoint, TrunkDevice } from '@/types/schema'
 import type { SymbolKey } from '@/types/schema'
+import {
+  createSyncSupplyInverterMultiplierDeps,
+  getSupplyInverterMultiplier,
+  syncSupplyInverterMultiplierCount,
+} from '@/lib/eendraad/syncSupplyInverterMultiplier'
 
 const SOCKET_PREVIEW_SYMBOL_PX = 40
 const SOCKET_PREVIEW_OFFSET_PX =
@@ -170,6 +175,7 @@ type AddMoreCountDialogBodyProps = {
   currentValue: number
   min: number
   max?: number
+  allowedValues?: number[]
   onConfirm: (value: number) => void
   onCancel: () => void
 }
@@ -181,6 +187,7 @@ function AddMoreCountDialogBody({
   currentValue,
   min,
   max,
+  allowedValues,
   onConfirm,
   onCancel,
 }: AddMoreCountDialogBodyProps) {
@@ -203,7 +210,10 @@ function AddMoreCountDialogBody({
       return t('multiplier.mustBeAtLeastOne', 'Number must be at least 1')
     }
     if (max != null && n > max) {
-      return t('endpoints.socketCountMax', 'Maximum is 4')
+      return t('multiplier.maximumCount', 'Maximum is {{max}}', { max })
+    }
+    if (allowedValues && !allowedValues.includes(n)) {
+      return t('multiplier.allowedInverterCounts', 'Use 1, 2, or 3')
     }
     return null
   }
@@ -221,6 +231,7 @@ function AddMoreCountDialogBody({
     const n = Number(value)
     if (!Number.isFinite(n) || !Number.isInteger(n) || n < min) return currentValue
     if (max != null && n > max) return max
+    if (allowedValues && !allowedValues.includes(n)) return currentValue
     return n
   })()
 
@@ -329,6 +340,37 @@ export function openSocketAddMoreDialog(endpoint: Endpoint, t: TFunction) {
               socketCount: count <= 1 ? undefined : count,
             },
           })
+          closeDialog()
+        }}
+        onCancel={() => closeDialog()}
+      />
+    ),
+  })
+}
+
+export function openSupplyInverterAddMoreDialog(device: TrunkDevice, t: TFunction) {
+  const { openDialog, closeDialog } = useDialogStore.getState()
+  const previewSrc = getSymbolById('inverter')?.svgPath ?? '/symbols/energy/inverter.svg'
+
+  openDialog({
+    type: 'custom',
+    title: t('contextMenu.addMore', 'Add more...'),
+    showCloseButton: true,
+    content: (
+      <AddMoreCountDialogBody
+        previewSrc={previewSrc}
+        message={t('multiplier.setTotalCount', 'Set total number of symbols in sitplan')}
+        inputLabel={t('multiplier.totalCount', 'Total count')}
+        currentValue={getSupplyInverterMultiplier(device)}
+        min={1}
+        max={3}
+        allowedValues={[1, 2, 3]}
+        onConfirm={(target) => {
+          syncSupplyInverterMultiplierCount(
+            createSyncSupplyInverterMultiplierDeps(),
+            device.id,
+            target
+          )
           closeDialog()
         }}
         onCancel={() => closeDialog()}

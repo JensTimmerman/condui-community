@@ -62,6 +62,7 @@ export const WIRE_INSETS: Record<string, WireInsets> = {
   // Protection devices (mcb + rcd both resolve here, see NODE_TYPE_CATEGORY)
   protection: { top: 8, bottom: 6, left: 8, right: 6 },
   rotating_switch: { top: 9, bottom: 6, left: 9, right: 6 },
+  source_changeover: { top: 10, bottom: 10, left: 10, right: 10 },
   fuse: { top: 0, bottom: 0, left: 0, right: 0 },
 
   // ── Symbol overrides (take precedence over node type) ───
@@ -88,8 +89,8 @@ export const WIRE_INSETS: Record<string, WireInsets> = {
   // An SPD is tapped off the trunk; the trunk itself remains uninterrupted.
   spd: _,
 
-  // Stop a feeder from below at the enlarged one-wire panel body's lower edge.
-  panel_distribution: { top: 0, bottom: 6.5, left: 0, right: 0 },
+  // Stop vertical feeders at the lower edge and horizontal feeders at the panel body.
+  panel_distribution: { top: 0, bottom: 6.5, left: 12.5, right: 12.5 },
 
   relay: { top: 6, bottom: 6, left: 8.5, right: 8.5 },
   // Domotica wires are fully controlled by custom geometry (deriveWires/layoutTree); no automatic insets.

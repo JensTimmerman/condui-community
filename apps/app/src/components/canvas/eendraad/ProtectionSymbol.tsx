@@ -44,7 +44,13 @@ import type { Point } from '@/types/ui'
 
 type EendraadPointerEvent = {
   cancelBubble: boolean
-  evt: { button?: number; shiftKey?: boolean; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean }
+  evt: {
+    button?: number
+    shiftKey?: boolean
+    altKey?: boolean
+    ctrlKey?: boolean
+    metaKey?: boolean
+  }
 }
 type WindowWithEendraTapSuppression = Window & { __eendraSuppressNextElementTap?: boolean }
 
@@ -83,6 +89,7 @@ export function ProtectionSymbol({
   type ProjectStoreState = ReturnType<typeof useProjectStore.getState>
   // Subscribe to actual data to make moveInfo reactive
   const circuit = protection.circuits?.[0]
+  const isHorizontalConverterBackup = circuit?.supplySource?.kind === 'converter-backup'
   const secondaryBusOrder = useProjectStore((state: ProjectStoreState) => {
     if (!circuit || !state.currentProject) return null
     return getSecondaryBusOrderForCircuit(
@@ -90,7 +97,7 @@ export function ProtectionSymbol({
       circuit.id
     )
   })
-  
+
   const mainBusOrder = useProjectStore((state: ProjectStoreState) => {
     if (!circuit || !state.currentProject) {
       return null
@@ -99,26 +106,26 @@ export function ProtectionSymbol({
     if (!panel) {
       return null
     }
-    
+
     const isDirectCircuit = panel.circuits.some((c: Circuit) => c.id === circuit.id)
     // Any protection with circuits can be on the main bus (MCB, RCBO, RCD)
     const isProtectionOnMainBus = protection.circuits && protection.circuits.length > 0
-    
+
     if (!isDirectCircuit && !isProtectionOnMainBus) {
       return null
     }
-    
+
     // Build order string for main bus items
     // IMPORTANT: We need to preserve the order from panel.protections and panel.circuits arrays
     const items: string[] = []
-    
+
     // Add direct circuits (preserve order from panel.circuits)
     panel.circuits.forEach((c: Circuit) => {
       if (c.code !== 'PANEL') {
         items.push(`circuit:${c.id}`)
       }
     })
-    
+
     // Add protections with circuits (MCB, RCBO, RCD) - preserve order from panel.protections
     // Use the same logic as isMainBusProtection: check if this protection's circuit
     // is in any OTHER protection's circuit's subCircuitIds
@@ -130,7 +137,7 @@ export function ProtectionSymbol({
           return
         }
         const myCircuitId = pCircuit.id
-        
+
         // Check if this circuit is nested (in a parent protection's circuit's subCircuitIds)
         // A protection is on main bus if its circuit is NOT in any other protection's circuit's subCircuitIds
         let isNested = false
@@ -144,23 +151,23 @@ export function ProtectionSymbol({
           }
           if (isNested) break
         }
-        
+
         if (!isNested) {
           items.push(`protection:${p.id}`)
         }
       }
     })
-    
+
     const result = items.join(',')
     return result
   })
-  
+
   // Determine move capabilities - now reactive to data changes
   const moveInfo = useMemo(() => {
     if (!circuit) {
       return null
     }
-    
+
     // Check secondary bus first
     if (secondaryBusOrder) {
       const circuitIds = secondaryBusOrder.split(',')
@@ -173,12 +180,12 @@ export function ProtectionSymbol({
         }
       }
     }
-    
+
     // Check main bus
     if (mainBusOrder) {
       const items = mainBusOrder.split(',')
-      const currentItem = items.find((item: string) =>
-        item === `circuit:${circuit.id}` || item === `protection:${protection.id}`
+      const currentItem = items.find(
+        (item: string) => item === `circuit:${circuit.id}` || item === `protection:${protection.id}`
       )
       if (currentItem) {
         const index = items.indexOf(currentItem)
@@ -191,13 +198,13 @@ export function ProtectionSymbol({
         }
       }
     }
-    
+
     return null
   }, [circuit, protection.id, secondaryBusOrder, mainBusOrder])
-  
+
   // Check if selected - allow selection even if type doesn't match (for multi-type drag rect selection)
   // If ID is in the list, it's selected regardless of selection.type
-  
+
   const symbolKey = protectionTypeToSymbolKey(protection.type)
   const symbol = symbolKey ? getSymbolById(symbolKey) : null
   const isSurgeProtection = protection.type === 'SPD'
@@ -207,33 +214,38 @@ export function ProtectionSymbol({
   const surgeBodyBounds = getSurgeProtectionBodyBounds(SYMBOL_SIZE, SYMBOL_SIZE, false)
   const surgeSelectionBounds = getSurgeProtectionSelectionBounds(SYMBOL_SIZE, SYMBOL_SIZE, false)
   const surgeSymbolAnchor = getSurgeProtectionSymbolAnchor(SYMBOL_SIZE, SYMBOL_SIZE)
-  
+
   // Load symbol image
   useEffect(() => {
     if (!renderedSymbolPath) return
     const isDark = theme.mode === 'dark'
-    loadProcessedSymbol(renderedSymbolPath, isDark).then(setProcessedImage).catch(() => {
-      logger.error('Failed to load symbol:', renderedSymbolPath)
-      setProcessedImage(null)
-    })
+    loadProcessedSymbol(renderedSymbolPath, isDark)
+      .then(setProcessedImage)
+      .catch(() => {
+        logger.error('Failed to load symbol:', renderedSymbolPath)
+        setProcessedImage(null)
+      })
   }, [renderedSymbolPath, theme.mode])
-  
-  const handleClick = useCallback((event: unknown) => {
-    const e = event as EendraadPointerEvent
-    const eendraWindow = window as WindowWithEendraTapSuppression
-    if (eendraWindow.__eendraSuppressNextElementTap) {
-      eendraWindow.__eendraSuppressNextElementTap = false
-      return
-    }
-    e.cancelBubble = true
-    
-    if (e.evt.button != null && e.evt.button !== 0) {
-      return
-    }
-    
-    setSelection({ type: 'protection', ids: [protection.id] })
-  }, [protection.id, setSelection])
-  
+
+  const handleClick = useCallback(
+    (event: unknown) => {
+      const e = event as EendraadPointerEvent
+      const eendraWindow = window as WindowWithEendraTapSuppression
+      if (eendraWindow.__eendraSuppressNextElementTap) {
+        eendraWindow.__eendraSuppressNextElementTap = false
+        return
+      }
+      e.cancelBubble = true
+
+      if (e.evt.button != null && e.evt.button !== 0) {
+        return
+      }
+
+      setSelection({ type: 'protection', ids: [protection.id] })
+    },
+    [protection.id, setSelection]
+  )
+
   const isDark = theme.mode === 'dark'
   const symbolColor = getSymbolColor(isDark)
   const [isHovered, setIsHovered] = useState(false)
@@ -244,7 +256,7 @@ export function ProtectionSymbol({
       <Group x={position.x} y={position.y}>
         <ProtectionOneWireLabels
           source={protection}
-          defaultPosition="right"
+          defaultPosition={isHorizontalConverterBackup ? 'bottom' : 'right'}
           textColor={getSecondaryTextColor(isDark)}
           fontFamily={fontFamily}
           fontSize={10}
@@ -253,7 +265,7 @@ export function ProtectionSymbol({
       </Group>
     )
   }
-  
+
   // If no symbol, fallback to simple rectangle
   if (!symbol || !processedImage) {
     return (
@@ -330,7 +342,7 @@ export function ProtectionSymbol({
       </Group>
     )
   }
-  
+
   return (
     <Group
       name={`protection-${protection.id}`}
@@ -390,11 +402,11 @@ export function ProtectionSymbol({
                 PROTECTION_OUTLINE_SIZE,
                 canvasZoom,
                 isSelected,
-                touchPrimary,
+                touchPrimary
               )}
             />
           )}
-      
+
           {/* Symbol image */}
           <Image
             key={`${renderedSymbolPath}-${theme.mode}`}
@@ -405,9 +417,10 @@ export function ProtectionSymbol({
             offsetX={isSurgeProtection ? surgeSymbolAnchor.x : SYMBOL_SIZE / 2}
             offsetY={isSurgeProtection ? surgeSymbolAnchor.y : SYMBOL_SIZE / 2}
             y={0}
+            rotation={isHorizontalConverterBackup ? -90 : 0}
             listening={false}
           />
-      
+
           {/* Preview highlight (during selection rectangle drag) */}
           {isPreviewSelected && !isSelected && (
             <Rect
@@ -418,7 +431,7 @@ export function ProtectionSymbol({
                     surgeSelectionBounds.y,
                     surgeSelectionBounds.width,
                     surgeSelectionBounds.height,
-                    2,
+                    2
                   )
                 : getPreviewOutlineProps(canvasZoom, PROTECTION_OUTLINE_SIZE))}
             />
@@ -433,12 +446,12 @@ export function ProtectionSymbol({
                     surgeSelectionBounds.y,
                     surgeSelectionBounds.width,
                     surgeSelectionBounds.height,
-                    2,
+                    2
                   )
                 : getHoverOutlineProps(canvasZoom, PROTECTION_OUTLINE_SIZE))}
             />
           )}
-      
+
           {/* Selection outline */}
           {isSelected && (
             <Rect
@@ -449,17 +462,17 @@ export function ProtectionSymbol({
                     surgeSelectionBounds.y,
                     surgeSelectionBounds.width,
                     surgeSelectionBounds.height,
-                    2,
+                    2
                   )
                 : getSelectionOutlineProps(canvasZoom, PROTECTION_OUTLINE_SIZE))}
             />
           )}
         </>
       )}
-      
+
       <ProtectionOneWireLabels
         source={protection}
-        defaultPosition="right"
+        defaultPosition={isHorizontalConverterBackup ? 'bottom' : 'right'}
         textColor={getSecondaryTextColor(isDark)}
         fontFamily={fontFamily}
         fontSize={10}

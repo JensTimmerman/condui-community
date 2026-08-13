@@ -36,8 +36,11 @@ export function getChangedPreviewWireSegments(
   currentSegments: WireSegment[],
   panelId: string,
   previewPanelNode?: LayoutNode,
+  diagramId: string = panelId
 ): WireSegment[] {
-  const currentPanelSegments = currentSegments.filter((segment) => segment.panelId === panelId)
+  const currentPanelSegments = currentSegments.filter(
+    (segment) => segment.panelId === panelId && (segment.diagramId ?? segment.panelId) === diagramId
+  )
   const secondaryBusRootXByCircuitId = new Map<string, number>()
   const visit = (node: LayoutNode) => {
     if (
@@ -69,8 +72,9 @@ export function getChangedPreviewWireSegments(
   return normalizedPreviewSegments.filter(
     (previewSegment) =>
       previewSegment.panelId === panelId &&
+      (previewSegment.diagramId ?? previewSegment.panelId) === diagramId &&
       !currentPanelSegments.some((currentSegment) =>
-        isSamePreviewWireSegment(previewSegment, currentSegment),
-      ),
+        isSamePreviewWireSegment(previewSegment, currentSegment)
+      )
   )
 }

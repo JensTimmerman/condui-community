@@ -8,6 +8,9 @@ import type {
   Circuit,
   TrunkDevice,
 } from '@/types/schema'
+import {
+  findConverterBackupProtectionRefs,
+} from '@/lib/panel/converterBackupPanelFeed'
 import { ensureInstallationFeedTopology, getPanelFeedProjection } from '@/lib/feedTopology'
 import { getPanelIncomingMainBusFeedDevice } from '@/lib/panel/subPanelFeed'
 import {
@@ -16,6 +19,7 @@ import {
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { findPanelById } from '@/lib/panel/panelTree'
+import { panelGridModuleRefKey } from './panelGridLayout'
 
 /** Trunk chain order on a circuit (matches eendraad trunkPosition). */
 function orderedTrunkDevices(circuit: Circuit | null | undefined): TrunkDevice[] {
@@ -65,6 +69,29 @@ function projectPanels(project: ProjectWithOptionalV2Electrical): Panel[] {
 
 function projectInstallation(project: ProjectWithOptionalV2Electrical) {
   return getElectricalInstallationFromProject(project)
+}
+
+/** Physical supply device that feeds the panel bus after branch-only devices are excluded. */
+export function getPanelMainBusSupplyDevice(devices: TrunkDevice[]): TrunkDevice | null {
+  const changeover = devices.find((device) => device.symbol === 'source_changeover')
+  if (changeover) {
+    const changeoverIndex = devices.findIndex((device) => device.id === changeover.id)
+    return (
+      devices
+        .slice(changeoverIndex + 1)
+        .filter((device) => device.supplyPath == null || device.supplyPath === 'serial')
+        .at(-1) ?? changeover
+    )
+  }
+  const directConverter = devices.find((device) => device.supplyPath === 'converter-branch')
+  if (directConverter) {
+    return (
+      devices.filter(
+        (device) => device.supplyPath == null || device.supplyPath === 'serial'
+      ).at(-1) ?? directConverter
+    )
+  }
+  return devices.at(-1) ?? null
 }
 
 function findSupplyTrunkDeviceByIdInProject(
@@ -307,6 +334,13 @@ export function getRelationEdges(
     const pushedChildCircuitTrunks = new Set<string>()
     if (pr?.circuits) {
       for (const circuit of pr.circuits) {
+        if (circuit.supplySource?.kind === 'converter-backup') {
+          parentRefs.push({
+            kind: 'trunkDevice',
+            id: circuit.supplySource.converterId,
+            scope: 'supply',
+          })
+        }
         const trunks = orderedTrunkDevices(circuit)
         const firstTrunkDevice = trunks[0]
         if (firstTrunkDevice) {
@@ -397,7 +431,10 @@ export function getRelationEdges(
     }
     // Main-bus protections: incoming PANEL feed (another board) wins over utility supply;
     // sub-panels fall back to the upstream feeder MCB when the PANEL line has no trunks yet.
-    if (pr && isMainBusProtection(pr, protectionPanel)) {
+    const hasConverterBackupSource = (pr?.circuits ?? []).some(
+      (circuit) => circuit.supplySource?.kind === 'converter-backup',
+    )
+    if (pr && isMainBusProtection(pr, protectionPanel) && !hasConverterBackupSource) {
       const incoming = getPanelIncomingMainBusFeedDevice(protectionPanel)
       if (incoming) {
         parentRefs.push({
@@ -410,9 +447,9 @@ export function getRelationEdges(
         const devices = installation
           ? (getPanelFeedProjection(installation, panels, protectionPanel)?.devices ?? [])
           : []
-        if (devices.length > 0) {
-          const last = devices[devices.length - 1]!
-          parentRefs.push({ kind: 'trunkDevice', id: last.id, scope: 'supply' })
+        const busSupplyDevice = getPanelMainBusSupplyDevice(devices)
+        if (busSupplyDevice) {
+          parentRefs.push({ kind: 'trunkDevice', id: busSupplyDevice.id, scope: 'supply' })
         }
       } else {
         const feederPr = findFeederProtectionForSubPanel(project, protectionPanel)
@@ -464,6 +501,176 @@ export function getRelationEdges(
           }
         } else {
           const list = mainPanelSupplyDevices
+          const sourceChangeover = list.find((device) => device.symbol === 'source_changeover')
+          if (sourceChangeover) {
+            const current = list.find((device) => device.id === ref.id)
+            const sourceChangeoverIndex = list.findIndex(
+              (device) => device.id === sourceChangeover.id
+            )
+            const orderedPath = (path: TrunkDevice['supplyPath']) =>
+              list.filter((device) => device.supplyPath === path)
+            const isSerialDevice = (device: TrunkDevice) =>
+              device.supplyPath == null || device.supplyPath === 'serial'
+            const sourceSerialDevices = list.filter(
+              (device, index) => index < sourceChangeoverIndex && isSerialDevice(device)
+            )
+            const loadSerialDevices = list.filter(
+              (device, index) => index > sourceChangeoverIndex && isSerialDevice(device)
+            )
+            const changeoverGridDevices = orderedPath('changeover-grid')
+            const converterGridDevices = orderedPath('converter-grid')
+            const backupOutputDevices = orderedPath('backup-output')
+            const converter = list.find((device) => device.supplyPath === 'backup')
+            const asSupplyRef = (device: TrunkDevice): PanelGridModuleRef => ({
+              kind: 'trunkDevice',
+              id: device.id,
+              scope: 'supply',
+            })
+            const pushUnique = (refs: PanelGridModuleRef[], device: TrunkDevice | undefined) => {
+              if (!device) return
+              const key = panelGridModuleRefKey(asSupplyRef(device))
+              if (!refs.some((candidate) => panelGridModuleRefKey(candidate) === key)) {
+                refs.push(asSupplyRef(device))
+              }
+            }
+            const pushMainBusChildren = () => {
+              for (const protection of panel.protections) {
+                if (isMainBusProtection(protection, panel)) {
+                  childRefs.push({ kind: 'protection', id: protection.id })
+                }
+              }
+            }
+            const connectSerialPath = (devices: TrunkDevice[], terminal: TrunkDevice) => {
+              const index = devices.findIndex((device) => device.id === ref.id)
+              if (index < 0) return false
+              pushUnique(parentRefs, devices[index - 1])
+              pushUnique(childRefs, devices[index + 1] ?? terminal)
+              return true
+            }
+
+            if (current?.id === sourceChangeover.id) {
+              pushUnique(
+                parentRefs,
+                changeoverGridDevices.at(-1) ?? sourceSerialDevices.at(-1)
+              )
+              pushUnique(parentRefs, backupOutputDevices.at(-1) ?? converter)
+              if (loadSerialDevices[0]) pushUnique(childRefs, loadSerialDevices[0])
+              else pushMainBusChildren()
+              return { parentRefs, childRefs, childPanelIds }
+            }
+            if (current?.supplyPath === 'changeover-grid') {
+              const index = changeoverGridDevices.findIndex((device) => device.id === ref.id)
+              pushUnique(
+                parentRefs,
+                changeoverGridDevices[index - 1] ?? sourceSerialDevices.at(-1)
+              )
+              pushUnique(childRefs, changeoverGridDevices[index + 1] ?? sourceChangeover)
+              return { parentRefs, childRefs, childPanelIds }
+            }
+            if (current?.supplyPath === 'backup-output') {
+              const index = backupOutputDevices.findIndex((device) => device.id === ref.id)
+              pushUnique(parentRefs, backupOutputDevices[index - 1] ?? converter)
+              pushUnique(childRefs, backupOutputDevices[index + 1] ?? sourceChangeover)
+              return { parentRefs, childRefs, childPanelIds }
+            }
+            if (current?.supplyPath === 'converter-grid') {
+              const index = converterGridDevices.findIndex((device) => device.id === ref.id)
+              pushUnique(
+                parentRefs,
+                converterGridDevices[index - 1] ?? sourceSerialDevices.at(-1)
+              )
+              pushUnique(childRefs, converterGridDevices[index + 1] ?? converter)
+              return { parentRefs, childRefs, childPanelIds }
+            }
+            if (current?.id === converter?.id) {
+              pushUnique(parentRefs, converterGridDevices.at(-1) ?? sourceSerialDevices.at(-1))
+              pushUnique(childRefs, backupOutputDevices[0] ?? sourceChangeover)
+              return { parentRefs, childRefs, childPanelIds }
+            }
+            if (current && connectSerialPath(sourceSerialDevices, sourceChangeover)) {
+              if (current.id === sourceSerialDevices.at(-1)?.id) {
+                childRefs.length = 0
+                pushUnique(childRefs, changeoverGridDevices[0] ?? sourceChangeover)
+                pushUnique(childRefs, converterGridDevices[0] ?? converter)
+              }
+              return { parentRefs, childRefs, childPanelIds }
+            }
+            if (current) {
+              const loadIndex = loadSerialDevices.findIndex((device) => device.id === current.id)
+              if (loadIndex >= 0) {
+                pushUnique(parentRefs, loadSerialDevices[loadIndex - 1] ?? sourceChangeover)
+                const next = loadSerialDevices[loadIndex + 1]
+                if (next) pushUnique(childRefs, next)
+                else pushMainBusChildren()
+                return { parentRefs, childRefs, childPanelIds }
+              }
+            }
+          }
+          const directConverter = list.find((device) => device.supplyPath === 'converter-branch')
+          if (directConverter) {
+            const converterIndex = list.findIndex((device) => device.id === directConverter.id)
+            const sourceSerialDevices = list.filter(
+              (device, index) =>
+                index < converterIndex &&
+                (device.supplyPath == null || device.supplyPath === 'serial')
+            )
+            const loadSerialDevices = list.filter(
+              (device, index) =>
+                index > converterIndex &&
+                (device.supplyPath == null || device.supplyPath === 'serial')
+            )
+            const gridDevices = list
+              .filter((device) => device.supplyPath === 'converter-grid')
+            const current = list.find((device) => device.id === ref.id)
+            const asSupplyRef = (device: TrunkDevice): PanelGridModuleRef => ({
+              kind: 'trunkDevice',
+              id: device.id,
+              scope: 'supply',
+            })
+            const lastSourceSerial = sourceSerialDevices.at(-1)
+
+            const pushMainBusChildren = () => {
+              for (const protection of panel.protections) {
+                if (isMainBusProtection(protection, panel)) {
+                  childRefs.push({ kind: 'protection', id: protection.id })
+                }
+              }
+            }
+
+            if (current?.supplyPath == null || current?.supplyPath === 'serial') {
+              const sourceIndex = sourceSerialDevices.findIndex((device) => device.id === ref.id)
+              const loadIndex = loadSerialDevices.findIndex((device) => device.id === ref.id)
+              if (sourceIndex >= 0) {
+                const previous = sourceSerialDevices[sourceIndex - 1]
+                const next = sourceSerialDevices[sourceIndex + 1]
+                if (previous) parentRefs.push(asSupplyRef(previous))
+                if (next) childRefs.push(asSupplyRef(next))
+                else {
+                  childRefs.push(asSupplyRef(gridDevices[0] ?? directConverter))
+                  if (loadSerialDevices[0]) childRefs.push(asSupplyRef(loadSerialDevices[0]))
+                  else pushMainBusChildren()
+                }
+              } else if (loadIndex >= 0) {
+                const previous = loadSerialDevices[loadIndex - 1] ?? lastSourceSerial
+                const next = loadSerialDevices[loadIndex + 1]
+                if (previous) parentRefs.push(asSupplyRef(previous))
+                if (next) childRefs.push(asSupplyRef(next))
+                else pushMainBusChildren()
+              }
+            } else if (current?.supplyPath === 'converter-grid') {
+              const gridIndex = gridDevices.findIndex((device) => device.id === ref.id)
+              const previous = gridDevices[gridIndex - 1] ?? lastSourceSerial
+              const next = gridDevices[gridIndex + 1] ?? directConverter
+              if (previous) parentRefs.push(asSupplyRef(previous))
+              if (gridIndex >= 0) childRefs.push(asSupplyRef(next))
+            } else if (current?.supplyPath === 'converter-branch') {
+              const previous = gridDevices[gridDevices.length - 1] ?? lastSourceSerial
+              if (previous) parentRefs.push(asSupplyRef(previous))
+              childRefs.push(...findConverterBackupProtectionRefs(project, current.id))
+            }
+
+            return { parentRefs, childRefs, childPanelIds }
+          }
           const idx = list.findIndex((d) => d.id === ref.id)
           if (idx > 0) {
             const prev = list[idx - 1]

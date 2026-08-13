@@ -359,6 +359,8 @@ function PlacementSymbolInner({
           symbol: trunkDevice.symbol,
           placements: trunkDevice.placements ?? [],
           energyConversionProps: trunkDevice.conversionProps,
+          batteryProps: trunkDevice.batteryProps,
+          solarPanelProps: trunkDevice.solarPanelProps,
         }
       : null),
     [sourceEndpoint, trunkDevice]

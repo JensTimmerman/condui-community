@@ -31,6 +31,8 @@ import { ProtectionProperties } from './editors/ProtectionProperties'
 import { CircuitProperties } from './editors/CircuitProperties'
 import { EndpointProperties } from './editors/EndpointProperties'
 import { WirePropertiesWithLayout } from './editors/WireProperties'
+import { AuxiliaryEnclosureProperties } from './editors/AuxiliaryEnclosureProperties'
+import { getAuxiliaryElectricalEnclosuresFromProject } from '@/lib/projectV2/electrical'
 import {
   GroundProperties,
   SupplyPanelProperties,
@@ -76,6 +78,7 @@ export default function PropertiesPanel({
     titleEndpoint,
     titleTrunkDevice,
     sameJunctionPanelId,
+    auxiliaryEnclosure,
     updatePanel,
     updateProtection,
     updateCircuit,
@@ -89,6 +92,7 @@ export default function PropertiesPanel({
     getCircuitById,
     getPanelById,
     updatePanelGrid,
+    updateAuxiliaryElectricalEnclosure,
     getEndpointById,
     getPlacementById,
     getTrunkDeviceById,
@@ -129,6 +133,12 @@ export default function PropertiesPanel({
             ? state.getTrunkDeviceById(selectedId)?.device
             : undefined,
         sameJunctionPanelId: hasSameJunctionPanel ? selectedId : null,
+        auxiliaryEnclosure:
+          selection.type === 'auxiliaryEnclosure' && state.currentProject
+            ? getAuxiliaryElectricalEnclosuresFromProject(state.currentProject).find(
+                (enclosure) => enclosure.id === selectedId
+              )
+            : undefined,
         updatePanel: state.updatePanel,
         updateProtection: state.updateProtection,
         updateCircuit: state.updateCircuit,
@@ -142,6 +152,7 @@ export default function PropertiesPanel({
         getCircuitById: state.getCircuitById,
         getPanelById: state.getPanelById,
         updatePanelGrid: state.updatePanelGrid,
+        updateAuxiliaryElectricalEnclosure: state.updateAuxiliaryElectricalEnclosure,
         getEndpointById: state.getEndpointById,
         getPlacementById: state.getPlacementById,
         getTrunkDeviceById: state.getTrunkDeviceById,
@@ -283,7 +294,13 @@ export default function PropertiesPanel({
               )
             }
             if (target.type === 'trunkDevice') {
-              return <TrunkDeviceProperties key={target.deviceId} deviceId={target.deviceId} />
+              return (
+                <TrunkDeviceProperties
+                  key={`${target.deviceId}:${id}`}
+                  deviceId={target.deviceId}
+                  placementId={id}
+                />
+              )
             }
             return null
           })()}
@@ -292,7 +309,16 @@ export default function PropertiesPanel({
         )}
         {selection.type === 'trunkDevice' && <TrunkDeviceProperties key={id} deviceId={id} />}
         {selection.type === 'ground' && <GroundProperties />}
-        {selection.type === 'supply' && <SupplyProperties readOnly={readOnly} />}
+        {selection.type === 'supply' && (
+          <SupplyProperties readOnly={readOnly} panelId={selection.supplyPanelId} />
+        )}
+        {selection.type === 'busSection' && (
+          <SupplyProperties
+            readOnly={readOnly}
+            panelId={selection.busSectionMetadata?.panelId}
+            selectedBusSectionId={selection.busSectionMetadata?.busSectionId}
+          />
+        )}
         {selection.type === 'note' &&
           (() => {
             const { note, isEendraad } = getSelectedNote(id, {
@@ -371,6 +397,12 @@ export default function PropertiesPanel({
               <SupplyPanelProperties panelId={id} panel={panel} updatePanelGrid={updatePanelGrid} />
             ) : null
           })()}
+        {selection.type === 'auxiliaryEnclosure' && auxiliaryEnclosure ? (
+          <AuxiliaryEnclosureProperties
+            enclosure={auxiliaryEnclosure}
+            onUpdate={updateAuxiliaryElectricalEnclosure}
+          />
+        ) : null}
       </>
     )
   } else {

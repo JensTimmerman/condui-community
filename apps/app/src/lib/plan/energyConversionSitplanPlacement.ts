@@ -13,6 +13,7 @@ import { generateId } from '@/utils/project'
 import { buildAutoSitplanPlacement } from './autoSitplanPlacement'
 import { getSituationPlanPlacementIdsHiddenByPanel } from './panelPlanPlacementVisibility'
 import { resolveCircuitSitplanTargetFloorId } from './sitplanTargetFloor'
+import { getAllSupplyTrunkDevices } from '@/lib/feedTopology'
 
 type EnergyConversionSitplanProject = ProjectWithOptionalV2Building &
   ProjectWithOptionalV2Electrical & {
@@ -25,9 +26,14 @@ const CONVERSION_SYMBOLS = new Set<SymbolKey>([
   'inverter',
   'dc_dc_converter',
 ])
+const PHYSICAL_SUPPLY_SYMBOLS = new Set<SymbolKey>([
+  ...CONVERSION_SYMBOLS,
+  'solar_panel',
+  'battery',
+])
 
 /**
- * Gives legacy conversion devices the placement behavior used for new drops.
+ * Gives legacy conversion and physical supply devices the placement behavior used for new drops.
  * Conversion placements that are not represented in a panel are visible,
  * including placements that older editor versions stored in the hidden-items
  * list. Placements intentionally represented in a panel remain hidden on the
@@ -37,12 +43,13 @@ const CONVERSION_SYMBOLS = new Set<SymbolKey>([
 export function healEnergyConversionSitplanPlacements(
   project: EnergyConversionSitplanProject
 ): boolean {
+  let changed = false
+
   const floors = getBuildingFloorsFromProject(project)
   const compatibilityFloors = getMutableCompatibilityFloorsForProject(project)
   const fallbackFloorId = floors[0]?.id
-  if (!fallbackFloorId) return false
+  if (!fallbackFloorId) return changed
 
-  let changed = false
   const conversionPlacementIds = new Set<string>()
   for (const panel of getElectricalPanelsFromProject(project)) {
     for (const circuit of getAllCircuits(panel)) {
@@ -80,6 +87,26 @@ export function healEnergyConversionSitplanPlacements(
           conversionPlacementIds.add(devicePlacement.id)
         }
       }
+    }
+  }
+
+  const supplyFloorId =
+    floors.find((floor) => floor.id === project.project?.lastActiveFloorId)?.id ?? fallbackFloorId
+  for (const device of getAllSupplyTrunkDevices(project)) {
+    if (!PHYSICAL_SUPPLY_SYMBOLS.has(device.symbol)) continue
+    if ((device.placements?.length ?? 0) === 0) {
+      const placement = buildAutoSitplanPlacement(project, {
+        circuitId: 'panel-supply',
+        floorId: supplyFloorId,
+        placementId: generateId(),
+      })
+      if (placement) {
+        device.placements = [placement]
+        changed = true
+      }
+    }
+    for (const placement of device.placements ?? []) {
+      conversionPlacementIds.add(placement.id)
     }
   }
 

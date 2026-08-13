@@ -6,7 +6,7 @@ import { logger } from '@/lib/logger'
  * Layout flows from supply (bottom) upward to endpoints (top).
  */
 
-import type { Circuit, ProtectionDevice, Panel, Installation } from '@/types/schema'
+import type { Circuit, ProtectionDevice, Panel, Installation, TrunkDevice } from '@/types/schema'
 import type { Point } from '@/types/ui'
 import { getCircuitBranches } from './endpointChains'
 import type { TrunkLayout, BranchLayout } from './wireSegments'
@@ -31,6 +31,8 @@ import {
   resolvePanelSupplyLinksForSourcePanel,
 } from '@/lib/eendraad/panelSupplyLink'
 import { getVisibleProtectionLabelLines } from '@/lib/protectionLabels'
+import { getVisibleCertificationLabelParts } from '@/lib/certificationLabels'
+import { isSymbolLabelVisible } from '@/lib/symbolLabels'
 import { getPanelFrameTitlePadding } from '@/lib/panel/panelDiagramLabels'
 import { collectCircuits } from '@/lib/panel/panelTree'
 import { clamp } from '@/lib/geometry'
@@ -132,7 +134,64 @@ export const LAYOUT_CONSTANTS = {
   // Supply wire layout (main panel only)
   SUPPLY_VERTICAL_DROP: 60, // Vertical drop from main bus before bending right
   SUPPLY_DEVICE_SPACING: 60, // Horizontal spacing between devices on the supply wire (+20% vs branch spacing for readability)
+  // The switched inverter lanes carry phase, cable and device metadata on both
+  // sides of the converter, so keep the changeover rectangle deliberately open.
+  SUPPLY_CHANGEOVER_LANE_OFFSET: 66,
+  SUPPLY_CHANGEOVER_RENDER_SIZE: 20,
+  SUPPLY_CHANGEOVER_ELBOW_LEAD: 18,
+  SUPPLY_CHANGEOVER_SLOT_LENGTH: 68,
+  SUPPLY_CHANGEOVER_BRANCH_DEVICE_SPACING: 66,
+  // Reserve a clean span for an enclosure-boundary marker and the adjacent
+  // wire label between the selector and its first load-side device.
+  SUPPLY_CHANGEOVER_LOAD_BOUNDARY_CLEARANCE: 30,
+  SUPPLY_CHANGEOVER_GRID_SOURCE_LEAD: 24,
+  SUPPLY_CHANGEOVER_VERTICAL_EXPANSION: 22,
+  // Give the direct inverter input lane enough vertical room for protection
+  // labels and inline modular devices around the converter.
+  SUPPLY_DIRECT_CONVERTER_OFFSET: 91,
+  // Keep the direct backup branch clear of the main-bus supply drop. This is
+  // intentionally wider than one normal supply-device step because endpoint
+  // symbols and protection labels also occupy the left side of this lane.
+  SUPPLY_DIRECT_CONVERTER_BACKUP_LEFT_CLEARANCE: 90,
+  // DC branches need room for wire labels plus inverter/battery/solar metadata.
+  // This also doubles the rise before the upper solar branch turns right.
+  SUPPLY_CONVERTER_DC_SLOT_LENGTH: 90,
+  // Only the first DC device needs the expanded clearance from the inverter.
+  // Devices after it keep the normal one-wire spacing.
+  SUPPLY_CONVERTER_DC_DEVICE_SPACING: 45,
 } as const
+
+function getSupplyConverterDcDeviceOffset(index: number): number {
+  return (
+    LAYOUT_CONSTANTS.SUPPLY_CONVERTER_DC_SLOT_LENGTH +
+    index * LAYOUT_CONSTANTS.SUPPLY_CONVERTER_DC_DEVICE_SPACING
+  )
+}
+
+const SUPPLY_TOP_LABEL_FONT_SIZE = 8
+const SUPPLY_TOP_LABEL_LINE_SPACING = 2
+const SUPPLY_TOP_LABEL_OFFSET_FROM_SYMBOL = 5
+const SUPPLY_FRAME_TOP_CONTENT_GAP = 14
+// Keep detached converter frames anchored while their optional upper DC lane is
+// populated or emptied. Four lines covers the normal certification stack plus notes.
+const SUPPLY_STABLE_TOP_LABEL_LINE_RESERVE = 4
+
+/** Top edge of labels that TrunkDeviceSymbol stacks above a horizontal supply device. */
+function getSupplyDeviceTopExtent(device: TrunkDevice, y: number): number {
+  let top = y - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
+  const certificationLineCount = getVisibleCertificationLabelParts(device).length
+  const showNotes =
+    device.type !== 'protection' &&
+    (device.notes ?? '').trim().length > 0 &&
+    isSymbolLabelVisible(device.symbolLabelDisplay, 'trunkDeviceNotes', true)
+  const topLineCount = certificationLineCount + (showNotes ? 1 : 0)
+  if (topLineCount > 0) {
+    const labelHeight =
+      topLineCount * (SUPPLY_TOP_LABEL_FONT_SIZE + SUPPLY_TOP_LABEL_LINE_SPACING)
+    top -= SUPPLY_TOP_LABEL_OFFSET_FROM_SYMBOL + labelHeight
+  }
+  return top
+}
 
 // Shared sizing helpers for circuit-notes labels so layout, canvas rendering,
 // debug overlays, and export all agree on the same estimated text box.
@@ -236,6 +295,10 @@ export interface BottomUpLayoutElement {
   label?: string
   trunkId?: string
   branchId?: string
+  /** Mirror endpoint artwork on branches that run left instead of right. */
+  mirrorEndpointHorizontally?: boolean
+  /** Resolve this user-facing label through i18n at render/export time. */
+  translationKey?: string
   /** For circuit-notes labels: draw horizontal or vertical. */
   notesOrientation?: 'horizontal' | 'vertical'
   /** For circuit-notes labels: if false, do not draw (slot still reserved for stable layout). */
@@ -259,6 +322,14 @@ export interface BottomUpCircuitLayout {
 
 export interface BottomUpPanelLayout {
   panel: Panel
+  /** Unique render/export identity. Virtual frames share the owning panel id. */
+  diagramId?: string
+  /** Ordinary electrical panel frame or a non-persisted detached supply frame. */
+  frameRole?: 'panel' | 'supply'
+  /** Electrical panel that owns interactions and persisted supply topology. */
+  ownerPanelId?: string
+  /** How the lower supply endpoint is represented in this frame. */
+  supplyEndpointKind?: 'mains' | 'continuation'
   elements: BottomUpLayoutElement[]
   /** Circuit notes labels for eendraad canvas + export overlay (single source of truth). */
   circuitNotes?: Array<{
@@ -294,6 +365,41 @@ export interface BottomUpPanelLayout {
     feedScope: 'shared' | 'root'
     feedIndex: number
   }>
+  /** Orthogonal upper backup and lower grid lanes exposed by a modular source changeover. */
+  supplyChangeoverBranches?: {
+    deviceId: string
+    x: number
+    y: number
+    elbowX: number
+    upperY: number
+    lowerY: number
+    slotEndX: number
+  }
+  /** Grid-connected converter branch without a source changeover. */
+  supplyConverterBranch?: {
+    deviceId: string
+    x: number
+    y: number
+    lineY: number
+    dcEndX: number
+    dcTopY?: number
+    dcTopEndX?: number
+  }
+  /** Optional protected load circuit leaving the left AC backup port of a direct converter. */
+  supplyConverterBackup?: {
+    converterId: string
+    x1: number
+    x2: number
+    y: number
+    circuitId?: string
+    protectionId?: string
+  }
+  /** @deprecated Detached feed frames now use a nearby text-only destination label. */
+  feedOutput?: {
+    x: number
+    busY: number
+    endY: number
+  }
   ground?: {
     x: number
     y: number
@@ -317,6 +423,21 @@ export interface BottomUpPanelLayout {
     circuit: Circuit
     position: Point
   }
+}
+
+export function getPanelDiagramId(panelLayout: BottomUpPanelLayout): string {
+  return panelLayout.diagramId ?? panelLayout.panel.id
+}
+
+interface BottomUpPanelLayoutOptions {
+  includeSupplyTopology?: boolean
+  includeGroundDevices?: boolean
+  frameRole?: 'panel' | 'supply'
+  diagramId?: string
+  ownerPanelId?: string
+  supplyEndpointKind?: 'mains' | 'continuation'
+  /** Render the compact detached-feed destination label and frame geometry. */
+  feedOutput?: boolean
 }
 
 export interface BottomUpLayoutResult {
@@ -460,6 +581,36 @@ function applyShiftToPanelLayout(panelLayout: BottomUpPanelLayout, dx: number, d
     device.x += dx
     device.y += dy
   })
+  if (panelLayout.supplyChangeoverBranches) {
+    panelLayout.supplyChangeoverBranches.x += dx
+    panelLayout.supplyChangeoverBranches.y += dy
+    panelLayout.supplyChangeoverBranches.elbowX += dx
+    panelLayout.supplyChangeoverBranches.upperY += dy
+    panelLayout.supplyChangeoverBranches.lowerY += dy
+    panelLayout.supplyChangeoverBranches.slotEndX += dx
+  }
+  if (panelLayout.supplyConverterBranch) {
+    panelLayout.supplyConverterBranch.x += dx
+    panelLayout.supplyConverterBranch.y += dy
+    panelLayout.supplyConverterBranch.lineY += dy
+    panelLayout.supplyConverterBranch.dcEndX += dx
+    if (panelLayout.supplyConverterBranch.dcTopY != null) {
+      panelLayout.supplyConverterBranch.dcTopY += dy
+    }
+    if (panelLayout.supplyConverterBranch.dcTopEndX != null) {
+      panelLayout.supplyConverterBranch.dcTopEndX += dx
+    }
+  }
+  if (panelLayout.supplyConverterBackup) {
+    panelLayout.supplyConverterBackup.x1 += dx
+    panelLayout.supplyConverterBackup.x2 += dx
+    panelLayout.supplyConverterBackup.y += dy
+  }
+  if (panelLayout.feedOutput) {
+    panelLayout.feedOutput.x += dx
+    panelLayout.feedOutput.busY += dy
+    panelLayout.feedOutput.endY += dy
+  }
   panelLayout.groundDevices?.forEach((device) => {
     device.x += dx
     device.y += dy
@@ -1144,7 +1295,8 @@ function calculateBottomUpPanelLayout(
   frameOffset: Point = { x: 0, y: 0 },
   parentMcbInfo?: { protection: ProtectionDevice; circuit: Circuit; parentPanel: Panel } | null,
   installation?: Installation,
-  rootPanels?: Panel[]
+  rootPanels?: Panel[],
+  options: BottomUpPanelLayoutOptions = {}
 ): BottomUpPanelLayout {
   const panelCircuits = collectCircuits(panel)
   const circuitMap = buildCircuitMap(panel)
@@ -1264,6 +1416,12 @@ function calculateBottomUpPanelLayout(
       branch: null, // Will be calculated later
       secondaryBusY: undefined, // Will be calculated in calculateBranches if nested circuit
     })
+
+    // Converter-backed circuits are positioned beside their converter after the supply
+    // geometry is known. They must not reserve a normal main-bus column.
+    if (circuit.supplySource?.kind === 'converter-backup') {
+      continue
+    }
 
     // Add nested circuits for this parent that were skipped (they appeared before parent in panelCircuits).
     // Demoting a main-bus circuit puts it in parent's subCircuitIds but its protection may come earlier in
@@ -1439,13 +1597,14 @@ function calculateBottomUpPanelLayout(
   // Ground wire is at the very start of main bus, offset by 20px to the right
   // Supply wire is spaced from ground by the current SUPPLY_LEFT_OFFSET (30px)
   const isSubPanel = !!parentMcbInfo
-  const hasGround = !isSubPanel && installation?.hasGround !== false // Default true for main panels
+  const hasGround =
+    !isSubPanel && options.includeGroundDevices !== false && installation?.hasGround !== false
 
   // Supply Y: main panels show the actual supply bend below the main bus.
   // Sub‑panels use a slightly deeper parent‑MCB placeholder so their wire
   // is visibly longer, but not so deep that it collides with the info block.
   const SUBPANEL_EXTRA_SUPPLY_DROP = 20
-  const supplyY = isSubPanel
+  let supplyY = isSubPanel
     ? mainBusY + LAYOUT_CONSTANTS.SUPPLY_VERTICAL_DROP + SUBPANEL_EXTRA_SUPPLY_DROP
     : mainBusY + LAYOUT_CONSTANTS.SUPPLY_VERTICAL_DROP
 
@@ -1453,7 +1612,9 @@ function calculateBottomUpPanelLayout(
   const groundY = supplyY // Ground at same level as supply
 
   // Ground trunk devices (main panel only) — placed vertically between ground symbol and main bus
-  const groundTrunkDevices = (!isSubPanel && installation?.groundTrunkDevices) || []
+  const groundTrunkDevices =
+    (!isSubPanel && options.includeGroundDevices !== false && installation?.groundTrunkDevices) ||
+    []
   const hasGroundDevices = groundTrunkDevices.length > 0
 
   // Calculate ground trunk device positions on the vertical wire
@@ -1483,9 +1644,51 @@ function calculateBottomUpPanelLayout(
   // Supply trunk devices (root panel only) — placed horizontally between bend (main bus) and supply.
   // Array order = flow from supply to main bus: index 0 = next to supply, last = next to main bus.
   const feedProjection =
-    !isSubPanel && installation ? getPanelFeedProjection(installation, [panel], panel) : null
+    !isSubPanel && installation && options.includeSupplyTopology !== false
+      ? getPanelFeedProjection(installation, rootPanels ?? [panel], panel)
+      : null
   const supplyTrunkDevices = (!isSubPanel && feedProjection?.devices) || []
   const hasSupplyDevices = supplyTrunkDevices.length > 0
+  const supplyChangeoverIndex = supplyTrunkDevices.findIndex(
+    (device) => device.symbol === 'source_changeover'
+  )
+  const hasSupplyChangeover = supplyChangeoverIndex >= 0
+  const directConverterIndex = supplyTrunkDevices.findIndex(
+    (device) => device.supplyPath === 'converter-branch'
+  )
+  const hasDirectConverter = !hasSupplyChangeover && directConverterIndex >= 0
+  let directConverterBackup: BottomUpPanelLayout['supplyConverterBackup']
+  const backupOutputDeviceCount = supplyTrunkDevices.filter(
+    (device) => device.supplyPath === 'backup-output'
+  ).length
+  const changeoverGridDeviceCount = supplyTrunkDevices.filter(
+    (device) => device.supplyPath === 'changeover-grid'
+  ).length
+  const converterGridDeviceCount = supplyTrunkDevices.filter(
+    (device) => device.supplyPath === 'converter-grid'
+  ).length
+  const converterGridVerticalExpansion =
+    Math.max(0, converterGridDeviceCount - 1) *
+    LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_VERTICAL_EXPANSION
+  // Keep the upper converter lane clear of the busbar as the vertical input stack grows.
+  // The added clearance cancels the upward half of the lane expansion and lets it grow down.
+  if (hasSupplyChangeover) {
+    supplyY +=
+      48 + (LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_LANE_OFFSET - 44) + converterGridVerticalExpansion
+  }
+  const changeoverLaneOffset = hasSupplyChangeover
+    ? LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_LANE_OFFSET + converterGridVerticalExpansion
+    : 0
+  const directConverterLaneOffset = hasDirectConverter
+    ? LAYOUT_CONSTANTS.SUPPLY_DIRECT_CONVERTER_OFFSET +
+      Math.max(0, converterGridDeviceCount - 1) *
+        LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_VERTICAL_EXPANSION
+    : 0
+  const supplySourceY = hasSupplyChangeover
+    ? supplyY + changeoverLaneOffset
+    : hasDirectConverter
+      ? supplyY + directConverterLaneOffset
+      : supplyY
 
   type SupplyDevicePosition = {
     device: import('@/types/schema').TrunkDevice
@@ -1504,11 +1707,287 @@ function calculateBottomUpPanelLayout(
       const deviceX = supplyBendX + (n - index) * LAYOUT_CONSTANTS.SUPPLY_DEVICE_SPACING
       const feedScope = index < sharedDeviceCount ? 'shared' : 'root'
       const feedIndex = feedScope === 'shared' ? index : index - sharedDeviceCount
-      supplyDevicePositions.push({ device, x: deviceX, y: supplyY, feedScope, feedIndex })
+      const deviceY =
+        hasSupplyChangeover &&
+        (device.supplyPath === 'backup' || device.supplyPath === 'backup-output')
+          ? supplyY - changeoverLaneOffset
+          : hasSupplyChangeover && index < supplyChangeoverIndex
+            ? supplySourceY
+            : hasDirectConverter &&
+                device.supplyPath !== 'converter-branch' &&
+                device.supplyPath !== 'converter-dc' &&
+                device.supplyPath !== 'converter-dc-top'
+              ? supplySourceY
+              : supplyY
+      supplyDevicePositions.push({ device, x: deviceX, y: deviceY, feedScope, feedIndex })
     })
+    const changeoverDevicePosition = supplyDevicePositions.find(
+      ({ device }) => device.symbol === 'source_changeover'
+    )
+    if (changeoverDevicePosition) {
+      const loadSideSerialCount = supplyDevicePositions.filter(({ device }) => {
+        const deviceIndex = supplyTrunkDevices.findIndex((candidate) => candidate.id === device.id)
+        return (
+          deviceIndex > supplyChangeoverIndex &&
+          (device.supplyPath == null || device.supplyPath === 'serial')
+        )
+      }).length
+      // Branch-only devices must never move the source selector or its load-side devices.
+      const loadSideExpansion =
+        loadSideSerialCount * LAYOUT_CONSTANTS.SUPPLY_DEVICE_SPACING +
+        (loadSideSerialCount > 0
+          ? LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_LOAD_BOUNDARY_CLEARANCE
+          : 0)
+      // One grid-input protection fits on the existing rail-to-selector span. Further
+      // protections extend that span, sharing any expansion already required by load-side devices.
+      const gridInputExpansion =
+        Math.max(0, changeoverGridDeviceCount - 1) * LAYOUT_CONSTANTS.SUPPLY_DEVICE_SPACING
+      changeoverDevicePosition.x =
+        supplyBendX +
+        LAYOUT_CONSTANTS.SUPPLY_DEVICE_SPACING +
+        Math.max(loadSideExpansion, gridInputExpansion)
+      const upperY = changeoverDevicePosition.y - changeoverLaneOffset
+      const lowerY = changeoverDevicePosition.y + changeoverLaneOffset
+      const elbowX =
+        changeoverDevicePosition.x +
+        LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_RENDER_SIZE / 2 +
+        LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_ELBOW_LEAD
+      const converterX =
+        elbowX +
+        LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_SLOT_LENGTH +
+        Math.max(backupOutputDeviceCount, changeoverGridDeviceCount) *
+          LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_BRANCH_DEVICE_SPACING
+      const converterPosition = supplyDevicePositions.find(
+        ({ device }) => device.supplyPath === 'backup'
+      )
+      if (converterPosition) {
+        converterPosition.x = converterX
+        converterPosition.y = upperY
+        supplyDevicePositions
+          .filter(({ device }) => device.supplyPath === 'converter-dc')
+          .forEach((position, index) => {
+            position.x = converterPosition.x + getSupplyConverterDcDeviceOffset(index)
+            position.y = converterPosition.y
+          })
+        supplyDevicePositions
+          .filter(({ device }) => device.supplyPath === 'converter-dc-top')
+          .forEach((position, index) => {
+            position.x = converterPosition.x + getSupplyConverterDcDeviceOffset(index)
+            position.y = converterPosition.y - LAYOUT_CONSTANTS.SUPPLY_CONVERTER_DC_SLOT_LENGTH
+          })
+      }
+
+      const backupOutputPositions = supplyDevicePositions.filter(
+        ({ device }) => device.supplyPath === 'backup-output'
+      )
+      backupOutputPositions.forEach((position, index) => {
+        position.x =
+          elbowX +
+          LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_SLOT_LENGTH +
+          index * LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_BRANCH_DEVICE_SPACING
+        position.y = upperY
+      })
+
+      const changeoverGridPositions = supplyDevicePositions.filter(
+        ({ device }) => device.supplyPath === 'changeover-grid'
+      )
+      changeoverGridPositions.forEach((position, index) => {
+        position.x = groundX + (index + 1) * LAYOUT_CONSTANTS.SUPPLY_DEVICE_SPACING
+        position.y = lowerY
+      })
+
+      const converterGridPositions = supplyDevicePositions.filter(
+        ({ device }) => device.supplyPath === 'converter-grid'
+      )
+      converterGridPositions.forEach((position, index) => {
+        position.x = converterX
+        position.y =
+          upperY + ((index + 1) * (lowerY - upperY)) / (converterGridPositions.length + 1)
+      })
+
+      const sourceSerialPositions = supplyDevicePositions
+        .filter((position) => {
+          const deviceIndex = supplyTrunkDevices.findIndex(
+            (candidate) => candidate.id === position.device.id
+          )
+          return (
+            deviceIndex < supplyChangeoverIndex &&
+            (position.device.supplyPath == null || position.device.supplyPath === 'serial')
+          )
+        })
+        .sort((left, right) => {
+          const leftIndex = supplyTrunkDevices.findIndex(
+            (candidate) => candidate.id === left.device.id
+          )
+          const rightIndex = supplyTrunkDevices.findIndex(
+            (candidate) => candidate.id === right.device.id
+          )
+          return rightIndex - leftIndex
+        })
+      const minimumSourceSerialX = converterX + LAYOUT_CONSTANTS.SUPPLY_DEVICE_SPACING
+      sourceSerialPositions.forEach((position, index) => {
+        position.x = minimumSourceSerialX + index * LAYOUT_CONSTANTS.SUPPLY_DEVICE_SPACING
+      })
+    }
+    if (hasDirectConverter) {
+      const converterPosition = supplyDevicePositions.find(
+        ({ device }) => device.supplyPath === 'converter-branch'
+      )
+      if (converterPosition) {
+        const backupCircuitLayout = circuitLayouts.find(
+          ({ circuit }) =>
+            circuit.supplySource?.kind === 'converter-backup' &&
+            circuit.supplySource.converterId === converterPosition.device.id
+        )
+        const backupBranches = backupCircuitLayout
+          ? branches.filter((branch) => branch.circuitId === backupCircuitLayout.circuit.id)
+          : []
+        const backupHasPanelEndpoint =
+          backupCircuitLayout?.circuit.endpoints.some(
+            (endpoint) => endpoint.symbol === 'panel_distribution'
+          ) === true || !!backupCircuitLayout?.protection?.subPanelId
+        const backupEndpointLeadExpansion =
+          LAYOUT_CONSTANTS.SUPPLY_DEVICE_SPACING - LAYOUT_CONSTANTS.BRANCH_LEAD_IN
+        const backupHorizontalWidth = backupCircuitLayout
+          ? Math.max(
+              ...backupBranches.map((branch) =>
+                branch.endpoints.some((endpoint) => endpoint.symbol !== 'panel_distribution')
+                  ? branch.branchWidth + backupEndpointLeadExpansion
+                  : branch.branchWidth
+              ),
+              backupHasPanelEndpoint ? LAYOUT_CONSTANTS.SUPPLY_DEVICE_SPACING : 0,
+              0
+            ) +
+            LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
+          : 0
+        const converterArrayIndex = supplyTrunkDevices.findIndex(
+          (device) => device.id === converterPosition.device.id
+        )
+        const lowerSerialPositions = supplyDevicePositions.filter(
+          ({ device }) => device.supplyPath == null || device.supplyPath === 'serial'
+        )
+        const sourceSerialPositions = lowerSerialPositions.filter(
+          ({ device }) =>
+            supplyTrunkDevices.findIndex((candidate) => candidate.id === device.id) <
+            converterArrayIndex
+        )
+        const loadSerialPositions = lowerSerialPositions.filter(
+          ({ device }) =>
+            supplyTrunkDevices.findIndex((candidate) => candidate.id === device.id) >
+            converterArrayIndex
+        )
+        const busSideDeviceClearance =
+          LAYOUT_CONSTANTS.SUPPLY_DIRECT_CONVERTER_BACKUP_LEFT_CLEARANCE +
+          LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
+        const lowerLaneWidth =
+          loadSerialPositions.length > 0
+            ? loadSerialPositions.length * LAYOUT_CONSTANTS.SUPPLY_DEVICE_SPACING +
+              busSideDeviceClearance
+            : LAYOUT_CONSTANTS.SUPPLY_DEVICE_SPACING
+        const upperBackupLaneWidth = backupCircuitLayout
+          ? LAYOUT_CONSTANTS.SUPPLY_DEVICE_SPACING +
+            backupHorizontalWidth +
+            LAYOUT_CONSTANTS.SUPPLY_DIRECT_CONVERTER_BACKUP_LEFT_CLEARANCE
+          : 0
+        // The lower supply lane and upper backup lane run in parallel. Reserve
+        // whichever lane is wider instead of summing devices that share a slot.
+        converterPosition.x = supplyBendX + Math.max(lowerLaneWidth, upperBackupLaneWidth)
+        sourceSerialPositions.forEach((position, index) => {
+          position.x =
+            converterPosition.x +
+            (sourceSerialPositions.length - index) * LAYOUT_CONSTANTS.SUPPLY_DEVICE_SPACING
+        })
+        loadSerialPositions.forEach((position, index) => {
+          position.x = converterPosition.x - (index + 1) * LAYOUT_CONSTANTS.SUPPLY_DEVICE_SPACING
+        })
+        const directGridPositions = supplyDevicePositions.filter(
+          ({ device }) => device.supplyPath === 'converter-grid'
+        )
+        converterPosition.y = supplyY
+        directGridPositions.forEach((position, index) => {
+          position.x = converterPosition.x
+          position.y =
+            converterPosition.y +
+            ((index + 1) * (supplySourceY - converterPosition.y)) / (directGridPositions.length + 1)
+        })
+        supplyDevicePositions
+          .filter(({ device }) => device.supplyPath === 'converter-dc')
+          .forEach((position, index) => {
+            position.x = converterPosition.x + getSupplyConverterDcDeviceOffset(index)
+            position.y = converterPosition.y
+          })
+        supplyDevicePositions
+          .filter(({ device }) => device.supplyPath === 'converter-dc-top')
+          .forEach((position, index) => {
+            position.x = converterPosition.x + getSupplyConverterDcDeviceOffset(index)
+            position.y = converterPosition.y - LAYOUT_CONSTANTS.SUPPLY_CONVERTER_DC_SLOT_LENGTH
+          })
+
+        const converterLeftX = converterPosition.x - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
+        const protectionX = converterPosition.x - LAYOUT_CONSTANTS.SUPPLY_DEVICE_SPACING
+        if (backupCircuitLayout) {
+          backupCircuitLayout.x =
+            protectionX - getProtectionAnchorOffset(backupCircuitLayout.leftReserve)
+          backupCircuitLayout.protectionY = converterPosition.y
+          backupBranches.forEach((branch) => {
+            if (branch.endpoints.some((endpoint) => endpoint.symbol !== 'panel_distribution')) {
+              branch.branchWidth += backupEndpointLeadExpansion
+            }
+            if (backupHasPanelEndpoint) {
+              branch.branchWidth = Math.max(
+                branch.branchWidth,
+                LAYOUT_CONSTANTS.SUPPLY_DEVICE_SPACING
+              )
+            }
+            branch.trunkX = protectionX
+            branch.trunkY = converterPosition.y
+            branch.branchX = protectionX - branch.branchWidth
+            branch.branchY = converterPosition.y
+          })
+          directConverterBackup = {
+            converterId: converterPosition.device.id,
+            x1: protectionX,
+            x2: converterLeftX,
+            y: converterPosition.y,
+            circuitId: backupCircuitLayout.circuit.id,
+            protectionId: backupCircuitLayout.protection?.id,
+          }
+        } else {
+          directConverterBackup = {
+            converterId: converterPosition.device.id,
+            x1: converterPosition.x - LAYOUT_CONSTANTS.SUPPLY_CONVERTER_DC_SLOT_LENGTH,
+            x2: converterLeftX,
+            y: converterPosition.y,
+          }
+        }
+      }
+    }
     // Supply symbol is right of the first device (index 0 = supply side)
-    const firstDeviceX = supplyDevicePositions[0]!.x
-    supplyX = firstDeviceX + LAYOUT_CONSTANTS.SUPPLY_DEVICE_SPACING
+    const lowerSupplyPositions = hasDirectConverter
+      ? supplyDevicePositions.filter(
+          ({ device }) =>
+            device.supplyPath !== 'converter-branch' &&
+            device.supplyPath !== 'converter-dc' &&
+            device.supplyPath !== 'converter-dc-top' &&
+            device.supplyPath !== 'converter-grid'
+        )
+      : hasSupplyChangeover
+        ? supplyDevicePositions.filter(
+            ({ device }) =>
+              device.supplyPath == null ||
+              device.supplyPath === 'serial' ||
+              device.supplyPath === 'backup'
+          )
+        : supplyDevicePositions
+    const lowerSupplyRightmostX =
+      lowerSupplyPositions.length > 0
+        ? Math.max(...lowerSupplyPositions.map((position) => position.x))
+        : supplyBendX
+    supplyX =
+      lowerSupplyRightmostX +
+      (hasSupplyChangeover
+        ? LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_GRID_SOURCE_LEAD
+        : LAYOUT_CONSTANTS.SUPPLY_DEVICE_SPACING)
   } else if (!isSubPanel) {
     // Minimum horizontal run before the supply symbol when the trunk is empty so the
     // diagram does not collapse (stable dashed separator, drop targets, and export).
@@ -1517,10 +1996,61 @@ function calculateBottomUpPanelLayout(
 
   // Calculate the rightmost extent of the supply wire (for frame width)
   // Supply is always the rightmost element (either at bend point with no devices, or after all devices)
-  const supplyRightExtent = supplyX + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
+  const changeoverPosition = supplyDevicePositions.find(
+    ({ device }) => device.symbol === 'source_changeover'
+  )
+  const usesDetachedSplitGround =
+    options.feedOutput === true && (panel.busSections?.length ?? 0) > 1
+  const renderedGroundY = usesDetachedSplitGround
+    ? supplySourceY + LAYOUT_CONSTANTS.SUPPLY_VERTICAL_DROP
+    : groundY
+  const renderedGroundDevicePositions = usesDetachedSplitGround
+    ? groundTrunkDevices.map((device, index) => ({
+        device,
+        x: groundX,
+        y:
+          renderedGroundY -
+          ((index + 1) * (renderedGroundY - supplySourceY)) /
+            (groundTrunkDevices.length + 1),
+      }))
+    : groundDevicePositions
+  const changeoverSlotEndX = changeoverPosition
+    ? changeoverPosition.x +
+      LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_RENDER_SIZE / 2 +
+      LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_ELBOW_LEAD +
+      LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_SLOT_LENGTH +
+      Math.max(backupOutputDeviceCount, changeoverGridDeviceCount) *
+        LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_BRANCH_DEVICE_SPACING
+    : undefined
+  if (changeoverSlotEndX != null) {
+    supplyX = Math.max(supplyX, changeoverSlotEndX + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2)
+  }
+  if (options.feedOutput) {
+    // Keep the normal source-side lead length in the detached feed frame.
+    // Right-edge breathing room belongs to the frame, not to compressed content geometry.
+    supplyX += 36
+  }
+  const converterRightExtent =
+    hasDirectConverter || hasSupplyChangeover
+      ? Math.max(
+          ...supplyDevicePositions.map(({ x }) => x + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2),
+          Number.NEGATIVE_INFINITY
+        )
+      : Number.NEGATIVE_INFINITY
+  const supplyRightExtent = Math.max(
+    supplyX + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2,
+    changeoverSlotEndX ?? Number.NEGATIVE_INFINITY,
+    converterRightExtent
+  )
 
   // maxY must account for the supply/ground position
-  maxY = Math.max(maxY, supplyY + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2)
+  maxY = Math.max(maxY, supplySourceY + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2)
+  if (usesDetachedSplitGround) {
+    maxY = Math.max(maxY, renderedGroundY + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2)
+  }
+  if (options.supplyEndpointKind === 'continuation') {
+    maxY = Math.max(maxY, supplySourceY + 24)
+  }
 
   // Supply-chain protections on the horizontal trunk render `ProtectionOneWireLabels` below
   // the symbol (see TrunkDeviceSymbol). Layout previously stopped at symbol half-height only,
@@ -1533,7 +2063,9 @@ function calculateBottomUpPanelLayout(
       return pos === 'bottom'
     })
   /** Matches order-of-magnitude height used by SymbolTextLabels / ProtectionOneWireLabels under the symbol. */
-  const SUPPLY_HORIZONTAL_PROTECTION_LABEL_CLEARANCE = 52
+  // Four-line residual-current labels reach just past the previous reserve.
+  // Keep a small breathing gap before the detached frame's info block.
+  const SUPPLY_HORIZONTAL_PROTECTION_LABEL_CLEARANCE = 60
   if (hasSupplyProtectionBottomLabels) {
     maxY = Math.max(
       maxY,
@@ -1571,11 +2103,11 @@ function calculateBottomUpPanelLayout(
     elements.push({
       id: 'ground',
       type: 'ground',
-      position: { x: groundX, y: groundY }, // LOCAL coordinates
+      position: { x: groundX, y: renderedGroundY }, // LOCAL coordinates
     })
 
     // Ground trunk device elements
-    groundDevicePositions.forEach(({ device, x, y }) => {
+    renderedGroundDevicePositions.forEach(({ device, x, y }) => {
       elements.push({
         id: `groundTrunkDevice-${device.id}`,
         type: 'trunkDevice',
@@ -1591,8 +2123,16 @@ function calculateBottomUpPanelLayout(
     elements.push({
       id: 'supply',
       type: 'supply',
-      position: { x: supplyX, y: supplyY }, // LOCAL coordinates
+      position: { x: supplyX, y: supplySourceY }, // LOCAL coordinates
     })
+    if (options.supplyEndpointKind === 'continuation') {
+      elements.push({
+        id: 'supply-continuation-label',
+        type: 'label',
+        position: { x: supplyBendX + 34, y: supplySourceY - 8 },
+        translationKey: 'canvas.supplyFrame.supplyLabel',
+      })
+    }
 
     // Supply trunk device elements
     supplyDevicePositions.forEach(({ device, x, y }) => {
@@ -1637,13 +2177,29 @@ function calculateBottomUpPanelLayout(
     mainBusWidth,
     supplyRightExtent - mainBusX + LAYOUT_CONSTANTS.CIRCUIT_PADDING
   )
+  const renderedMainBusWidth = options.feedOutput
+    ? Math.max(groundX, supplyBendX) - mainBusX + 15
+    : mainBusWidthWithSupply
   elements.push({
     id: `mainBus-${panel.id}`,
     type: 'mainBus',
     position: { x: mainBusX, y: mainBusY }, // LOCAL coordinates
-    width: mainBusWidthWithSupply,
+    width: renderedMainBusWidth,
     height: LAYOUT_CONSTANTS.BUS_THICKNESS,
   })
+  if (options.feedOutput) {
+    elements.push({
+      id: 'feed-output-label',
+      type: 'label',
+      position: {
+        x: mainBusX + renderedMainBusWidth / 2,
+        // CircuitLabel renders from y - 7 with an 11 px font, so this leaves
+        // roughly four pixels between the visible text bottom and the bus.
+        y: mainBusY - 10,
+      },
+      label: panel.name,
+    })
+  }
 
   // Precompute circuit notes positions: reserve a slot for every circuit with notes (ignore notesVisible so layout is stable)
   // Notes are stacked per vertical trunk and must sit above the *entire* circuit tree:
@@ -2240,7 +2796,10 @@ function calculateBottomUpPanelLayout(
       // Protection position: on vertical branch, slightly up from main bus (LOCAL coordinates)
       // IMPORTANT: protection must be at the same X as branchX (protection center), not circuit center
       // This ensures the vertical wire and horizontal branch align correctly
-      const mcbY = mainBusY - LAYOUT_CONSTANTS.MCB_Y_OFFSET
+      const mcbY =
+        cl.circuit.supplySource?.kind === 'converter-backup'
+          ? cl.protectionY
+          : mainBusY - LAYOUT_CONSTANTS.MCB_Y_OFFSET
       const mcbX = cl.x + getProtectionAnchorOffset(cl.leftReserve) // Protection center, matches branchX
 
       // Only create protection element if one doesn't already exist (prevent duplicates)
@@ -2258,15 +2817,18 @@ function calculateBottomUpPanelLayout(
         })
       }
 
-      // Circuit label (to the right of MCB) - positioned relative to MCB symbol
+      // Circuit label is above horizontal backup protections and beside regular protections.
       // Only create label if one doesn't already exist (prevent duplicates) and we actually have a label.
       if (displayLabel && !elements.find((e) => e.id === `label-${cl.circuit.id}`)) {
+        const isHorizontalConverterBackup = cl.circuit.supplySource?.kind === 'converter-backup'
         elements.push({
           id: `label-${cl.circuit.id}`,
           type: 'label',
           position: {
-            x: mcbX + getProtectionLabelXOffset(cl.protection), // LOCAL coordinates
-            y: mcbY + getProtectionLabelYOffset(cl.protection),
+            x: isHorizontalConverterBackup ? mcbX : mcbX + getProtectionLabelXOffset(cl.protection), // LOCAL coordinates
+            y: isHorizontalConverterBackup
+              ? mcbY - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 - 3
+              : mcbY + getProtectionLabelYOffset(cl.protection),
           },
           circuitId: cl.circuit.id,
           label: displayLabel,
@@ -2337,7 +2899,9 @@ function calculateBottomUpPanelLayout(
       const mcbYForDevices = cl.parentRcd
         ? (trunks.find((t) => t.protectionId === cl.parentRcd!.id)?.y ??
             mainBusY - LAYOUT_CONSTANTS.RCD_TRUNK_OFFSET) - LAYOUT_CONSTANTS.MCB_Y_OFFSET
-        : mainBusY - LAYOUT_CONSTANTS.MCB_Y_OFFSET
+        : cl.circuit.supplySource?.kind === 'converter-backup'
+          ? cl.protectionY
+          : mainBusY - LAYOUT_CONSTANTS.MCB_Y_OFFSET
 
       // Group trunk devices by position for layout
       trunkDevices.forEach((device) => {
@@ -2415,17 +2979,22 @@ function calculateBottomUpPanelLayout(
     circuitBranches.forEach((branch) => {
       // Exclude panel_distribution endpoints from branch endpoint processing
       const normalEndpoints = branch.endpoints.filter((e) => e.symbol !== 'panel_distribution')
+      const isHorizontalConverterBackup = cl.circuit.supplySource?.kind === 'converter-backup'
 
       // Each branch is a horizontal line going right from the vertical branch
       // If the first endpoint is a switch, the visual line should start at the switch position
       const firstEndpoint = normalEndpoints[0]
       const hasSwitches = firstEndpoint?.type === 'switch'
-      const branchVisualX = hasSwitches
-        ? branch.branchX + LAYOUT_CONSTANTS.BRANCH_LEAD_IN // Start at first switch position
-        : branch.branchX // Start at vertical connection point
-      const branchVisualWidth = hasSwitches
-        ? branch.branchWidth - LAYOUT_CONSTANTS.BRANCH_LEAD_IN // Adjust width when starting at switch position
-        : branch.branchWidth // Full width when starting at branchX
+      const branchVisualX = isHorizontalConverterBackup
+        ? branch.branchX
+        : hasSwitches
+          ? branch.branchX + LAYOUT_CONSTANTS.BRANCH_LEAD_IN // Start at first switch position
+          : branch.branchX // Start at vertical connection point
+      const branchVisualWidth = isHorizontalConverterBackup
+        ? branch.branchWidth
+        : hasSwitches
+          ? branch.branchWidth - LAYOUT_CONSTANTS.BRANCH_LEAD_IN // Adjust width when starting at switch position
+          : branch.branchWidth // Full width when starting at branchX
 
       // Always create branch element (needed by tree builder for vertical wire).
       // For panel-only branches this will have width 0 so no horizontal line is drawn.
@@ -2479,7 +3048,12 @@ function calculateBottomUpPanelLayout(
           ? domoticaChildX +
             getDomoticaRowChainIndex(normalEndpoints, endpoint) *
               LAYOUT_CONSTANTS.ENDPOINT_HORIZONTAL_SPACING
-          : branch.branchX + (endpointOffsets[index] ?? 0)
+          : isHorizontalConverterBackup
+            ? branch.branchX +
+              branch.branchWidth -
+              ((endpointOffsets[index] ?? 0) +
+                (LAYOUT_CONSTANTS.SUPPLY_DEVICE_SPACING - LAYOUT_CONSTANTS.BRANCH_LEAD_IN))
+            : branch.branchX + (endpointOffsets[index] ?? 0)
         let endpointY = branch.branchY
         if (
           (endpoint.domoticaChildProps?.outputGroup === 'endpoint' ||
@@ -2498,6 +3072,7 @@ function calculateBottomUpPanelLayout(
           },
           endpointId: endpoint.id,
           circuitId: cl.circuit.id,
+          mirrorEndpointHorizontally: isHorizontalConverterBackup,
         })
       })
 
@@ -2593,7 +3168,9 @@ function calculateBottomUpPanelLayout(
   const MIN_SUPPLY_INFO_GAP = 80
   const minWidthForSupplyClearance =
     supplyX + MIN_SUPPLY_INFO_GAP + FRAME_PADDING + INFO_BLOCK_TOTAL_WIDTH + INFO_BLOCK_FRAME_MARGIN
-  frameWidth = Math.max(frameWidth, minFrameWidth, minWidthForSupplyClearance)
+  frameWidth = options.feedOutput
+    ? Math.max(frameWidth, minFrameWidth) + 36
+    : Math.max(frameWidth, minFrameWidth, minWidthForSupplyClearance)
 
   // Reserve vertical space for the info block only when the supply wire actually reaches
   // underneath it. When supply stays on the left (typical), the info block can share the
@@ -2603,17 +3180,56 @@ function calculateBottomUpPanelLayout(
   const SUPPLY_INFO_HORIZONTAL_OVERLAP_CLEARANCE = 16
   const supplyOverlapsInfoBlockHorizontally =
     supplyRightExtent + SUPPLY_INFO_HORIZONTAL_OVERLAP_CLEARANCE > infoBlockLeftX
-  const frameBottomMargin = supplyOverlapsInfoBlockHorizontally
-    ? INFO_BLOCK_HEIGHT + INFO_BLOCK_FRAME_MARGIN + 8
-    : INFO_BLOCK_FRAME_MARGIN
+  const DETACHED_SUPPLY_INFO_CLEARANCE = 24
+  const SPLIT_MAIN_INFO_CLEARANCE = 24
+  const usesDetachedSplitMain =
+    options.supplyEndpointKind === 'continuation' &&
+    (panel.busSections?.length ?? 0) > 1
+  const frameBottomMargin =
+    options.feedOutput
+      ? usesDetachedSplitGround
+        ? INFO_BLOCK_FRAME_MARGIN + DETACHED_SUPPLY_INFO_CLEARANCE
+        : INFO_BLOCK_HEIGHT + INFO_BLOCK_FRAME_MARGIN + 8
+      : usesDetachedSplitMain
+        ? INFO_BLOCK_FRAME_MARGIN + SPLIT_MAIN_INFO_CLEARANCE
+      : supplyOverlapsInfoBlockHorizontally
+        ? INFO_BLOCK_HEIGHT + INFO_BLOCK_FRAME_MARGIN + 8
+        : INFO_BLOCK_FRAME_MARGIN
   const totalHeight = frameBottomY - minY + FRAME_TOP_MARGIN + frameBottomMargin
   const baseFrameHeight = totalHeight + frameTopTitlePadding + FRAME_PADDING
 
   // Respect minimum frame height required by the info block, but keep all panel
   // bottoms aligned: when we increase the height, shift the frame upward so the
   // bottom edge (baseline) stays at the same Y for every panel.
-  const frameHeight = Math.max(baseFrameHeight, minFrameHeight)
-  if (frameHeight !== baseFrameHeight) {
+  let frameHeight = Math.max(baseFrameHeight, minFrameHeight)
+  if (options.feedOutput) {
+    const SUPPLY_FRAME_EXTRA_TOP_GAP = 28
+    frameY -= SUPPLY_FRAME_EXTRA_TOP_GAP
+    frameHeight += SUPPLY_FRAME_EXTRA_TOP_GAP
+    const supplyTopContentY = Math.min(
+      ...supplyDevicePositions.map(({ device, y }) => getSupplyDeviceTopExtent(device, y)),
+      ...supplyDevicePositions
+        .filter(
+          ({ device }) => device.supplyPath === 'backup' || device.supplyPath === 'converter-branch'
+        )
+        .map(
+          ({ y }) =>
+            y -
+            LAYOUT_CONSTANTS.SUPPLY_CONVERTER_DC_SLOT_LENGTH -
+            LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 -
+            SUPPLY_TOP_LABEL_OFFSET_FROM_SYMBOL -
+            SUPPLY_STABLE_TOP_LABEL_LINE_RESERVE *
+              (SUPPLY_TOP_LABEL_FONT_SIZE + SUPPLY_TOP_LABEL_LINE_SPACING)
+        ),
+      Number.POSITIVE_INFINITY
+    )
+    const requiredFrameY = supplyTopContentY - SUPPLY_FRAME_TOP_CONTENT_GAP
+    if (Number.isFinite(requiredFrameY) && frameY > requiredFrameY) {
+      const extraTopHeight = frameY - requiredFrameY
+      frameY = requiredFrameY
+      frameHeight += extraTopHeight
+    }
+  } else if (frameHeight !== baseFrameHeight) {
     const baseBottom = frameY + baseFrameHeight
     frameY = baseBottom - frameHeight
   }
@@ -2647,6 +3263,10 @@ function calculateBottomUpPanelLayout(
 
   return {
     panel,
+    diagramId: options.diagramId ?? panel.id,
+    frameRole: options.frameRole ?? 'panel',
+    ownerPanelId: options.ownerPanelId ?? panel.id,
+    supplyEndpointKind: options.supplyEndpointKind ?? 'mains',
     elements: offsetElements, // Elements already have frameOffset applied
     circuitNotes,
     circuits: circuitLayouts.map((cl) => ({
@@ -2658,16 +3278,16 @@ function calculateBottomUpPanelLayout(
     mainBus: {
       x: mainBusX + frameOffset.x, // Apply frameOffset
       y: mainBusY + frameOffset.y,
-      width: mainBusWidthWithSupply,
+      width: renderedMainBusWidth,
     },
     supply: {
       x: supplyX + frameOffset.x, // Apply frameOffset
-      y: supplyY + frameOffset.y,
+      y: supplySourceY + frameOffset.y,
     },
     supplyBend: !isSubPanel
       ? {
           x: supplyBendX + frameOffset.x,
-          y: supplyY + frameOffset.y,
+          y: (hasDirectConverter ? supplySourceY : supplyY) + frameOffset.y,
         }
       : undefined,
     supplyDevices:
@@ -2678,15 +3298,77 @@ function calculateBottomUpPanelLayout(
             y: sd.y + frameOffset.y,
           }))
         : undefined,
+    supplyChangeoverBranches: changeoverPosition
+      ? {
+          deviceId: changeoverPosition.device.id,
+          x: changeoverPosition.x + frameOffset.x,
+          y: changeoverPosition.y + frameOffset.y,
+          elbowX:
+            changeoverPosition.x +
+            LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_RENDER_SIZE / 2 +
+            LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_ELBOW_LEAD +
+            frameOffset.x,
+          upperY: changeoverPosition.y - changeoverLaneOffset + frameOffset.y,
+          lowerY: changeoverPosition.y + changeoverLaneOffset + frameOffset.y,
+          slotEndX: (changeoverSlotEndX ?? changeoverPosition.x) + frameOffset.x,
+        }
+      : undefined,
+    supplyConverterBranch:
+      (hasDirectConverter || hasSupplyChangeover) &&
+      (directConverterIndex >= 0 ||
+        supplyTrunkDevices.some((device) => device.supplyPath === 'backup'))
+        ? (() => {
+            const converter = supplyDevicePositions.find(
+              ({ device }) =>
+                device.supplyPath === 'converter-branch' || device.supplyPath === 'backup'
+            )
+            if (!converter) return undefined
+            const dcDevices = supplyDevicePositions.filter(
+              ({ device }) => device.supplyPath === 'converter-dc'
+            )
+            const dcTopDevices = supplyDevicePositions.filter(
+              ({ device }) => device.supplyPath === 'converter-dc-top'
+            )
+            return {
+              deviceId: converter.device.id,
+              x: converter.x + frameOffset.x,
+              y: converter.y + frameOffset.y,
+              lineY: supplySourceY + frameOffset.y,
+              dcEndX:
+                (dcDevices.at(-1)?.x ?? converter.x) +
+                (dcDevices.length > 0
+                  ? LAYOUT_CONSTANTS.SUPPLY_CONVERTER_DC_DEVICE_SPACING
+                  : LAYOUT_CONSTANTS.SUPPLY_CONVERTER_DC_SLOT_LENGTH) +
+                frameOffset.x,
+              dcTopY:
+                converter.y - LAYOUT_CONSTANTS.SUPPLY_CONVERTER_DC_SLOT_LENGTH + frameOffset.y,
+              dcTopEndX:
+                (dcTopDevices.at(-1)?.x ?? converter.x) +
+                (dcTopDevices.length > 0
+                  ? LAYOUT_CONSTANTS.SUPPLY_CONVERTER_DC_DEVICE_SPACING
+                  : LAYOUT_CONSTANTS.SUPPLY_CONVERTER_DC_SLOT_LENGTH) +
+                frameOffset.x,
+            }
+          })()
+        : undefined,
+    supplyConverterBackup: directConverterBackup
+      ? {
+          ...directConverterBackup,
+          x1: directConverterBackup.x1 + frameOffset.x,
+          x2: directConverterBackup.x2 + frameOffset.x,
+          y: directConverterBackup.y + frameOffset.y,
+        }
+      : undefined,
+    feedOutput: undefined,
     ground: hasGround
       ? {
           x: groundX + frameOffset.x, // Apply frameOffset
-          y: groundY + frameOffset.y,
+          y: renderedGroundY + frameOffset.y,
         }
       : undefined,
     groundDevices:
-      groundDevicePositions.length > 0
-        ? groundDevicePositions.map((gd) => ({
+      renderedGroundDevicePositions.length > 0
+        ? renderedGroundDevicePositions.map((gd) => ({
             ...gd,
             x: gd.x + frameOffset.x,
             y: gd.y + frameOffset.y,
@@ -2701,6 +3383,61 @@ function calculateBottomUpPanelLayout(
     isSubPanel: isSubPanel,
     parentMcb: parentMcbPosition,
   }
+}
+
+function isConverterBackupCircuit(circuit: Circuit): boolean {
+  return circuit.supplySource?.kind === 'converter-backup'
+}
+
+function clonePanelForDiagramRole(panel: Panel, role: 'panel' | 'supply'): Panel {
+  const keepCircuit = (circuit: Circuit) =>
+    role === 'supply' ? isConverterBackupCircuit(circuit) : !isConverterBackupCircuit(circuit)
+
+  return {
+    ...panel,
+    circuits: panel.circuits.filter(keepCircuit),
+    protections: panel.protections.flatMap((protection): ProtectionDevice[] => {
+      const circuits = (protection.circuits ?? []).filter(keepCircuit)
+      if ((protection.circuits?.length ?? 0) > 0 && circuits.length === 0) return []
+      if (role === 'supply' && circuits.length === 0) return []
+      return [{ ...protection, circuits }]
+    }),
+  }
+}
+
+function panelHasMainBusProtection(panel: Panel): boolean {
+  return panel.protections.some((protection) => {
+    const circuits = protection.circuits ?? []
+    return circuits.length === 0 || circuits.some((circuit) => !isConverterBackupCircuit(circuit))
+  })
+}
+
+function panelHasComplexSupplyTopology(
+  panel: Panel,
+  installation: Installation,
+  rootPanels: Panel[]
+): boolean {
+  const devices = getPanelFeedProjection(installation, rootPanels, panel)?.devices ?? []
+  return devices.some(
+    (device) =>
+      device.symbol === 'source_changeover' ||
+      device.type === 'conversion' ||
+      device.supplyPath === 'converter-branch' ||
+      device.supplyPath === 'backup'
+  )
+}
+
+function shouldDetachSupplyFrame(
+  panel: Panel,
+  installation: Installation,
+  rootPanels: Panel[],
+  isSubPanel: boolean
+): boolean {
+  return (
+    !isSubPanel &&
+    panelHasMainBusProtection(panel) &&
+    panelHasComplexSupplyTopology(panel, installation, rootPanels)
+  )
 }
 
 /**
@@ -2720,6 +3457,7 @@ export function calculateBottomUpLayout(
   const PANEL_SPACING = 100
   const ROW_SPACING = 120
   const panelLayouts: BottomUpPanelLayout[] = []
+  const detachedSupplyLayouts: BottomUpPanelLayout[] = []
   const panelLayoutById = new Map<string, BottomUpPanelLayout>()
   const depthHeights = new Map<number, number>()
   const originalFrameYByPanelId = new Map<string, number>()
@@ -2755,14 +3493,49 @@ export function calculateBottomUpLayout(
       }
     }
 
+    const detachSupply = shouldDetachSupplyFrame(flatPanel.panel, installation, panels, isSubPanel)
+    const panelForMainDiagram = detachSupply
+      ? clonePanelForDiagramRole(flatPanel.panel, 'panel')
+      : flatPanel.panel
     const panelLayout = calculateBottomUpPanelLayout(
-      flatPanel.panel,
+      panelForMainDiagram,
       manualOverrides,
       { x: 0, y: 0 },
       parentMcbInfo,
       installation,
-      panels
+      panels,
+      detachSupply
+        ? {
+            includeSupplyTopology: false,
+            includeGroundDevices: false,
+            diagramId: flatPanel.panel.id,
+            ownerPanelId: flatPanel.panel.id,
+            frameRole: 'panel',
+            supplyEndpointKind: 'continuation',
+          }
+        : undefined
     )
+
+    if (detachSupply) {
+      const supplyDiagramPanel = clonePanelForDiagramRole(flatPanel.panel, 'supply')
+      detachedSupplyLayouts.push(
+        calculateBottomUpPanelLayout(
+          supplyDiagramPanel,
+          manualOverrides,
+          { x: 0, y: 0 },
+          null,
+          installation,
+          panels,
+          {
+            diagramId: `${flatPanel.panel.id}--supply`,
+            ownerPanelId: flatPanel.panel.id,
+            frameRole: 'supply',
+            supplyEndpointKind: 'mains',
+            feedOutput: true,
+          }
+        )
+      )
+    }
 
     const upstreamProtectionLabel = (parentMcbInfo?.protection.label ?? '').trim()
     // Parent panel fallback below the incoming feeder. Only show this when the
@@ -2869,11 +3642,63 @@ export function calculateBottomUpLayout(
     }
   }
 
+  const framesOverlap = (
+    left: { x: number; y: number; width: number; height: number },
+    right: { x: number; y: number; width: number; height: number }
+  ) =>
+    left.x < right.x + right.width &&
+    left.x + left.width > right.x &&
+    left.y < right.y + right.height &&
+    left.y + left.height > right.y
+
+  for (const supplyLayout of detachedSupplyLayouts) {
+    const ownerLayout = panelLayoutById.get(supplyLayout.ownerPanelId ?? supplyLayout.panel.id)
+    if (!ownerLayout) continue
+    const targetFrameX = ownerLayout.frame.x
+    let targetFrameY = ownerLayout.frame.y + ownerLayout.frame.height + ROW_SPACING
+    let candidateFrame = {
+      x: targetFrameX,
+      y: targetFrameY,
+      width: supplyLayout.frame.width,
+      height: supplyLayout.frame.height,
+    }
+    let moved = true
+    while (moved) {
+      moved = false
+      for (const existing of panelLayouts) {
+        if (existing === ownerLayout) continue
+        if (!framesOverlap(candidateFrame, existing.frame)) continue
+        targetFrameY = existing.frame.y + existing.frame.height + ROW_SPACING
+        candidateFrame = { ...candidateFrame, y: targetFrameY }
+        moved = true
+      }
+    }
+    applyShiftToPanelLayout(
+      supplyLayout,
+      targetFrameX - supplyLayout.frame.x,
+      targetFrameY - supplyLayout.frame.y
+    )
+    panelLayouts.push(supplyLayout)
+  }
+
   // Add panel symbols for protections that connect to sub-panels
   // These should appear at the end of the circuit's trunk (centered), not on a branch
   panelLayouts.forEach((mainPanelLayout) => {
     resolvePanelSupplyLinksForSourcePanel(project, mainPanelLayout.panel).forEach((link) => {
-      const subPanelLayout = panelLayouts.find((pl) => pl.panel.id === link.targetPanel.id)
+      const feederIsConverterBackup = link.feederCircuit?.supplySource?.kind === 'converter-backup'
+      const hasDetachedSupplyFrame = panelLayouts.some(
+        (candidate) =>
+          candidate.panel.id === mainPanelLayout.panel.id && candidate.frameRole === 'supply'
+      )
+      if (
+        hasDetachedSupplyFrame &&
+        (mainPanelLayout.frameRole === 'supply') !== feederIsConverterBackup
+      ) {
+        return
+      }
+      const subPanelLayout = panelLayouts.find(
+        (pl) => pl.frameRole !== 'supply' && pl.panel.id === link.targetPanel.id
+      )
       if (subPanelLayout) {
         const circuit = link.feederCircuit
         if (circuit) {
@@ -2894,7 +3719,10 @@ export function calculateBottomUpLayout(
             // with nested protections. In the latter case, the unprotected panel
             // is another direct bus attachment and belongs beside those protections,
             // not at the top of their consumer branches.
-            const symbolX = topmostBranch.trunkX // Centered on vertical trunk
+            const isHorizontalConverterBackup = circuit.supplySource?.kind === 'converter-backup'
+            const symbolX = isHorizontalConverterBackup
+              ? topmostBranch.branchX + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
+              : topmostBranch.trunkX // Centered on vertical trunk
             const nestedCircuitIds = new Set(circuit.subCircuitIds ?? [])
             const nestedProtectionYs = panelSharesSecondaryBus
               ? mainPanelLayout.elements
@@ -2932,8 +3760,9 @@ export function calculateBottomUpLayout(
                 ? feederProtectionElement.position.y -
                   LAYOUT_CONSTANTS.NESTED_PANEL_FEEDER_VERTICAL_OFFSET
                 : undefined
-            const symbolY =
-              panelSharesSecondaryBus && nestedProtectionYs.length > 0
+            const symbolY = isHorizontalConverterBackup
+              ? topmostBranch.branchY
+              : panelSharesSecondaryBus && nestedProtectionYs.length > 0
                 ? Math.min(...nestedProtectionYs) -
                   LAYOUT_CONSTANTS.SECONDARY_BUS_PANEL_VERTICAL_OFFSET
                 : (nestedPanelOnlyFeederY ??

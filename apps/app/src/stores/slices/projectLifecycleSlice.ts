@@ -10,6 +10,7 @@ import { logger } from '@/lib/logger'
 import { supportsExtendedInstallationProfiles } from '@/lib/editionInstallationProfileCapabilities'
 import { forceHouseholdInstallationProfile } from '@/lib/installationProfile'
 import { getMutableElectricalInstallationForProject } from '@/lib/projectV2/electrical'
+import { summarizeConverterDcPersistence } from '@/lib/supplyAssembly/persistenceDiagnostics'
 
 export const createProjectLifecycleSlice: ProjectSliceCreator = (set, get) => ({
     setProject: (project) =>
@@ -60,8 +61,17 @@ export const createProjectLifecycleSlice: ProjectSliceCreator = (set, get) => ({
       }),
 
     saveCurrentProject: async (options) => {
-      const { currentProject, currentProjectStorageMode } = get()
-      if (currentProject) {
+      const projectId = get().currentProject?.project.id
+      if (!projectId) return
+
+      // A save can overlap a later editor mutation. Never let the older save clear
+      // `isDirty`, otherwise that later mutation is skipped by autosave and vanishes
+      // on reload. Keep taking the newest snapshot until the project stays unchanged
+      // for one complete persistence pass.
+      let projectSnapshot = get().currentProject
+      while (projectSnapshot?.project.id === projectId) {
+        const currentProject = projectSnapshot
+        const { currentProjectStorageMode } = get()
         prepareProjectForPersistence(currentProject)
         const projectToSave: Project = {
           ...currentProject,
@@ -70,12 +80,28 @@ export const createProjectLifecycleSlice: ProjectSliceCreator = (set, get) => ({
             lastViewportLayout: viewportLayoutForPersistence(useUIStore.getState().viewportLayout),
           },
         }
-        await saveProject(projectToStoredProjectV2(projectToSave), {
+        const storedProject = projectToStoredProjectV2(projectToSave)
+        const dcPersistenceSummary = summarizeConverterDcPersistence(storedProject)
+        if (dcPersistenceSummary) {
+          logger.debug('[SUPPLY-PERSIST] saving converter DC topology', dcPersistenceSummary)
+        }
+        await saveProject(storedProject, {
           storageMode: currentProjectStorageMode,
           storageMetadata: options?.storageMetadata,
         })
+        if (dcPersistenceSummary) {
+          logger.debug('[SUPPLY-PERSIST] converter DC topology saved', dcPersistenceSummary)
+        }
+
+        const latestProject = get().currentProject
+        if (latestProject !== currentProject) {
+          projectSnapshot = latestProject
+          continue
+        }
         getProjectStoreApi().setState({ isDirty: false, lastSaved: new Date().toISOString() })
+        return
       }
+      return
     },
 
     undo: () => {

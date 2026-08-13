@@ -4,7 +4,7 @@ import {
   panelGridModuleIsVisibleByDefault,
   panelGridModuleRefKey,
 } from '@/lib/eendraad/projectElectricalDomain'
-import { walkPanels } from '@/lib/panel/panelTree'
+import { findPanelById, walkPanels } from '@/lib/panel/panelTree'
 import { getMutableCompatibilityFloorsForProject } from '@/lib/projectV2/buildingFloors'
 import {
   getElectricalInstallationFromProject,
@@ -14,6 +14,8 @@ import {
 import type { ProjectWithOptionalV2Building } from '@/lib/projectV2/buildingFloors'
 import type { Endpoint, Placement, TrunkDevice } from '@/types/schema'
 import type { Panel, PanelGridModuleRef } from '@/types/schema'
+import { getPanelSupplyTrunkDevices } from '@/lib/feedTopology'
+import { findConverterBackupPanelFeed } from '@/lib/panel/converterBackupPanelFeed'
 
 type PanelPlanVisibilityProject = ProjectWithOptionalV2Electrical & ProjectWithOptionalV2Building
 
@@ -49,6 +51,80 @@ function ensurePanelGridView(panel: Panel): NonNullable<Panel['gridView']> {
     slots: [],
   }
   return panel.gridView
+}
+
+/**
+ * Older backup-board projection temporarily stored the real inverter and its
+ * upstream feeder as modules in the fed board. They are now represented by a
+ * virtual incoming source, so move inverter visibility back to its owning panel
+ * and remove the stale borrowed slots.
+ */
+function healConverterBackupPanelProjection(project: PanelPlanVisibilityProject): boolean {
+  const panels = getElectricalPanelsFromProject(project)
+  let changed = false
+  for (const panel of walkPanels(panels)) {
+    const feed = findConverterBackupPanelFeed(project, panel.id)
+    if (!feed || !panel.gridView) continue
+    const converterKey = panelGridModuleRefKey(feed.converterRef)
+    const protectionKey = panelGridModuleRefKey(feed.protectionRef)
+    const borrowedKeys = new Set([converterKey, protectionKey])
+    const sourcePanel = findPanelById(panels, feed.sourcePanelId)
+
+    if (panel.gridView.hiddenModuleKeys?.includes(converterKey) && sourcePanel) {
+      const sourceGrid = ensurePanelGridView(sourcePanel)
+      const sourceHidden = sourceGrid.hiddenModuleKeys ?? []
+      if (!sourceHidden.includes(converterKey)) {
+        sourceGrid.hiddenModuleKeys = [...sourceHidden, converterKey]
+        changed = true
+      }
+      if (sourceGrid.shownModuleKeys?.includes(converterKey)) {
+        sourceGrid.shownModuleKeys = sourceGrid.shownModuleKeys.filter(
+          (key) => key !== converterKey,
+        )
+        if (sourceGrid.shownModuleKeys.length === 0) sourceGrid.shownModuleKeys = undefined
+        changed = true
+      }
+      const installation = getElectricalInstallationFromProject(project)
+      const converter = installation
+        ? getPanelSupplyTrunkDevices(installation, panels, sourcePanel).find(
+            (device) => device.id === feed.converterId,
+          )
+        : undefined
+      const placementIds = new Set((converter?.placements ?? []).map((placement) => placement.id))
+      if (placementIds.size > 0) {
+        for (const floor of getMutableCompatibilityFloorsForProject(project)) {
+          const previous = floor.hiddenSitplanPlacementIds ?? []
+          const next = previous.filter((id) => !placementIds.has(id))
+          if (next.length === previous.length) continue
+          floor.hiddenSitplanPlacementIds = next.length > 0 ? next : undefined
+          changed = true
+        }
+      }
+    }
+
+    const slots = panel.gridView.slots ?? []
+    const nextSlots = slots.filter((slot) => !borrowedKeys.has(panelGridModuleRefKey(slot.module)))
+    if (nextSlots.length !== slots.length) {
+      panel.gridView.slots = nextSlots
+      changed = true
+    }
+    const supplySlots = panel.gridView.supplyPanelSlots ?? []
+    const nextSupplySlots = supplySlots.filter(
+      (slot) => !borrowedKeys.has(panelGridModuleRefKey(slot.module)),
+    )
+    if (nextSupplySlots.length !== supplySlots.length) {
+      panel.gridView.supplyPanelSlots = nextSupplySlots.length > 0 ? nextSupplySlots : undefined
+      changed = true
+    }
+    for (const keyName of ['hiddenModuleKeys', 'shownModuleKeys'] as const) {
+      const keys = panel.gridView[keyName] ?? []
+      const nextKeys = keys.filter((key) => !borrowedKeys.has(key))
+      if (nextKeys.length === keys.length) continue
+      panel.gridView[keyName] = nextKeys.length > 0 ? nextKeys : undefined
+      changed = true
+    }
+  }
+  return changed
 }
 
 function collectPanelModuleOccurrences(
@@ -216,8 +292,12 @@ function collectPanelPlanPlacementOwners(
   const endpointsById = new Map<string, Endpoint>()
   const trunkDevicesById = new Map<string, TrunkDevice>()
 
-  for (const device of installation?.mainSupply?.supplyTrunkDevices ?? []) {
-    trunkDevicesById.set(device.id, device)
+  if (installation) {
+    for (const panel of walkPanels(rootPanels)) {
+      for (const device of getPanelSupplyTrunkDevices(installation, rootPanels, panel)) {
+        trunkDevicesById.set(device.id, device)
+      }
+    }
   }
   for (const device of installation?.groundTrunkDevices ?? []) {
     trunkDevicesById.set(device.id, device)
@@ -239,12 +319,11 @@ function collectPanelPlanPlacementOwners(
         !hiddenKeys.has(key) &&
         (panelGridModuleIsVisibleByDefault(ref, panel, installation, rootPanels) ||
           shownKeys.has(key))
+      const trunkOwner = ref.kind === 'trunkDevice' ? trunkDevicesById.get(ref.id) : undefined
       const owner =
         ref.kind === 'domotica'
           ? endpointsById.get(ref.endpointId)
-          : ref.kind === 'trunkDevice'
-            ? trunkDevicesById.get(ref.id)
-            : undefined
+          : trunkOwner
 
       // ProtectionDevice has no situation-plan placement model. Protection-style trunk
       // devices (including rotating switches on a supply wire) are handled above.
@@ -283,9 +362,10 @@ export function syncPanelAndSituationPlanDeviceVisibility(
   project: PanelPlanVisibilityProject,
   intent?: PanelVisibilityIntent,
 ): boolean {
+  const healedConverterBackupProjection = healConverterBackupPanelProjection(project)
   const normalizedPanels = normalizeUniquePanelModuleVisibility(project, intent)
   const owners = collectPanelPlanPlacementOwners(project)
-  if (owners.size === 0) return normalizedPanels
+  if (owners.size === 0) return normalizedPanels || healedConverterBackupProjection
 
   const floors = getMutableCompatibilityFloorsForProject(project)
   const placementIds = new Set(
@@ -316,5 +396,5 @@ export function syncPanelAndSituationPlanDeviceVisibility(
     changed = true
   }
 
-  return changed || normalizedPanels
+  return changed || normalizedPanels || healedConverterBackupProjection
 }

@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware'
 import { symbols, type SymbolMetadata } from '@/lib/symbols'
 import { fuzzyMatchAny } from '@/utils/search'
 import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
+import { isSymbolAvailableInLibrary } from '@/lib/supplyTopologyFeature'
 
 interface LibraryState {
   symbols: SymbolMetadata[]
@@ -56,11 +57,11 @@ export const useLibraryStore = create<LibraryState>()(
 
       setSelectedCategory: (category) => set({ selectedCategory: category }),
 
-      getSymbolById: (id) => get().symbols.find((s) => s.id === id),
+      getSymbolById: (id) => get().symbols.find((s) => s.id === id && isSymbolAvailableInLibrary(s)),
 
       getFilteredSymbols: () => {
         const { symbols, searchQuery, selectedCategory } = get()
-        let filtered = symbols.filter((s) => !s.hiddenFromLibrary)
+        let filtered = symbols.filter(isSymbolAvailableInLibrary)
 
         // Filter by category
         if (selectedCategory) {
@@ -85,12 +86,15 @@ export const useLibraryStore = create<LibraryState>()(
       },
 
       getSymbolsByCategory: (category) => {
-        return get().symbols.filter((s) => s.category === category && !s.hiddenFromLibrary)
+        return get().symbols.filter(
+          (s) => s.category === category && isSymbolAvailableInLibrary(s)
+        )
       },
 
       getSymbolsByScope: (scope) => {
         return get().symbols.filter(
           (s) =>
+            isSymbolAvailableInLibrary(s) &&
             (s.scope === scope || s.scope === 'both') &&
             (scope !== 'situatieplan' || canSymbolAppearOnSituationPlan(s.id))
         )

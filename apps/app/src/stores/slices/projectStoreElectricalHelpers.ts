@@ -12,6 +12,7 @@ import {
 import { dedupeAllPanelsProtectionsInProject } from '@/lib/eendraad/mainBusOrder'
 import { ensureInstallationFeedTopology } from '@/lib/feedTopology'
 import { healSupplyTrunkMisplacedOnMainGrid } from '@/lib/panel/healSupplyTrunkGrid'
+import { reconcileInvalidPanelFeedOrganizationsInProject } from '@/lib/panel/panelFeedOrganization'
 import { healEarthingSitplanPlacements } from '@/lib/plan/earthingSitplanPlacement'
 import { healEnergyConversionSitplanPlacements } from '@/lib/plan/energyConversionSitplanPlacement'
 import { healJunctionBoxSitplanPlacements } from '@/lib/plan/junctionBoxSitplanPlacement'
@@ -35,7 +36,14 @@ import { syncValidationFromCompatibility } from '@/lib/projectV2/validation'
 import { logOrphanReport } from '@/lib/validation/orphanDetection'
 import { healSupplyTrunkProtectionBreakingCapacity } from '@/lib/protectionDefaults'
 import { recordSessionAction } from '@/lib/diagnostics/sessionActionLog'
+import { healSourceChangeoverFeedScope } from '@/lib/supplyAssembly/editorIntegration'
 import { shortProjectIdLabel } from '@/utils/project'
+import { logger } from '@/lib/logger'
+import { summarizeConverterDcPersistence } from '@/lib/supplyAssembly/persistenceDiagnostics'
+import {
+  collectSupplyDeviceReferenceIssues,
+  linkSupplyAssemblyDeviceReferences,
+} from '@/lib/supplyAssembly/deviceReferences'
 import { type Project, type ProjectInput, type ProjectState } from './projectStoreTypes'
 import { findPanelById, findPanelByName } from '@/lib/panel/panelTree'
 
@@ -77,6 +85,11 @@ export function hydrateProjectForEditor(project: ProjectInput): {
   if (installation) {
     ensureInstallationFeedTopology(installation, panels)
   }
+  const healedSourceChangeoverFeedScope = healSourceChangeoverFeedScope(runtimeProject)
+  const linkedSupplyAssemblyDeviceReferences = linkSupplyAssemblyDeviceReferences(runtimeProject)
+  const reconciledPanelFeedOrganizations = reconcileInvalidPanelFeedOrganizationsInProject(
+    runtimeProject
+  )
   const normalizedNominalVoltage = installation
     ? normalizeInstallationNominalVoltage(installation)
     : false
@@ -109,11 +122,22 @@ export function hydrateProjectForEditor(project: ProjectInput): {
     `Opened project in editor (${shortProjectIdLabel(runtimeProject.project.id)})`
   )
   logOrphanReport(runtimeProject)
+  const dcPersistenceSummary = summarizeConverterDcPersistence(runtimeProject)
+  if (dcPersistenceSummary) {
+    logger.debug('[SUPPLY-PERSIST] hydrated converter DC topology', dcPersistenceSummary)
+  }
+  const supplyDeviceReferenceIssues = collectSupplyDeviceReferenceIssues(runtimeProject)
+  if (supplyDeviceReferenceIssues.length > 0) {
+    logger.warn('[SUPPLY-PERSIST] supply device reference issues', supplyDeviceReferenceIssues)
+  }
 
   return {
     project: runtimeProject,
     isDirty:
       sanitizedLegacyV2Bloat ||
+      healedSourceChangeoverFeedScope ||
+      linkedSupplyAssemblyDeviceReferences ||
+      reconciledPanelFeedOrganizations ||
       normalizedNominalVoltage ||
       healedSupplyProtectionBreakingCapacity ||
       healedSupplyGrid ||
@@ -148,6 +172,7 @@ export function prepareProjectForPersistence(project: Project): void {
   if (installation) {
     ensureInstallationFeedTopology(installation, getElectricalPanelsFromProject(project))
   }
+  linkSupplyAssemblyDeviceReferences(project)
   healPlanWiring(project)
 }
 

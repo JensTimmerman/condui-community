@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { ZOOM_100 } from '@/constants/canvasConstants'
-import { Group, Image, Rect, Text } from 'react-konva'
+import { Group, Rect, Text } from 'react-konva'
 import { useSettingsStore } from '@/stores/settingsStore'
 import {
   useCanvasFontFamily,
@@ -10,12 +10,11 @@ import {
 } from '@/editions/community/communityHooks'
 import { useProjectStore } from '@/stores/projectStore'
 import { useUIStore } from '@/stores/uiStore'
-import { getSymbolById } from '@/lib/symbols'
-import { loadProcessedSymbol } from '@/lib/symbolImage'
 import { getVoltageSummaryLabel } from '@/utils/voltageLabel'
 import { SYMBOL_SIZE, getSymbolColor, getTextColor, GROUND_OUTLINE_SIZE, getSelectionOutlineProps, getHoverOutlineProps, getTouchAwareHitAreaProps } from './canvasSymbols'
 import { useTouchPrimaryDevice } from '@/editions/community/communityHooks'
 import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
+import { CatalogSymbolImage } from './CatalogSymbolImage'
 
 type EendraadPointerEvent = {
   cancelBubble: boolean
@@ -26,9 +25,10 @@ type WindowWithEendraTapSuppression = Window & { __eendraSuppressNextElementTap?
 interface SupplySymbolProps {
   x: number
   y: number
+  panelId?: string
 }
 
-export function SupplySymbol({ x, y }: SupplySymbolProps) {
+export function SupplySymbol({ x, y, panelId }: SupplySymbolProps) {
   const theme = useSettingsStore((state) => state.theme)
   const fontFamily = useCanvasFontFamily()
   type ProjectStoreState = ReturnType<typeof useProjectStore.getState>
@@ -38,14 +38,14 @@ export function SupplySymbol({ x, y }: SupplySymbolProps) {
   const setSelection = useSetSelection()
   const canvasZoom = useEffectiveCanvasZoom(ZOOM_100, 'eendraad')
   const touchPrimary = useTouchPrimaryDevice()
-  const [processedImage, setProcessedImage] = useState<HTMLImageElement | null>(null)
   const [isHovered, setIsHovered] = useState(false)
   const isDark = theme?.mode === 'dark'
   const symbolColor = getSymbolColor(isDark)
   const textColor = getTextColor(isDark)
-  const isSelected = useIsTypeAndIdSelected('supply', 'supply')
+  const isSelectedByType = useIsTypeAndIdSelected('supply', 'supply')
+  const selectedSupplyPanelId = useUIStore((state) => state.selection.supplyPanelId)
+  const isSelected = isSelectedByType && (!panelId || selectedSupplyPanelId === panelId)
 
-  const symbol = getSymbolById('mains')
   const voltageLabel = installation?.nominalVoltage
     ? getVoltageSummaryLabel(installation.nominalVoltage)
     : ''
@@ -72,9 +72,13 @@ export function SupplySymbol({ x, y }: SupplySymbolProps) {
       // Shift + Click: Add to selection
       const { selection } = useUIStore.getState()
       if (selection.type === 'supply' && !selection.ids.includes('supply')) {
-        setSelection({ type: 'supply', ids: [...selection.ids, 'supply'] })
+        setSelection({
+          type: 'supply',
+          ids: [...selection.ids, 'supply'],
+          supplyPanelId: panelId,
+        })
       } else if (selection.type !== 'supply') {
-        setSelection({ type: 'supply', ids: ['supply'] })
+        setSelection({ type: 'supply', ids: ['supply'], supplyPanelId: panelId })
       }
     } else if (e.evt.altKey || e.evt.ctrlKey || e.evt.metaKey) {
       // Alt/Ctrl + Click: Remove from selection
@@ -84,16 +88,9 @@ export function SupplySymbol({ x, y }: SupplySymbolProps) {
       }
     } else {
       // Normal click: Replace selection
-      setSelection({ type: 'supply', ids: ['supply'] })
+      setSelection({ type: 'supply', ids: ['supply'], supplyPanelId: panelId })
     }
-  }, [setSelection])
-
-  useEffect(() => {
-    if (!symbol) return
-    loadProcessedSymbol(symbol.svgPath, isDark).then(setProcessedImage).catch(() => setProcessedImage(null))
-  }, [symbol, isDark])
-
-  const displayImage = processedImage
+  }, [panelId, setSelection])
 
   // Same placement as TrunkDeviceSymbol (vertical): offsetY = SYMBOL_SIZE/4 so symbol sits on wire
   const offsetY = SYMBOL_SIZE / 2
@@ -119,27 +116,13 @@ export function SupplySymbol({ x, y }: SupplySymbolProps) {
         )}
       />
       
-      {displayImage ? (
-        <Image
-          image={displayImage}
-          width={SYMBOL_SIZE}
-          height={SYMBOL_SIZE}
-          offsetX={SYMBOL_SIZE / 2}
-          offsetY={offsetY}
-          listening={false}
-        />
-      ) : (
-        <Rect
-          x={-SYMBOL_SIZE / 2}
-          y={-offsetY}
-          width={SYMBOL_SIZE}
-          height={SYMBOL_SIZE}
-          fill="transparent"
-          stroke={symbolColor}
-          strokeWidth={2}
-          listening={false}
-        />
-      )}
+      <CatalogSymbolImage
+        symbolId="mains"
+        width={SYMBOL_SIZE}
+        height={SYMBOL_SIZE}
+        offsetY={offsetY}
+        fallbackStroke={symbolColor}
+      />
       
       {/* Phase indicator (1 or 3) - top left corner */}
       <Text

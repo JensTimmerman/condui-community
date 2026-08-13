@@ -60,6 +60,12 @@ export type DropTargetType =
   | 'mainBus'
   | 'rcd'
   | 'supplyWire'
+  | 'supplyBackupWire'
+  | 'supplyBackupOutputWire'
+  | 'supplyChangeoverGridWire'
+  | 'supplyConverterGridWire'
+  | 'supplyConverterBackupWire'
+  | 'supplyConverterDcWire'
   | 'groundWire'
   | null
 
@@ -73,6 +79,8 @@ export interface SymbolVisual {
   opacity?: number
   /** Whether this endpoint is the final symbol on its horizontal branch. */
   isEndpointAtBranchEnd?: boolean
+  /** Mirror artwork for an endpoint connected by a left-running branch. */
+  mirrorHorizontally?: boolean
   /** For a bottom label, keep its left edge clear of a nearby branch wire. */
   bottomLabelMinimumLeftX?: number
   /** For a bottom label, truncate before crossing the circuit's right boundary. */
@@ -97,6 +105,7 @@ export interface BusBarVisual {
 export interface LabelVisual {
   type: 'label'
   text: string
+  translationKey?: string
   fontSize?: number
   variant?: 'circuit-notes' | 'default' // 'circuit-notes' for italic, gray styling
   /** When 'left', label is drawn with left edge at bounds.x (e.g. to the right of domotica endpoints). */
@@ -121,6 +130,9 @@ export interface HitZone {
   supplyFeedScope?: 'shared' | 'root'
   supplyInsertIndex?: number
   supplyPanelId?: string
+  supplyConverterDcBranch?: 'right' | 'top'
+  /** The single direct-converter junction where a source changeover may be inserted. */
+  supplyConverterChangeoverSlot?: boolean
 }
 
 /**
@@ -148,6 +160,8 @@ export interface LayoutNode {
   type: LayoutNodeType
   bounds: Bounds
   domainId?: string // panel.id, circuit.id, endpoint.id, protection.id
+  /** Unique frame identity when one electrical panel renders in multiple frames. */
+  diagramId?: string
   domainRef?: Panel | Circuit | ProtectionDevice | Endpoint | TrunkDevice // Typed domain reference
   /** When set on an `mcb` node, wires for this column use this circuit (multi-circuit protections / merged sub-panel feed). */
   circuitIdForWires?: string
@@ -186,6 +200,7 @@ import {
   LAYOUT_CONSTANTS,
   PROTECTION_LABEL_DEFAULT_BOX_WIDTH,
   estimateProtectionNameLabelWidth,
+  getPanelDiagramId,
   hasPanelAttachmentOnSecondaryBus,
   isPanelOnlySubPanelFeeder,
 } from './bottomUpLayout'
@@ -272,13 +287,37 @@ function buildPanelNode(panelLayout: BottomUpPanelLayout): LayoutNode {
       visual: {
         type: 'symbol',
         symbolId: 'mains',
+        opacity: panelLayout.supplyEndpointKind === 'continuation' ? 0 : undefined,
       },
       hitZone: {
-        type: 'supplyWire',
+        type: panelLayout.supplyEndpointKind === 'continuation' ? null : 'supplyWire',
         padding: 0,
         supplyFeedScope: 'shared',
         supplyInsertIndex: 0,
         supplyPanelId: panelLayout.panel.id,
+      },
+      children: [],
+    })
+  }
+
+  const supplyContinuationLabel = panelLayout.elements.find(
+    (element) => element.id === 'supply-continuation-label'
+  )
+  if (supplyContinuationLabel) {
+    children.push({
+      id: supplyContinuationLabel.id,
+      type: 'label',
+      bounds: {
+        x: supplyContinuationLabel.position.x,
+        y: supplyContinuationLabel.position.y,
+        width: 120,
+        height: 20,
+      },
+      visual: {
+        type: 'label',
+        text: supplyContinuationLabel.label ?? '',
+        translationKey: supplyContinuationLabel.translationKey,
+        align: 'center',
       },
       children: [],
     })
@@ -310,7 +349,22 @@ function buildPanelNode(panelLayout: BottomUpPanelLayout): LayoutNode {
           label: supplyDeviceData.device.label,
         },
         hitZone: {
-          type: 'supplyWire', // Trunk devices on supply wire target the supply wire
+          // Branch devices keep their own insertion lane. The converter itself remains
+          // selectable, but is not another insertion slot.
+          type:
+            supplyDeviceData.device.supplyPath === 'backup'
+              ? null
+              : supplyDeviceData.device.supplyPath === 'converter-branch' ||
+                  supplyDeviceData.device.supplyPath === 'converter-dc' ||
+                  supplyDeviceData.device.supplyPath === 'converter-dc-top'
+                ? null
+                : supplyDeviceData.device.supplyPath === 'backup-output'
+                  ? 'supplyBackupOutputWire'
+                  : supplyDeviceData.device.supplyPath === 'changeover-grid'
+                    ? 'supplyChangeoverGridWire'
+                    : supplyDeviceData.device.supplyPath === 'converter-grid'
+                      ? 'supplyConverterGridWire'
+                      : 'supplyWire',
           // Make supply trunk devices easy to hit while dragging/dropping.
           padding: 10,
           supplyFeedScope: supplyDeviceData.feedScope,
@@ -538,6 +592,41 @@ function buildPanelNode(panelLayout: BottomUpPanelLayout): LayoutNode {
     children.push(mainBusNode)
   }
 
+  const outputLabel = panelLayout.elements.find((element) => element.id === 'feed-output-label')
+  if (panelLayout.feedOutput) {
+    children.push({
+      id: `feed-output-wire-${panelLayout.panel.id}`,
+      type: 'wire',
+      bounds: {
+        x: panelLayout.feedOutput.x - 4,
+        y: panelLayout.feedOutput.endY,
+        width: 8,
+        height: panelLayout.feedOutput.busY - panelLayout.feedOutput.endY,
+      },
+      hitZone: { type: null, padding: 0 },
+      children: [],
+    })
+  }
+  if (outputLabel) {
+    children.push({
+      id: outputLabel.id,
+      type: 'label',
+      bounds: {
+        x: outputLabel.position.x,
+        y: outputLabel.position.y,
+        width: 140,
+        height: 20,
+      },
+      visual: {
+        type: 'label',
+        text: outputLabel.label ?? '',
+        translationKey: outputLabel.translationKey,
+        align: 'center',
+      },
+      children: [],
+    })
+  }
+
   // Sub-panel incoming feeder wire hit zone (parent MCB -> child panel main bus).
   // This enables drop/preview for protections and trunk devices on that local wire.
   if (parentMcbElement && mainBusElement) {
@@ -564,7 +653,7 @@ function buildPanelNode(panelLayout: BottomUpPanelLayout): LayoutNode {
   }
 
   return {
-    id: `panel-${panelLayout.panel.id}`,
+    id: `panel-${getPanelDiagramId(panelLayout)}`,
     type: 'panel',
     bounds: {
       x: panelLayout.frame.x,
@@ -573,6 +662,7 @@ function buildPanelNode(panelLayout: BottomUpPanelLayout): LayoutNode {
       height: panelLayout.frame.height,
     },
     domainId: panelLayout.panel.id,
+    diagramId: getPanelDiagramId(panelLayout),
     domainRef: panelLayout.panel,
     children,
   }
@@ -648,7 +738,14 @@ function buildMainBusNode(
   const supplyBend = panelLayout.supplyBend
   if (supply && mainBusElement.position) {
     const pad = 10
-    const supplyDevicesSorted = [...(panelLayout.supplyDevices ?? [])].sort((a, b) => a.x - b.x)
+    const supplyDevicesSorted = [...(panelLayout.supplyDevices ?? [])]
+      .filter(
+        ({ device }) =>
+          panelLayout.supplyChangeoverBranches ||
+          !panelLayout.supplyConverterBranch ||
+          !['converter-grid', 'converter-dc', 'converter-dc-top'].includes(device.supplyPath ?? '')
+      )
+      .sort((a, b) => a.x - b.x)
     const hasSupplyDevices = supplyDevicesSorted.length > 0
 
     if (supplyBend) {
@@ -671,8 +768,12 @@ function buildMainBusNode(
         x1: number,
         x2: number,
         scope: 'shared' | 'root',
-        insertIndex: number
+        insertIndex: number,
+        supplyConverterChangeoverSlot = false
       ) => {
+        // A changeover owns lane-aware hit zones below. Do not leave stale zones
+        // behind on the former centerline after its source-side symbols move down.
+        if (panelLayout.supplyChangeoverBranches) return
         if (x2 <= x1) return
         children.unshift({
           id,
@@ -689,6 +790,7 @@ function buildMainBusNode(
             supplyFeedScope: scope,
             supplyInsertIndex: insertIndex,
             supplyPanelId: panelLayout.panel.id,
+            supplyConverterChangeoverSlot,
           },
           children: [],
         })
@@ -708,7 +810,7 @@ function buildMainBusNode(
         hitZone: {
           type: 'supplyWire',
           padding: 0,
-          supplyFeedScope: rootCount > 0 || sharedCount > 0 ? 'root' : 'shared',
+          supplyFeedScope: 'root',
           supplyInsertIndex: rootCount > 0 || sharedCount > 0 ? rootCount : sharedCount,
           supplyPanelId: panelLayout.panel.id,
         },
@@ -739,7 +841,8 @@ function buildMainBusNode(
               bendX,
               leftmostDevice.x,
               leftmostDevice.feedScope,
-              leftmostDevice.feedIndex + 1
+              leftmostDevice.feedIndex + 1,
+              leftmostDevice.device.supplyPath === 'converter-branch'
             )
           }
         }
@@ -754,7 +857,8 @@ function buildMainBusNode(
               left.x,
               right.x,
               right.feedScope,
-              right.feedIndex + 1
+              right.feedIndex + 1,
+              right.device.supplyPath === 'converter-branch'
             )
             continue
           }
@@ -804,11 +908,19 @@ function buildMainBusNode(
             )
           }
         }
-      } else {
+      } else if (panelLayout.supplyEndpointKind !== 'continuation') {
         const supplyEndX = supply.x + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
+        const separatorX = (bendX + supplyEndX) / 2
         pushSupplySegment(
-          `supply-wire-segment-${panelLayout.panel.id}-stub`,
+          `supply-wire-segment-${panelLayout.panel.id}-stub-root`,
           bendX,
+          separatorX,
+          'root',
+          0
+        )
+        pushSupplySegment(
+          `supply-wire-segment-${panelLayout.panel.id}-stub-shared`,
+          separatorX,
           supplyEndX,
           'shared',
           0
@@ -836,6 +948,364 @@ function buildMainBusNode(
         },
         children: [],
       })
+    }
+  }
+
+  const changeoverBranches = panelLayout.supplyChangeoverBranches
+  if (changeoverBranches) {
+    const pad = 10
+    const devices = [...(panelLayout.supplyDevices ?? [])].sort((a, b) => a.x - b.x)
+    const changeover = devices.find(
+      (candidate) => candidate.device.id === changeoverBranches.deviceId
+    )
+    const backupConverter = devices.find((candidate) => candidate.device.supplyPath === 'backup')
+    const isBranchDevice = (candidate: (typeof devices)[number]) =>
+      ['backup', 'backup-output', 'changeover-grid', 'converter-grid'].includes(
+        candidate.device.supplyPath ?? ''
+      )
+    const pushLaneSegment = (
+      id: string,
+      x1: number,
+      x2: number,
+      y: number,
+      insertIndex: number,
+      feedScope: 'shared' | 'root',
+      type:
+        | 'supplyWire'
+        | 'supplyBackupWire'
+        | 'supplyBackupOutputWire'
+        | 'supplyChangeoverGridWire' = 'supplyWire'
+    ) => {
+      if (x2 <= x1) return
+      children.unshift({
+        id,
+        type: 'wire',
+        bounds: { x: x1 - pad, y: y - pad, width: x2 - x1 + pad * 2, height: pad * 2 },
+        hitZone: {
+          type,
+          padding: 0,
+          supplyFeedScope: feedScope,
+          supplyInsertIndex: insertIndex,
+          supplyPanelId: panelLayout.panel.id,
+        },
+        children: [],
+      })
+    }
+
+    if (changeover) {
+      const outputDevices = devices.filter(
+        (candidate) => candidate.x < changeover.x && !isBranchDevice(candidate)
+      )
+      let previousX = panelLayout.supplyBend?.x ?? changeover.x
+      for (const candidate of [...outputDevices, changeover]) {
+        pushLaneSegment(
+          `supply-changeover-load-slot-${panelLayout.panel.id}-${candidate.device.id}`,
+          previousX,
+          candidate.x,
+          changeoverBranches.y,
+          candidate.feedIndex + 1,
+          candidate.feedScope
+        )
+        previousX = candidate.x
+      }
+
+      const changeoverGridDevices = devices
+        .filter((candidate) => candidate.device.supplyPath === 'changeover-grid')
+        .sort((a, b) => a.x - b.x)
+      const gridRailX = groundElement?.position.x ?? mainBusElement.position.x + 20
+      previousX = gridRailX
+      for (const candidate of changeoverGridDevices) {
+        pushLaneSegment(
+          `supply-changeover-grid-rail-slot-${panelLayout.panel.id}-${candidate.device.id}`,
+          previousX,
+          candidate.x,
+          changeoverBranches.lowerY,
+          candidate.feedIndex + 1,
+          'root',
+          'supplyChangeoverGridWire'
+        )
+        previousX = candidate.x
+      }
+      pushLaneSegment(
+        `supply-changeover-grid-rail-slot-${panelLayout.panel.id}-append`,
+        previousX,
+        changeoverBranches.elbowX,
+        changeoverBranches.lowerY,
+        changeoverGridDevices.at(-1)?.feedIndex != null
+          ? changeoverGridDevices.at(-1)!.feedIndex + 1
+          : changeover.feedIndex + 1,
+        'root',
+        'supplyChangeoverGridWire'
+      )
+      const gridTapX = backupConverter?.x ?? changeoverBranches.slotEndX
+      previousX = changeoverBranches.elbowX
+      if (backupConverter) {
+        pushLaneSegment(
+          `supply-changeover-grid-slot-${panelLayout.panel.id}-tap`,
+          previousX,
+          gridTapX,
+          changeoverBranches.lowerY,
+          backupConverter.feedIndex,
+          'root',
+          'supplyChangeoverGridWire'
+        )
+        previousX = gridTapX
+      }
+
+      const gridDevices = devices.filter(
+        (candidate) => candidate.x > changeover.x && !isBranchDevice(candidate)
+      )
+      for (const candidate of gridDevices) {
+        pushLaneSegment(
+          `supply-changeover-grid-slot-${panelLayout.panel.id}-${candidate.device.id}`,
+          previousX,
+          candidate.x,
+          changeoverBranches.lowerY,
+          candidate.feedIndex + 1,
+          candidate.feedScope
+        )
+        previousX = candidate.x
+      }
+      pushLaneSegment(
+        `supply-changeover-grid-slot-${panelLayout.panel.id}-supply`,
+        previousX,
+        supply.x + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2,
+        changeoverBranches.lowerY,
+        0,
+        'shared'
+      )
+
+      const backupOutputDevices = devices
+        .filter((candidate) => candidate.device.supplyPath === 'backup-output')
+        .sort((a, b) => a.x - b.x)
+      if (backupConverter) {
+        previousX = changeoverBranches.elbowX
+        for (const candidate of [...backupOutputDevices, backupConverter]) {
+          pushLaneSegment(
+            `supply-changeover-backup-output-slot-${panelLayout.panel.id}-${candidate.device.id}`,
+            previousX,
+            candidate.x,
+            changeoverBranches.upperY,
+            candidate.device.supplyPath === 'backup'
+              ? changeover.feedIndex
+              : candidate.feedIndex + 1,
+            'root',
+            'supplyBackupOutputWire'
+          )
+          previousX = candidate.x
+        }
+
+        const converterGridDevices = devices
+          .filter((candidate) => candidate.device.supplyPath === 'converter-grid')
+          .sort((a, b) => a.y - b.y)
+        const verticalWaypoints = [
+          {
+            y: backupConverter.y + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2,
+            index: backupConverter.feedIndex,
+          },
+          ...converterGridDevices.map((candidate) => ({
+            y: candidate.y,
+            index: candidate.feedIndex + 1,
+          })),
+          { y: changeoverBranches.lowerY, index: backupConverter.feedIndex },
+        ]
+        for (let index = 0; index < verticalWaypoints.length - 1; index++) {
+          const from = verticalWaypoints[index]!
+          const to = verticalWaypoints[index + 1]!
+          if (to.y <= from.y) continue
+          children.unshift({
+            id: `supply-changeover-converter-grid-slot-${panelLayout.panel.id}-${index}`,
+            type: 'wire',
+            bounds: {
+              x: backupConverter.x - pad,
+              y: from.y - pad,
+              width: pad * 2,
+              height: to.y - from.y + pad * 2,
+            },
+            hitZone: {
+              type: 'supplyConverterGridWire',
+              padding: 0,
+              supplyFeedScope: 'root',
+              supplyInsertIndex: to.index,
+              supplyPanelId: panelLayout.panel.id,
+            },
+            children: [],
+          })
+        }
+      } else {
+        previousX = changeoverBranches.elbowX
+        for (const candidate of backupOutputDevices) {
+          pushLaneSegment(
+            `supply-changeover-backup-slot-${panelLayout.panel.id}-${candidate.device.id}`,
+            previousX,
+            candidate.x,
+            changeoverBranches.upperY,
+            candidate.feedIndex,
+            'root',
+            'supplyBackupOutputWire'
+          )
+          previousX = candidate.x
+        }
+        pushLaneSegment(
+          `supply-changeover-backup-slot-${panelLayout.panel.id}-append`,
+          previousX,
+          changeoverBranches.slotEndX,
+          changeoverBranches.upperY,
+          backupOutputDevices.at(-1)?.feedIndex != null
+            ? backupOutputDevices.at(-1)!.feedIndex + 1
+            : (changeover?.feedIndex ?? 0) + 1,
+          'root',
+          'supplyBackupWire'
+        )
+      }
+    }
+  }
+
+  const converterBranch = panelLayout.supplyConverterBranch
+  if (converterBranch) {
+    const pad = 10
+    const devices = panelLayout.supplyDevices ?? []
+    const converter = devices.find((candidate) => candidate.device.id === converterBranch.deviceId)
+    const gridDevices = devices
+      .filter((candidate) => candidate.device.supplyPath === 'converter-grid')
+      .sort((a, b) => a.y - b.y)
+    if (converter) {
+      const backup = panelLayout.supplyConverterBackup
+      if (backup && !backup.circuitId && backup.x2 > backup.x1) {
+        children.unshift({
+          id: `supply-direct-converter-backup-slot-${panelLayout.panel.id}`,
+          type: 'wire',
+          bounds: {
+            x: backup.x1 - pad,
+            y: backup.y - pad,
+            width: backup.x2 - backup.x1 + pad * 2,
+            height: pad * 2,
+          },
+          hitZone: {
+            type: 'supplyConverterBackupWire',
+            padding: 0,
+            supplyFeedScope: 'root',
+            supplyPanelId: panelLayout.panel.id,
+          },
+          children: [],
+        })
+      }
+      const verticalWaypoints = [
+        {
+          y: converter.y + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2,
+          index: converter.feedIndex,
+        },
+        ...gridDevices.map((candidate) => ({
+          y: candidate.y,
+          index: candidate.feedIndex + 1,
+        })),
+        { y: converterBranch.lineY, index: converter.feedIndex },
+      ]
+      for (let index = 0; index < verticalWaypoints.length - 1; index++) {
+        const from = verticalWaypoints[index]!
+        const to = verticalWaypoints[index + 1]!
+        if (to.y <= from.y) continue
+        children.unshift({
+          id: `supply-direct-converter-grid-slot-${panelLayout.panel.id}-${index}`,
+          type: 'wire',
+          bounds: {
+            x: converter.x - pad,
+            y: from.y - pad,
+            width: pad * 2,
+            height: to.y - from.y + pad * 2,
+          },
+          hitZone: {
+            type: 'supplyConverterGridWire',
+            padding: 0,
+            supplyFeedScope: 'root',
+            supplyInsertIndex: to.index,
+            supplyPanelId: panelLayout.panel.id,
+          },
+          children: [],
+        })
+      }
+
+      const dcDevices = devices
+        .filter((candidate) => candidate.device.supplyPath === 'converter-dc')
+        .sort((a, b) => a.x - b.x)
+      const dcTopDevices = devices
+        .filter((candidate) => candidate.device.supplyPath === 'converter-dc-top')
+        .sort((a, b) => a.x - b.x)
+      const pushDcInsertionSegment = (
+        branch: 'right' | 'top',
+        segmentIndex: number,
+        x1: number,
+        x2: number,
+        y: number,
+        insertIndex: number
+      ) => {
+        if (x2 <= x1) return
+        children.unshift({
+          id: `supply-direct-converter-dc-${branch}-slot-${panelLayout.panel.id}-${segmentIndex}`,
+          type: 'wire',
+          bounds: {
+            x: x1 - pad,
+            y: y - pad,
+            width: x2 - x1 + pad * 2,
+            height: pad * 2,
+          },
+          hitZone: {
+            type: 'supplyConverterDcWire',
+            padding: 0,
+            supplyFeedScope: 'root',
+            supplyInsertIndex: insertIndex,
+            supplyPanelId: panelLayout.panel.id,
+            supplyConverterDcBranch: branch,
+          },
+          children: [],
+        })
+      }
+      const pushDcLaneInsertionSegments = (
+        branch: 'right' | 'top',
+        branchDevices: typeof dcDevices,
+        startX: number,
+        endX: number,
+        y: number
+      ) => {
+        let previousX = startX
+        branchDevices.forEach((candidate, index) => {
+          const nextX = candidate.x - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
+          pushDcInsertionSegment(branch, index, previousX, nextX, y, candidate.feedIndex)
+          previousX = candidate.x + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
+        })
+        const appendIndex =
+          branchDevices.at(-1)?.feedIndex != null
+            ? branchDevices.at(-1)!.feedIndex + 1
+            : converter.feedIndex + 1
+        pushDcInsertionSegment(branch, branchDevices.length, previousX, endX, y, appendIndex)
+      }
+      pushDcLaneInsertionSegments(
+        'right',
+        dcDevices,
+        converter.x + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2,
+        converterBranch.dcEndX,
+        converter.y
+      )
+      if ((dcDevices.length > 0 || dcTopDevices.length > 0) && converterBranch.dcTopY != null) {
+        if (dcTopDevices.length === 0) {
+          pushDcInsertionSegment(
+            'top',
+            0,
+            converter.x - 1,
+            converter.x + 1,
+            converterBranch.dcTopY,
+            converter.feedIndex + 1
+          )
+        } else {
+          pushDcLaneInsertionSegments(
+            'top',
+            dcTopDevices,
+            converter.x,
+            converterBranch.dcTopEndX ?? converterBranch.dcEndX,
+            converterBranch.dcTopY
+          )
+        }
+      }
     }
   }
 
@@ -872,7 +1342,13 @@ function buildMainBusNode(
     const busEndX = busStartX + (mainBusElement.width || 0)
 
     const connectionXs: number[] = children
-      .filter((child) => child.type === 'rcd' || child.type === 'mcb')
+      .filter((child) => {
+        if (child.type !== 'rcd' && child.type !== 'mcb') return false
+        const circuit = panelLayout.circuits.find(
+          (candidate) => candidate.circuit.id === child.circuitIdForWires
+        )?.circuit
+        return circuit?.supplySource?.kind !== 'converter-backup'
+      })
       .map((child) => child.bounds.x)
       .sort((a, b) => a - b)
 
@@ -897,7 +1373,7 @@ function buildMainBusNode(
           thickness: LAYOUT_CONSTANTS.BUS_THICKNESS,
         },
         hitZone: {
-          type: 'mainBus',
+          type: panelLayout.frameRole === 'supply' ? null : 'mainBus',
           padding: 0,
         },
         children: [],
@@ -919,8 +1395,8 @@ function buildMainBusNode(
       thickness: LAYOUT_CONSTANTS.BUS_THICKNESS,
     },
     hitZone: {
-      type: 'mainBus',
-      padding: 12,
+      type: panelLayout.frameRole === 'supply' ? null : 'mainBus',
+      padding: panelLayout.frameRole === 'supply' ? 0 : 12,
     },
     children,
   }
@@ -1070,6 +1546,8 @@ function buildMcbNode(
   }
 
   const children: LayoutNode[] = []
+  const isHorizontalConverterBackup =
+    circuitLayout.circuit.supplySource?.kind === 'converter-backup'
   const trunkDeviceElements = panelLayout.elements.filter(
     (e) => e.type === 'trunkDevice' && e.circuitId === circuitLayout.circuit.id
   )
@@ -1120,48 +1598,71 @@ function buildMcbNode(
     ...sortedTrunkDeviceElements.map((td) => td.position.y),
     topWireY,
   ]
-  for (let i = 0; i < trunkWaypointsY.length - 1; i++) {
-    const startY = trunkWaypointsY[i]
-    const endY = trunkWaypointsY[i + 1]
-    if (startY == null || endY == null) continue
-    const segmentTopY = Math.min(startY, endY)
-    const segmentHeight = Math.abs(startY - endY)
-    if (segmentHeight <= 0) continue
+  if (isHorizontalConverterBackup) {
+    if (subPanelSymbolElement) {
+      const panelX = subPanelSymbolElement.position.x
+      const left = Math.min(panelX, protectionElement.position.x)
+      const right = Math.max(panelX, protectionElement.position.x)
+      children.push({
+        id: `circuit-trunk-${circuitLayout.circuit.id}-horizontal`,
+        type: 'wire',
+        bounds: {
+          x: left,
+          y: protectionElement.position.y - wirePad,
+          width: right - left,
+          height: wirePad * 2,
+        },
+        hitZone: {
+          type: 'circuit',
+          padding: 0,
+        },
+        children: [],
+      })
+    }
+  } else {
+    for (let i = 0; i < trunkWaypointsY.length - 1; i++) {
+      const startY = trunkWaypointsY[i]
+      const endY = trunkWaypointsY[i + 1]
+      if (startY == null || endY == null) continue
+      const segmentTopY = Math.min(startY, endY)
+      const segmentHeight = Math.abs(startY - endY)
+      if (segmentHeight <= 0) continue
+      children.push({
+        id: `circuit-trunk-${circuitLayout.circuit.id}-segment-${i}`,
+        type: 'wire',
+        bounds: {
+          x: wireX - wirePad,
+          y: segmentTopY,
+          width: wirePad * 2,
+          height: segmentHeight,
+        },
+        hitZone: {
+          type: 'circuit',
+          padding: 0,
+        },
+        children: [],
+      })
+    }
+
+    // Single nest slot at the top of the trunk (nested MCB / secondary-bus insertion).
+    // Trunk segment hit zones remain for trunk devices; this zone is prioritized for protection drops.
+    const nestZoneHeight = 40
     children.push({
-      id: `circuit-trunk-${circuitLayout.circuit.id}-segment-${i}`,
+      id: `circuit-nest-${circuitLayout.circuit.id}`,
       type: 'wire',
       bounds: {
         x: wireX - wirePad,
-        y: segmentTopY,
+        y: topWireY - nestZoneHeight / 2,
         width: wirePad * 2,
-        height: segmentHeight,
+        height: nestZoneHeight,
       },
       hitZone: {
         type: 'circuit',
-        padding: 0,
+        padding: 10,
       },
       children: [],
     })
   }
-
-  // Single nest slot at the top of the trunk (nested MCB / secondary-bus insertion).
-  // Trunk segment hit zones remain for trunk devices; this zone is prioritized for protection drops.
-  const nestZoneHeight = 40
-  children.push({
-    id: `circuit-nest-${circuitLayout.circuit.id}`,
-    type: 'wire',
-    bounds: {
-      x: wireX - wirePad,
-      y: topWireY - nestZoneHeight / 2,
-      width: wirePad * 2,
-      height: nestZoneHeight,
-    },
-    hitZone: {
-      type: 'circuit',
-      padding: 10,
-    },
-    children: [],
-  })
 
   // Add circuit label (exclude circuit-notes, they're handled separately)
   const labelElement = panelLayout.elements.find(
@@ -1193,7 +1694,7 @@ function buildMcbNode(
         type: 'label',
         text: labelElement.label || circuitLayout.circuit.code,
         fontSize: 12,
-        align: isProtectionLabel ? 'right' : 'center',
+        align: isHorizontalConverterBackup ? 'center' : isProtectionLabel ? 'right' : 'center',
       },
       children: [],
     })
@@ -1570,6 +2071,7 @@ function buildBranchNode(
           symbolId: endpoint.symbol || getDefaultSymbolForEndpointType(endpoint.type),
           label: endpoint.label,
           isEndpointAtBranchEnd: endpointIndex === branch.endpoints.length - 1,
+          mirrorHorizontally: endpointElement.mirrorEndpointHorizontally,
           bottomLabelMinimumLeftX: constrainSingleEndpointLabel
             ? getEndpointNoteMinimumLeftX(endpointElement.position.x, branch.branchX)
             : undefined,

@@ -6,6 +6,9 @@ export interface HiddenItem {
   label: string
   icon?: ReactNode
   subtitle?: string
+  onSelect?: () => void
+  onHoverChange?: (hovered: boolean) => void
+  selectAriaLabel?: string
 }
 
 interface HiddenItemsDialogProps {
@@ -124,21 +127,40 @@ export default function HiddenItemsDialog({
         </label>
 
         {items.map((item) => (
-          <label
+          <div
             key={item.id}
             className="flex items-center gap-3 px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
+            onClick={() => handleToggleItem(item.id)}
+            onMouseEnter={() => item.onHoverChange?.(true)}
+            onMouseLeave={() => item.onHoverChange?.(false)}
           >
             <input
               type="checkbox"
               checked={selectedIds.has(item.id)}
               onChange={() => handleToggleItem(item.id)}
+              onClick={(event) => event.stopPropagation()}
               className="rounded border-gray-400 mt-0.5"
             />
             <div className="flex items-center gap-3 flex-1 min-w-0">
               {item.icon && (
-                <div className="flex-shrink-0 w-9 h-9 flex items-center justify-center bg-gray-100 dark:bg-gray-700 rounded border border-gray-200 dark:border-gray-600 overflow-hidden">
-                  {item.icon}
-                </div>
+                item.onSelect ? (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      item.onSelect?.()
+                    }}
+                    className="flex-shrink-0 w-9 h-9 flex items-center justify-center bg-gray-100 hover:bg-sky-50 dark:bg-gray-700 dark:hover:bg-sky-900/30 rounded border border-gray-200 hover:border-sky-400 dark:border-gray-600 dark:hover:border-sky-500 overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+                    aria-label={item.selectAriaLabel}
+                    title={item.selectAriaLabel}
+                  >
+                    {item.icon}
+                  </button>
+                ) : (
+                  <div className="flex-shrink-0 w-9 h-9 flex items-center justify-center bg-gray-100 dark:bg-gray-700 rounded border border-gray-200 dark:border-gray-600 overflow-hidden">
+                    {item.icon}
+                  </div>
+                )
               )}
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium text-gray-800 dark:text-gray-100 truncate">
@@ -151,7 +173,7 @@ export default function HiddenItemsDialog({
                 )}
               </div>
             </div>
-          </label>
+          </div>
         ))}
       </div>
 

@@ -302,6 +302,7 @@ function Dialog() {
                 {dialog.cancelLabel || t('common.cancel')}
               </button>
               <button
+                autoFocus
                 onClick={() => {
                   dialog.onConfirm()
                   handleClose()

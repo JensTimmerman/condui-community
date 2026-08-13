@@ -10,11 +10,20 @@ import type {
   RootPanelFeedPath,
   TrunkDevice,
 } from '@/types/schema'
+import type { OffGridSupplyAssembly } from '@/types/supplyAssembly'
 import { polesFromConfig } from '@/constants/poleConfig'
 import { findParentCircuitInfo } from '@/lib/eendraad/findParentCircuitInfo'
 import { walkPanels } from '@/lib/panel/panelTree'
 import { getMainBusOrder } from '@/lib/eendraad/mainBusOrder'
 import { collectRootPanels, ensureInstallationFeedTopology } from '@/lib/feedTopology'
+import {
+  getCircuitBusSectionId,
+  getPanelBusSectionPhaseOrder,
+  getPrimaryPanelBusSectionId,
+  getProtectionBusSectionId,
+  hasExplicitPanelBusSections,
+} from '@/lib/panel/panelBusSections'
+import { deriveHandoffPhaseSupplyPaths } from '@/lib/supplyAssembly/phasePaths'
 
 export type PhaseAssignmentOption = {
   value: string
@@ -53,18 +62,30 @@ type VoltageSystem = Installation['nominalVoltage']['system'] | string | undefin
 const PHASE_ORDER: AcPhase[] = ['L1', 'L2', 'L3', 'N', 'PE']
 const DEFAULT_BUSBAR_PHASE_ORDER: AcLinePhase[] = ['L1', 'L2', 'L3']
 
-function sanitizeBusbarPhaseOrder(order: AcLinePhase[] | undefined): AcLinePhase[] {
+function sanitizeBusbarPhaseOrder(
+  order: AcLinePhase[] | undefined,
+  allowPartial = false
+): AcLinePhase[] {
   if (!order?.length) return DEFAULT_BUSBAR_PHASE_ORDER
   const unique = order.filter(
     (phase, index): phase is AcLinePhase =>
       DEFAULT_BUSBAR_PHASE_ORDER.includes(phase) && order.indexOf(phase) === index
   )
+  if (allowPartial && unique.length === order.length) return unique
   return unique.length === 3 ? unique : DEFAULT_BUSBAR_PHASE_ORDER
 }
 
-export function getBusbarPhaseOrder(panel: Panel, ownerId?: string): AcLinePhase[] {
+export function getBusbarPhaseOrder(
+  panel: Panel,
+  ownerId?: string,
+  busSectionId?: string
+): AcLinePhase[] {
+  if (ownerId) {
+    return sanitizeBusbarPhaseOrder(panel.busbarPhases?.secondary?.[ownerId])
+  }
   return sanitizeBusbarPhaseOrder(
-    ownerId ? panel.busbarPhases?.secondary?.[ownerId] : panel.busbarPhases?.main
+    getPanelBusSectionPhaseOrder(panel, busSectionId),
+    hasExplicitPanelBusSections(panel)
   )
 }
 
@@ -122,6 +143,31 @@ function assignmentForBusbarSlot(
   }
 }
 
+function assignmentForLimitedBusbar(
+  system: VoltageSystem,
+  order: AcLinePhase[]
+): CircuitPhaseAssignment | undefined {
+  if (order.length === 0 || order.length >= 3) return undefined
+  const normalized = normalizeNominalVoltageSystem(system ?? '2~')
+  if (normalized === '3N~') {
+    return {
+      kind: order.length === 1 ? 'single_phase' : 'phase_to_phase',
+      phases: [...order, 'N'],
+      neutral: 'used',
+      source: 'derived_from_busbar',
+    }
+  }
+  if (normalized === '3~' && order.length === 2) {
+    return {
+      kind: 'phase_to_phase',
+      phases: [...order],
+      neutral: 'not_present',
+      source: 'derived_from_busbar',
+    }
+  }
+  return undefined
+}
+
 function findCircuitContext(
   circuitId: string,
   panels: Panel[]
@@ -152,6 +198,16 @@ function getMainBusSlotIndex(
   item: { type: 'circuit' | 'protection'; id: string },
   system: VoltageSystem
 ): number {
+  const targetBusSectionId =
+    item.type === 'protection'
+      ? getProtectionBusSectionId(
+          panel,
+          panel.protections.find((protection) => protection.id === item.id) ?? {}
+        )
+      : getCircuitBusSectionId(
+          panel,
+          panel.circuits.find((circuit) => circuit.id === item.id) ?? {}
+        )
   let slot = 0
   for (const candidate of getMainBusOrder(panel)) {
     if (candidate.type === item.type && candidate.id === item.id) return slot
@@ -159,6 +215,13 @@ function getMainBusSlotIndex(
       candidate.type === 'protection'
         ? panel.protections.find((protection) => protection.id === candidate.id)
         : undefined
+    const candidateBusSectionId = candidateProtection
+      ? getProtectionBusSectionId(panel, candidateProtection)
+      : getCircuitBusSectionId(
+          panel,
+          panel.circuits.find((circuit) => circuit.id === candidate.id) ?? {}
+        )
+    if (candidateBusSectionId !== targetBusSectionId) continue
     slot += getBusbarPhaseAdvance(candidateProtection, system)
   }
   return slot
@@ -171,10 +234,22 @@ export function getMainBusProtectionPhaseAssignment(
 ): CircuitPhaseAssignment | undefined {
   const poles = getProtectionPoles(protection) ?? 2
   const slot = getMainBusSlotIndex(panel, { type: 'protection', id: protection.id }, system)
+  const phaseOrder = getBusbarPhaseOrder(
+    panel,
+    undefined,
+    getProtectionBusSectionId(panel, protection)
+  )
+  const limitedBusAssignment = assignmentForLimitedBusbar(system, phaseOrder)
+  if (limitedBusAssignment) return limitedBusAssignment
   if (poles > 2 && normalizeNominalVoltageSystem(system ?? '2~') !== '3~') {
     return getFullInstallationPhaseAssignment(system)
   }
-  return assignmentForBusbarSlot(system, getBusbarPhaseOrder(panel), slot, poles)
+  return assignmentForBusbarSlot(
+    system,
+    phaseOrder,
+    slot,
+    poles
+  )
 }
 
 /** Automatic phase set supplied by the circuit's own busbar attachment. */
@@ -187,6 +262,7 @@ export function getAutomaticBusbarPhaseAssignment(
   const context = findCircuitContext(circuit.id, panels)
   if (!context) return undefined
   const { panel, protection } = context
+  const busSectionId = getCircuitBusSectionId(panel, circuit, protection)
   const parent = findParentCircuitInfo(circuit.id, panels)
   if (parent) {
     let index = 0
@@ -220,7 +296,7 @@ export function getAutomaticBusbarPhaseAssignment(
 
   if (protection) return getMainBusProtectionPhaseAssignment(panel, protection, system)
   const slot = getMainBusSlotIndex(panel, { type: 'circuit', id: circuit.id }, system)
-  return assignmentForBusbarSlot(system, getBusbarPhaseOrder(panel), slot)
+  return assignmentForBusbarSlot(system, getBusbarPhaseOrder(panel, undefined, busSectionId), slot)
 }
 
 function manualAssignment(
@@ -399,11 +475,73 @@ export function getProtectionPhaseConstraint(
 function getRootFeedForPanel(
   installation: Installation,
   panels: Panel[],
-  panelId: string
+  panel: Panel,
+  busSectionId?: string
 ): RootPanelFeedPath | undefined {
+  const targetBusSectionId = busSectionId ?? getPrimaryPanelBusSectionId(panel)
   return ensureInstallationFeedTopology(installation, panels).rootFeeds.find(
-    (feed) => feed.panelId === panelId
+    (feed) =>
+      feed.panelId === panel.id &&
+      (feed.busSectionId ?? getPrimaryPanelBusSectionId(panel)) === targetBusSectionId
   )
+}
+
+function getAssemblyBusSectionAssignment(
+  assemblies: readonly OffGridSupplyAssembly[],
+  panel: Panel,
+  busSectionId: string,
+  system: VoltageSystem
+): CircuitPhaseAssignment | undefined {
+  const legacyPanelInputSectionId = hasExplicitPanelBusSections(panel)
+    ? panel.busSections?.find((section) => section.role === 'backup')?.id ??
+      getPrimaryPanelBusSectionId(panel)
+    : getPrimaryPanelBusSectionId(panel)
+  const match = assemblies
+    .flatMap((assembly) =>
+      assembly.loadHandoffs.map((handoff) => ({ assembly, handoff }))
+    )
+    .find(({ handoff }) =>
+      handoff.target.kind === 'panel-bus-input'
+        ? handoff.target.panelId === panel.id && handoff.target.busSectionId === busSectionId
+        : handoff.target.kind === 'panel-input' &&
+          handoff.target.panelId === panel.id &&
+          legacyPanelInputSectionId === busSectionId
+    )
+  if (!match) return undefined
+
+  const installationLinePhases = getInstallationPhases(system).filter(
+    (phase): phase is AcLinePhase => phase === 'L1' || phase === 'L2' || phase === 'L3'
+  )
+  const handoffPaths = deriveHandoffPhaseSupplyPaths(
+    match.assembly,
+    installationLinePhases
+  ).filter((path) => path.handoffId === match.handoff.id)
+  const linePhases = handoffPaths
+    .filter((path) => path.backupConnectionIds.length > 0)
+    .map((path) => path.phase)
+  if (linePhases.length === 0) return undefined
+
+  const neutralPresent =
+    match.handoff.conductors.includes('N') &&
+    match.assembly.nodes.some(
+      (node) =>
+        node.kind === 'inverter-unit' &&
+        node.ports.some(
+          (port) => port.role === 'inverter-backup-ac' && port.conductors.includes('N')
+        )
+    )
+  const phases: AcPhase[] = neutralPresent ? [...linePhases, 'N'] : linePhases
+  return {
+    kind:
+      linePhases.length >= 3
+        ? 'three_phase'
+        : linePhases.length === 2
+          ? 'phase_to_phase'
+          : 'single_phase',
+    phases,
+    neutral: neutralPresent ? 'used' : 'not_present',
+    source: 'derived_from_busbar',
+  }
 }
 
 function getFirstNarrowingRootProtection(
@@ -415,10 +553,7 @@ function getFirstNarrowingRootProtection(
   return feed?.trunkDevices?.find((device) => {
     if (device.type !== 'protection') return false
     const constraint = getProtectionPhaseConstraint(device, system)
-    return (
-      constraint?.activeConductorCount != null &&
-      constraint.activeConductorCount < fullCount
-    )
+    return constraint?.activeConductorCount != null && constraint.activeConductorCount < fullCount
   })
 }
 
@@ -441,15 +576,59 @@ function assignmentMatchesConstraint(
 export function getPanelIncomingPhaseState(
   installation: Installation | undefined,
   panels: Panel[],
-  panel: Panel
+  panel: Panel,
+  busSectionId?: string,
+  supplyAssemblies: readonly OffGridSupplyAssembly[] = []
 ): PanelIncomingPhaseState {
   const system = installation?.nominalVoltage.system
-  if (!installation || panel.isMain === false || !supportsExplicitPhaseSelection(system)) return {}
+  if (!installation || !supportsExplicitPhaseSelection(system)) return {}
+  if (panel.isMain === false) {
+    const panelFeed = findPanelFeed(panel.id, panels)
+    if (!panelFeed) return {}
+    const inherited = getEffectiveCircuitPhaseState(
+      panelFeed.feederCircuit,
+      panels,
+      system,
+      installation
+    )
+    return {
+      assignment: inherited.assignment,
+      showPhaseLabel: inherited.showPhaseLabel,
+      constraint: getInheritedPhaseConstraint(inherited.assignment),
+    }
+  }
 
-  const rootFeed = getRootFeedForPanel(installation, panels, panel.id)
+  const rootFeed = getRootFeedForPanel(installation, panels, panel, busSectionId)
+  const targetBusSectionId = busSectionId ?? getPrimaryPanelBusSectionId(panel)
+  const assemblyAssignment = getAssemblyBusSectionAssignment(
+    supplyAssemblies,
+    panel,
+    targetBusSectionId,
+    system
+  )
+  const sectionOrder = getPanelBusSectionPhaseOrder(panel, busSectionId)
+  const normalizedSystem = normalizeNominalVoltageSystem(system ?? '2~')
+  const sectionAssignment: CircuitPhaseAssignment | undefined =
+    sectionOrder && sectionOrder.length > 0 && sectionOrder.length < 3
+      ? normalizedSystem === '3N~' && sectionOrder.length === 1
+        ? {
+            kind: 'single_phase',
+            phases: [sectionOrder[0]!, 'N'],
+            neutral: 'used',
+            source: 'derived_from_busbar',
+          }
+        : normalizedSystem === '3~' && sectionOrder.length === 2
+          ? {
+              kind: 'phase_to_phase',
+              phases: [...sectionOrder],
+              neutral: 'not_present',
+              source: 'derived_from_busbar',
+            }
+          : undefined
+      : undefined
   const configuredAssignment = isConcretePhaseAssignment(rootFeed?.phaseAssignment)
     ? rootFeed.phaseAssignment
-    : undefined
+    : (assemblyAssignment ?? sectionAssignment)
   const narrowingProtection = getFirstNarrowingRootProtection(rootFeed, system)
   if (!narrowingProtection) {
     return {

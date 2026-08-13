@@ -6,7 +6,19 @@ import type { SymbolMetadata } from '@/lib/symbols'
 import type { DropTarget, FindDropTargetOptions } from '@/lib/layout/findDropTarget'
 import type { ProtectionDevice } from '@/types/schema'
 import type { Point } from '@/types/ui'
+import type { ElectricalEnclosureRef } from '@/types/supplyAssembly'
 import { normalizeProtectionPlacementDropTarget } from '@/lib/eendraad/protectionPlacementDropTarget'
+import { canCreateSupplyTopologyFromDrop } from '@/lib/supplyTopologyFeature'
+
+const SUPPLY_ASSEMBLY_DROP_TARGETS = new Set<NonNullable<DropTarget['type']>>([
+  'supplyWire',
+  'supplyBackupWire',
+  'supplyBackupOutputWire',
+  'supplyChangeoverGridWire',
+  'supplyConverterGridWire',
+  'supplyConverterBackupWire',
+  'supplyConverterDcWire',
+])
 
 export interface DragPreviewState {
   position: Point
@@ -17,12 +29,24 @@ export interface DragPreviewState {
    * the source circuit and inserted on the hovered trunk (same device id).
    */
   relocatingTrunkDevice?: { id: string; sourceCircuitId: string }
+  /** Existing device being popped out and reinserted in a supply-frame lane. */
+  relocatingSupplyTrunkDevice?: { id: string; targetMounting?: ElectricalEnclosureRef }
   movingEndpointSelection?: {
     draggedEndpointId: string
     sourceCircuitId: string
     endpointIds: string[]
   }
   movingPanelAttachment?: { panelId: string }
+}
+
+export function shouldPreferMainBusOverSupplyWire(
+  draggingProtectionId: string | null | undefined
+): boolean {
+  return !!draggingProtectionId
+}
+
+export function shouldShowPanelDragPreview(dropTarget: DropTarget): boolean {
+  return !(dropTarget.type === null && dropTarget.panelId)
 }
 
 /**
@@ -49,9 +73,17 @@ export function useEendraadDragPreview(
         setDragPreview(null)
         return
       }
+      if (!canCreateSupplyTopologyFromDrop(symbol, null)) {
+        setDragPreview(null)
+        return
+      }
 
       const draggingProtectionId = options?.draggingProtectionIdRef?.current
-      const prefersMainBus = !!draggingProtectionId || symbol.id === 'panel_distribution'
+      // Existing protections need the main-bus preference at the supply/bus crossing
+      // for reorder drags. Panels must keep the actual wire target: a converter-backed
+      // circuit can run close enough to the main bus for the padded hit zones to overlap.
+      const prefersMainBus =
+        shouldPreferMainBusOverSupplyWire(draggingProtectionId) || Boolean(symbol.busFeedKind)
       const protectionIds = [...PROTECTION_SYMBOL_IDS]
       const isProtectionPlacement = protectionIds.includes(
         symbol.id as (typeof PROTECTION_SYMBOL_IDS)[number]
@@ -71,6 +103,14 @@ export function useEendraadDragPreview(
       // devices so they behave exactly like drops on the main bus of that panel.
       let dropTarget: DropTarget = rawDropTarget
       if (
+        symbol.busFeedKind &&
+        rawDropTarget.type === null &&
+        rawDropTarget.panelId &&
+        rawDropTarget.diagramId?.endsWith('--supply')
+      ) {
+        dropTarget = { ...rawDropTarget, type: 'mainBus', mainBusInsertIndex: 0 }
+      }
+      if (
         rawDropTarget.type === null &&
         rawDropTarget.panelId &&
         symbol &&
@@ -79,10 +119,38 @@ export function useEendraadDragPreview(
         dropTarget = { ...rawDropTarget, type: 'mainBus', normalizedFromPanelFrame: true }
       }
 
+      if (!canCreateSupplyTopologyFromDrop(symbol, dropTarget.type)) {
+        setDragPreview(null)
+        return
+      }
+
       // New protections dropped on an existing protection nest on its output
       // circuit. Existing-protection drags keep their separate reorder behavior.
       if (!options?.draggingProtectionIdRef?.current) {
         dropTarget = normalizeProtectionPlacementDropTarget(symbol, dropTarget)
+      }
+
+      // Supply-assembly lanes use the full simulated layout preview. Keep the drag
+      // preview alive for every placeable symbol, not only endpoint/protection types.
+      if (dropTarget.type && SUPPLY_ASSEMBLY_DROP_TARGETS.has(dropTarget.type)) {
+        setDragPreview({ position, symbolData: symbol, dropTarget })
+        return
+      }
+
+      if (symbol.busFeedKind) {
+        if (dropTarget.type === 'protection' || dropTarget.type === 'circuit') {
+          dropTarget = { ...dropTarget, type: 'mainBus' }
+        }
+        if (
+          dropTarget.type === 'mainBus' ||
+          dropTarget.type === 'protection' ||
+          dropTarget.type === 'circuit'
+        ) {
+          setDragPreview({ position, symbolData: symbol, dropTarget })
+        } else {
+          setDragPreview(null)
+        }
+        return
       }
 
       // Get endpoint type for this symbol (null for protection devices and panels)
@@ -94,7 +162,11 @@ export function useEendraadDragPreview(
       } else if (symbol.id === 'panel_distribution') {
         // Keep the resolved drop target so panel preview can reflect actual
         // hover intent (main bus vs empty feeder circuit/protection).
-        setDragPreview({ position, symbolData: symbol, dropTarget })
+        if (!shouldShowPanelDragPreview(dropTarget)) {
+          setDragPreview(null)
+        } else {
+          setDragPreview({ position, symbolData: symbol, dropTarget })
+        }
       } else if (symbol.id === 'earthing') {
         // Ground/earthing can be dropped on main bus of main panels
         if (dropTarget.type === 'mainBus') {
@@ -124,7 +196,6 @@ export function useEendraadDragPreview(
             dropTarget.type === 'rcd' ||
             dropTarget.type === 'circuit' ||
             dropTarget.type === 'protection' ||
-            dropTarget.type === 'supplyWire' ||
             (dropTarget.type === null && dropTarget.panelId)
           ) {
             setDragPreview({ position, symbolData: symbol, dropTarget })

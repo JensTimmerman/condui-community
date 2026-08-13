@@ -133,6 +133,12 @@ export function getEendraadPanelBodyGeometry() {
   }
 }
 
+/** Vertical distance from the one-wire panel anchor to the visible body's center. */
+export function getEendraadPanelBodyCenterYOffset(): number {
+  const body = getEendraadPanelBodyGeometry()
+  return body.y + body.height / 2
+}
+
 /**
  * Extra width added by multi-socket rendering.
  * @param socketCount Number of sockets (1-4). Values <= 1 return 0.

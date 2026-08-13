@@ -8,6 +8,7 @@ import { createProjectLifecycleSlice } from './slices/projectLifecycleSlice'
 import { createProtectionSlice } from './slices/protectionSlice'
 import { createResetSlice } from './slices/resetSlice'
 import { createSelectorAnnotationSlice } from './slices/selectorAnnotationSlice'
+import { createSupplyAssemblySlice } from './slices/supplyAssemblySlice'
 import { logger } from '@/lib/logger'
 import {
   bindProjectStoreApi,
@@ -36,6 +37,7 @@ const createProjectState: StateCreator<
     ...createPlanPlacementSlice(set, get, api),
     ...createBuildingFloorSlice(set, get, api),
     ...createSelectorAnnotationSlice(set, get, api),
+    ...createSupplyAssemblySlice(set, get, api),
     ...createResetSlice(set, get, api),
   }) as ProjectState
 

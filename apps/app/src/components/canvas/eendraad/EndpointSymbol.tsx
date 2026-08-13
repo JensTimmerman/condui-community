@@ -89,6 +89,8 @@ interface EndpointSymbolProps {
   getCanvasPositionFromEvent?: (e: unknown) => Point | null
   /** Whether this endpoint is the final symbol on its horizontal branch. */
   isEndpointAtBranchEnd?: boolean
+  /** Mirror symbol artwork for the exceptional branches that run to the left. */
+  mirrorHorizontally?: boolean
   /** Clamp bottom label text away from the branch wire when needed. */
   bottomLabelMinimumLeftX?: number
   /** Truncate bottom label text before it enters the next circuit column. */
@@ -105,6 +107,7 @@ export const EndpointSymbol = memo(function EndpointSymbol({
   draggable = false,
   getCanvasPositionFromEvent,
   isEndpointAtBranchEnd = true,
+  mirrorHorizontally = false,
   bottomLabelMinimumLeftX,
   bottomLabelMaximumRightX,
 }: EndpointSymbolProps) {
@@ -706,13 +709,14 @@ export const EndpointSymbol = memo(function EndpointSymbol({
       
       {/* Render socket symbols (1-4 copies offset to the right) */}
       {processedImage && Array.from({ length: socketCount }, (_, i) => (
-        <Group key={i} x={i * MULTI_SOCKET_OFFSET}>
+        <Group key={i} x={(mirrorHorizontally ? -1 : 1) * i * MULTI_SOCKET_OFFSET}>
           <Image
             image={processedImage}
             width={SYMBOL_SIZE}
             height={SYMBOL_SIZE}
             offsetX={SYMBOL_SIZE / 2}
             offsetY={SYMBOL_SIZE / 2}
+            scaleX={mirrorHorizontally ? -1 : 1}
             y={0}
             listening={false}
           />

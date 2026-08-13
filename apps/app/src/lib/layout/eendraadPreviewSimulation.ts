@@ -54,6 +54,9 @@ import {
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { findPanelById } from '@/lib/panel/panelTree'
+import { getMainBusInsertionSectionId } from '@/lib/panel/panelBusSections'
+import { getPanelFeedOrganization } from '@/lib/panel/panelFeedOrganization'
+import { canCreateSupplyTopologyFromDrop } from '@/lib/supplyTopologyFeature'
 import {
   moveEndpointSelectionBetweenCircuits,
   moveEndpointSelectionOnCircuit,
@@ -63,6 +66,15 @@ import {
   movePanelAttachmentOnSecondaryBus,
   movePanelAttachmentToMainBus,
 } from '@/lib/eendraad/panelAttachmentMove'
+import {
+  directConverterBackupInlineDevicesToTrunkDevices,
+  findDirectConverterBackupProtection,
+  getDirectConverterOutputChainForChangeover,
+  panelHasPopulatedDirectConverterBackup,
+  resolveDirectConverterChangeoverInsertIndex,
+} from '@/lib/supplyAssembly/directConverterBackupUpgrade'
+import { moveSupplyTrunkDeviceAtDropTarget } from '@/lib/eendraad/supplyTrunkDeviceMove'
+import type { ElectricalEnclosureRef } from '@/types/supplyAssembly'
 
 type PreviewProject = ProjectWithOptionalV2Electrical
 
@@ -554,6 +566,13 @@ function simulateEndpointDrop(
     }
   }
 
+  // A converter's direct backup output is intentionally one simple circuit.
+  // Keep every endpoint on its single branch, matching the live drop behavior.
+  if (circuit.supplySource?.kind === 'converter-backup' && circuit.endpoints.length > 0) {
+    insertAfterEndpointId = circuit.endpoints.at(-1)?.id
+    createNewBranch = false
+  }
+
   // Label assignment (simplified but aligned with endpointBehavior).
   if (!isDomoticaOutputDrop && !endpoint.domoticaChildProps) {
     const chainRef = isDomoticaChildReplace
@@ -605,6 +624,9 @@ function simulateEndpointDrop(
   } else if (isDomoticaOutputDrop) {
     // Domotica output insertion is fully handled above by insertDomoticaChildEndpoint.
     // Do not run generic branch bookkeeping with stale branch data.
+  } else if (circuit.supplySource?.kind === 'converter-backup') {
+    const branch = branches[0] ?? { id: generateId(), label: '', endpointIds: [] }
+    circuit.branches = [{ ...branch, endpointIds: circuit.endpoints.map((item) => item.id) }]
   } else if (createNewBranch) {
     circuit.branches = [...branches, { id: generateId(), label: '', endpointIds: [endpointId] }]
   } else if (branchEndpointIds?.length) {
@@ -698,6 +720,9 @@ function simulateProtectionDrop(
     type: protectionType,
     label: circuitCode,
     circuits: [] as Circuit[],
+    ...(target.type === 'mainBus'
+      ? { busSectionId: getMainBusInsertionSectionId(panel, target.mainBusInsertIndex) }
+      : {}),
     ...defaults,
   }
 
@@ -708,6 +733,17 @@ function simulateProtectionDrop(
     cable: createDefaultAcCircuitCable(),
     endpoints: [],
     ...DEFAULT_AC_CIRCUIT_WIRE_LABEL_FLAGS,
+  }
+  if (target.type === 'supplyConverterBackupWire') {
+    const installation = getMutableElectricalInstallationForProject(project)
+    const converter = installation
+      ? getSupplyFeedDevicesForPanel(installation, projectPanels(project), panel.id, 'root').find(
+          (device) => device.supplyPath === 'converter-branch'
+        )
+      : undefined
+    if (!converter) return
+    circuit.supplySource = { kind: 'converter-backup', converterId: converter.id }
+    circuit.phaseAssignment = converter.conversionProps?.acPhaseAssignment
   }
 
   panel.protections = [...(panel.protections ?? []), protection]
@@ -967,7 +1003,7 @@ function simulateTrunkDeviceOnCircuit(
     id: deviceId,
     type,
     symbol: symbol.id as TrunkDevice['symbol'],
-    label: type === 'conversion' ? '' : symbol.name ?? '',
+    label: type === 'conversion' ? '' : (symbol.name ?? ''),
     trunkPosition,
   }
 
@@ -1004,10 +1040,7 @@ function simulateSupplyTrunkDevice(
   symbol: SymbolMetadata,
   changeSet: EendraadPreviewChangeSet
 ): void {
-  if (
-    symbol.id === 'energy_meter' ||
-    ['transformer', 'rectifier', 'inverter', 'dc_dc_converter'].includes(symbol.id)
-  ) {
+  if (symbol.id === 'energy_meter') {
     return
   }
 
@@ -1028,6 +1061,9 @@ function simulateSupplyTrunkDevice(
     } else if (symbol.id === 'junction_panel') {
       deviceType = 'junction_panel'
       label = 'JP1'
+    } else if (symbol.id === 'source_changeover') {
+      deviceType = 'changeover'
+      label = ''
     } else if (['transformer', 'rectifier', 'inverter', 'dc_dc_converter'].includes(symbol.id)) {
       deviceType = 'conversion'
       label = symbol.name ?? ''
@@ -1085,7 +1121,43 @@ function simulateSupplyTrunkDevice(
         : []
 
   const deviceId = generateId()
-  const insertIndex = target.supplyDeviceInsertIndex ?? supplyDevices.length
+  let insertIndex = target.supplyDeviceInsertIndex ?? supplyDevices.length
+
+  if (symbol.id === 'source_changeover') {
+    const directConverter = supplyDevices.find((device) => device.supplyPath === 'converter-branch')
+    if (directConverter) {
+      const normalizedInsertIndex = resolveDirectConverterChangeoverInsertIndex(
+        supplyDevices,
+        insertIndex,
+        Boolean(
+          mainTargetPanel &&
+            getPanelFeedOrganization(project, mainTargetPanel) === 'split-backup'
+        )
+      )
+      const converterOutputChain = getDirectConverterOutputChainForChangeover(
+        supplyDevices,
+        normalizedInsertIndex ?? undefined
+      )
+      if (!converterOutputChain) return
+      insertIndex = normalizedInsertIndex!
+      const directBackup = target.panelId
+        ? findDirectConverterBackupProtection(project, target.panelId, directConverter.id)
+        : null
+      directConverter.supplyPath = 'backup'
+      converterOutputChain.forEach((device) => {
+        device.supplyPath = 'backup-output'
+      })
+      if (directBackup) {
+        const owningPanel = findPanelById(projectPanels(project), target.panelId!)
+        if (owningPanel) {
+          owningPanel.protections = owningPanel.protections.filter(
+            (protection) => protection.id !== directBackup.protection.id
+          )
+        }
+        supplyDevices.push(...directConverterBackupInlineDevicesToTrunkDevices(directBackup))
+      }
+    }
+  }
 
   let deviceType: TrunkDevice['type'] = 'energy_meter'
   let label = ''
@@ -1099,6 +1171,9 @@ function simulateSupplyTrunkDevice(
   } else if (symbol.id === 'junction_panel') {
     deviceType = 'junction_panel'
     label = 'JP1'
+  } else if (symbol.id === 'source_changeover') {
+    deviceType = 'changeover'
+    label = ''
   } else if (
     symbol.id === 'transformer' ||
     symbol.id === 'rectifier' ||
@@ -1107,17 +1182,24 @@ function simulateSupplyTrunkDevice(
   ) {
     deviceType = 'conversion'
     label = symbol.name ?? ''
-  } else if (PROTECTION_SYMBOL_IDS.includes(symbol.id as (typeof PROTECTION_SYMBOL_IDS)[number])) {
+  } else if (symbol.id === 'battery') {
+    deviceType = 'storage'
+  } else if (symbol.id === 'solar_panel') {
+    deviceType = 'generation'
+  } else if (
+    PROTECTION_SYMBOL_IDS.includes(symbol.id as (typeof PROTECTION_SYMBOL_IDS)[number]) ||
+    symbol.category === 'switches'
+  ) {
     deviceType = 'protection'
     const protectionType = PROTECTION_SYMBOL_ID_TO_TYPE[symbol.id]
-    label = protectionType === 'ROTATING_SWITCH' ? '' : symbol.id.toUpperCase()
+    label = protectionType && protectionType !== 'ROTATING_SWITCH' ? symbol.id.toUpperCase() : ''
   }
 
   const voltagePoles = getVoltagePolesConfig(project)
   const protectionType = PROTECTION_SYMBOL_ID_TO_TYPE[symbol.id]
   const protectionDefaults =
-    deviceType === 'protection' && protectionType
-      ? getDefaultTrunkDeviceProtectionProps(protectionType, voltagePoles)
+    deviceType === 'protection'
+      ? getDefaultTrunkDeviceProtectionProps(protectionType ?? 'OTHER', voltagePoles)
       : {}
 
   const trunkDevice: TrunkDevice = {
@@ -1126,9 +1208,42 @@ function simulateSupplyTrunkDevice(
     symbol: symbol.id as TrunkDevice['symbol'],
     label,
     trunkPosition: insertIndex,
+    ...(target.type === 'supplyWire' &&
+    target.supplyFeedScope === 'root' &&
+    ['transformer', 'rectifier', 'inverter', 'dc_dc_converter'].includes(symbol.id)
+      ? { supplyPath: 'converter-branch' as const }
+      : target.type === 'supplyBackupWire'
+        ? {
+            supplyPath: ['transformer', 'rectifier', 'inverter', 'dc_dc_converter'].includes(
+              symbol.id
+            )
+              ? ('backup' as const)
+              : ('backup-output' as const),
+          }
+        : target.type === 'supplyBackupOutputWire'
+          ? { supplyPath: 'backup-output' as const }
+          : target.type === 'supplyChangeoverGridWire'
+            ? { supplyPath: 'changeover-grid' as const }
+            : target.type === 'supplyConverterGridWire'
+              ? { supplyPath: 'converter-grid' as const }
+              : target.type === 'supplyConverterDcWire'
+                ? {
+                    supplyPath:
+                      target.supplyConverterDcBranch === 'top'
+                        ? ('converter-dc-top' as const)
+                        : ('converter-dc' as const),
+                  }
+                : {}),
+    ...(symbol.id === 'battery' ? { batteryProps: { voltageV: 48, capacityKWh: 5 } } : {}),
+    ...(symbol.id === 'solar_panel' ? { solarPanelProps: { wattageW: 1000 } } : {}),
+    ...(symbol.id === 'source_changeover'
+      ? { changeoverProps: { port1Label: '1', port2Label: '2' } }
+      : {}),
     ...(deviceType === 'protection' && protectionType
       ? { protectionType, ...protectionDefaults }
-      : {}),
+      : deviceType === 'protection'
+        ? protectionDefaults
+        : {}),
   }
 
   if (insertIndex >= 0 && insertIndex <= supplyDevices.length) {
@@ -1368,6 +1483,37 @@ export function simulateTrunkDeviceRelocationOnProject(
   return changeSet
 }
 
+/** Preview the exact pop-out/reinsert operation used for an existing supply-frame device. */
+export function simulateSupplyTrunkDeviceRelocationOnProject(
+  project: PreviewProject,
+  relocating: { id: string; targetMounting?: ElectricalEnclosureRef },
+  target: DropTarget
+): EendraadPreviewChangeSet | null {
+  if (!project) return null
+  const cloned = cloneProject(project)
+  const result = moveSupplyTrunkDeviceAtDropTarget(
+    cloned,
+    relocating.id,
+    target,
+    relocating.targetMounting
+  )
+  if (!result) return null
+
+  return {
+    project: cloned,
+    affectedPanelIds: [result.sourcePanelId, result.targetPanelId].filter(
+      (id, index, ids): id is string => !!id && ids.indexOf(id) === index
+    ),
+    affectedCircuitIds: [],
+    createdEndpointIds: [],
+    createdProtectionIds: [],
+    createdTrunkDeviceIds: [],
+    movedTrunkDeviceIds: [relocating.id],
+    createdSupplyTrunkDeviceIds: [],
+    createdGroundTrunkDeviceIds: [],
+  }
+}
+
 export function simulateEndpointSelectionMoveOnProject(
   project: PreviewProject,
   moving: { draggedEndpointId: string; sourceCircuitId: string; endpointIds: string[] },
@@ -1442,6 +1588,7 @@ export function simulateDropOnProject(
   target: DropTarget
 ): EendraadPreviewChangeSet | null {
   if (!project) return null
+  if (!canCreateSupplyTopologyFromDrop(symbol, target.type)) return null
 
   const cloned = cloneProject(project)
 
@@ -1461,12 +1608,69 @@ export function simulateDropOnProject(
   const isDcOnlyEndpoint = symbol.id === 'solar_panel' || symbol.id === 'battery'
 
   // Supply trunk devices (horizontal supply wire to main bus)
-  if (target.type === 'supplyWire') {
+  if (
+    target.type === 'supplyWire' ||
+    target.type === 'supplyBackupWire' ||
+    target.type === 'supplyBackupOutputWire' ||
+    target.type === 'supplyChangeoverGridWire' ||
+    target.type === 'supplyConverterGridWire' ||
+    target.type === 'supplyConverterBackupWire' ||
+    target.type === 'supplyConverterDcWire'
+  ) {
     const behavior = dropBehaviors[symbol.id]
-    if (!behavior?.validTargets.includes('supplyWire')) {
+    if (!behavior?.validTargets.includes(target.type)) {
       return null
     }
-    simulateSupplyTrunkDevice(cloned, target, symbol, changeSet)
+    if (symbol.id === 'source_changeover' && target.supplyFeedScope !== 'root') {
+      return null
+    }
+    if (
+      symbol.id === 'source_changeover' &&
+      target.panelId &&
+      panelHasPopulatedDirectConverterBackup(cloned, target.panelId)
+    ) {
+      return null
+    }
+    if (
+      symbol.id === 'source_changeover' &&
+      (() => {
+        const panelId = target.panelId ?? ''
+        const devices = getSupplyFeedDevicesForPanel(
+          mutableProjectInstallation(cloned)!,
+          projectPanels(cloned),
+          panelId,
+          'root'
+        )
+        const panel = findPanelById(projectPanels(cloned), panelId)
+        const acceptsAnyGridFeedSegment = Boolean(
+          panel && getPanelFeedOrganization(cloned, panel) === 'split-backup'
+        )
+        const deviceAtRequestedSlot = devices.find(
+          (device) => device.trunkPosition === target.supplyDeviceInsertIndex
+        )
+        const requiresDedicatedSlot =
+          deviceAtRequestedSlot?.supplyPath === 'converter-dc' ||
+          deviceAtRequestedSlot?.supplyPath === 'converter-dc-top'
+        return (
+          devices.some((device) => device.supplyPath === 'converter-branch') &&
+          ((!acceptsAnyGridFeedSegment &&
+            requiresDedicatedSlot &&
+            !target.supplyConverterChangeoverSlot) ||
+            resolveDirectConverterChangeoverInsertIndex(
+              devices,
+              target.supplyDeviceInsertIndex,
+              acceptsAnyGridFeedSegment
+            ) === null)
+        )
+      })()
+    ) {
+      return null
+    }
+    if (target.type === 'supplyConverterBackupWire') {
+      simulateProtectionDrop(cloned, target, symbol, changeSet)
+    } else {
+      simulateSupplyTrunkDevice(cloned, target, symbol, changeSet)
+    }
     return changeSet
   }
 
@@ -1655,7 +1859,40 @@ export function simulateDropOnProject(
       circuits: [],
       subPanels: [],
     }
-    parentPanel.subPanels = [...(parentPanel.subPanels ?? []), newPanel]
+    const targetedCircuit = target.circuitId ? findCircuitInProject(cloned, target.circuitId) : null
+    if (targetedCircuit?.supplySource?.kind === 'converter-backup') {
+      clonedPanels.push(newPanel)
+      const feederProtection = findProtectionByCircuitIdInProject(cloned, targetedCircuit.id)
+      if (!feederProtection) return null
+
+      feederProtection.subPanelId = newPanelId
+      const panelEndpointId = generateId()
+      targetedCircuit.endpoints = [
+        ...targetedCircuit.endpoints,
+        {
+          id: panelEndpointId,
+          type: 'fixed_appliance',
+          label: newPanel.name,
+          symbol: 'panel_distribution',
+          panelId: newPanelId,
+          placements: [],
+        },
+      ]
+      const branch = targetedCircuit.branches?.[0] ?? {
+        id: generateId(),
+        label: '',
+        endpointIds: [],
+      }
+      targetedCircuit.branches = [
+        { ...branch, endpointIds: targetedCircuit.endpoints.map((endpoint) => endpoint.id) },
+      ]
+      changeSet.createdEndpointIds.push(panelEndpointId)
+      changeSet.affectedCircuitIds.push(targetedCircuit.id)
+      changeSet.affectedPanelIds.push(parentPanel.id, newPanelId)
+      return changeSet
+    } else {
+      parentPanel.subPanels = [...(parentPanel.subPanels ?? []), newPanel]
+    }
     changeSet.affectedPanelIds.push(parentPanel.id, newPanelId)
 
     let feederProtection: ProtectionDevice | null = null
@@ -1688,6 +1925,14 @@ export function simulateDropOnProject(
       label: feederCode,
       circuits: [],
       subPanelId: newPanelId,
+      ...(target.type === 'mainBus'
+        ? {
+            busSectionId: getMainBusInsertionSectionId(
+              parentPanel,
+              target.mainBusInsertIndex
+            ),
+          }
+        : {}),
       ...mcbDefaults,
     }
     const circuit: Circuit = {

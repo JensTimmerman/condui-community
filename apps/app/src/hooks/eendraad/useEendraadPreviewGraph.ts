@@ -4,10 +4,12 @@ import { useUIStore, type UIState } from '@/stores/uiStore'
 import { calculateBottomUpLayout, type BottomUpLayoutResult } from '@/lib/layout/bottomUpLayout'
 import { buildLayoutTree, type LayoutTree } from '@/lib/layout/layoutTree'
 import { deriveWires } from '@/lib/layout/deriveWires'
+import { resolveSupplyDeviceMounting } from '@/lib/panel/auxiliarySupplyEnclosures'
 import {
   simulatePanelAttachmentMoveOnProject,
   simulateDropOnProject,
   simulateEndpointSelectionMoveOnProject,
+  simulateSupplyTrunkDeviceRelocationOnProject,
   simulateTrunkDeviceRelocationOnProject,
   type EendraadPreviewChangeSet,
 } from '@/lib/layout/eendraadPreviewSimulation'
@@ -16,6 +18,7 @@ import type { DragPreviewState } from './useEendraadDragPreview'
 import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
+  getSupplyAssembliesFromProject,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 
@@ -67,6 +70,12 @@ export function useEendraadPreviewGraph(
         dragPreview.movingEndpointSelection,
         dragPreview.dropTarget ?? { type: null },
       )
+    } else if (dragPreview.relocatingSupplyTrunkDevice) {
+      sim = simulateSupplyTrunkDeviceRelocationOnProject(
+        currentProject,
+        dragPreview.relocatingSupplyTrunkDevice,
+        dragPreview.dropTarget ?? { type: null },
+      )
     } else if (dragPreview.relocatingTrunkDevice) {
       sim = simulateTrunkDeviceRelocationOnProject(
         currentProject,
@@ -97,6 +106,8 @@ export function useEendraadPreviewGraph(
       layoutTree,
       getElectricalPanelsFromProject(sim.project),
       getElectricalInstallationFromProject(sim.project),
+      getSupplyAssembliesFromProject(sim.project),
+      (deviceId) => resolveSupplyDeviceMounting(sim.project, deviceId),
     )
 
     // Build lookup maps for preview symbols

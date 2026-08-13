@@ -21,9 +21,11 @@ import {
   removeEndpointIdsFromCircuit,
 } from '@/lib/eendraad/projectElectricalDomain'
 import { repairCircuitBranchMembership } from '@/lib/eendraad/repairCircuitBranchMembership'
-import { ensureInstallationFeedTopology, getPanelFeedProjection, getPanelSupplyTrunkDevices } from '@/lib/feedTopology'
+import { ensureInstallationFeedTopology, getAllSupplyTrunkDevices, getPanelFeedProjection } from '@/lib/feedTopology'
 import { ejectSupplyTrunkFromMainGridSlot } from '@/lib/panel/healSupplyTrunkGrid'
 import { getSuppressedPanelGridModuleKeys } from '@/lib/panel/panelGridDuplicates'
+import { resolveSupplyDeviceMounting } from '@/lib/panel/auxiliarySupplyEnclosures'
+import { setPanelFeedOrganizationInProject } from '@/lib/panel/panelFeedOrganization'
 import { findPanelById, findPanelByName } from '@/lib/panel/panelTree'
 import { buildAutoSitplanPlacement, getViewportCenterPlanSpaceIfApplicable } from '@/lib/plan/autoSitplanPlacement'
 import { ensureElectricalLayerOnFloor, healProjectFloorsElectricalLayers } from '@/lib/plan/floorLayers'
@@ -149,6 +151,10 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
           isEarthing: true,
         }
       }
+      for (const device of getAllSupplyTrunkDevices(currentProject)) {
+        const placement = device.placements?.find((candidate) => candidate.id === id)
+        if (placement) return { ...placement, trunkDeviceId: device.id }
+      }
       for (const panel of getElectricalPanelsFromProject(currentProject)) {
         for (const endpoint of getAllEndpoints(panel)) {
           const placement = endpoint.placements.find((p) => p.id === id)
@@ -252,6 +258,12 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
       }> = defaultRefs
         .filter((ref) => {
           const key = panelGridModuleRefKey(ref)
+          if (ref.kind === 'trunkDevice' && ref.scope === 'supply') {
+            const mounting = resolveSupplyDeviceMounting(currentProject, ref.id)
+            if (mounting?.kind === 'auxiliary') return false
+            if (mounting?.kind === 'grid' && !rootSupplyKeys.has(key)) return false
+            if (mounting?.kind === 'panel' && mounting.panelId !== panel.id) return false
+          }
           if (hiddenKeys.has(key)) return false
           if (
             !panelGridModuleIsVisibleByDefault(ref, panel, installation, panels) &&
@@ -290,14 +302,11 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
       if (panel.isMain) {
         const installation = getElectricalInstallationFromProject(currentProject)
         if (!installation) return result
-        const supplyDevices = getPanelSupplyTrunkDevices(
-          installation,
-          getElectricalPanelsFromProject(currentProject),
-          panel
-        ).filter((device) =>
-          sharedSupplyKeys.has(
-            panelGridModuleRefKey({ kind: 'trunkDevice', id: device.id, scope: 'supply' })
-          )
+        const supplyDevices = getAllSupplyTrunkDevices(currentProject).filter(
+          (device) =>
+            sharedSupplyKeys.has(
+              panelGridModuleRefKey({ kind: 'trunkDevice', id: device.id, scope: 'supply' })
+            ) && resolveSupplyDeviceMounting(currentProject, device.id)?.kind === 'grid'
         )
         const supplySlotMap = new Map(
           sharedSupplySlots.map((s) => [panelGridModuleRefKey(s.module), s])
@@ -375,6 +384,14 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
       const shownKeys = new Set(panel.gridView?.shownModuleKeys ?? [])
       const installation = getElectricalInstallationFromProject(currentProject)
       const panels = getElectricalPanelsFromProject(currentProject)
+      const sharedSupplyKeys = new Set(
+        panel.isMain && installation
+          ? (getPanelFeedProjection(installation, panels, panel)?.sharedFeed.trunkDevices ?? []).map(
+              (device) =>
+                panelGridModuleRefKey({ kind: 'trunkDevice', id: device.id, scope: 'supply' })
+            )
+          : []
+      )
       const defaultRefs = getDefaultPanelGridModuleRefs(
         panel,
         installation,
@@ -382,7 +399,9 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
       )
       return defaultRefs.filter((ref) => {
         const key = panelGridModuleRefKey(ref)
-        return hiddenKeys.has(key) || (
+        if (hiddenKeys.has(key)) return true
+        if (sharedSupplyKeys.has(key)) return false
+        return (
           !panelGridModuleIsVisibleByDefault(ref, panel, installation, panels) &&
           !shownKeys.has(key)
         )
@@ -425,6 +444,20 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
         }
       }
       const installation = getElectricalInstallationFromProject(currentProject)
+      for (const device of getAllSupplyTrunkDevices(currentProject)) {
+        for (const placement of device.placements ?? []) {
+          if (placement.floorId === floorId) {
+            result.push({ ...placement, trunkDeviceId: device.id })
+          }
+        }
+      }
+      for (const device of installation?.groundTrunkDevices ?? []) {
+        for (const placement of device.placements ?? []) {
+          if (placement.floorId === floorId) {
+            result.push({ ...placement, trunkDeviceId: device.id })
+          }
+        }
+      }
       const jpPlacements = installation?.junctionPanelPlacements ?? []
       for (const jp of jpPlacements) {
         if (jp.floorId === floorId) {
@@ -844,6 +877,16 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
             removedCircuitIds: payload.contentType === 'circuit' ? [payload.contentId] : undefined,
           })
           state.isDirty = true
+        } else if (payload.kind === 'collapsePanelFeedToSingleGrid') {
+          if (
+            setPanelFeedOrganizationInProject(
+              state.currentProject,
+              payload.panelId,
+              'single'
+            )
+          ) {
+            state.isDirty = true
+          }
         }
       }),
 

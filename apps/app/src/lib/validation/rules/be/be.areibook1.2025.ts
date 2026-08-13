@@ -249,6 +249,24 @@ export const beAreiBook1_2025: RulePack = {
       tags: ['naming', 'panel', 'consistency'],
     },
     {
+      id: 'be.areibook1.2025.converter-backup-labels',
+      title: 'Backup-supply labels',
+      severity: 'error',
+      appliesTo: ['board'],
+      checks: [{ name: 'checkConverterBackupLabels' }],
+      message: 'validation.rules.be.areibook1.2025.converter-backup-labels.message',
+      details: 'validation.rules.be.areibook1.2025.converter-backup-labels.details',
+      remediation: 'validation.rules.be.areibook1.2025.converter-backup-labels.remediation',
+      citations: [
+        {
+          code: 'AREI',
+          title: 'Algemeen Reglement op de Elektrische Installaties',
+          section: '§ 3.1.2',
+        },
+      ],
+      tags: ['naming', 'supply', 'backup'],
+    },
+    {
       id: 'be.areibook1.2025.phase-protection-compatibility',
       title: 'Protection and phase compatibility',
       severity: 'warning',

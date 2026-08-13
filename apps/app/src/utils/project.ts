@@ -27,6 +27,7 @@ import { getBuildingFloorsFromProject } from '@/lib/projectV2/buildingFloors'
 import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
+  getSupplyAssembliesFromProject,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { findPanelById, walkPanels } from '@/lib/panel/panelTree'
@@ -35,6 +36,7 @@ import {
   DEFAULT_PANEL_GRID_COLUMNS,
   DEFAULT_PANEL_GRID_ROWS,
 } from '@/lib/panel/panelGridDefaults'
+import { validatePanelBusSectionTopology } from '@/lib/panel/panelBusSectionValidation'
 
 type Project = Parameters<typeof migrateProjectV1ToV2>[0]
 
@@ -415,6 +417,14 @@ export function validateProjectStructure(project: Project): { valid: boolean; er
   }
   validateSubPanels(panels)
 
+  errors.push(
+    ...validatePanelBusSectionTopology(
+      panels,
+      installation,
+      getSupplyAssembliesFromProject(project),
+    ).map((issue) => issue.message),
+  )
+
   return { valid: errors.length === 0, errors }
 }
 
@@ -758,6 +768,20 @@ export function collectPlacementsOnFloor(
     }
   }
   const installation = getElectricalInstallationFromProject(project)
+  for (const device of getAllSupplyTrunkDevices(project)) {
+    for (const placement of device.placements ?? []) {
+      if (placement.floorId === floorId) {
+        result.push({ ...placement, trunkDeviceId: device.id })
+      }
+    }
+  }
+  for (const device of installation?.groundTrunkDevices ?? []) {
+    for (const placement of device.placements ?? []) {
+      if (placement.floorId === floorId) {
+        result.push({ ...placement, trunkDeviceId: device.id })
+      }
+    }
+  }
   const jpPlacements = installation?.junctionPanelPlacements ?? []
   for (const jp of jpPlacements) {
     if (jp.floorId === floorId) {

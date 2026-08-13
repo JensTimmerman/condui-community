@@ -5,7 +5,7 @@ type ConversionSource =
       Endpoint,
       'symbolLabelDisplay' | 'energyConversionProps' | 'solarPanelProps' | 'batteryProps' | 'symbol'
     >
-  | Pick<TrunkDevice, 'symbolLabelDisplay' | 'conversionProps' | 'symbol'>
+  | Pick<TrunkDevice, 'symbolLabelDisplay' | 'conversionProps' | 'solarPanelProps' | 'symbol'>
 
 export type ConversionLabelKey =
   | 'conversionTransformerLabel'
@@ -29,14 +29,17 @@ const DEFAULT_VISIBILITY: Record<ConversionLabelKey, boolean> = {
   batteryCapacity: true,
 }
 
-export function isConversionLabelVisible(source: ConversionSource, key: ConversionLabelKey): boolean {
+export function isConversionLabelVisible(
+  source: ConversionSource,
+  key: ConversionLabelKey
+): boolean {
   const configured = source.symbolLabelDisplay?.visibility?.[key]
   if (typeof configured === 'boolean') return configured
   return DEFAULT_VISIBILITY[key]
 }
 
 export function getVisibleEndpointNoteText(
-  endpoint: Pick<Endpoint, 'notes' | 'notesVisible'>,
+  endpoint: Pick<Endpoint, 'notes' | 'notesVisible'>
 ): string {
   if (endpoint.notesVisible === false) return ''
   return (endpoint.notes ?? '').trim()
@@ -49,9 +52,9 @@ export function getVisibleConversionLabelParts(source: ConversionSource): Conver
   }
   const conversionProps = props.conversionProps ?? props.energyConversionProps
 
-  const transformerLabel = (source.symbol === 'transformer'
-    ? conversionProps?.transformerOverlayLabel
-    : '')?.trim()
+  const transformerLabel = (
+    source.symbol === 'transformer' ? conversionProps?.transformerOverlayLabel : ''
+  )?.trim()
   const pMaxPrimary = (conversionProps?.pMaxPrimaryW ?? '').trim()
   const pMaxSecondary = (conversionProps?.pMaxSecondaryW ?? '').trim()
   const solarPower =

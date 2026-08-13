@@ -6,6 +6,7 @@ import {
 } from '@/lib/projectV2/electrical'
 import { getCircuitIdFromModuleRef } from '@/components/canvas/panel/panelRelationEdges'
 import { panelGridModuleRefKey } from '@/components/canvas/panel/panelGridLayout'
+import { isSupplyTopologyEnabled } from '@/lib/supplyTopologyFeature'
 import type {
   Circuit,
   Panel,
@@ -258,7 +259,9 @@ export function getPanelRewireOperation(
   target: PanelGridModuleRef | null,
 ): PanelRewireOperation | null {
   if (!panel || !currentProject) return null
-  const panelPromotion = getPanelRootPromotionOperation(panel, currentProject, origin, target)
+  const panelPromotion = isSupplyTopologyEnabled()
+    ? getPanelRootPromotionOperation(panel, currentProject, origin, target)
+    : null
   if (panelPromotion) return panelPromotion
   if (!target) return null
   if (panelGridModuleRefKey(origin) === panelGridModuleRefKey(target)) return null

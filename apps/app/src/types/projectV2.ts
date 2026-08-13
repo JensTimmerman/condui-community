@@ -10,6 +10,10 @@ import type {
   Project,
 } from './schema'
 import type { ViewportLayout } from './ui'
+import type {
+  AuxiliaryElectricalEnclosure,
+  OffGridSupplyAssembly,
+} from './supplyAssembly'
 
 export const PROJECT_V2_SCHEMA_VERSION = '2.1.0' as const
 
@@ -387,6 +391,9 @@ export interface ElectricalModelV2 {
   devices: ElectricalDeviceV2[]
   planWiring?: PlanWiringModel
   oneWire: OneWireModelV2
+  /** Optional so projects created before the supply workspace remain valid and unchanged. */
+  supplyAssemblies?: OffGridSupplyAssembly[]
+  auxiliaryEnclosures?: AuxiliaryElectricalEnclosure[]
 }
 
 export interface DisciplineModelsV2 {

@@ -15,9 +15,10 @@ import {
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { findPanelById, walkPanels } from '@/lib/panel/panelTree'
-import { getSymbolById } from '@/lib/symbols'
+import { getSymbolById, RELAY_OVERLAY_PATHS } from '@/lib/symbols'
 import {
   getEffectiveCircuitPhaseState,
+  getFullInstallationPhaseAssignment,
   getInheritedCircuitPhaseState,
   getPhaseAssignmentLabel,
   phaseAssignmentDiffersFromInstallation,
@@ -198,6 +199,12 @@ function countCircuitEndpoints(pr: ProtectionDevice): number {
 export interface ModuleDisplayInfo {
   label: string
   specLines: string[]
+  /** Relay symbol details rendered in the center band of endpoint modules. */
+  relay?: {
+    symbolPath: string
+    controlOverlayPath: string
+    polesLabel: string
+  }
   /** Optional non-standard phase annotation shown in the module's bottom band. */
   phaseLabel?: string
   tooltipText: string
@@ -207,7 +214,11 @@ export interface ModuleDisplayInfo {
 function getLocalizedPanelDeviceName(symbolId: string | undefined): string | null {
   if (!symbolId) return null
   const symbol = getSymbolById(symbolId)
-  if (symbol?.category !== 'energyConversion' && symbol?.id !== 'rotating_switch') return null
+  if (
+    symbol?.category !== 'energyConversion' &&
+    symbol?.id !== 'rotating_switch' &&
+    symbol?.id !== 'source_changeover'
+  ) return null
   return i18n.t(`symbols.${symbol.id}`, { defaultValue: symbol.name })
 }
 
@@ -401,6 +412,9 @@ export function getModuleDisplayInfo(
       label: visibleLabel,
       specLines,
       phaseLabel: (() => {
+        if (d.symbol === 'source_changeover') {
+          return getPhaseAssignmentLabel(getFullInstallationPhaseAssignment(system), system)
+        }
         const circuit = findCircuitForTrunkDevice(panels, ref.id)
         return circuit
           ? getCircuitPhaseLabel(circuit, panels, system, installation, isMultiPoleDevice(d))
@@ -419,6 +433,8 @@ export function getModuleDisplayInfo(
     const tooltipParts: string[] = [ep.label]
     const localizedPanelDeviceName = getLocalizedPanelDeviceName(ep.symbol)
     const typeName = localizedPanelDeviceName ?? ep.type.replace(/_/g, ' ')
+    const relaySymbol = ep.symbol === 'relay' ? getSymbolById('relay') : null
+    const relayControl = ep.relayProps?.control ?? 'standard'
     if (ep.symbol) {
       tooltipParts.push(`${typeName} (${ep.symbol.replace(/_/g, ' ')})`)
     } else {
@@ -427,8 +443,15 @@ export function getModuleDisplayInfo(
     if (ep.notes) tooltipParts.push(ep.notes)
 
     return {
-      label: localizedPanelDeviceName ?? ep.label,
+      label: ep.label.trim() || localizedPanelDeviceName || ep.label,
       specLines: [],
+      relay: relaySymbol?.svgPath
+        ? {
+            symbolPath: relaySymbol.svgPath,
+            controlOverlayPath: RELAY_OVERLAY_PATHS[relayControl],
+            polesLabel: `${ep.relayProps?.poles ?? 1}P`,
+          }
+        : undefined,
       phaseLabel: getDomoticaModulePhaseLabel(context, panels, system, installation),
       tooltipText: tooltipParts.join('\n'),
       kind: 'domotica',

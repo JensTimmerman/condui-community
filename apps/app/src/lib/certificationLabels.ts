@@ -1,5 +1,10 @@
 import i18n from '@/i18n'
-import type { Endpoint, EnergyConversionDeviceProps, SymbolLabelDisplayConfig, TrunkDevice } from '@/types/schema'
+import type {
+  Endpoint,
+  EnergyConversionDeviceProps,
+  SymbolLabelDisplayConfig,
+  TrunkDevice,
+} from '@/types/schema'
 import { isSymbolLabelVisible } from '@/lib/symbolLabels'
 
 export const CERTIFICATION_LISTING_VISIBILITY_KEY = 'certificationListing'
@@ -18,9 +23,14 @@ export interface CertificationLabelPart {
 export type CertificationLabelSource =
   | Pick<
       Endpoint,
-      'symbol' | 'symbolLabelDisplay' | 'energyConversionProps' | 'evChargerProps' | 'batteryProps'
+      | 'symbol'
+      | 'symbolLabelDisplay'
+      | 'energyConversionProps'
+      | 'evChargerProps'
+      | 'batteryProps'
+      | 'solarPanelProps'
     >
-  | Pick<TrunkDevice, 'symbol' | 'symbolLabelDisplay' | 'conversionProps'>
+  | Pick<TrunkDevice, 'symbol' | 'symbolLabelDisplay' | 'conversionProps' | 'solarPanelProps'>
 
 const CERT_FIELD_LABEL_KEYS = {
   brand: 'endpoints.certification.brand',
@@ -30,7 +40,7 @@ const CERT_FIELD_LABEL_KEYS = {
 const DIAGRAM_POWER_PREFIX = 'P'
 
 function conversionPropsFromSource(
-  source: CertificationLabelSource,
+  source: CertificationLabelSource
 ): EnergyConversionDeviceProps | undefined {
   const props = source as {
     conversionProps?: EnergyConversionDeviceProps
@@ -40,7 +50,7 @@ function conversionPropsFromSource(
 }
 
 export function isCertificationListingVisible(
-  config: SymbolLabelDisplayConfig | undefined,
+  config: SymbolLabelDisplayConfig | undefined
 ): boolean {
   return isSymbolLabelVisible(config, CERTIFICATION_LISTING_VISIBILITY_KEY, true)
 }
@@ -48,7 +58,7 @@ export function isCertificationListingVisible(
 function certificationLine(
   key: CertificationLabelKey,
   labelKey: string,
-  value: string | number | undefined,
+  value: string | number | undefined
 ): CertificationLabelPart {
   const label = i18n.t(labelKey)
   if (value === undefined || value === null) {
@@ -68,14 +78,14 @@ function serialNumberLine(value: string | undefined): CertificationLabelPart | n
 /** Power: short `P:` prefix on the one-wire (all languages). */
 function powerLine(value: string | undefined): CertificationLabelPart {
   const text = (value ?? '').trim()
-  return { key: 'certificationPower', text: text ? `${DIAGRAM_POWER_PREFIX}: ${text}` : `${DIAGRAM_POWER_PREFIX}:` }
+  return {
+    key: 'certificationPower',
+    text: text ? `${DIAGRAM_POWER_PREFIX}: ${text}` : `${DIAGRAM_POWER_PREFIX}:`,
+  }
 }
 
 function inverterRectifierParts(
-  props:
-    | Endpoint['energyConversionProps']
-    | TrunkDevice['conversionProps']
-    | undefined,
+  props: Endpoint['energyConversionProps'] | TrunkDevice['conversionProps'] | undefined
 ): CertificationLabelPart[] {
   return [
     certificationLine('certificationBrand', CERT_FIELD_LABEL_KEYS.brand, props?.brand),
@@ -104,8 +114,18 @@ function batteryParts(props: Endpoint['batteryProps'] | undefined): Certificatio
   ].filter((part): part is CertificationLabelPart => part != null)
 }
 
+function solarPanelParts(
+  props: Endpoint['solarPanelProps'] | TrunkDevice['solarPanelProps'] | undefined
+): CertificationLabelPart[] {
+  return [
+    certificationLine('certificationBrand', CERT_FIELD_LABEL_KEYS.brand, props?.brand),
+    certificationLine('certificationModel', CERT_FIELD_LABEL_KEYS.model, props?.model),
+    serialNumberLine(props?.serialNumber),
+  ].filter((part): part is CertificationLabelPart => part != null)
+}
+
 export function getVisibleCertificationLabelParts(
-  source: CertificationLabelSource,
+  source: CertificationLabelSource
 ): CertificationLabelPart[] {
   if (!isCertificationListingVisible(source.symbolLabelDisplay)) return []
 
@@ -121,6 +141,10 @@ export function getVisibleCertificationLabelParts(
 
   if (symbol === 'battery' && 'batteryProps' in source) {
     return batteryParts(source.batteryProps)
+  }
+
+  if (symbol === 'solar_panel' && 'solarPanelProps' in source) {
+    return solarPanelParts(source.solarPanelProps)
   }
 
   return []

@@ -20,6 +20,7 @@ import { getPlanGraphicElementAsset } from '@/lib/plan/graphicElements'
 import { getCompatibilityFloorsFromProject } from '@/lib/projectV2/buildingFloors'
 import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
 import { findPanelById } from '@/lib/panel/panelTree'
+import { getSymbolById } from '@/lib/symbols'
 import { panelT } from './shared/propertiesSharedUtils'
 
 type Project = NonNullable<ProjectState['currentProject']>
@@ -333,6 +334,9 @@ function panelTitleForTrunkDevice(device: TrunkDevice | undefined, t: TFunction)
     return pt('symbols.earthing_separator', 'Earthing Separator')
   if (device.symbol === 'junction_panel')
     return pt('junctionPanel.propertiesTitle', 'Junction panel')
+  if (device.symbol === 'source_changeover')
+    return pt('symbols.source_changeover', 'Source transfer switch')
+  if (getSymbolById(device.symbol)?.category === 'switches') return pt('endpoints.switch', 'Switch')
   if (device.type === 'protection') {
     return pt(
       `protections.${device.protectionType || 'MCB'}`,
@@ -340,12 +344,13 @@ function panelTitleForTrunkDevice(device: TrunkDevice | undefined, t: TFunction)
     )
   }
   if (device.type === 'energy_meter') return pt('symbols.energy_meter', 'Energy meter')
+  if (device.symbol === 'solar_panel') return pt('symbols.solar_panel', 'Solar panel')
+  if (device.symbol === 'battery') return pt('symbols.battery', 'Battery')
   if (device.type === 'conversion') {
     if (device.symbol === 'transformer') return pt('symbols.transformer', 'Transformer')
     if (device.symbol === 'rectifier') return pt('symbols.rectifier', 'Rectifier')
     if (device.symbol === 'inverter') return pt('symbols.inverter', 'Inverter')
-    if (device.symbol === 'dc_dc_converter')
-      return pt('symbols.dc_dc_converter', 'DC-DC Converter')
+    if (device.symbol === 'dc_dc_converter') return pt('symbols.dc_dc_converter', 'DC-DC Converter')
   }
   return pt('supply.trunkDevice', 'Supply wire device')
 }
@@ -398,6 +403,8 @@ export function getPropertiesPanelTitle({
       return pt('panels.propertiesTitle', 'Panel')
     case 'supplyPanel':
       return pt('panelCanvas.supplyPanel', 'Supply panel')
+    case 'auxiliaryEnclosure':
+      return pt('panelCanvas.virtualEnclosure', 'Supply enclosure')
     case 'protection':
       return pt('protections.title', 'Protection Device')
     case 'circuit':
@@ -431,7 +438,8 @@ export function getPropertiesPanelTitle({
     case 'ground':
       return pt('symbols.earthing', 'Earthing')
     case 'supply':
-      return pt('properties.supplyProperties', 'Supply Properties')
+    case 'busSection':
+      return pt('feedOrganization.title', 'Feed organization')
     case 'endpoint':
       return panelTitleForEndpoint(titleLookups?.endpoint, t)
     case 'trunkDevice': {

@@ -20,6 +20,7 @@ import {
 import { isProtectionOnSupplyPanel } from '@/components/canvas/panel/panelGridLayout'
 import { InstallDateField } from '../shared/propertiesShared'
 import { ensureInstallDateTargetColors } from '../shared/propertiesSharedUtils'
+import { AutomaticNamingLockedField } from '../shared/AutomaticNamingLockedField'
 import { installationDateUpdateFromYear } from '@/lib/installDates'
 import {
   getElectricalInstallationFromProject,
@@ -302,16 +303,18 @@ export function CircuitProperties({
             )}
           </button>
         </div>
-        <DebouncedTextInput
-          type="text"
-          value={localCode}
-          onDraftChange={handleCodeChange}
-          onCommit={(v) => commitCodeChange(v)}
-          onKeyDown={handleKeyDown}
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
-          placeholder={t('circuits.code', 'Code')}
-          disabled={lockMainBusLetterFields}
-        />
+        <AutomaticNamingLockedField locked={lockMainBusLetterFields}>
+          <DebouncedTextInput
+            type="text"
+            value={localCode}
+            onDraftChange={handleCodeChange}
+            onCommit={(v) => commitCodeChange(v)}
+            onKeyDown={handleKeyDown}
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
+            placeholder={t('circuits.code', 'Code')}
+            disabled={lockMainBusLetterFields}
+          />
+        </AutomaticNamingLockedField>
       </div>
 
       <div>

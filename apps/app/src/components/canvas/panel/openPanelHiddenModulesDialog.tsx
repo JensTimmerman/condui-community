@@ -1,0 +1,88 @@
+import type { TFunction } from 'i18next'
+import HiddenItemsDialog, { type HiddenItem } from '@/components/common/HiddenItemsDialog'
+import { getSymbolById } from '@/lib/symbols'
+import { useDialogStore } from '@/stores/dialogStore'
+import { useProjectStore } from '@/stores/projectStore'
+import { useUIStore } from '@/stores/uiStore'
+import {
+  getPanelHiddenModulePresentation,
+  getPanelModuleSelection,
+} from './panelHiddenModulePresentation'
+
+export interface PanelHiddenDialogTarget {
+  panelId: string
+  panelName: string
+}
+
+interface OpenPanelHiddenModulesDialogOptions {
+  showPanelName?: boolean
+  title?: string
+}
+
+export function openPanelHiddenModulesDialog(
+  targets: PanelHiddenDialogTarget[],
+  t: TFunction,
+  options: OpenPanelHiddenModulesDialogOptions = {}
+): boolean {
+  const store = useProjectStore.getState()
+  const project = store.currentProject
+  if (!project) return false
+
+  const selectionByDialogId = new Map<string, { panelId: string; moduleKey: string }>()
+  const items: HiddenItem[] = targets.flatMap(({ panelId, panelName }) =>
+    store.getPanelHiddenModuleRefs(panelId).map((ref) => {
+      const item = getPanelHiddenModulePresentation(ref, project, t)
+      const symbol = item.symbolId ? getSymbolById(item.symbolId) : undefined
+      const dialogId = `${panelId}\u0000${item.key}`
+      const selection = getPanelModuleSelection(ref)
+      selectionByDialogId.set(dialogId, { panelId, moduleKey: item.key })
+      const subtitle = [item.typeLabel, options.showPanelName ? panelName : undefined]
+        .filter(Boolean)
+        .join(' · ')
+      return {
+        id: dialogId,
+        label: item.label,
+        subtitle: subtitle || undefined,
+        icon: symbol ? (
+          <img src={symbol.svgPath} alt="" className="h-7 w-7 object-contain dark:invert" />
+        ) : undefined,
+        onSelect: () => useUIStore.getState().setSelection(selection),
+        onHoverChange: (hovered) => {
+          if (hovered) useUIStore.getState().setHover(selection)
+          else useUIStore.getState().clearHover()
+        },
+        selectAriaLabel: t('hiddenItemsDialog.selectSymbol', 'Select {{symbol}}', {
+          symbol: item.label,
+        }),
+      }
+    })
+  )
+
+  const { openDialog, closeDialog } = useDialogStore.getState()
+  openDialog({
+    type: 'custom',
+    title: options.title ?? t('hiddenItemsDialog.manageHidden', 'Manage hidden symbols'),
+    content: (
+      <HiddenItemsDialog
+        items={items}
+        description={t(
+          'panelCanvas.showHiddenDescription',
+          'Select one or more devices to show.'
+        )}
+        onConfirm={(selectedIds) => {
+          for (const selectedId of selectedIds) {
+            const selected = selectionByDialogId.get(selectedId)
+            if (selected) store.unhideModuleFromPanel(selected.panelId, selected.moduleKey)
+          }
+          useUIStore.getState().clearHover()
+          closeDialog()
+        }}
+        onCancel={() => {
+          useUIStore.getState().clearHover()
+          closeDialog()
+        }}
+      />
+    ),
+  })
+  return true
+}

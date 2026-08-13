@@ -86,6 +86,8 @@
     "shortcuts": "Raccourcis",
     "installOffline": "Installer pour utilisation hors ligne",
     "contactSupport": "Contacter le support",
+    "documentation": "Documentation",
+    "areiGuide": "Guide RGIE",
     "tutorial": "Tutoriel"
   },
   "pwaInstall": {
@@ -773,6 +775,8 @@
   "panelCanvas": {
     "selectPanel": "Sélectionner un tableau",
     "panelOptions": "Options du tableau",
+    "visibility": "Visibilité",
+    "hiddenDevices": "Appareils masqués",
     "allHierarchy": "Tous (hiérarchie)",
     "noPanels": "Aucun tableau",
     "feedFromTop": "Alimentation par le haut",
@@ -780,12 +784,13 @@
     "rows": "Lignes",
     "columns": "Colonnes",
     "showDomotica": "Afficher domotique",
-    "moveToSupplyPanel": "Déplacer vers le tableau d'alimentation",
+    "moveToSupplyPanel": "Déplacer vers le tableau réseau",
     "moveToMainPanel": "Déplacer vers le tableau principal",
     "hideFromPanel": "Masquer de la vue tableau",
     "showHiddenDescription": "Sélectionnez un ou plusieurs appareils à afficher.",
-    "supplyPanel": "Tableau d'alimentation",
-    "hideSupplyPanel": "Masquer le tableau d'alimentation",
+    "supplyPanel": "Tableau réseau",
+    "virtualEnclosure": "Coffret d'alimentation",
+    "hideSupplyPanel": "Masquer le tableau réseau",
     "rewireTool": "Outil de recâblage",
     "rewireModeOn": "Desactiver Mode recâblage",
     "rewireModeOff": "Mode recâblage",
@@ -818,6 +823,11 @@
     "firstFloor": "Premier étage",
     "dragSymbolsHere": "(Glissez les symboles ici)",
     "noFloors": "Aucun étage",
+    "supplyFrame": {
+      "title": "Alimentation",
+      "supplyLabel": "Alimentation",
+      "mainPanelLabel": "Tableau principal"
+    },
     "eendraadNaming": {
       "menuTitle": "Dénomination",
       "automaticNaming": "Dénomination automatique",
@@ -826,6 +836,9 @@
       "hideFeederLettersDescription": "Les circuits sans prises n’ont pas de label ; vous pouvez les nommer manuellement.",
       "toggleLetterOnOneWire": "Afficher ou masquer la lettre de circuit sur le schéma unifilaire",
       "endpointBranchLabelLocked": "Les étiquettes de dérivation suivent la dénomination automatique (lettre du circuit + numéro de dérivation).",
+      "lockedTooltip": "L’étiquetage automatique est activé",
+      "lockedDescription": "Désactivez-le pour modifier cette étiquette.",
+      "openAutomaticNaming": "Ouvrir l’étiquetage automatique",
       "confirmOverwriteTitle": "Remplacer les lettres ?",
       "confirmOverwriteMessage": "La dénomination automatique remplace les lettres actuelles par A, B, C… selon l’ordre des rangées sur chaque tableau. Continuer ?",
       "confirmOverwriteConfirm": "Continuer"
@@ -1067,6 +1080,7 @@
     "switch_1p_pull": "Interrupteur à tirette",
     "switch_impulse": "Bouton-poussoir",
     "switch_cross": "Interrupteur de croisement",
+    "source_changeover": "Inverseur de sources",
     "motion_detector": "Détecteur de mouvement",
     "light_point": "Point lumineux",
     "light_spot": "Spot",
@@ -1114,6 +1128,10 @@
   },
   "earthing": {
     "deleteConfirmTitle": "Retirer la mise à la terre ?"
+  },
+  "supplyAssembly": {
+    "deleteChangeoverTitle": "Supprimer l’inverseur de source ?",
+    "deleteChangeoverMessage": "La suppression de l’inverseur de source supprime aussi la branche du convertisseur et les appareils raccordés. Continuer ?"
   },
   "orphan": {
     "banner": {
@@ -1165,6 +1183,7 @@
       "panelMissingOneWireSymbol": "Tableau sans symbole unifilaire",
       "panelGridDuplicateModule": "Module en double sur le canevas du tableau",
       "supplyTrunkMisplacedInMainGrid": "Élément d'alimentation dans une zone incorrecte",
+      "splitBusWithoutBackupSupply": "Jeu de barres divisé sans alimentation de secours",
       "branchMultiplierEndpointsSplit": "Symboles multiplicateurs séparés sur une même derivation",
       "danglingReference": "Référence pendante",
       "invalidGeometry": "Géométrie invalide"
@@ -1369,6 +1388,12 @@
           "message": "Deux protections ou plus sur ce tableau partagent le même nom",
           "details": "Chaque protection sur un même tableau (bus principal, bus secondaire, bande d'alimentation ou arrivée) doit avoir un nom unique pour que les circuits restent identifiables sur le schéma unifilaire et le canevas du tableau. Ce n'est pas un orphelin de câblage — c'est un conflit de nommage.",
           "remediation": "Renommez l'une des protections en conflit, ou activez le nommage automatique pour réattribuer les lettres sans doublons."
+        },
+        "converter-backup-labels": {
+          "shortTitle": "Étiquette manquante sur l’alimentation de secours",
+          "message": "Une protection ou un récepteur de l’alimentation de secours n’a pas d’étiquette",
+          "details": "Les éléments de l’alimentation de secours sont hors du bus principal et ne sont pas nommés automatiquement.",
+          "remediation": "Ajoutez une étiquette manuelle claire à chaque protection et récepteur de la branche de secours de l’onduleur."
         }
       }
     },
@@ -1387,12 +1412,23 @@
       "panelMissingOneWireSymbol": "Le tableau « {{panelName}} » existe mais n'a pas de symbole/lien d'alimentation unifilaire.",
       "panelGridDuplicateModule": "Le canevas du tableau affiche « {{moduleLabel}} » plus d'une fois ; conservez le module complet et masquez le doublon plus faible.",
       "supplyTrunkMisplacedInMainGrid": "L'élément d'alimentation « {{label}} » est placé sur la grille principale (ligne {{row}}, colonne {{col}}) mais doit être uniquement dans la bande d'alimentation — le canevas et le schéma unifilaire sont incohérents.",
+      "splitBusWithoutBackupSupply": "Le tableau « {{panelName}} » possède {{busSectionCount}} sections de jeu de barres, mais aucune alimentation de secours raccordée. Regroupez-les sur une seule alimentation réseau.",
       "branchMultiplierEndpointsSplit": "Circuit {{circuitCode}} : la dérivation « {{branchLabel}} » contient {{absorbCount}} symbole(s) multiplicateur(s) en trop comme points séparés ; fusionnez en un seul point avec plusieurs placements. Utilisez Réparer dans l’inspecteur d’orphelins."
     },
     "primitives": {
       "duplicatePanelProtectionLabels": {
         "message": "Le nom de protection « {{label}} » est utilisé {{count}} fois sur ce tableau",
         "details": "Des noms de protection en double sur le même tableau (bus principal, bus secondaire ou alimentation) rendent les circuits difficiles à identifier. Renommez une protection ou activez le nommage automatique."
+      },
+      "converterBackupLabels": {
+        "protection": {
+          "message": "La protection de l’alimentation de secours n’a pas d’étiquette",
+          "details": "Les protections de la branche de secours d’un onduleur ne sont pas nommées automatiquement. Ajoutez une étiquette manuelle claire."
+        },
+        "endpoint": {
+          "message": "Le récepteur de l’alimentation de secours n’a pas d’étiquette",
+          "details": "Les récepteurs de la branche de secours d’un onduleur ne sont pas nommés automatiquement. Ajoutez une étiquette manuelle claire."
+        }
       },
       "protectionPhaseCompatibility": {
         "deviceLabel": "Protection",
@@ -1698,7 +1734,10 @@
     "setTotalCount": "Définir le nombre total de symboles dans le plan de situation",
     "totalCount": "Nombre total",
     "invalidNumber": "Entrez un nombre entier",
+    "mustBeAtLeastOne": "Le nombre doit être au moins égal à 1",
     "mustBeAtLeastCurrent": "Le nombre doit être au moins égal au nombre actuel",
+    "maximumCount": "Le maximum est {{max}}",
+    "allowedInverterCounts": "Utilisez 1, 2 ou 3",
     "maxCount": "Le maximum est 99"
   },
   "floorSelection": {
@@ -1729,7 +1768,10 @@
     "unnamedItem": "Élément sans nom",
     "protectionFallback": "Dispositif de protection",
     "trunkDeviceFallback": "Appareil sur tronc",
-    "domoticaFallback": "Module domotique"
+    "domoticaFallback": "Module domotique",
+    "manageHidden": "Gérer les symboles masqués",
+    "deviceOnCircuit": "{{device}} sur {{circuit}}",
+    "selectSymbol": "Sélectionner {{symbol}}"
   },
   "tally": {
     "title": "Liste de matériel",
@@ -1857,6 +1899,10 @@
   "supply": {
     "trunkDevice": "Appareil sur fil d'alimentation",
     "mainProtectionLabel": "Principal",
+    "port1": "Port 1",
+    "port2": "Port 2",
+    "converterPhases": "Phases CA",
+    "inverterUnit": "Onduleur",
     "nameLabelOnDiagramHint": "Si affiché, apparaît au-dessus du symbole sur le fil d'alimentation horizontal."
   },
   "installDates": {
@@ -1882,6 +1928,17 @@
     "propagateProtections": "Oui - uniquement les protections",
     "propagateAll": "Oui - tout",
     "propagateConsumers": "Oui - consommateurs aussi"
+  },
+  "feedOrganization": {
+    "title": "Répartition de l’alimentation",
+    "single": "Alimentation unique",
+    "splitSwitchable": "Réseau + secours commutable",
+    "splitBackup": "Réseau + secours",
+    "bus": "Jeu de barres",
+    "gridFeed": "Alimentation réseau",
+    "backupFeed": "Alimentation de secours",
+    "gridMarker": "Réseau",
+    "backupMarker": "Secours"
   },
   "wallProperties": {
     "title": "Propriétés du mur",

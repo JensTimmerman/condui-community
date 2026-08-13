@@ -41,7 +41,6 @@ import {
 import { getPdfContentHeightMm } from './pdfPageLayout'
 import { A4_LANDSCAPE, A4_PORTRAIT } from './pageSizes'
 import { buildInfoBlockSvg } from './infoBlockSvg'
-import type { Panel } from '@/types/schema'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useUIStore } from '@/stores/uiStore'
 import { yieldToBrowser } from './yieldToBrowser'
@@ -69,24 +68,8 @@ import { getEendraadNotesFromProject } from '@/lib/projectV2/annotations'
 import { getBuildingFloorsFromProject } from '@/lib/projectV2/buildingFloors'
 import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
 import { shouldRasterizePdf } from '@/lib/editionPdfRenderingPolicy'
-
-/**
- * Recursively collect all panels (including sub-panels)
- */
-function collectAllPanels(panels: Panel[]): Panel[] {
-  const result: Panel[] = []
-  for (const panel of panels) {
-    result.push(panel)
-    result.push(...collectAllPanels(panel.subPanels))
-  }
-  return result
-}
-
-function countMainPanels(panels: Panel[]): number {
-  return panels.reduce((count, panel) => {
-    return count + (panel.isMain ? 1 : 0) + countMainPanels(panel.subPanels)
-  }, 0)
-}
+import { getPanelDiagramId } from '@/lib/layout/bottomUpLayout'
+import { buildPanelExportTargets, orderEendraadLayoutsForExport } from './exportPlan'
 
 function normalizeInstallerProfile(
   profile: InstallerProfile | ExportProjectInstallerOverride
@@ -113,12 +96,14 @@ function buildExportPlan(options: ExportOptions, context: ExportContext): Export
   if (options.includeEendraad && eendraadLayout) {
     // For each panel, we'll calculate slices during scene preparation
     // For now, create placeholder pages - actual slicing happens in prepareSceneForPage
-    for (const panelLayout of eendraadLayout.panels) {
+    const orderedLayouts = orderEendraadLayoutsForExport(eendraadLayout.panels)
+    for (const panelLayout of orderedLayouts) {
+      const diagramId = getPanelDiagramId(panelLayout)
       // We'll create one page per panel initially, then slice during preparation
       pages.push({
-        id: `eendraad-${panelLayout.panel.id}`,
+        id: `eendraad-${diagramId}`,
         scene: {
-          id: `eendraad-${panelLayout.panel.id}`,
+          id: `eendraad-${diagramId}`,
           kind: 'eendraad',
           // rootNode and bounds will be set by scene provider
           rootNode: null as unknown as ExportScene['rootNode'], // Temporary, will be set during preparation
@@ -153,59 +138,24 @@ function buildExportPlan(options: ExportOptions, context: ExportContext): Export
   }
 
   if (options.includePanel) {
-    const panelRoots = getElectricalPanelsFromProject(project)
-    const allPanels = collectAllPanels(panelRoots)
-    const mainPanelCount = countMainPanels(panelRoots)
-    const hasMultipleMainPanels = mainPanelCount > 1
-    const shouldIncludeOverview = allPanels.length > 3
-
-    if (shouldIncludeOverview) {
+    for (const target of buildPanelExportTargets(project)) {
       pages.push({
-        id: 'panel-overview',
+        id: target.id,
         scene: {
-          id: 'panel-overview',
+          id: target.id,
           kind: 'panel',
           rootNode: null as unknown as ExportScene['rootNode'],
           bounds: { x: 0, y: 0, width: 0, height: 0, space: 'scene' },
-          preferredOrientation: 'landscape',
-          metadata: { exportMode: 'overview' },
+          preferredOrientation: target.orientation,
+          metadata:
+            target.mode.kind === 'overview'
+              ? { exportMode: 'overview' }
+              : target.mode.kind === 'hierarchy-surface'
+                ? { exportMode: 'hierarchy-surface', surfaceId: target.mode.surfaceId }
+                : undefined,
         },
         pageSize: 'A4',
-        orientation: 'landscape',
-      })
-    }
-
-    if (hasMultipleMainPanels) {
-      pages.push({
-        id: 'panel-shared-supply',
-        scene: {
-          id: 'panel-shared-supply',
-          kind: 'panel',
-          rootNode: null as unknown as ExportScene['rootNode'],
-          bounds: { x: 0, y: 0, width: 0, height: 0, space: 'scene' },
-          preferredOrientation: 'portrait',
-          metadata: { exportMode: 'hierarchy-surface', surfaceId: 'shared-supply' },
-        },
-        pageSize: 'A4',
-        orientation: 'portrait',
-      })
-    }
-
-    for (const panel of allPanels) {
-      pages.push({
-        id: `panel-${panel.id}`,
-        scene: {
-          id: `panel-${panel.id}`,
-          kind: 'panel',
-          rootNode: null as unknown as ExportScene['rootNode'], // Temporary
-          bounds: { x: 0, y: 0, width: 0, height: 0, space: 'scene' }, // Temporary
-          preferredOrientation: 'portrait',
-          metadata: hasMultipleMainPanels
-            ? { exportMode: 'hierarchy-surface', surfaceId: panel.id }
-            : undefined,
-        },
-        pageSize: 'A4',
-        orientation: 'portrait',
+        orientation: target.orientation,
       })
     }
   }
@@ -238,17 +188,19 @@ async function prepareSceneForPage(
 
   switch (page.scene.kind) {
     case 'eendraad': {
-      const panelId = page.scene.id.replace('eendraad-', '')
-      const panelLayout = context.eendraadLayout?.panels.find((p) => p.panel.id === panelId)
+      const diagramId = page.scene.id.replace('eendraad-', '')
+      const panelLayout = context.eendraadLayout?.panels.find(
+        (p) => getPanelDiagramId(p) === diagramId
+      )
       if (!panelLayout) {
-        throw new ExportError('NO_CONTENT', `Panel ${panelId} not found in layout`)
+        throw new ExportError('NO_CONTENT', `Diagram ${diagramId} not found in layout`)
       }
 
       const fullScene = eendraadCache
-        ? eendraadCache.byPanelId.get(panelId)
-        : await prepareEendraadScene(panelId, 0, null, options)
+        ? eendraadCache.byPanelId.get(diagramId)
+        : await prepareEendraadScene(diagramId, 0, null, options)
       if (!fullScene) {
-        throw new ExportError('NO_CONTENT', `Eendraad scene for panel ${panelId} not in cache`)
+        throw new ExportError('NO_CONTENT', `Eendraad scene for diagram ${diagramId} not in cache`)
       }
 
       const documentGlobalScale = eendraadCache?.documentGlobalScale
@@ -272,7 +224,7 @@ async function prepareSceneForPage(
         scenes.push({
           ...fullScene,
           rootNode: rootClone,
-          id: `eendraad-${panelId}-slice-${i}`,
+          id: `eendraad-${diagramId}-slice-${i}`,
           // Slice-local bounds (including overlap) drive scaling and placement.
           // The core visible rect (without overlap) is enforced via contentClipRect.
           bounds: {
@@ -418,27 +370,35 @@ export async function exportToPDF(
         let maxHeight = 0
         const overlayByPanelId = new Map<string, ReturnType<typeof collectEendraadTextOverlays>>()
         for (const page of eendraadPages) {
-          const panelId = page.scene.id.replace('eendraad-', '')
-          const panelLayout = context.eendraadLayout!.panels.find((p) => p.panel.id === panelId)
+          const diagramId = page.scene.id.replace('eendraad-', '')
+          const panelLayout = context.eendraadLayout!.panels.find(
+            (p) => getPanelDiagramId(p) === diagramId
+          )
           if (!panelLayout) continue
-          const fullScene = await prepareEendraadScene(panelId, 0, null, {
+          const fullScene = await prepareEendraadScene(diagramId, 0, null, {
             ...options,
             theme: exportTheme,
           })
-          byPanelId.set(panelId, fullScene)
+          byPanelId.set(diagramId, fullScene)
           const baseOverlays = collectEendraadTextOverlays(panelLayout, exportTheme)
-          const noteOverlays = collectEendraadFreeNoteOverlays(
-            getEendraadNotesFromProject(context.project),
-            panelId,
-            exportTheme
-          )
+          const noteOverlays =
+            panelLayout.frameRole === 'supply'
+              ? []
+              : collectEendraadFreeNoteOverlays(
+                  getEendraadNotesFromProject(context.project),
+                  panelLayout.panel.id,
+                  exportTheme
+                )
           const wireLabelOverlays = collectEendraadWireLabelOverlays(
             context.eendraadWireSegments ?? [],
-            panelId,
-            exportTheme
+            panelLayout.panel.id,
+            exportTheme,
+            diagramId
           )
-          overlayByPanelId.set(panelId, [...baseOverlays, ...noteOverlays, ...wireLabelOverlays])
-          maxHeight = Math.max(maxHeight, fullScene.bounds.height)
+          overlayByPanelId.set(diagramId, [...baseOverlays, ...noteOverlays, ...wireLabelOverlays])
+          if (panelLayout.frameRole !== 'supply') {
+            maxHeight = Math.max(maxHeight, fullScene.bounds.height)
+          }
         }
         const usableHeight = getPdfContentHeightMm('landscape', {
           hasInfoBlock: true,
@@ -581,7 +541,14 @@ export async function exportToPDF(
             // reinterpreted as a source dark color when both palettes share a hex value.
             let svgString = await renderSvgFromScene(scene)
             if (scene.kind === 'eendraad') {
-              svgString = fixEendraadWireLineCapsInExportSvg(svgString)
+              const diagramId = scene.id.replace(/^eendraad-/, '').replace(/-slice-\d+$/, '')
+              const isSupplyFrame = context.eendraadLayout?.panels.some(
+                (panelLayout) =>
+                  getPanelDiagramId(panelLayout) === diagramId && panelLayout.frameRole === 'supply'
+              )
+              svgString = fixEendraadWireLineCapsInExportSvg(svgString, {
+                preserveRoundedThickCaps: isSupplyFrame,
+              })
             }
             svgString = applyPreparedSceneThemeToSvg(svgString, scene, exportTheme, renderTheme)
             if (scene.symbolExports?.length) {
@@ -600,9 +567,9 @@ export async function exportToPDF(
             }
             svgString = applyExportFontToSvg(svgString)
             if (isLimitedRasterExport && scene.kind === 'eendraad' && context.eendraadLayout) {
-              const panelId = scene.id.replace(/^eendraad-/, '').replace(/-slice-\d+$/, '')
+              const diagramId = scene.id.replace(/^eendraad-/, '').replace(/-slice-\d+$/, '')
               const panelLayout = context.eendraadLayout.panels.find(
-                (candidate) => candidate.panel.id === panelId
+                (candidate) => getPanelDiagramId(candidate) === diagramId
               )
               const circuitIds = (scene.metadata?.circuitIds ?? '').split(',').filter(Boolean)
               if (panelLayout && circuitIds.length > 0) {
@@ -692,14 +659,17 @@ export async function exportToPDF(
             const panelTitle =
               scene.kind === 'eendraad'
                 ? (() => {
-                    const panelId = scene.id.replace(/^eendraad-/, '').replace(/-slice-\d+$/, '')
-                    const panel = context.eendraadLayout?.panels.find(
-                      (p) => p.panel.id === panelId
-                    )?.panel
-                    if (!panel) return null
+                    const diagramId = scene.id.replace(/^eendraad-/, '').replace(/-slice-\d+$/, '')
+                    const panelLayout = context.eendraadLayout?.panels.find(
+                      (p) => getPanelDiagramId(p) === diagramId
+                    )
+                    if (!panelLayout) return null
+                    if (panelLayout.frameRole === 'supply') {
+                      return i18n.t('canvas.supplyFrame.title', 'Supply')
+                    }
                     return getPanelDiagramTitleLine(
                       project,
-                      panel,
+                      panelLayout.panel,
                       i18n.t.bind(i18n),
                       context.advancedPanelLabels === true
                     )
@@ -742,8 +712,11 @@ export async function exportToPDF(
               eendraadOverlayCache &&
               placement
             ) {
-              const panelId = scene.id.replace(/^eendraad-/, '').replace(/-slice-\d+$/, '')
-              const allOverlays = eendraadOverlayCache.byPanelId.get(panelId) ?? []
+              const diagramId = scene.id.replace(/^eendraad-/, '').replace(/-slice-\d+$/, '')
+              const panelLayout = context.eendraadLayout?.panels.find(
+                (candidate) => getPanelDiagramId(candidate) === diagramId
+              )
+              const allOverlays = eendraadOverlayCache.byPanelId.get(diagramId) ?? []
               const sliceCircuitIds = (scene.metadata?.circuitIds ?? '').split(',').filter(Boolean)
               const clipRect = scene.contentClipRect ?? scene.bounds
               const sliceOverlays = getTextOverlaysForSlice(
@@ -755,9 +728,10 @@ export async function exportToPDF(
               )
               const secondaryBusReferenceOverlays = collectEendraadSecondaryBusReferenceOverlays(
                 context.eendraadWireSegments ?? [],
-                panelId,
+                panelLayout?.panel.id ?? diagramId,
                 exportTheme,
-                scene.contentClipRect ?? scene.bounds
+                scene.contentClipRect ?? scene.bounds,
+                diagramId
               )
               const overlays = [...sliceOverlays, ...secondaryBusReferenceOverlays]
               if (overlays.length > 0) {

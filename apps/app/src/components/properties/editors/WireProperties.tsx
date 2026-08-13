@@ -36,6 +36,7 @@ import { GroundWireProperties, SupplyWireProperties } from './SupplyGroundWirePr
 import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
+  getSupplyAssembliesFromProject,
 } from '@/lib/projectV2/electrical'
 function BusbarPhaseOrderProperties({
   panel,
@@ -128,6 +129,9 @@ function WireProperties({
   const updateEndpoint = useProjectStore((state: ProjectState) => state.updateEndpoint)
   const getPanelById = useProjectStore((state: ProjectState) => state.getPanelById)
   const updatePanel = useProjectStore((state: ProjectState) => state.updatePanel)
+  const updateSupplyAssemblyConnection = useProjectStore(
+    (state: ProjectState) => state.updateSupplyAssemblyConnection
+  )
 
   // Get selection to access wire metadata
   const selection = useUIStore((state: UIState) => state.selection)
@@ -139,8 +143,15 @@ function WireProperties({
   if (!wireSegment && selection.wireMetadata) {
     const metadata = selection.wireMetadata.find((m) => m.id === wireSegmentId)
     if (metadata) {
+      if (metadata.supplyAssemblyId && metadata.supplyConnectionId) {
+        wireSegment = wireSegments.find(
+          (ws) =>
+            ws.supplyAssemblyId === metadata.supplyAssemblyId &&
+            ws.supplyConnectionId === metadata.supplyConnectionId
+        )
+      }
       // Domotica output/control wires: first try to re-resolve by domotica metadata
-      if (
+      if (!wireSegment &&
         metadata.domoticaOutputGroup &&
         typeof metadata.domoticaOutputIndex === 'number' &&
         metadata.circuitId
@@ -238,6 +249,51 @@ function WireProperties({
         </p>
       </div>
     )
+  }
+
+  if (wireSegment.supplyAssemblyId && wireSegment.supplyConnectionId && currentProject) {
+    const assembly = getSupplyAssembliesFromProject(currentProject).find(
+      ({ id }) => id === wireSegment.supplyAssemblyId
+    )
+    const connection = assembly?.connections.find(
+      ({ id }) => id === wireSegment.supplyConnectionId
+    )
+    if (assembly && connection) {
+      const wireProperties = connection.wireProperties
+      const wireFormState: WireRouteFormState = {
+        cable: wireProperties?.cable ?? wireSegment.cable,
+        wireRoute: wireProperties?.wireRoute,
+        inTube: wireProperties?.inTube,
+        inWall: wireProperties?.inWall,
+        hideWireLabel: wireProperties?.hideWireLabel,
+        showFireClassLabel: wireProperties?.showFireClassLabel,
+        wireLengthM: wireProperties?.wireLengthM,
+        showWireLengthLabel: wireProperties?.showWireLengthLabel,
+        defaultWireLabelVisible: false,
+      }
+      const setWireProperties = (updates: Partial<WireRouteFormState>) => {
+        const next = { ...wireProperties, ...updates, cable: updates.cable ?? wireFormState.cable }
+        delete next.defaultWireLabelVisible
+        delete next.phaseAssignment
+        delete next.phaseConstraint
+        delete next.showPhaseLabel
+        updateSupplyAssemblyConnection(assembly.id, connection.id, { wireProperties: next })
+      }
+      return (
+        <div className="space-y-4">
+          <p className="text-xs font-medium text-gray-600 dark:text-gray-400">
+            {connection.domain === 'DC' ? t('wires.domainDc', 'DC') : 'AC'}
+          </p>
+          <WireRouteAndCableForm
+            state={wireFormState}
+            onChange={setWireProperties}
+            isDC={connection.domain === 'DC'}
+            phaseSystem={installationForPhase?.nominalVoltage.system}
+            t={panelStringT(t)}
+          />
+        </div>
+      )
+    }
   }
 
   const selectedBusbarOwnerId =

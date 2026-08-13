@@ -40,7 +40,11 @@ export const PANEL_FOCUS_SINGLE_PANEL_LINK_POLICY: PanelLinkPolicy = {
   includeDescendants: false,
 }
 
-function findParentPanelId(panels: Panel[], childId: string, parentId: string | null = null): string | null {
+function findParentPanelId(
+  panels: Panel[],
+  childId: string,
+  parentId: string | null = null
+): string | null {
   for (const p of panels) {
     if (p.id === childId) return parentId
     const found = findParentPanelId(p.subPanels ?? [], childId, p.id)
@@ -108,10 +112,11 @@ function relayoutStackedScene(
   rootPanels: Panel[]
 ): { surfaces: PanelSceneSurface[]; connectors: PanelSceneConnector[] } {
   const shared = surfaces.filter((s) => s.kind === 'shared_supply')
+  const auxiliary = surfaces.filter((s) => s.kind === 'auxiliary')
   const panelSurfaces = surfaces.filter((s) => s.kind === 'panel')
   panelSurfaces.sort((a, b) => surfaceSortDepth(rootPanels, a, b))
 
-  const ordered = [...shared, ...panelSurfaces]
+  const ordered = [...shared, ...auxiliary, ...panelSurfaces]
   const stackGap = 56
   let cursorY = 0
   const placed: PanelSceneSurface[] = []
@@ -209,13 +214,19 @@ export function applyPanelSceneFilter(
   const rootPanels = getElectricalPanelsFromProject(project)
   const visiblePanelIds = resolveVisiblePanelIds(rootPanels, filter)
   const includeShared =
-    filter.linkPolicy.includeSharedSupply &&
-    visibleHasMainPanel(rootPanels, visiblePanelIds)
+    filter.linkPolicy.includeSharedSupply && visibleHasMainPanel(rootPanels, visiblePanelIds)
 
   const picked: PanelSceneSurface[] = []
   for (const surface of full.surfaces) {
     if (surface.kind === 'shared_supply') {
       if (includeShared) picked.push(cloneSurface(surface))
+      continue
+    }
+    if (
+      surface.kind === 'auxiliary' &&
+      (!surface.enclosure?.ownerPanelId || visiblePanelIds.has(surface.enclosure.ownerPanelId))
+    ) {
+      picked.push(cloneSurface(surface))
       continue
     }
     if (surface.kind === 'panel' && surface.panel && visiblePanelIds.has(surface.panel.id)) {

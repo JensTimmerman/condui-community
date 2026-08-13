@@ -86,6 +86,8 @@
     "shortcuts": "Shortcuts",
     "installOffline": "Install for offline use",
     "contactSupport": "Contact support",
+    "documentation": "Documentation",
+    "areiGuide": "AREI guide",
     "tutorial": "Tutorial"
   },
   "pwaInstall": {
@@ -773,6 +775,8 @@
   "panelCanvas": {
     "selectPanel": "Select panel",
     "panelOptions": "Panel options",
+    "visibility": "Visibility",
+    "hiddenDevices": "Hidden devices",
     "allHierarchy": "All (hierarchy)",
     "noPanels": "No panels",
     "feedFromTop": "Feed from top",
@@ -783,12 +787,13 @@
     "modules": "modules",
     "assignToCircuit": "Assign to circuit",
     "assignModeOn": "Click a circuit…",
-    "moveToSupplyPanel": "Move to supply panel",
+    "moveToSupplyPanel": "Move to grid panel",
     "moveToMainPanel": "Move to main panel",
     "hideFromPanel": "Hide from panel view",
     "showHiddenDescription": "Select one or more devices to show.",
-    "supplyPanel": "Supply panel",
-    "hideSupplyPanel": "Hide supply panel",
+    "supplyPanel": "Grid panel",
+    "virtualEnclosure": "Supply enclosure",
+    "hideSupplyPanel": "Hide grid panel",
     "rewireTool": "Rewire tool",
     "rewireModeOn": "Deactivate Rewire Tool",
     "rewireModeOff": "Rewire Tool",
@@ -821,6 +826,11 @@
     "firstFloor": "First Floor",
     "dragSymbolsHere": "(Drag symbols here)",
     "noFloors": "No floors",
+    "supplyFrame": {
+      "title": "Supply",
+      "supplyLabel": "Supply",
+      "mainPanelLabel": "Main panel"
+    },
     "eendraadNaming": {
       "menuTitle": "Naming",
       "automaticNaming": "Auto-label",
@@ -829,6 +839,9 @@
       "hideFeederLettersDescription": "Circuits without outlets get no label; you can name them manually.",
       "toggleLetterOnOneWire": "Show or hide the circuit letter on the one-wire diagram",
       "endpointBranchLabelLocked": "Branch labels follow automatic naming (circuit letter + branch number).",
+      "lockedTooltip": "Auto-label is on",
+      "lockedDescription": "Turn it off to change this label.",
+      "openAutomaticNaming": "Open auto-label",
       "confirmOverwriteTitle": "Replace circuit letters?",
       "confirmOverwriteMessage": "Automatic naming will replace current letters with A, B, C… by row order on each panel. Continue?",
       "confirmOverwriteConfirm": "Continue"
@@ -1070,6 +1083,7 @@
     "switch_1p_pull": "Pull switch",
     "switch_impulse": "Impulse/Push switch",
     "switch_cross": "Cross switch",
+    "source_changeover": "Source transfer switch",
     "motion_detector": "Motion detector",
     "light_point": "Light point",
     "light_spot": "Spot light",
@@ -1117,6 +1131,10 @@
   },
   "earthing": {
     "deleteConfirmTitle": "Remove earthing?"
+  },
+  "supplyAssembly": {
+    "deleteChangeoverTitle": "Delete changeover?",
+    "deleteChangeoverMessage": "Deleting the changeover also deletes its converter branch and connected devices. Continue?"
   },
   "orphan": {
     "banner": {
@@ -1168,6 +1186,7 @@
       "panelMissingOneWireSymbol": "Panel missing one-wire symbol",
       "panelGridDuplicateModule": "Duplicate module on panel canvas",
       "supplyTrunkMisplacedInMainGrid": "Supply device on wrong panel area",
+      "splitBusWithoutBackupSupply": "Split bus without backup supply",
       "branchMultiplierEndpointsSplit": "Multiplier symbols split on one branch",
       "danglingReference": "Dangling reference",
       "invalidGeometry": "Invalid geometry"
@@ -1378,6 +1397,12 @@
           "message": "Two or more protections on this panel share the same label",
           "details": "Each protection on one panel (main bus, secondary bus, supply strip, or incoming feed) must have a unique label so circuits stay identifiable on the one-line diagram and panel layout. This is not a wiring orphan — it is a naming conflict.",
           "remediation": "Rename one of the conflicting protections, or turn on automatic naming so letters are reassigned without duplicates."
+        },
+        "converter-backup-labels": {
+          "shortTitle": "Missing backup-supply label",
+          "message": "A protection or endpoint on the backup supply is not labeled",
+          "details": "Backup-supply items are outside the main bus and are not named automatically.",
+          "remediation": "Add a clear manual label to every protection and endpoint on the inverter backup branch."
         }
       }
     },
@@ -1396,12 +1421,23 @@
       "panelMissingOneWireSymbol": "Panel \"{{panelName}}\" exists but has no one-wire feeder symbol/link.",
       "panelGridDuplicateModule": "Panel canvas shows \"{{moduleLabel}}\" more than once; keep the fuller module and hide the weaker duplicate.",
       "supplyTrunkMisplacedInMainGrid": "Supply device \"{{label}}\" is placed on the main panel grid (row {{row}}, column {{col}}) but must live in the supply strip only — panel canvas and one-line supply chain disagree.",
+      "splitBusWithoutBackupSupply": "Panel \"{{panelName}}\" has {{busSectionCount}} bus sections but no connected backup supply. Merge it back onto one grid feed.",
       "branchMultiplierEndpointsSplit": "Circuit {{circuitCode}}: branch \"{{branchLabel}}\" lists {{absorbCount}} extra multiplier symbol(s) (e.g. lights) as separate endpoints; they should be one endpoint with multiple plan placements. Use Repair in the Orphan Inspector."
     },
     "primitives": {
       "duplicatePanelProtectionLabels": {
         "message": "Protection label \"{{label}}\" is used {{count}} times on this panel",
         "details": "Duplicate protection names on the same panel (main bus, secondary bus, or supply) make circuits hard to identify. Rename one protection or enable automatic naming."
+      },
+      "converterBackupLabels": {
+        "protection": {
+          "message": "Backup-supply protection is not labeled",
+          "details": "Protections on an inverter backup-supply branch are not named automatically. Add a clear manual label."
+        },
+        "endpoint": {
+          "message": "Backup-supply endpoint is not labeled",
+          "details": "Endpoints on an inverter backup-supply branch are not named automatically. Add a clear manual label."
+        }
       },
       "protectionPhaseCompatibility": {
         "deviceLabel": "Protection",
@@ -1703,7 +1739,10 @@
     "unnamedItem": "Unnamed item",
     "protectionFallback": "Protection device",
     "trunkDeviceFallback": "Trunk device",
-    "domoticaFallback": "Domotica module"
+    "domoticaFallback": "Domotica module",
+    "manageHidden": "Manage hidden symbols",
+    "deviceOnCircuit": "{{device}} on {{circuit}}",
+    "selectSymbol": "Select {{symbol}}"
   },
   "contextMenu": {
     "addElement": "Add element",
@@ -1746,7 +1785,10 @@
     "setTotalCount": "Set total number of symbols in sitplan",
     "totalCount": "Total count",
     "invalidNumber": "Enter a whole number",
+    "mustBeAtLeastOne": "Number must be at least 1",
     "mustBeAtLeastCurrent": "Number must be at least the current count",
+    "maximumCount": "Maximum is {{max}}",
+    "allowedInverterCounts": "Use 1, 2, or 3",
     "maxCount": "Maximum is 99"
   },
   "tally": {
@@ -1875,6 +1917,10 @@
   "supply": {
     "trunkDevice": "Supply wire device",
     "mainProtectionLabel": "Main",
+    "port1": "Port 1",
+    "port2": "Port 2",
+    "converterPhases": "AC phases",
+    "inverterUnit": "Inverter",
     "nameLabelOnDiagramHint": "When shown, appears above the symbol on the horizontal supply wire."
   },
   "installDates": {
@@ -1900,6 +1946,17 @@
     "propagateProtections": "Yes - only protections",
     "propagateAll": "Yes - all",
     "propagateConsumers": "Yes - consumers too"
+  },
+  "feedOrganization": {
+    "title": "Feed organization",
+    "single": "Single feed",
+    "splitSwitchable": "Grid + switched backup",
+    "splitBackup": "Grid + backup",
+    "bus": "Busbar",
+    "gridFeed": "Grid feed",
+    "backupFeed": "Backup feed",
+    "gridMarker": "Grid",
+    "backupMarker": "Backup"
   },
   "wallProperties": {
     "title": "Wall properties",

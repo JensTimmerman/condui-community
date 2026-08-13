@@ -22,7 +22,10 @@ function parseStrokeWidth(value: string | null): number | null {
 /**
  * svgcanvas/Konva export can default wire paths to round caps; the editor uses butt caps.
  */
-export function fixEendraadWireLineCapsInExportSvg(svgString: string): string {
+export function fixEendraadWireLineCapsInExportSvg(
+  svgString: string,
+  options: { preserveRoundedThickCaps?: boolean } = {}
+): string {
   const doc = new DOMParser().parseFromString(svgString, 'image/svg+xml')
   const parserError = doc.querySelector('parsererror')
   if (parserError) return svgString
@@ -32,6 +35,13 @@ export function fixEendraadWireLineCapsInExportSvg(svgString: string): string {
     const strokeWidth = parseStrokeWidth(shape.getAttribute('stroke-width'))
     if (strokeWidth == null || !EENDRAAD_WIRE_STROKE_WIDTHS.has(strokeWidth)) return
     if (!shape.getAttribute('stroke')) return
+    if (
+      options.preserveRoundedThickCaps === true &&
+      strokeWidth === 6 &&
+      shape.getAttribute('stroke-linecap') === 'round'
+    ) {
+      return
+    }
     shape.setAttribute('stroke-linecap', 'butt')
   })
 

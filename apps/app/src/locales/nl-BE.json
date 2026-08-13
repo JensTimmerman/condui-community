@@ -86,6 +86,8 @@
     "shortcuts": "Sneltoetsen",
     "installOffline": "Installeren voor offline gebruik",
     "contactSupport": "Contacteer support",
+    "documentation": "Documentatie",
+    "areiGuide": "AREI-gids",
     "tutorial": "Tutorial"
   },
   "pwaInstall": {
@@ -779,6 +781,8 @@
   "panelCanvas": {
     "selectPanel": "Selecteer bord",
     "panelOptions": "Bordopties",
+    "visibility": "Zichtbaarheid",
+    "hiddenDevices": "Verborgen toestellen",
     "allHierarchy": "Alles (hiërarchie)",
     "noPanels": "Geen borden",
     "feedFromTop": "Voeding van boven",
@@ -786,12 +790,13 @@
     "rows": "Rijen",
     "columns": "Kolommen",
     "showDomotica": "Toon domotica",
-    "moveToSupplyPanel": "Verplaats naar voedingsbord",
+    "moveToSupplyPanel": "Verplaats naar netbord",
     "moveToMainPanel": "Verplaats naar hoofdbord",
     "hideFromPanel": "Verbergen in bordweergave",
     "showHiddenDescription": "Selecteer een of meer toestellen om te tonen.",
-    "supplyPanel": "Voedingsbord",
-    "hideSupplyPanel": "Voedingsbord verbergen",
+    "supplyPanel": "Netbord",
+    "virtualEnclosure": "Voedingskast",
+    "hideSupplyPanel": "Netbord verbergen",
     "rewireTool": "Herschakel gereedschap",
     "rewireModeOn": "Herschakelmodus Deactiveren",
     "rewireModeOff": "Herschakelmodus",
@@ -824,6 +829,11 @@
     "firstFloor": "Eerste verdieping",
     "dragSymbolsHere": "(Sleep symbolen hierheen)",
     "noFloors": "Geen verdiepingen",
+    "supplyFrame": {
+      "title": "Voeding",
+      "supplyLabel": "Voeding",
+      "mainPanelLabel": "Hoofdbord"
+    },
     "eendraadNaming": {
       "menuTitle": "Benaming",
       "automaticNaming": "Auto-Label",
@@ -832,6 +842,9 @@
       "hideFeederLettersDescription": "Kringen zonder aansluitingen krijgen geen label.",
       "toggleLetterOnOneWire": "Hoofdletter op het ééndraadschema tonen of verbergen",
       "endpointBranchLabelLocked": "Vertakkingslabels volgen automatische benaming (kringletter + volgnummer).",
+      "lockedTooltip": "Automatisch label is ingeschakeld",
+      "lockedDescription": "Schakel het uit om dit label te wijzigen.",
+      "openAutomaticNaming": "Automatisch label openen",
       "confirmOverwriteTitle": "Letters vervangen?",
       "confirmOverwriteMessage": "Automatische benaming vervangt de huidige letters door A, B, C… volgens de rijen op elk bord. Doorgaan?",
       "confirmOverwriteConfirm": "Doorgaan"
@@ -1073,6 +1086,7 @@
     "switch_1p_pull": "Trekschakelaar",
     "switch_impulse": "Impulsschakelaar",
     "switch_cross": "Kruisschakelaar",
+    "source_changeover": "Omschakelaar",
     "motion_detector": "Bewegingsdetector",
     "light_point": "Lichtpunt",
     "light_spot": "Spot",
@@ -1120,6 +1134,10 @@
   },
   "earthing": {
     "deleteConfirmTitle": "Aarding verwijderen?"
+  },
+  "supplyAssembly": {
+    "deleteChangeoverTitle": "Omschakelaar verwijderen?",
+    "deleteChangeoverMessage": "Als je de omschakelaar verwijdert, worden ook de omvormertak en aangesloten toestellen verwijderd. Doorgaan?"
   },
   "orphan": {
     "banner": {
@@ -1171,6 +1189,7 @@
       "panelMissingOneWireSymbol": "Paneel mist eendraadsymbool",
       "panelGridDuplicateModule": "Dubbele module op paneelcanvas",
       "supplyTrunkMisplacedInMainGrid": "Voedingscomponent op verkeerd paneelgebied",
+      "splitBusWithoutBackupSupply": "Gesplitste rail zonder backupvoeding",
       "branchMultiplierEndpointsSplit": "Vermenigvuldigingssymbolen gesplitst op één aftakking",
       "danglingReference": "Dangling referentie",
       "invalidGeometry": "Ongeldige geometrie"
@@ -1381,6 +1400,12 @@
           "message": "Twee of meer beveiligingen op dit bord hebben dezelfde naam",
           "details": "Elke beveiliging op één bord (hoofdbusbalk, secundaire bus, voedingsstrook of inkomende voeding) moet een unieke naam hebben zodat stroombanen herkenbaar blijven op het éénlijnschema en paneeloverzicht. Dit is geen bedradingswees — het is een naamconflict.",
           "remediation": "Hernoem één van de conflicterende beveiligingen, of schakel automatische naamgeving in zodat letters zonder duplicaten worden toegewezen."
+        },
+        "converter-backup-labels": {
+          "shortTitle": "Label op back-upvoeding ontbreekt",
+          "message": "Een beveiliging of verbruiker op de back-upvoeding heeft geen label",
+          "details": "Onderdelen op de back-upvoeding staan buiten de hoofdbusbalk en krijgen geen automatische naam.",
+          "remediation": "Geef elke beveiliging en verbruiker op de back-uptak van de omvormer een duidelijk handmatig label."
         }
       }
     },
@@ -1399,12 +1424,23 @@
       "panelMissingOneWireSymbol": "Paneel \"{{panelName}}\" bestaat maar heeft geen eendraad-voedingssymbool/koppeling.",
       "panelGridDuplicateModule": "Paneelcanvas toont \"{{moduleLabel}}\" meer dan één keer; behoud de volledige module en verberg de zwakkere dubbelganger.",
       "supplyTrunkMisplacedInMainGrid": "Voedingscomponent \"{{label}}\" staat op het hoofdraster (rij {{row}}, kolom {{col}}) maar hoort alleen in de voedingsstrook — paneelcanvas en eendraad voeding wijken af.",
+      "splitBusWithoutBackupSupply": "Bord \"{{panelName}}\" heeft {{busSectionCount}} railsecties maar geen aangesloten backupvoeding. Voeg ze opnieuw samen op één netvoeding.",
       "branchMultiplierEndpointsSplit": "Stroombaan {{circuitCode}}: aftakking \"{{branchLabel}}\" heeft {{absorbCount}} extra vermenigvuldigingssymbool(len) als aparte eindpunten; horen één eindpunt met meerdere plaatsingen te zijn. Gebruik Repareren in de weesinspectie."
     },
     "primitives": {
       "duplicatePanelProtectionLabels": {
         "message": "Beveiligingsnaam \"{{label}}\" wordt {{count}} keer gebruikt op dit bord",
         "details": "Dubbele beveiligingsnamen op hetzelfde bord (hoofdbus, secundaire bus of voeding) maken stroombanen moeilijk herkenbaar. Hernoem één beveiliging of schakel automatische naamgeving in."
+      },
+      "converterBackupLabels": {
+        "protection": {
+          "message": "Beveiliging op de back-upvoeding heeft geen label",
+          "details": "Beveiligingen op de back-uptak van een omvormer krijgen geen automatische naam. Voeg een duidelijk handmatig label toe."
+        },
+        "endpoint": {
+          "message": "Verbruiker op de back-upvoeding heeft geen label",
+          "details": "Verbruikers op de back-uptak van een omvormer krijgen geen automatische naam. Voeg een duidelijk handmatig label toe."
+        }
       },
       "protectionPhaseCompatibility": {
         "deviceLabel": "Beveiliging",
@@ -1719,7 +1755,10 @@
     "setTotalCount": "Stel het totaal aantal symbolen in het sitplan in",
     "totalCount": "Totaal aantal",
     "invalidNumber": "Voer een geheel getal in",
+    "mustBeAtLeastOne": "Het getal moet minstens 1 zijn",
     "mustBeAtLeastCurrent": "Het getal moet minstens het huidige aantal zijn",
+    "maximumCount": "Maximum is {{max}}",
+    "allowedInverterCounts": "Gebruik 1, 2 of 3",
     "maxCount": "Maximum is 99"
   },
   "floorSelection": {
@@ -1750,7 +1789,10 @@
     "unnamedItem": "Naamloos item",
     "protectionFallback": "Beveiligingstoestel",
     "trunkDeviceFallback": "Apparaat op stam",
-    "domoticaFallback": "Domotica-module"
+    "domoticaFallback": "Domotica-module",
+    "manageHidden": "Verborgen symbolen beheren",
+    "deviceOnCircuit": "{{device}} op {{circuit}}",
+    "selectSymbol": "{{symbol}} selecteren"
   },
   "tally": {
     "title": "Materiaallijst",
@@ -1878,6 +1920,10 @@
   "supply": {
     "trunkDevice": "Voedingsdraad apparaat",
     "mainProtectionLabel": "Hoofd",
+    "port1": "Poort 1",
+    "port2": "Poort 2",
+    "converterPhases": "AC-fasen",
+    "inverterUnit": "Omvormer",
     "nameLabelOnDiagramHint": "Indien zichtbaar: verschijnt boven het symbool op de horizontale voedingsdraad."
   },
   "installDates": {
@@ -1903,6 +1949,17 @@
     "propagateProtections": "Ja - alleen beveiligingen",
     "propagateAll": "Ja - alles",
     "propagateConsumers": "Ja - verbruikers ook"
+  },
+  "feedOrganization": {
+    "title": "Voedingsindeling",
+    "single": "Eén voeding",
+    "splitSwitchable": "Net + schakelbare backup",
+    "splitBackup": "Net + backup",
+    "bus": "Rail",
+    "gridFeed": "Netvoeding",
+    "backupFeed": "Backupvoeding",
+    "gridMarker": "Net",
+    "backupMarker": "Backup"
   },
   "wallProperties": {
     "title": "Muureigenschappen",

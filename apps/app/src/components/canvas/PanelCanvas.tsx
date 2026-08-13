@@ -11,7 +11,7 @@ import type { BaseCanvasHandle } from './BaseCanvas'
 import CanvasFloatingControlRail from './CanvasFloatingControlRail'
 import { CanvasOverlayScaleProvider } from '@/contexts/CanvasOverlayScaleContext'
 import { FloatingControl } from './FloatingControls'
-import { PanelSelectorIcon } from '@/components/icons/UiIcons'
+import { PanelSelectorIcon, VisibilityIcon } from '@/components/icons/UiIcons'
 import { useUIStore } from '@/stores/uiStore'
 
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -78,6 +78,10 @@ import {
   buildPanelSelectorLabel,
   type PanelOption,
 } from './panel/panelOptionsMenuUtils'
+import {
+  PanelVisibilityMenu,
+  type PanelVisibilityTarget,
+} from './panel/PanelVisibilityMenu'
 import {
   usePanelContextMenu,
   usePanelLibraryDrop,
@@ -250,6 +254,7 @@ export default function PanelCanvas({ onMultiFingerSwipe, capabilities }: PanelC
     setFeedSideDirection,
     setPanelOptionsMenuOpen,
   } = usePanelOptionsMenuState()
+  const [panelVisibilityMenuOpen, setPanelVisibilityMenuOpen] = useState(false)
 
   // Register canvas for export
   // Always return stage if available - export will handle switching panels as needed
@@ -324,7 +329,13 @@ export default function PanelCanvas({ onMultiFingerSwipe, capabilities }: PanelC
     )
     return selectedExists ? panelCanvasMode : { kind: 'all' }
   }, [panelCanvasMode, panelList])
-
+  const panelVisibilityTargets = useMemo<PanelVisibilityTarget[]>(() => {
+    const visiblePanels =
+      effectivePanelCanvasMode.kind === 'panel'
+        ? panelList.filter((option) => option.id === effectivePanelCanvasMode.panelId)
+        : panelList
+    return visiblePanels.map((option) => ({ panelId: option.id, panelName: option.name }))
+  }, [effectivePanelCanvasMode, panelList])
   /** When single-panel mode or the focused panel id changes, re-frame the scene after layout. */
   const panelCanvasFitKeyRef = useRef<string | null>(null)
   useEffect(() => {
@@ -899,7 +910,6 @@ export default function PanelCanvas({ onMultiFingerSwipe, capabilities }: PanelC
     setSupplyPanelVisible,
     sharedSupplyRefKeys,
     t,
-    unhideModuleFromPanel,
   })
 
   // Calculate panel frame dimensions with margin
@@ -2328,7 +2338,10 @@ export default function PanelCanvas({ onMultiFingerSwipe, capabilities }: PanelC
             variant="menu"
             side="right"
             open={panelOptionsMenuOpen}
-            onOpenChange={setPanelOptionsMenuOpen}
+            onOpenChange={(open) => {
+              if (open) setPanelVisibilityMenuOpen(false)
+              setPanelOptionsMenuOpen(open)
+            }}
             triggerTestId="e2e-panel-canvas-options"
           >
             <PanelOptionsMenu
@@ -2346,6 +2359,26 @@ export default function PanelCanvas({ onMultiFingerSwipe, capabilities }: PanelC
               setFeedSideDirection={setFeedSideDirection}
               showFeedControls={canEditProject}
               onClose={closePanelOptionsMenu}
+            />
+          </FloatingControl>
+          <FloatingControl
+            icon={<VisibilityIcon className="w-6 h-6 text-gray-700 dark:text-gray-200" />}
+            label={t('panelCanvas.visibility', 'Visibility')}
+            tooltipDescription={t('panelCanvas.hiddenDevices', 'Hidden devices')}
+            variant="menu"
+            side="right"
+            open={panelVisibilityMenuOpen}
+            onOpenChange={(open) => {
+              if (open) closePanelOptionsMenu()
+              setPanelVisibilityMenuOpen(open)
+            }}
+            triggerTestId="e2e-panel-canvas-visibility"
+          >
+            <PanelVisibilityMenu
+              readOnly={!canEditProject}
+              showPanelName={effectivePanelCanvasMode.kind === 'all'}
+              targets={panelVisibilityTargets}
+              onShow={unhideModuleFromPanel}
             />
           </FloatingControl>
         </CanvasFloatingControlRail>

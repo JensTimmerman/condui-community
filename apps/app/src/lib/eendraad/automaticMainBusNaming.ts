@@ -69,6 +69,7 @@ export function protectionOmittedFromAutomaticNamingLetter(
   protection: ProtectionDevice | null | undefined,
   primaryCircuit: Circuit,
 ): boolean {
+  if (primaryCircuit.supplySource?.kind === 'converter-backup') return true
   if (!protection || protection.type !== 'ROTATING_SWITCH') return false
   return !rowFeedsLinkedSubPanel(primaryCircuit, protection)
 }

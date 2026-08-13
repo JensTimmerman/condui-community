@@ -65,7 +65,8 @@ export function trunkDeviceCountsAsProtection(
 
 /**
  * Initial main/secondary-bus label and circuit code on drop.
- * Rotating switches stay unlabeled until auto-naming assigns a feeder letter or the user sets one.
+ * Rotating-switch protection rows stay unlabeled; circuit-wire drops are stored as inline trunk
+ * devices and therefore inherit the owning circuit's label.
  */
 export function resolveInitialProtectionBusLabel(
   type: ProtectionType,

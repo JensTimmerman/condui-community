@@ -145,7 +145,7 @@ export function collectEendraadTextOverlays(
     // Legacy circuit-notes labels are represented both in elements and in panelLayout.circuitNotes.
     // To avoid double ownership, ignore these here and rely on circuitNotes as the single source.
     if (el.id?.startsWith('circuit-notes-')) continue
-    const text = (el.label ?? '').trim()
+    const text = (el.translationKey ? i18n.t(el.translationKey) : (el.label ?? '')).trim()
     if (!text) continue
 
     const isBranchLabel = !!el.branchId
@@ -289,6 +289,7 @@ export function collectEendraadWireLabelOverlays(
   wireSegments: WireSegment[],
   panelId: string,
   exportTheme: ExportTheme,
+  diagramId: string = panelId,
 ): ExportTextOverlay[] {
   if (!wireSegments.length) return []
 
@@ -298,6 +299,7 @@ export function collectEendraadWireLabelOverlays(
 
   for (const wireSegment of wireSegments) {
     if (wireSegment.panelId !== panelId) continue
+    if ((wireSegment.diagramId ?? wireSegment.panelId) !== diagramId) continue
     if (!isWireLabelVisibleForSegment(wireSegment)) continue
 
     const mainText = formatWireLabel(wireSegment, { otherLabel: i18n.t('wires.other') })
@@ -427,7 +429,8 @@ export function collectEendraadSecondaryBusReferenceOverlays(
   wireSegments: WireSegment[],
   panelId: string,
   exportTheme: ExportTheme,
-  sliceBounds: SceneBounds
+  sliceBounds: SceneBounds,
+  diagramId: string = panelId,
 ): ExportTextOverlay[] {
   if (!wireSegments.length) return []
 
@@ -445,6 +448,7 @@ export function collectEendraadSecondaryBusReferenceOverlays(
 
   for (const wireSegment of wireSegments) {
     if (wireSegment.panelId !== panelId) continue
+    if ((wireSegment.diagramId ?? wireSegment.panelId) !== diagramId) continue
     const label = (
       wireSegment.secondaryBusReferenceExportLabel ??
       wireSegment.secondaryBusReferenceLabel ??

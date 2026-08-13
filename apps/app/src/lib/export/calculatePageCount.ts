@@ -2,7 +2,6 @@
  * Calculate page counts for PDF export
  */
 
-import type { Panel } from '@/types/schema'
 import type { BottomUpLayoutResult } from '@/lib/layout/bottomUpLayout'
 import { buildSitplanExportTargets } from './sitplanExportPlan'
 import { estimateEendraadPageCount } from './slicing/eendraadSlicing'
@@ -11,6 +10,7 @@ import {
   getElectricalPanelsFromProject,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
+import { buildPanelExportTargets, countElectricalPanels } from './exportPlan'
 
 type PageCountProject = ProjectWithOptionalV2Electrical & ProjectWithOptionalV2Building
 
@@ -26,21 +26,6 @@ export interface PageCountOptions {
   includeEendraad: boolean
   includePanel: boolean
   includeSitplan: boolean
-}
-
-/**
- * Count all panels recursively (including sub-panels)
- */
-function countAllPanels(panels: Panel[]): number {
-  return panels.reduce((count, p) => {
-    return count + 1 + countAllPanels(p.subPanels)
-  }, 0)
-}
-
-function countMainPanels(panels: Panel[]): number {
-  return panels.reduce((count, panel) => {
-    return count + (panel.isMain ? 1 : 0) + countMainPanels(panel.subPanels)
-  }, 0)
 }
 
 /**
@@ -74,16 +59,8 @@ export function calculatePageCounts(
   // Calculate panel pages (1 per panel)
   if (options.includePanel) {
     const projectPanels = getElectricalPanelsFromProject(project)
-    const panelCount = countAllPanels(projectPanels)
-    const mainPanelCount = countMainPanels(projectPanels)
-    panel = panelCount
-    if (panelCount > 3) {
-      panel += 1
-    }
-    if (mainPanelCount > 1) {
-      panel += 1
-    }
-    if (panelCount > 0) {
+    panel = buildPanelExportTargets(project).length
+    if (projectPanels.length > 0) {
       panel += 1
     }
   }
@@ -94,7 +71,7 @@ export function calculatePageCounts(
       eendraad = estimateEendraadPageCount(layout.panels)
     } else {
       // No layout available - estimate based on number of panels
-      const panelCount = countAllPanels(getElectricalPanelsFromProject(project))
+      const panelCount = countElectricalPanels(getElectricalPanelsFromProject(project))
       // Rough estimate: assume 1 page per panel (will be more accurate during actual export)
       eendraad = panelCount
     }

@@ -8,12 +8,17 @@
  */
 
 import type { BottomUpPanelLayout, BottomUpCircuitLayout } from '@/lib/layout/bottomUpLayout'
-import { LAYOUT_CONSTANTS, estimateCircuitNotesWidth } from '@/lib/layout/bottomUpLayout'
+import {
+  LAYOUT_CONSTANTS,
+  estimateCircuitNotesWidth,
+  getPanelDiagramId,
+} from '@/lib/layout/bottomUpLayout'
 import type { ExportScene } from '../types'
 import { A4_LANDSCAPE, getUsableArea } from '../pageSizes'
 import { ExportError } from '../types'
 import { exportLog } from '../exportLogger'
 import { getPdfContentHeightMm } from '../pdfPageLayout'
+import { getCircuitBusSectionId } from '@/lib/panel/panelBusSections'
 
 /** Estimated horizontal space for branch labels to the left of branchX (px). */
 const LABEL_WIDTH_ESTIMATE_PX = 90
@@ -60,6 +65,7 @@ interface MainBusBlock {
   left: number
   right: number
   circuitIds: string[]
+  busSectionId: string
   /** Child circuit extents used for safe internal cut points when the block is oversized. */
   nestedExtents?: Array<{ left: number; right: number }>
 }
@@ -135,6 +141,11 @@ function getMainBusBlocks(panelLayout: BottomUpPanelLayout): MainBusBlock[] {
       left,
       right,
       circuitIds: ids,
+      busSectionId: getCircuitBusSectionId(
+        panelLayout.panel,
+        cl.circuit,
+        cl.protection ?? undefined
+      ),
       nestedExtents: nestedExtents.sort((a, b) => a.left - b.left),
     })
   }
@@ -153,6 +164,11 @@ function getMainBusBlocks(panelLayout: BottomUpPanelLayout): MainBusBlock[] {
       left,
       right,
       circuitIds: underRcd.map((c) => c.circuit.id),
+      busSectionId: getCircuitBusSectionId(
+        panelLayout.panel,
+        underRcd[0]!.circuit,
+        underRcd[0]!.parentRcd ?? undefined
+      ),
       nestedExtents,
     })
   }
@@ -193,6 +209,17 @@ function getCutPoints(
   }
   points.push(sceneRight)
   return [...new Set(points)].sort((a, b) => a - b)
+}
+
+function isBusSectionBoundary(blocks: MainBusBlock[], cutPoint: number): boolean {
+  for (let index = 0; index < blocks.length - 1; index++) {
+    const left = blocks[index]!
+    const right = blocks[index + 1]!
+    if (left.busSectionId === right.busSectionId) continue
+    const boundary = (left.right + right.left) / 2
+    if (Math.abs(boundary - cutPoint) < 0.01) return true
+  }
+  return false
 }
 
 function computeGlobalScale(sceneBounds: ExportScene['bounds']): number {
@@ -241,9 +268,26 @@ function buildCoreSlices(
 
   while (startX < sceneRight - 1) {
     const maxEndX = startX + sliceWidthPx
-    let bestEndX = startX
-    for (const cutPoint of cutPoints) {
-      if (cutPoint > startX && cutPoint <= maxEndX) bestEndX = cutPoint
+    const candidates = cutPoints.filter((cutPoint) => cutPoint > startX && cutPoint <= maxEndX)
+    const furthestEndX = candidates.at(-1) ?? startX
+    let bestEndX = furthestEndX
+
+    // A physical bus-section transition is the cleanest place to break a drawing. Prefer
+    // the latest such boundary that makes a useful page, but never isolate the first block
+    // merely to preserve a section boundary. This keeps e.g. 1 grid + many backup circuits
+    // packed naturally while making balanced grid/backup runs land on separate pages.
+    const preferredBoundary = candidates
+      .filter((cutPoint) => isBusSectionBoundary(blocks, cutPoint))
+      .filter((cutPoint) => {
+        const pageBlocks = getBlocksInRange(blocks, startX, cutPoint)
+        const utilization = (cutPoint - startX) / sliceWidthPx
+        return pageBlocks.length >= 2 && utilization >= 0.45
+      })
+      .at(-1)
+    if (preferredBoundary != null) {
+      const pagesAfterPreferred = Math.ceil((sceneRight - preferredBoundary) / sliceWidthPx)
+      const pagesAfterFurthest = Math.ceil((sceneRight - furthestEndX) / sliceWidthPx)
+      if (pagesAfterPreferred <= pagesAfterFurthest) bestEndX = preferredBoundary
     }
     if (bestEndX <= startX) {
       bestEndX = Math.min(startX + sliceWidthPx, sceneRight)
@@ -316,7 +360,8 @@ export function chooseEendraadDocumentScale(
     let pageCount = 0
     let sparseTailCount = 0
     for (const panelLayout of panelLayouts) {
-      const scene = scenesByPanelId.get(panelLayout.panel.id)
+      if (panelLayout.frameRole === 'supply') continue
+      const scene = scenesByPanelId.get(getPanelDiagramId(panelLayout))
       if (!scene) continue
       const metrics = getSlicingMetrics(panelLayout, scene, scale)
       pageCount += metrics.pageCount
@@ -351,7 +396,7 @@ export function chooseEendraadDocumentScale(
 export function estimateEendraadPageCount(panelLayouts: BottomUpPanelLayout[]): number {
   const scenesByPanelId = new Map<string, ExportScene>()
   for (const panelLayout of panelLayouts) {
-    scenesByPanelId.set(panelLayout.panel.id, {
+    scenesByPanelId.set(getPanelDiagramId(panelLayout), {
       bounds: {
         x: panelLayout.frame.x,
         y: panelLayout.frame.y,
@@ -368,7 +413,8 @@ export function estimateEendraadPageCount(panelLayouts: BottomUpPanelLayout[]): 
     EENDRAAD_MAX_SCALE_MM_PER_PX
   )
   return panelLayouts.reduce((count, panelLayout) => {
-    const scene = scenesByPanelId.get(panelLayout.panel.id)
+    if (panelLayout.frameRole === 'supply') return count + 1
+    const scene = scenesByPanelId.get(getPanelDiagramId(panelLayout))
     return scene ? count + getSlicingMetrics(panelLayout, scene, scale).pageCount : count
   }, 0)
 }
@@ -379,6 +425,31 @@ export async function calculateEendraadSlices(
   documentGlobalScale?: number
 ): Promise<EendraadSlicingResult> {
   const sceneBounds = scene.bounds
+  if (panelLayout.frameRole === 'supply') {
+    const contentWidth = getUsableArea(A4_LANDSCAPE).width
+    const contentHeight = getPdfContentHeightMm('landscape', {
+      hasInfoBlock: true,
+      hasPanelTitle: true,
+    })
+    const globalScale = Math.min(
+      EENDRAAD_MAX_SCALE_MM_PER_PX,
+      contentWidth / sceneBounds.width,
+      contentHeight / sceneBounds.height
+    )
+    return {
+      slices: [
+        {
+          x: sceneBounds.x,
+          y: sceneBounds.y,
+          width: sceneBounds.width,
+          height: sceneBounds.height,
+          circuitIds: [],
+        },
+      ],
+      globalScale,
+      mainBusY: panelLayout.mainBus.y,
+    }
+  }
   const blocks = getMainBusBlocks(panelLayout)
   const rawScale = documentGlobalScale ?? computeGlobalScale(sceneBounds)
   const globalScale = Math.min(rawScale, EENDRAAD_MAX_SCALE_MM_PER_PX)

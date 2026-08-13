@@ -4,7 +4,11 @@ import { useMemo, useRef, useEffect, useCallback } from 'react'
 import { Circle, Line, Text } from 'react-konva'
 import Konva from 'konva'
 import { panelGridModuleRefKey, ROW_GAP, ROW_STRIDE, CELL_W, CELL_H } from './panelGridLayout'
-import { findPanelContainingModuleRef, getRelationEdges } from './panelRelationEdges'
+import {
+  findPanelContainingModuleRef,
+  getPanelMainBusSupplyDevice,
+  getRelationEdges,
+} from './panelRelationEdges'
 import type { Panel, PanelGridModuleRef } from '@/types/schema'
 import type { ModulePlacement } from './panelGridLayout'
 import { ensureInstallationFeedTopology, getPanelFeedProjection } from '@/lib/feedTopology'
@@ -510,30 +514,58 @@ function applyWireTerminal(
 
 function buildModulePortCandidates(
   wires: RoutedWire[],
-  placement: ModulePlacement
+  placement: ModulePlacement,
+  lockDirectionalSides = false
 ): ModulePortCandidate[] {
   const centerX = placement.x + placement.width / 2
   const cloneWires = () => wires.map((wire) => ({ ...wire, points: [...wire.points] }))
-  const configurableWireIndexes = wires.flatMap((wire, index) =>
-    wire.selectedEndpoint ? [index] : []
+  const incomingWireIndexes = wires.flatMap((wire, index) =>
+    wire.selectedEndpoint === 'target' ? [index] : []
   )
-  if (configurableWireIndexes.length === 0) {
+  const outgoingWireIndexes = wires.flatMap((wire, index) =>
+    wire.selectedEndpoint === 'source' ? [index] : []
+  )
+  const configurableGroups = [incomingWireIndexes, outgoingWireIndexes].filter(
+    (indexes) => indexes.length > 0
+  )
+  if (configurableGroups.length === 0) {
     return [{ wires: cloneWires(), preferencePenalty: 0 }]
   }
 
-  // Port planning happens before pathfinding. Evaluate each relation's top/bottom
-  // choice independently so even a module with only one visible relation can flip
-  // to the side that produces the shortest complete route.
-  const configurableCount = Math.min(configurableWireIndexes.length, 5)
-  const assignmentCount = 1 << configurableCount
+  if (lockDirectionalSides) {
+    return (['top', 'bottom'] as const).map((incomingSide) => {
+      const outgoingSide = incomingSide === 'top' ? 'bottom' : 'top'
+      const candidateWires = cloneWires()
+      for (const wireIndex of [...incomingWireIndexes, ...outgoingWireIndexes]) {
+        const wire = candidateWires[wireIndex]!
+        const side = wire.selectedEndpoint === 'target' ? incomingSide : outgoingSide
+        const incomingIndex = incomingWireIndexes.indexOf(wireIndex)
+        const terminalX =
+          incomingIndex >= 0 && incomingWireIndexes.length > 1
+            ? centerX +
+              (incomingIndex - (incomingWireIndexes.length - 1) / 2) * SUPPLY_PORT_SPREAD * 2
+            : centerX
+        applyWireTerminal(wire, wire.selectedEndpoint!, placement, side, terminalX)
+      }
+      return { wires: candidateWires, preferencePenalty: 0 }
+    })
+  }
+
+  // A module port represents a bus connection, not a separate decision for every
+  // relation. Keep the complete incoming bundle and complete outgoing fan-out on
+  // coherent sides, then let pathfinding compare the (at most four) group-level
+  // assignments. Besides producing a readable bus, this avoids the old five-wire
+  // bitmask cap leaving large fan-outs partly on their legacy guide side.
+  const assignmentCount = 1 << configurableGroups.length
   const candidates: ModulePortCandidate[] = []
   for (let assignment = 0; assignment < assignmentCount; assignment += 1) {
     const candidateWires = cloneWires()
-    for (let planIndex = 0; planIndex < configurableCount; planIndex += 1) {
-      const wireIndex = configurableWireIndexes[planIndex]!
-      const wire = candidateWires[wireIndex]!
-      const side = (assignment & (1 << planIndex)) === 0 ? 'top' : 'bottom'
-      applyWireTerminal(wire, wire.selectedEndpoint!, placement, side, centerX)
+    for (let groupIndex = 0; groupIndex < configurableGroups.length; groupIndex += 1) {
+      const side = (assignment & (1 << groupIndex)) === 0 ? 'top' : 'bottom'
+      for (const wireIndex of configurableGroups[groupIndex]!) {
+        const wire = candidateWires[wireIndex]!
+        applyWireTerminal(wire, wire.selectedEndpoint!, placement, side, centerX)
+      }
     }
     candidates.push({ wires: candidateWires, preferencePenalty: 0 })
   }
@@ -1565,8 +1597,7 @@ function computeWires(
     panelForContext.isMain && installation
       ? (getPanelFeedProjection(installation, panels, panelForContext)?.devices ?? [])
       : []
-  const lastSupplyDeviceId =
-    supplyDevices.length > 0 ? (supplyDevices[supplyDevices.length - 1]?.id ?? null) : null
+  const lastSupplyDeviceId = getPanelMainBusSupplyDevice(supplyDevices)?.id ?? null
 
   const lastSupplyRef: PanelGridModuleRef | null = lastSupplyDeviceId
     ? { kind: 'trunkDevice', id: lastSupplyDeviceId, scope: 'supply' }
@@ -2260,7 +2291,17 @@ function computeWires(
     score += countWirePathConflicts(wires) * WIRE_CONFLICT_PENALTY
     return { wires, score }
   }
-  const modulePortCandidates = buildModulePortCandidates(result, targetPlacement)
+  const selectedSupplyDevice =
+    ref.kind === 'trunkDevice' && ref.scope === 'supply'
+      ? supplyDevices.find((device) => device.id === ref.id)
+      : undefined
+  const modulePortCandidates = buildModulePortCandidates(
+    result,
+    targetPlacement,
+    selectedSupplyDevice?.symbol === 'source_changeover' ||
+      (result.some((wire) => wire.selectedEndpoint === 'target') &&
+        result.some((wire) => wire.selectedEndpoint === 'source'))
+  )
   const bundledCandidates = modulePortCandidates.filter(candidateKeepsOverlapGroupsTogether)
   const routedCandidates = (
     bundledCandidates.length > 0 ? bundledCandidates : modulePortCandidates

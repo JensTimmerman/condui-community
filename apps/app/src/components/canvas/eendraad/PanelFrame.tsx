@@ -58,8 +58,15 @@ export function PanelFrame({ panelLayout, children }: PanelFrameProps) {
   const setSelection = useSetSelection()
   const setHover = useSetHover()
   const clearHover = useClearHover()
-  const isSelected = useIsTypeAndIdSelected('panel', panelLayout.panel.id)
-  const isHovered = useHoverIncludes('panel', panelLayout.panel.id)
+  const isVirtualSupplyFrame = panelLayout.frameRole === 'supply'
+  const panelIsSelected = useIsTypeAndIdSelected('panel', panelLayout.panel.id)
+  const panelIsHovered = useHoverIncludes('panel', panelLayout.panel.id)
+  const supplyIsSelected = useUIStore(
+    (state) =>
+      state.selection.type === 'supply' && state.selection.supplyPanelId === panelLayout.panel.id
+  )
+  const isSelected = isVirtualSupplyFrame ? supplyIsSelected : panelIsSelected
+  const isHovered = !isVirtualSupplyFrame && panelIsHovered
   const canvasZoom = useEffectiveCanvasZoom(ZOOM_100, 'eendraad')
   const currentProject = useProjectStore((s: ProjectState) => s.currentProject)
   const { advancedPanelLabels } = useEditionFeatureAvailability(currentProject?.project.id)
@@ -69,17 +76,30 @@ export function PanelFrame({ panelLayout, children }: PanelFrameProps) {
   const frameStrokeWidth = 4
 
   const headerLines = useMemo(() => {
+    if (isVirtualSupplyFrame) {
+      return [
+        {
+          text: t('canvas.supplyFrame.title', 'Supply'),
+          variant: 'title' as const,
+        },
+      ]
+    }
     if (!currentProject) {
       return [{ text: panelLayout.panel.name, variant: 'title' as const }]
     }
-    const numberIndexById = buildPanelNumberIndexById(getElectricalPanelsFromProject(currentProject))
-    const parentPanel = findParentPanel(getElectricalPanelsFromProject(currentProject), panelLayout.panel.id)
+    const numberIndexById = buildPanelNumberIndexById(
+      getElectricalPanelsFromProject(currentProject)
+    )
+    const parentPanel = findParentPanel(
+      getElectricalPanelsFromProject(currentProject),
+      panelLayout.panel.id
+    )
     return buildPanelDiagramHeaderLines(currentProject, panelLayout.panel, t, {
       advancedLabelsEnabled: advancedPanelLabels,
       parentPanel,
       numberIndexById,
     })
-  }, [advancedPanelLabels, currentProject, panelLayout.panel, t])
+  }, [advancedPanelLabels, currentProject, isVirtualSupplyFrame, panelLayout.panel, t])
 
   const { x: fx, y: fy, width: fw, height: fh } = panelLayout.frame
   const borderHitCanvas = getFrameBorderHitThicknessCanvas(canvasZoom)
@@ -113,17 +133,37 @@ export function PanelFrame({ panelLayout, children }: PanelFrameProps) {
   const rightHitHeight = Math.max(0, infoBlockY - fy)
 
   const handleFrameMouseEnter = useCallback(() => {
+    if (isVirtualSupplyFrame) return
     setHover({ type: 'panel', ids: [panelLayout.panel.id] })
-  }, [panelLayout.panel.id, setHover])
+  }, [isVirtualSupplyFrame, panelLayout.panel.id, setHover])
 
   const handleFrameMouseLeave = useCallback(() => {
+    if (isVirtualSupplyFrame) return
     clearHover()
-  }, [clearHover])
+  }, [clearHover, isVirtualSupplyFrame])
 
   const handleTitleClick = useCallback(
-    (e: { cancelBubble: boolean; evt: { button?: number; shiftKey?: boolean; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean } }) => {
+    (e: {
+      cancelBubble: boolean
+      evt: {
+        button?: number
+        shiftKey?: boolean
+        altKey?: boolean
+        ctrlKey?: boolean
+        metaKey?: boolean
+      }
+    }) => {
       e.cancelBubble = true
       if (e.evt.button != null && e.evt.button !== 0) return
+
+      if (isVirtualSupplyFrame) {
+        setSelection({
+          type: 'supply',
+          ids: ['supply'],
+          supplyPanelId: panelLayout.panel.id,
+        })
+        return
+      }
 
       if (e.evt.shiftKey) {
         const { selection } = useUIStore.getState()
@@ -146,7 +186,7 @@ export function PanelFrame({ panelLayout, children }: PanelFrameProps) {
         setSelection({ type: 'panel', ids: [panelLayout.panel.id] })
       }
     },
-    [panelLayout.panel.id, setSelection]
+    [isVirtualSupplyFrame, panelLayout.panel.id, setSelection]
   )
 
   const titleX = panelLayout.frame.x + PANEL_FRAME_HEADER_TOP_INSET
@@ -164,7 +204,14 @@ export function PanelFrame({ panelLayout, children }: PanelFrameProps) {
         onTap={handleTitleClick}
         listening={true}
       >
-        <Rect x={fx} y={fy} width={fw} height={borderHitCanvas} fill="transparent" listening={true} />
+        <Rect
+          x={fx}
+          y={fy}
+          width={fw}
+          height={borderHitCanvas}
+          fill="transparent"
+          listening={true}
+        />
         {bottomHitWidth > 0 && (
           <Rect
             x={fx}
@@ -175,7 +222,14 @@ export function PanelFrame({ panelLayout, children }: PanelFrameProps) {
             listening={true}
           />
         )}
-        <Rect x={fx} y={fy} width={borderHitCanvas} height={fh} fill="transparent" listening={true} />
+        <Rect
+          x={fx}
+          y={fy}
+          width={borderHitCanvas}
+          height={fh}
+          fill="transparent"
+          listening={true}
+        />
         {rightHitHeight > 0 && (
           <Rect
             x={fx + fw - borderHitCanvas}
@@ -252,11 +306,7 @@ export function PanelFrame({ panelLayout, children }: PanelFrameProps) {
           fontSize={line.variant === 'title' ? TITLE_FONT_SIZE : BODY_FONT_SIZE}
           fontFamily={fontFamily}
           fontStyle={line.variant === 'title' ? 'bold' : 'normal'}
-          fill={
-            line.variant === 'muted'
-              ? getSecondaryTextColor(isDark)
-              : getTextColor(isDark)
-          }
+          fill={line.variant === 'muted' ? getSecondaryTextColor(isDark) : getTextColor(isDark)}
           listening={false}
         />
       ))}

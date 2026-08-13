@@ -18,6 +18,7 @@ import { getPlanWiringFromProject } from '@/lib/projectV2/planWiring'
 import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
 import { getPanelDisplayName } from '@/utils/panelNames'
 import { clamp } from '@/lib/geometry'
+import { openHiddenSituationPlanDialogForFloor } from '@/components/plan/openHiddenSituationPlanDialog'
 
 /** Symbol category for visibility and hover-highlight */
 export type SitplanSymbolCategory = 'sockets' | 'lights' | 'switches' | 'panels' | 'fixedAppliances'
@@ -281,6 +282,11 @@ export default function SitplanVisibilityPanel({ readOnly = false }: { readOnly?
     [currentProject],
   )
 
+  const hiddenItemCount = useMemo(
+    () => activeFloor?.hiddenSitplanPlacementIds?.length ?? 0,
+    [activeFloor]
+  )
+
   const flattenedPanels: Array<{ id: string; name: string }> = useMemo(() => {
     function flattenPanels(
       localPanels: typeof panels,
@@ -312,6 +318,23 @@ export default function SitplanVisibilityPanel({ readOnly = false }: { readOnly?
       </div>
 
       <div id="sitplan-visibility-content" className="px-3 pb-3 pt-2 min-w-[220px]">
+        <button
+          type="button"
+          disabled={readOnly || hiddenItemCount === 0}
+          onClick={() => {
+            if (!activeFloorId) return
+            openHiddenSituationPlanDialogForFloor(
+              activeFloorId,
+              t,
+              t('hiddenItemsDialog.manageHidden', 'Manage hidden')
+            )
+          }}
+          className="mb-2 flex w-full items-center justify-between rounded-md border border-gray-300 px-2.5 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+        >
+          <span>{t('hiddenItemsDialog.manageHidden', 'Manage hidden')}</span>
+          <span className="text-xs text-gray-500 dark:text-gray-400">{hiddenItemCount}</span>
+        </button>
+
         {/* Master checkbox */}
         <label className={`flex items-center gap-2 py-1.5 ${text} cursor-pointer`}>
           <input

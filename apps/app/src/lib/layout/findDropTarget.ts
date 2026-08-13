@@ -58,6 +58,12 @@ export interface DropTarget {
     | 'mainBus'
     | 'rcd'
     | 'supplyWire'
+    | 'supplyBackupWire'
+    | 'supplyBackupOutputWire'
+    | 'supplyChangeoverGridWire'
+    | 'supplyConverterGridWire'
+    | 'supplyConverterBackupWire'
+    | 'supplyConverterDcWire'
     | 'groundWire'
     | null
   circuitId?: string
@@ -69,6 +75,8 @@ export interface DropTarget {
    *  - undefined: no position info — append to end */
   insertAfterEndpointId?: string | null
   panelId?: string
+  /** Unique one-wire frame containing the hit target. */
+  diagramId?: string
   branchEndpoints?: string[] // Endpoints on the branch that was dropped on
   /** Layout branch id (`branch-{circuitId}-{index}`) when the drop is on a branch wire */
   branchId?: string
@@ -76,6 +84,10 @@ export interface DropTarget {
   supplyDeviceInsertIndex?: number
   /** Which feed path a supply-wire drop should target on a main panel. */
   supplyFeedScope?: 'shared' | 'root'
+  /** Which physical DC branch of a hybrid supply converter is targeted. */
+  supplyConverterDcBranch?: 'right' | 'top'
+  /** True only on the direct converter's load-side junction slot. */
+  supplyConverterChangeoverSlot?: boolean
   /** Insert index for ground trunk devices (used when type === 'groundWire') */
   groundDeviceInsertIndex?: number
   /** Segment index on a circuit trunk hit zone (used for per-segment trunk insertion/domain checks) */
@@ -121,6 +133,7 @@ export interface DebugInfo {
  */
 interface WalkContext {
   panelId: string
+  diagramId?: string
   circuitId?: string
   branchEndpoints?: string[] // Ordered endpoint IDs on the branch (when inside a branch node)
   branchId?: string // Layout branch id when inside a branch node
@@ -368,7 +381,7 @@ export function findDropTarget(
     return { type: null }
   }
 
-  const ctx: WalkContext = { panelId: panelNode.domainId }
+  const ctx: WalkContext = { panelId: panelNode.domainId, diagramId: panelNode.diagramId }
 
   // Pass 1: core bounds only (highest priority — cursor is directly ON the element)
   const coreResult = findTarget(panelNode, position, ctx, 'core', options)
@@ -478,7 +491,7 @@ export function findDropTargetWithDebug(
     }
   }
 
-  const ctx: WalkContext = { panelId: panelNode.domainId }
+  const ctx: WalkContext = { panelId: panelNode.domainId, diagramId: panelNode.diagramId }
 
   // Pass 1: core bounds only (highest priority — cursor is directly ON the element)
   const coreResult = findTargetWithDebug(panelNode, position, ctx, 'core', debugPath, options)
@@ -785,7 +798,7 @@ export function findDomoticaOutputDropTarget(tree: LayoutTree, position: Point):
 
   for (const panelNode of tree.panels) {
     if (!panelNode.domainId) continue
-    visit(panelNode, { panelId: panelNode.domainId })
+    visit(panelNode, { panelId: panelNode.domainId, diagramId: panelNode.diagramId })
   }
 
   return bestMatch.current?.target ?? null
@@ -1062,6 +1075,7 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
   const target: DropTarget = {
     type: node.hitZone!.type,
     panelId: ctx.panelId,
+    diagramId: ctx.diagramId,
   }
 
   switch (node.type) {
@@ -1257,8 +1271,15 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
     case 'trunkDevice':
       // Trunk device nodes — check if this is a supply trunk device, ground trunk device, or circuit trunk device
       if (node.id?.startsWith('supplyTrunkDevice-')) {
-        // Supply trunk device → supplyWire target
-        target.type = 'supplyWire'
+        // Supply trunk devices on converter branches retain their dedicated lane target.
+        target.type =
+          node.hitZone?.type === 'supplyBackupOutputWire' ||
+          node.hitZone?.type === 'supplyChangeoverGridWire' ||
+          node.hitZone?.type === 'supplyConverterGridWire' ||
+          node.hitZone?.type === 'supplyConverterBackupWire' ||
+          node.hitZone?.type === 'supplyConverterDcWire'
+            ? node.hitZone.type
+            : 'supplyWire'
       } else if (node.id?.startsWith('groundTrunkDevice-')) {
         // Ground trunk device → groundWire target
         target.type = 'groundWire'
@@ -1270,13 +1291,27 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
   }
 
   // For supply wire targets, compute insertion index based on cursor X
-  if (target.type === 'supplyWire' && position) {
+  if (
+    (target.type === 'supplyWire' ||
+      target.type === 'supplyBackupOutputWire' ||
+      target.type === 'supplyChangeoverGridWire' ||
+      target.type === 'supplyConverterGridWire' ||
+      target.type === 'supplyConverterBackupWire' ||
+      target.type === 'supplyConverterDcWire') &&
+    position
+  ) {
     target.supplyFeedScope = node.hitZone?.supplyFeedScope
+    target.supplyConverterDcBranch = node.hitZone?.supplyConverterDcBranch
+    target.supplyConverterChangeoverSlot = node.hitZone?.supplyConverterChangeoverSlot
     if (node.type === 'trunkDevice' && typeof node.hitZone?.supplyInsertIndex === 'number') {
       target.supplyDeviceInsertIndex =
-        position.x < node.bounds.x
-          ? node.hitZone.supplyInsertIndex + 1
-          : node.hitZone.supplyInsertIndex
+        target.type === 'supplyConverterGridWire'
+          ? position.y < node.bounds.y
+            ? node.hitZone.supplyInsertIndex + 1
+            : node.hitZone.supplyInsertIndex
+          : position.x < node.bounds.x
+            ? node.hitZone.supplyInsertIndex + 1
+            : node.hitZone.supplyInsertIndex
     } else if (typeof node.hitZone?.supplyInsertIndex === 'number') {
       target.supplyDeviceInsertIndex = node.hitZone.supplyInsertIndex
     } else {

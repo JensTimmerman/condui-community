@@ -114,6 +114,8 @@ function createStoreDropBehaviorCallbacks(
     updateCircuit: store.updateCircuit,
     updateProtection: store.updateProtection,
     updateInstallation: store.updateInstallation,
+    addSupplyAssembly: store.addSupplyAssembly,
+    replaceSupplyAssembly: store.replaceSupplyAssembly,
     moveCircuitOnMainBus: store.moveCircuitOnMainBus,
     moveCircuitToSecondaryBus: store.moveCircuitToSecondaryBus,
     deleteEndpoint: store.deleteEndpoint,

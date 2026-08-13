@@ -13,6 +13,7 @@ import {
   getElectricalPanelsFromProject,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
+import { getPrimaryPanelBusSectionId } from '@/lib/panel/panelBusSections'
 
 export type SupplyFeedScope = 'shared' | 'root'
 
@@ -66,12 +67,18 @@ function buildSharedFeedFromLegacyMainSupply(installation: Installation, connect
 }
 
 /** `cable` omitted for single-main projects (use `installation.mainSupply.cable`). */
-function buildRootFeed(panelId: string, connectorId: string, cable?: CableSpec): RootPanelFeedPath {
+function buildRootFeed(
+  panelId: string,
+  connectorId: string,
+  cable?: CableSpec,
+  busSectionId?: string,
+): RootPanelFeedPath {
   const feed: RootPanelFeedPath = {
     id: `root-feed-${panelId}`,
     kind: 'root_panel',
     connectorId,
     panelId,
+    ...(busSectionId ? { busSectionId } : {}),
     trunkDevices: [],
     segmentCables: [],
   }
@@ -85,10 +92,15 @@ function buildRootFeed(panelId: string, connectorId: string, cable?: CableSpec):
 function resolvePanelIncomingSupplyCable(
   installation: Installation,
   panels: Panel[],
+  panel: Panel,
   rootFeed: RootPanelFeedPath | null,
   sharedFeed: SharedFeedPath,
 ): CableSpec {
-  if (collectRootPanels(panels).length === 1) {
+  const isPrimaryFeed =
+    rootFeed == null ||
+    (rootFeed.busSectionId ?? getPrimaryPanelBusSectionId(panel)) ===
+      getPrimaryPanelBusSectionId(panel)
+  if (collectRootPanels(panels).length === 1 && isPrimaryFeed) {
     return installation.mainSupply.cable
   }
   return rootFeed?.cable ?? sharedFeed.cable ?? installation.mainSupply.cable
@@ -118,7 +130,12 @@ export function ensureInstallationFeedTopology(installation: Installation, panel
             trunkDevices,
           }
       // Single main panel: never persist root-feed cable (avoids drift vs mainSupply).
-      if (soleRootPanelId !== null && feed.panelId === soleRootPanelId) {
+      const owningPanel = rootPanels.find((panel) => panel.id === feed.panelId)
+      const isPrimaryFeed =
+        owningPanel != null &&
+        (feed.busSectionId ?? getPrimaryPanelBusSectionId(owningPanel)) ===
+          getPrimaryPanelBusSectionId(owningPanel)
+      if (soleRootPanelId !== null && feed.panelId === soleRootPanelId && isPrimaryFeed) {
         nextFeed = { ...nextFeed }
         delete nextFeed.cable
       } else if (cablesEqual(feed.cable, existing.sharedFeed.cable)) {
@@ -132,7 +149,14 @@ export function ensureInstallationFeedTopology(installation: Installation, panel
       return nextFeed
     })
     for (const panel of rootPanels) {
-      if (!rootFeeds.some((feed) => feed.panelId === panel.id)) {
+      const primaryBusSectionId = getPrimaryPanelBusSectionId(panel)
+      if (
+        !rootFeeds.some(
+          (feed) =>
+            feed.panelId === panel.id &&
+            (feed.busSectionId ?? primaryBusSectionId) === primaryBusSectionId,
+        )
+      ) {
         rootFeeds.push(
           buildRootFeed(
             panel.id,
@@ -199,17 +223,24 @@ export interface PanelFeedProjection {
   sharedDeviceCount: number
   cable: CableSpec
   hideWireLabel: boolean
+  busSectionId: string
 }
 
-export function getPanelFeedProjection(
+export function getPanelBusSectionFeedProjection(
   installation: Installation,
   panels: Panel[],
   panel: Panel,
+  busSectionId: string,
 ): PanelFeedProjection | null {
   if (panel.isMain !== true) return null
   const topology = ensureInstallationFeedTopology(installation, panels)
   const sharedFeed = topology.sharedFeed
-  const rootFeed = topology.rootFeeds.find((feed) => feed.panelId === panel.id) ?? null
+  const rootFeed =
+    topology.rootFeeds.find(
+      (feed) =>
+        feed.panelId === panel.id &&
+        (feed.busSectionId ?? getPrimaryPanelBusSectionId(panel)) === busSectionId,
+    ) ?? null
   const sharedDevices = sharedFeed.trunkDevices ?? []
   const rootDevices = rootFeed?.trunkDevices ?? []
 
@@ -218,13 +249,28 @@ export function getPanelFeedProjection(
     rootFeed,
     devices: [...sharedDevices, ...rootDevices],
     sharedDeviceCount: sharedDevices.length,
-    cable: resolvePanelIncomingSupplyCable(installation, panels, rootFeed, sharedFeed),
+    cable: resolvePanelIncomingSupplyCable(installation, panels, panel, rootFeed, sharedFeed),
     hideWireLabel:
       rootFeed?.hideWireLabel ??
       sharedFeed.hideWireLabel ??
       installation.mainSupply.hideWireLabel ??
       true,
+    busSectionId,
   }
+}
+
+/** Existing single-bus projection; split panels resolve their primary section. */
+export function getPanelFeedProjection(
+  installation: Installation,
+  panels: Panel[],
+  panel: Panel,
+): PanelFeedProjection | null {
+  return getPanelBusSectionFeedProjection(
+    installation,
+    panels,
+    panel,
+    getPrimaryPanelBusSectionId(panel),
+  )
 }
 
 export function getPanelSupplyTrunkDevices(
@@ -240,12 +286,22 @@ export function getSupplyFeedDevicesForPanel(
   panels: Panel[],
   panelId: string,
   scope: SupplyFeedScope = 'shared',
+  busSectionId?: string,
 ): TrunkDevice[] {
   const topology = ensureInstallationFeedTopology(installation, panels)
   if (scope === 'shared') {
     return topology.sharedFeed.trunkDevices ?? []
   }
-  return topology.rootFeeds.find((feed) => feed.panelId === panelId)?.trunkDevices ?? []
+  const panel = collectRootPanels(panels).find((candidate) => candidate.id === panelId)
+  const targetBusSectionId = busSectionId ?? (panel ? getPrimaryPanelBusSectionId(panel) : undefined)
+  return (
+    topology.rootFeeds.find(
+      (feed) =>
+        feed.panelId === panelId &&
+        (!targetBusSectionId ||
+          (feed.busSectionId ?? targetBusSectionId) === targetBusSectionId),
+    )?.trunkDevices ?? []
+  )
 }
 
 export function getPanelSupplyCable(

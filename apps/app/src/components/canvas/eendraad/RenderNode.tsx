@@ -1,4 +1,5 @@
 import { memo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Group, Text } from 'react-konva'
 import type { LayoutNode } from '@/lib/layout/layoutTree'
 import { SupplySymbol } from './SupplySymbol'
@@ -9,11 +10,12 @@ import { CircuitLabel } from './CircuitLabel'
 import { PanelFrame } from './PanelFrame'
 import { PanelSymbol } from './PanelSymbol'
 import { useProjectStore } from '@/stores/projectStore'
+import { useUIStore } from '@/stores/uiStore'
 import type { ProjectState } from '@/stores/projectStore'
 import { getPanelSymbolLabel } from '@/lib/panel/panelDiagramLabels'
 import { useEditionFeatureAvailability } from '@/hooks/useEditionFeatureAvailability'
 import { TrunkDeviceSymbol } from './TrunkDeviceSymbol'
-import { EENDRAAD_PANEL_SYMBOL_WIDTH } from './canvasSymbols'
+import { EENDRAAD_PANEL_SYMBOL_WIDTH, getEendraadPanelBodyCenterYOffset } from './canvasSymbols'
 import { useThemeColors } from '@/lib/theme/hooks'
 import { useCanvasFontFamily } from '@/editions/community/communityHooks'
 import type { BottomUpPanelLayout } from '@/lib/layout/bottomUpLayout'
@@ -81,6 +83,7 @@ const RenderNode = memo(function RenderNode({
   onGroundDragEnd,
   getCanvasPositionFromEvent,
 }: RenderNodeProps) {
+  const { t } = useTranslation()
   const currentProject = useProjectStore((s: ProjectState) => s.currentProject)
   const { advancedPanelLabels } = useEditionFeatureAvailability(currentProject?.project.id)
   const resolvedSupplyProtectionCollisionIds =
@@ -116,17 +119,18 @@ const RenderNode = memo(function RenderNode({
       )
 
     case 'supply':
-      return <SupplySymbol key={node.id} x={node.bounds.x} y={node.bounds.y} />
-
-    case 'ground':
+      if (node.visual?.type === 'symbol' && node.visual.opacity === 0) return null
       return (
-        <GroundSymbol
+        <SupplySymbol
           key={node.id}
           x={node.bounds.x}
           y={node.bounds.y}
-          onDragEnd={onGroundDragEnd || (() => {})}
+          panelId={panelLayout?.panel.id}
         />
       )
+
+    case 'ground':
+      return <GroundSymbol key={node.id} x={node.bounds.x} y={node.bounds.y} />
 
     case 'busBar':
       // Main bus or secondary bus container — visual line is rendered via wire segments
@@ -285,6 +289,20 @@ const RenderNode = memo(function RenderNode({
         const subPanel = resolvedSubPanelId ? getPanelById?.(resolvedSubPanelId) : undefined
 
         if (subPanel) {
+          const feederProtectionId = node.id.startsWith('subpanel-symbol-')
+            ? node.id.slice('subpanel-symbol-'.length)
+            : undefined
+          const isHorizontalConverterBackup = panelLayout?.circuits.some(
+            ({ circuit }) =>
+              circuit.supplySource?.kind === 'converter-backup' &&
+              (circuit.endpoints.some((candidate) => candidate.id === endpoint?.id) ||
+                panelLayout.elements.some(
+                  (element) =>
+                    element.type === 'protection' &&
+                    element.protectionId === feederProtectionId &&
+                    element.circuitId === circuit.id
+                ))
+          )
           const circuitCount = countPanelCircuits(subPanel)
           const nextColumnX = (() => {
             if (!panelLayout) return null
@@ -307,12 +325,18 @@ const RenderNode = memo(function RenderNode({
           return (
             <PanelSymbol
               key={node.id}
-              position={{ x: node.bounds.x, y: node.bounds.y }}
+              position={{
+                x: node.bounds.x,
+                y:
+                  node.bounds.y -
+                  (isHorizontalConverterBackup ? getEendraadPanelBodyCenterYOffset() : 0),
+              }}
               panelName={panelName}
               subPanelId={subPanel.id}
               circuitCount={circuitCount}
               symbolLabelDisplay={subPanel.symbolLabelDisplay}
-              maxLabelWidth={maxLabelWidth}
+              maxLabelWidth={isHorizontalConverterBackup ? 120 : maxLabelWidth}
+              labelPosition={isHorizontalConverterBackup ? 'top' : 'right'}
               onDragStart={
                 onElementDragStart
                   ? (altKey, event) =>
@@ -371,6 +395,9 @@ const RenderNode = memo(function RenderNode({
           isEndpointAtBranchEnd={
             node.visual?.type === 'symbol' ? node.visual.isEndpointAtBranchEnd : undefined
           }
+          mirrorHorizontally={
+            node.visual?.type === 'symbol' ? node.visual.mirrorHorizontally : undefined
+          }
           bottomLabelMinimumLeftX={
             node.visual?.type === 'symbol' ? node.visual.bottomLabelMinimumLeftX : undefined
           }
@@ -387,6 +414,8 @@ const RenderNode = memo(function RenderNode({
       const trunkDevice = node.domainRef as unknown as TrunkDevice
       // Supply trunk devices have IDs starting with 'supplyTrunkDevice-' and are on horizontal wire
       const isSupplyTrunkDevice = node.id?.startsWith('supplyTrunkDevice-')
+      const isVerticalSupplyBranchDevice =
+        isSupplyTrunkDevice && trunkDevice.supplyPath === 'converter-grid'
       const isSubPanelSupplyTrunkDevice = node.id?.startsWith('subpanelSupplyTrunkDevice-')
       const isGroundTrunkDevice = node.id?.startsWith('groundTrunkDevice-')
       const isDraggableTrunkDevice = !isGroundTrunkDevice
@@ -395,7 +424,8 @@ const RenderNode = memo(function RenderNode({
           key={node.id}
           device={trunkDevice}
           position={{ x: node.bounds.x, y: node.bounds.y }}
-          isHorizontal={isSupplyTrunkDevice}
+          isHorizontal={isSupplyTrunkDevice && !isVerticalSupplyBranchDevice}
+          protectionLabelPosition={isVerticalSupplyBranchDevice ? 'right' : undefined}
           showDeviceLabelLeft={isSubPanelSupplyTrunkDevice}
           splitProtectionResidualLine={
             isSupplyTrunkDevice && resolvedSupplyProtectionCollisionIds.has(node.id)
@@ -427,12 +457,33 @@ const RenderNode = memo(function RenderNode({
             </Group>
           )
         }
+        const isSupplyFeedLabel =
+          node.id === 'supply-continuation-label' || node.id === 'feed-output-label'
+        const selectSupply = isSupplyFeedLabel
+          ? (event: { cancelBubble: boolean }) => {
+              event.cancelBubble = true
+              useUIStore.getState().setSelection({
+                type: 'supply',
+                ids: ['supply'],
+                supplyPanelId: panelLayout?.panel.id,
+              })
+            }
+          : undefined
         return (
-          <Group key={node.id} name="export-strip-label">
+          <Group
+            key={node.id}
+            name="export-strip-label"
+            onClick={selectSupply}
+            onTap={selectSupply}
+          >
             <CircuitLabel
               x={node.bounds.x}
               y={node.bounds.y}
-              label={node.visual.text}
+              label={
+                node.visual.translationKey
+                  ? t(node.visual.translationKey, node.visual.text)
+                  : node.visual.text
+              }
               align={node.visual.align}
             />
           </Group>

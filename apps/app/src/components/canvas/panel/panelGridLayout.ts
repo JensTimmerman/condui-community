@@ -118,6 +118,23 @@ export interface ModulePlacement {
   isOverflow?: boolean
 }
 
+export function canResizeModulePlacement(
+  placement: ModulePlacement & { inSupplyPanel?: boolean },
+  placements: Array<ModulePlacement & { inSupplyPanel?: boolean }>,
+  newWidthCols: number,
+  totalCols: number
+): boolean {
+  const width = Math.max(1, Math.round(newWidthCols))
+  if (placement.col < 0 || placement.col + width > totalCols) return false
+  const key = panelGridModuleRefKey(placement.ref)
+  return !placements.some((other) => {
+    if (panelGridModuleRefKey(other.ref) === key) return false
+    if (other.inSupplyPanel !== placement.inSupplyPanel || other.row !== placement.row) return false
+    const otherWidth = Math.max(1, Math.round(other.width / CELL_W))
+    return placement.col < other.col + otherWidth && other.col < placement.col + width
+  })
+}
+
 export function getPanelGridPlacements(
   panel: Panel,
   project: ProjectWithOptionalV2Electrical | null,

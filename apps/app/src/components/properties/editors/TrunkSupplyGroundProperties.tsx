@@ -41,6 +41,13 @@ import {
 import { getDerivedCircuitKind } from '@/lib/circuitKind'
 import { TRANSFORMER_OVERLAY_PATHS } from '@/lib/symbols'
 import {
+  SWITCH_TYPE_SYMBOLS,
+  SwitchPolesGrid,
+  SwitchTypeDropdown,
+  TwoWayPolesGrid,
+} from './EndpointControls'
+import { normalizeSwitchSymbol } from './endpointControlsUtils'
+import {
   findMatchingSynergridEntry,
   formatSynergridPower,
   loadSynergridCatalog,
@@ -51,6 +58,7 @@ import {
 import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
+  getSupplyAssembliesFromProject,
 } from '@/lib/projectV2/electrical'
 import { DEFAULT_PANEL_GRID_COLUMNS } from '@/lib/panel/panelGridDefaults'
 import { getInstallDateTargetInheritedYear } from '@/lib/installDatePropagation'
@@ -71,9 +79,40 @@ import {
   PROTECTION_SYMBOL_ID_TO_TYPE,
 } from '../ProtectionDeviceElectricalFields'
 import { SynergridListPicker } from '../SynergridListPicker'
+import {
+  getSupplyInverterMultiplier,
+  getSupplyInverterSerialNumbers,
+} from '@/utils/inverterMultipliers'
+import {
+  formatPhaseAssignment,
+  getPanelIncomingPhaseState,
+  getPhaseAssignmentForOptionValue,
+  getPhaseAssignmentOptions,
+  getPhaseAssignmentOptionValue,
+  supportsExplicitPhaseSelection,
+} from '@/lib/wires/phaseAssignment'
+import {
+  getDefaultSupplyConverterAcPhaseAssignment,
+  getSupplyInverterUnitPhaseAssignments,
+} from '@/lib/supplyAssembly/supplyConverterPhases'
+import { findPanelById } from '@/lib/panel/panelTree'
+import {
+  getPanelBusFeedKind,
+  getPanelFeedOrganization,
+  panelCanConfigureBackupOutput,
+  panelHasModularChangeover,
+  type PanelFeedOrganization,
+} from '@/lib/panel/panelFeedOrganization'
+import { getPanelBusSections } from '@/lib/panel/panelBusSections'
 
 const SYNERGRID_AUTO_MATCH_DEBOUNCE_MS = 450
-export function TrunkDeviceProperties({ deviceId }: { deviceId: string }) {
+export function TrunkDeviceProperties({
+  deviceId,
+  placementId,
+}: {
+  deviceId: string
+  placementId?: string
+}) {
   const { t } = useTranslation()
   const {
     currentProject,
@@ -131,6 +170,12 @@ export function TrunkDeviceProperties({ deviceId }: { deviceId: string }) {
     device?.symbol === 'rectifier' ||
     device?.symbol === 'inverter' ||
     device?.symbol === 'dc_dc_converter'
+  const installationSystem = currentProject
+    ? getElectricalInstallationFromProject(currentProject)?.nominalVoltage.system
+    : undefined
+  const isInlineSwitch = device
+    ? SWITCH_TYPE_SYMBOLS.includes(normalizeSwitchSymbol(device.symbol))
+    : false
 
   // Helper to update the device (circuit, supply, or ground trunk device)
   const handleUpdate = useCallback((updates: Partial<TrunkDevice>) => {
@@ -153,12 +198,30 @@ export function TrunkDeviceProperties({ deviceId }: { deviceId: string }) {
     updateTrunkDevice,
   ])
 
-  // Ensure conversionProps exists for conversion devices so UI and logs don't see undefined
+  // Supply converters carry one explicit AC phase set shared by both AC ports.
   useEffect(() => {
-    if (isConversionSymbol && device && !device.conversionProps) {
+    if (!isConversionSymbol || !device) return
+    if (isSupplyDevice && installationSystem && !device.conversionProps?.acPhaseAssignment) {
+      handleUpdate({
+        conversionProps: {
+          ...(device.conversionProps ?? {}),
+          acPhaseAssignment: getDefaultSupplyConverterAcPhaseAssignment(installationSystem),
+        },
+      })
+    } else if (!device.conversionProps) {
       handleUpdate({ conversionProps: {} })
     }
-  }, [isConversionSymbol, device, device?.conversionProps, handleUpdate])
+  }, [device, handleUpdate, installationSystem, isConversionSymbol, isSupplyDevice])
+
+  // Heal switches created by the early supply prototype, where ordinary switches
+  // were stored as the pseudo protection type OTHER with an automatic OTHER label.
+  useEffect(() => {
+    if (!device || !isInlineSwitch || device.symbol === 'source_changeover') return
+    const updates: Partial<TrunkDevice> = {}
+    if (device.protectionType === 'OTHER') updates.protectionType = undefined
+    if ((device.label ?? '').trim().toUpperCase() === 'OTHER') updates.label = ''
+    if (Object.keys(updates).length > 0) handleUpdate(updates)
+  }, [device, handleUpdate, isInlineSwitch])
   const canUseSynergridList =
     showSynergridCatalog &&
     (device?.symbol === 'rectifier' || device?.symbol === 'inverter')
@@ -217,6 +280,216 @@ export function TrunkDeviceProperties({ deviceId }: { deviceId: string }) {
     : 'other'
   const em = device.energyMeterProps || {}
   const conv = device.conversionProps || {}
+  const inverterMultiplier = getSupplyInverterMultiplier(device)
+  const converterPhaseOptions =
+    isSupplyDevice && installationSystem && supportsExplicitPhaseSelection(installationSystem)
+      ? getPhaseAssignmentOptions(installationSystem).filter((option) => {
+          const kind = option.assignment?.kind
+          return (
+            kind === 'single_phase' || kind === 'phase_to_phase' || kind === 'three_phase'
+          )
+        })
+      : []
+  const inverterUnitPhaseOptions = converterPhaseOptions.filter((option) => {
+    const kind = option.assignment?.kind
+    return kind === 'single_phase' || kind === 'phase_to_phase'
+  })
+  const inverterUnitPhaseAssignments =
+    device.symbol === 'inverter' && installationSystem
+      ? getSupplyInverterUnitPhaseAssignments(device, installationSystem, inverterMultiplier)
+      : []
+  const inverterSerialNumbers = getSupplyInverterSerialNumbers(device)
+  const selectedInverterUnitIndex =
+    device.symbol === 'inverter' && placementId
+      ? device.placements?.findIndex((placement) => placement.id === placementId) ?? -1
+      : -1
+  const isGroupedInverter = device.symbol === 'inverter' && inverterMultiplier > 1
+  const isSelectedInverterUnit = isGroupedInverter && selectedInverterUnitIndex >= 0
+  const updateInverterSerialNumber = (index: number, serialNumber: string) => {
+    const serialNumbers = [...inverterSerialNumbers]
+    serialNumbers[index] = serialNumber
+    handleUpdate({
+      conversionProps: {
+        ...conv,
+        serialNumber: undefined,
+        serialNumbers,
+      },
+    })
+  }
+  if (device.symbol === 'battery' || device.symbol === 'solar_panel') {
+    const isBattery = device.symbol === 'battery'
+    const battery = device.batteryProps ?? {}
+    const solar = device.solarPanelProps ?? {}
+    const certification = isBattery ? battery : solar
+    const updateNumber = (value: string, apply: (next: number | undefined) => void) => {
+      const parsed = value === '' ? undefined : Number(value)
+      apply(parsed === undefined || Number.isFinite(parsed) ? parsed : undefined)
+    }
+    const setDiagramVisibility = (key: string, visible: boolean) =>
+      handleUpdate({
+        symbolLabelDisplay: {
+          ...(device.symbolLabelDisplay ?? {}),
+          visibility: {
+            ...((device.symbolLabelDisplay?.visibility ?? {}) as Record<string, boolean>),
+            [key]: visible,
+          },
+        },
+      })
+
+    return (
+      <div className="space-y-4">
+        {!isSharedSupplyDevice && (
+          <InstallDateField
+            entity={device}
+            project={currentProject}
+            inheritedYear={
+              currentProject
+                ? getInstallDateTargetInheritedYear(currentProject, {
+                    id: device.id,
+                    type: 'trunkDevice',
+                  })
+                : undefined
+            }
+            onUpdate={(updates) => handleUpdate(updates)}
+          />
+        )}
+        <div>
+          <label className={labelClass}>{t('endpoints.label', 'Label')}</label>
+          <DebouncedTextInput
+            type="text"
+            value={device.label ?? ''}
+            onCommit={(label) => handleUpdate({ label })}
+            className={selectClass}
+          />
+        </div>
+        {isBattery ? (
+          <div className="space-y-2">
+            <div>
+              <label className={labelClass}>{t('endpoints.battery.voltage', 'Voltage (V)')}</label>
+              <input
+                type="number"
+                min={0}
+                value={battery.voltageV ?? ''}
+                onChange={(event) =>
+                  updateNumber(event.target.value, (voltageV) =>
+                    handleUpdate({ batteryProps: { ...battery, voltageV } })
+                  )
+                }
+                className={selectClass}
+              />
+            </div>
+            <div>
+              <label className={labelClass}>
+                {t('endpoints.battery.capacity', 'Capacity (kWh)')}
+              </label>
+              <input
+                type="number"
+                min={0}
+                step="0.1"
+                value={battery.capacityKWh ?? ''}
+                onChange={(event) =>
+                  updateNumber(event.target.value, (capacityKWh) =>
+                    handleUpdate({ batteryProps: { ...battery, capacityKWh } })
+                  )
+                }
+                className={selectClass}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div>
+              <label className={labelClass}>
+                {t('endpoints.solarPanel.wattage', 'Wattage (W)')}
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={solar.wattageW ?? ''}
+                onChange={(event) =>
+                  updateNumber(event.target.value, (wattageW) =>
+                    handleUpdate({ solarPanelProps: { ...solar, wattageW } })
+                  )
+                }
+                className={selectClass}
+              />
+            </div>
+            <div>
+              <label className={labelClass}>
+                {t('endpoints.solarPanel.voltage', 'Voltage (V)')}
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={solar.voltageV ?? ''}
+                onChange={(event) =>
+                  updateNumber(event.target.value, (voltageV) =>
+                    handleUpdate({ solarPanelProps: { ...solar, voltageV } })
+                  )
+                }
+                className={selectClass}
+              />
+            </div>
+          </div>
+        )}
+        <CertificationListingFields
+          fields={['brand', 'model', 'serialNumber']}
+          values={certification}
+          onCommit={(patch) =>
+            isBattery
+              ? handleUpdate({ batteryProps: { ...battery, ...patch } })
+              : handleUpdate({ solarPanelProps: { ...solar, ...patch } })
+          }
+          numberFields={
+            isBattery
+              ? [
+                  {
+                    key: 'powerKw',
+                    labelKey: 'endpoints.certification.powerKw',
+                    defaultLabel: 'Power (kW)',
+                    value: battery.powerKw,
+                    step: 0.1,
+                  },
+                ]
+              : undefined
+          }
+          onNumberCommit={(_, powerKw) =>
+            handleUpdate({ batteryProps: { ...battery, powerKw } })
+          }
+          labelClass={labelClass}
+          selectClass={selectClass}
+          t={t}
+          title={t('endpoints.certification.title', 'Device details')}
+          diagramVisible={isSymbolLabelVisible(
+            device.symbolLabelDisplay,
+            CERTIFICATION_LISTING_VISIBILITY_KEY,
+            true
+          )}
+          onToggleDiagramVisible={() =>
+            setDiagramVisibility(
+              CERTIFICATION_LISTING_VISIBILITY_KEY,
+              !isSymbolLabelVisible(
+                device.symbolLabelDisplay,
+                CERTIFICATION_LISTING_VISIBILITY_KEY,
+                true
+              )
+            )
+          }
+          visibilityToggleClass={visibilityToggleClass}
+        />
+        <div>
+          <label className={labelClass}>{t('endpoints.notes', 'Notes')}</label>
+          <DebouncedTextarea
+            value={device.notes ?? ''}
+            onCommit={(notes) => handleUpdate({ notes })}
+            delayMs={500}
+            rows={3}
+            className={`${selectClass} resize-none`}
+          />
+        </div>
+      </div>
+    )
+  }
   const applySynergridEntryToTrunkDevice = (entry: SynergridCatalogEntry) => {
     const synergrid = synergridCertificationFromEntry(entry)
     handleUpdate({
@@ -274,6 +547,119 @@ export function TrunkDeviceProperties({ deviceId }: { deviceId: string }) {
             delayMs={500}
             className={selectClass + ' resize-none'}
             rows={2}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  if (device.symbol === 'source_changeover') {
+    const port1Visible = isSymbolLabelVisible(
+      device.symbolLabelDisplay,
+      'changeoverPort1Label',
+      true
+    )
+    const port2Visible = isSymbolLabelVisible(
+      device.symbolLabelDisplay,
+      'changeoverPort2Label',
+      true
+    )
+    const nameVisible = isSymbolLabelVisible(
+      device.symbolLabelDisplay,
+      'supplyProtectionNameLabel',
+      true
+    )
+    const updatePortLabel = (key: 'port1Label' | 'port2Label', value: string) =>
+      handleUpdate({ changeoverProps: { ...device.changeoverProps, [key]: value } })
+    const togglePortLabel = (key: 'changeoverPort1Label' | 'changeoverPort2Label') =>
+      handleUpdate({
+        symbolLabelDisplay: {
+          ...device.symbolLabelDisplay,
+          visibility: {
+            ...(device.symbolLabelDisplay?.visibility ?? {}),
+            [key]: !isSymbolLabelVisible(device.symbolLabelDisplay, key, true),
+          },
+        },
+      })
+
+    return (
+      <div className="space-y-4">
+        {!isSharedSupplyDevice && (
+          <InstallDateField
+            entity={device}
+            project={currentProject}
+            inheritedYear={
+              currentProject
+                ? getInstallDateTargetInheritedYear(currentProject, {
+                    id: device.id,
+                    type: 'trunkDevice',
+                  })
+                : undefined
+            }
+            onUpdate={(updates) => handleUpdate(updates)}
+          />
+        )}
+        <div>
+          <div className="mb-1 flex items-center gap-2">
+            <label className={labelClass + ' mb-0'}>{t('endpoints.label', 'Label')}</label>
+            <button
+              type="button"
+              onClick={() =>
+                handleUpdate({
+                  symbolLabelDisplay: {
+                    ...device.symbolLabelDisplay,
+                    visibility: {
+                      ...(device.symbolLabelDisplay?.visibility ?? {}),
+                      supplyProtectionNameLabel: !nameVisible,
+                    },
+                  },
+                })
+              }
+              className={visibilityToggleClass(nameVisible)}
+              title={nameVisible ? t('common.hide', 'Hide') : t('common.show', 'Show')}
+            >
+              {nameVisible ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+            </button>
+          </div>
+          <DebouncedTextInput
+            type="text"
+            value={device.label ?? ''}
+            onCommit={(label) => handleUpdate({ label })}
+            className={selectClass}
+          />
+        </div>
+        {([
+          ['port1Label', 'changeoverPort1Label', port1Visible, t('supply.port1', 'Port 1')],
+          ['port2Label', 'changeoverPort2Label', port2Visible, t('supply.port2', 'Port 2')],
+        ] as const).map(([valueKey, visibilityKey, visible, label]) => (
+          <div key={valueKey}>
+            <div className="mb-1 flex items-center gap-2">
+              <label className={labelClass + ' mb-0'}>{label}</label>
+              <button
+                type="button"
+                onClick={() => togglePortLabel(visibilityKey)}
+                className={visibilityToggleClass(visible)}
+                title={visible ? t('common.hide', 'Hide') : t('common.show', 'Show')}
+              >
+                {visible ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+              </button>
+            </div>
+            <DebouncedTextInput
+              type="text"
+              value={device.changeoverProps?.[valueKey] ?? (valueKey === 'port1Label' ? '1' : '2')}
+              onCommit={(value) => updatePortLabel(valueKey, value)}
+              className={selectClass}
+            />
+          </div>
+        ))}
+        <div>
+          <label className={labelClass}>{t('properties.notes', 'Notes')}</label>
+          <DebouncedTextarea
+            value={device.notes ?? ''}
+            onCommit={(notes) => handleUpdate({ notes })}
+            delayMs={500}
+            rows={3}
+            className={`${selectClass} resize-none`}
           />
         </div>
       </div>
@@ -551,7 +937,7 @@ export function TrunkDeviceProperties({ deviceId }: { deviceId: string }) {
 
   return (
     <div className="space-y-4">
-      {isSupplyDevice && (
+      {isSupplyDevice && !isInlineSwitch && (
         <p className="text-xs text-gray-500 dark:text-gray-400 -mt-1">
           {t('supply.trunkDevice', 'Supply wire device')}
         </p>
@@ -573,7 +959,7 @@ export function TrunkDeviceProperties({ deviceId }: { deviceId: string }) {
           }
         />
       )}
-      {/* Label — supply protections: eye toggles name on one-wire diagram above symbol */}
+      {/* Label — supply protections and inline switches can show their name above the symbol. */}
       <div>
         {isSupplyDevice && device.type === 'protection' ? (
           <>
@@ -652,8 +1038,39 @@ export function TrunkDeviceProperties({ deviceId }: { deviceId: string }) {
         </div>
       )}
 
+      {isInlineSwitch && (
+        <>
+          <SwitchTypeDropdown
+            value={normalizeSwitchSymbol(device.symbol)}
+            onChangeSymbol={(symbol) => handleUpdate({ symbol, protectionType: undefined })}
+          />
+          {device.symbol === 'switch' && (
+            <SwitchPolesGrid
+              value={(device.poles ?? 1) as 1 | 2 | 3 | 4}
+              onChange={(poles) =>
+                handleUpdate({ poles, polesConfig: `${poles}P` as PolesConfig })
+              }
+            />
+          )}
+          {(device.symbol === 'switch_1p_twoway' ||
+            device.symbol === 'switch_2p_twoway') && (
+            <TwoWayPolesGrid
+              value={device.symbol === 'switch_2p_twoway' ? 2 : 1}
+              onChange={(poles) =>
+                handleUpdate({
+                  symbol: poles === 2 ? 'switch_2p_twoway' : 'switch_1p_twoway',
+                  poles,
+                  polesConfig: `${poles}P` as PolesConfig,
+                  protectionType: undefined,
+                })
+              }
+            />
+          )}
+        </>
+      )}
+
       {/* Protection-specific properties (when type === 'protection') */}
-      {device.type === 'protection' &&
+      {device.type === 'protection' && !isInlineSwitch &&
         (() => {
           const isProtectionLabelVisible = (key: ProtectionLabelKey) =>
             isProtectionLabelPartVisible(device, key)
@@ -709,6 +1126,76 @@ export function TrunkDeviceProperties({ deviceId }: { deviceId: string }) {
         device.symbol === 'inverter' ||
         device.symbol === 'dc_dc_converter') && (
         <>
+          {converterPhaseOptions.length > 0 && installationSystem && inverterMultiplier !== 2 && (
+            <div>
+              <label className={labelClass}>{t('supply.converterPhases', 'AC phases')}</label>
+              <CustomDropdown
+                value={getPhaseAssignmentOptionValue(
+                  conv.acPhaseAssignment ??
+                    getDefaultSupplyConverterAcPhaseAssignment(installationSystem),
+                  installationSystem
+                )}
+                onChange={(value) => {
+                  const acPhaseAssignment = getPhaseAssignmentForOptionValue(
+                    value,
+                    installationSystem
+                  )
+                  if (!acPhaseAssignment) return
+                  handleUpdate({ conversionProps: { ...conv, acPhaseAssignment } })
+                }}
+                options={converterPhaseOptions.map((option) => ({
+                  value: option.value,
+                  label: formatPhaseAssignment(option.assignment),
+                }))}
+                className={selectClass}
+                disabled={device.symbol === 'inverter' && inverterMultiplier >= 3}
+              />
+            </div>
+          )}
+          {device.symbol === 'inverter' &&
+            inverterMultiplier === 2 &&
+            installationSystem &&
+            inverterUnitPhaseOptions.length > 0 && (
+              <div className="space-y-2">
+                <label className={labelClass}>{t('supply.converterPhases', 'AC phases')}</label>
+                {inverterUnitPhaseAssignments.map((assignment, index) => {
+                  if (isSelectedInverterUnit && selectedInverterUnitIndex !== index) return null
+                  return (
+                    <div key={index}>
+                      {!isSelectedInverterUnit && (
+                        <label className={labelClass}>
+                          {t('supply.inverterUnit', 'Inverter')} {index + 1}
+                        </label>
+                      )}
+                      <CustomDropdown
+                        value={getPhaseAssignmentOptionValue(assignment, installationSystem)}
+                        onChange={(value) => {
+                          const nextAssignment = getPhaseAssignmentForOptionValue(
+                            value,
+                            installationSystem
+                          )
+                          if (!nextAssignment) return
+                          const acPhaseAssignments = [...inverterUnitPhaseAssignments]
+                          acPhaseAssignments[index] = nextAssignment
+                          handleUpdate({
+                            conversionProps: {
+                              ...conv,
+                              acPhaseAssignment: undefined,
+                              acPhaseAssignments,
+                            },
+                          })
+                        }}
+                        options={inverterUnitPhaseOptions.map((option) => ({
+                          value: option.value,
+                          label: formatPhaseAssignment(option.assignment),
+                        }))}
+                        className={selectClass}
+                      />
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           {/* Transformer-only overlays when used as trunk device */}
           {device.symbol === 'transformer' && (
             <div className="space-y-2">
@@ -1066,18 +1553,31 @@ export function TrunkDeviceProperties({ deviceId }: { deviceId: string }) {
       {(device.symbol === 'inverter' || device.symbol === 'rectifier') && (
         <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
           <CertificationListingFields
-            fields={['brand', 'model', 'serialNumber', 'power']}
+            fields={
+              isGroupedInverter && !isSelectedInverterUnit
+                ? ['brand', 'model', 'power']
+                : ['brand', 'model', 'serialNumber', 'power']
+            }
             values={{
               brand: conv.brand,
               model: conv.model,
-              serialNumber: conv.serialNumber,
+              serialNumber: isSelectedInverterUnit
+                ? inverterSerialNumbers[selectedInverterUnitIndex]
+                : conv.serialNumber,
               power: conv.power,
             }}
-            onCommit={(patch) =>
+            onCommit={(patch) => {
+              if (isSelectedInverterUnit && 'serialNumber' in patch) {
+                updateInverterSerialNumber(
+                  selectedInverterUnitIndex,
+                  patch.serialNumber ?? ''
+                )
+                return
+              }
               handleUpdate({
                 conversionProps: { ...conv, ...patch, synergrid: undefined },
               })
-            }
+            }}
             labelClass={labelClass}
             selectClass={selectClass}
             t={t}
@@ -1111,6 +1611,23 @@ export function TrunkDeviceProperties({ deviceId }: { deviceId: string }) {
               canUseSynergridList ? () => setSynergridPickerOpen(true) : undefined
             }
           />
+          {isGroupedInverter && !isSelectedInverterUnit && (
+            <div className="mt-3 space-y-2">
+              {inverterSerialNumbers.map((serialNumber, index) => (
+                <div key={index}>
+                  <label className={labelClass}>
+                    {t('endpoints.certification.serialNumber', 'Serial number')} {index + 1}
+                  </label>
+                  <DebouncedTextInput
+                    type="text"
+                    value={serialNumber}
+                    onCommit={(value) => updateInverterSerialNumber(index, value)}
+                    className={selectClass}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
           {canUseSynergridList ? (
             <SynergridListPicker
               open={synergridPickerOpen}
@@ -1206,10 +1723,21 @@ export function GroundProperties() {
   )
 }
 
-export function SupplyProperties({ readOnly = false }: { readOnly?: boolean }) {
+export function SupplyProperties({
+  readOnly = false,
+  panelId,
+  selectedBusSectionId,
+}: {
+  readOnly?: boolean
+  panelId?: string
+  selectedBusSectionId?: string
+}) {
   const { t } = useTranslation()
   const currentProject = useProjectStore((state: ProjectState) => state.currentProject)
   const updateInstallation = useProjectStore((state: ProjectState) => state.updateInstallation)
+  const setPanelFeedOrganization = useProjectStore(
+    (state: ProjectState) => state.setPanelFeedOrganization,
+  )
 
   const installation = currentProject
     ? getElectricalInstallationFromProject(currentProject)
@@ -1221,9 +1749,88 @@ export function SupplyProperties({ readOnly = false }: { readOnly?: boolean }) {
       </div>
     )
   }
+  const panels = currentProject ? getElectricalPanelsFromProject(currentProject) : []
+  const panel = panelId
+    ? findPanelById(panels, panelId)
+    : panels.find((candidate) => candidate.isMain !== false)
+  const organization =
+    currentProject && panel ? getPanelFeedOrganization(currentProject, panel) : 'single'
+  const hasChangeover = Boolean(
+    currentProject && panel && panelHasModularChangeover(currentProject, panel.id),
+  )
+  const hasBackup = Boolean(
+    currentProject && panel && panelCanConfigureBackupOutput(currentProject, panel.id),
+  )
+  const splitOrganization: PanelFeedOrganization = hasChangeover
+    ? 'split-switchable'
+    : 'split-backup'
+  const selectedSection = panel
+    ? getPanelBusSections(panel).find((section) => section.id === selectedBusSectionId)
+    : undefined
+  const selectedSectionPhaseAssignment =
+    currentProject && panel && selectedSection
+      ? getPanelIncomingPhaseState(
+          installation,
+          panels,
+          panel,
+          selectedSection.id,
+          getSupplyAssembliesFromProject(currentProject)
+        ).assignment
+      : undefined
 
   return (
     <div className="space-y-6">
+      {panel && (
+        <div>
+          <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+            {t('feedOrganization.title', 'Feed organization')}
+          </h4>
+          <div className="grid grid-cols-1 gap-2">
+            {[
+              {
+                value: 'single' as const,
+                label: t('feedOrganization.single', 'Single feed'),
+              },
+              {
+                value: splitOrganization,
+                label: hasChangeover
+                  ? t('feedOrganization.splitSwitchable', 'Grid + switched backup')
+                  : t('feedOrganization.splitBackup', 'Grid + backup'),
+              },
+            ].map((option) => {
+              const active = organization === option.value
+              const disabled = readOnly || (option.value !== 'single' && !hasBackup)
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => setPanelFeedOrganization(panel.id, option.value)}
+                  className={`rounded-md border px-3 py-2 text-left text-sm font-medium ${
+                    active
+                      ? 'border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300'
+                      : 'border-gray-300 bg-white text-gray-700 hover:border-sky-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300'
+                  } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
+                >
+                  {option.label}
+                </button>
+              )
+            })}
+          </div>
+          {selectedSection && (
+            <div className="mt-3 rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300">
+              {t('feedOrganization.bus', 'Busbar')}: {selectedSection.label} ·{' '}
+              {getPanelBusFeedKind(panel, selectedSection.id) === 'backup'
+                ? t('feedOrganization.backupFeed', 'Backup feed')
+                : t('feedOrganization.gridFeed', 'Grid feed')}
+              {selectedSectionPhaseAssignment?.phases.length
+                ? ` · ${selectedSectionPhaseAssignment.phases.join(' + ')}`
+                : ''}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Nominal Voltage */}
       <div>
         <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">

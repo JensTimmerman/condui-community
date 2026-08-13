@@ -2,14 +2,21 @@
  * Pure construction of the panel hierarchy scene (surfaces + connectors).
  * Used by PanelCanvas / HierarchyPanelCanvas for both full-tree and filtered views.
  */
-import { getPanelFeedProjection } from '@/lib/feedTopology'
+import { getAllSupplyTrunkDevices, getPanelFeedProjection } from '@/lib/feedTopology'
 import { getPanelDisplayName } from '@/utils/panelNames'
 import type { Panel, PanelGridModuleRef } from '@/types/schema'
 import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
+  getAuxiliaryElectricalEnclosuresFromProject,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
+import {
+  getAuxiliaryEnclosureSupplyDeviceIds,
+  MIN_AUXILIARY_COLUMNS,
+  resolveSupplyDeviceMounting,
+} from '@/lib/panel/auxiliarySupplyEnclosures'
+import type { AuxiliaryElectricalEnclosure } from '@/types/supplyAssembly'
 import {
   CELL_H,
   CELL_W,
@@ -19,13 +26,14 @@ import {
   getSupplyPanelRows,
   getSupplyPanelPlacements,
   panelGridModuleRefKey,
-  resolveModuleWidthCols,
   type ModulePlacement,
 } from '@/components/canvas/panel/panelGridLayout'
+import { DEFAULT_PANEL_GRID_COLUMNS, DEFAULT_PANEL_GRID_ROWS } from '@/lib/panel/panelGridDefaults'
 import {
-  DEFAULT_PANEL_GRID_COLUMNS,
-  DEFAULT_PANEL_GRID_ROWS,
-} from '@/lib/panel/panelGridDefaults'
+  findConverterBackupPanelFeed,
+  findConverterBackupPanelFeedsFromSource,
+  type ConverterBackupPanelFeed,
+} from '@/lib/panel/converterBackupPanelFeed'
 
 export const PANEL_SCENE_FRAME_MARGIN = 40
 /** Vertical gap between main and supply regions on one panel surface (matches legacy PanelCanvas). */
@@ -38,11 +46,12 @@ export type PanelScenePanelOption = {
   isRoot: boolean
 }
 
-export type PanelSceneSurfaceKind = 'shared_supply' | 'panel'
+export type PanelSceneSurfaceKind = 'shared_supply' | 'auxiliary' | 'panel'
 
 export interface PanelSceneSurface {
   id: string
   panel: Panel | null
+  enclosure?: AuxiliaryElectricalEnclosure
   kind: PanelSceneSurfaceKind
   x: number
   y: number
@@ -62,10 +71,19 @@ export interface PanelSceneSurface {
   placements: Array<ModulePlacement & { inSupplyPanel?: boolean }>
   supplyPanelVisible: boolean
   label: string
+  converterBackupFeed?: ConverterBackupPanelFeed | null
+  converterBackupSourceFeed?: ConverterBackupPanelFeed | null
 }
 
 export interface PanelSceneConnector {
   points: number[]
+}
+
+export interface ConverterBackupFeedMarkerGeometry {
+  sourceX: number
+  sourceY: number
+  symbolSize: number
+  wirePaths: number[][]
 }
 
 export interface BuiltPanelScene {
@@ -85,6 +103,35 @@ function getSupplyPanelLayout(panel: Panel | null | undefined) {
   return { rows, cols, contentWidth, contentHeight }
 }
 
+/** Virtual converter source below its physical board, feeding the real outgoing protection. */
+export function getConverterBackupFeedMarkerGeometry(
+  surface: PanelSceneSurface
+): ConverterBackupFeedMarkerGeometry | null {
+  if (!surface.converterBackupSourceFeed || !surface.panel) return null
+  const targets = surface.placements.filter(
+    (placement) =>
+      placement.ref.kind === 'protection' &&
+      placement.ref.id === surface.converterBackupSourceFeed?.protectionId
+  )
+  const sourceX =
+    targets.length > 0
+      ? targets.reduce((sum, target) => sum + target.x + target.width / 2, 0) / targets.length
+      : surface.width / 2
+  const frameBottom = surface.mainPanelY + surface.panelFrameHeight
+  const sourceY = frameBottom + 48
+  const symbolSize = 32
+  const busY = frameBottom + 18
+  const wirePaths =
+    targets.length > 0
+      ? targets.map((target) => {
+          const targetX = target.x + target.width / 2
+          const targetY = target.y + target.height
+          return [sourceX, sourceY - symbolSize / 2, sourceX, busY, targetX, busY, targetX, targetY]
+        })
+      : [[sourceX, sourceY - symbolSize / 2, sourceX, frameBottom]]
+  return { sourceX, sourceY, symbolSize, wirePaths }
+}
+
 export function routePanelSceneConnector(
   fromX: number,
   fromY: number,
@@ -94,6 +141,42 @@ export function routePanelSceneConnector(
 ): number[] {
   if (Math.abs(fromX - toX) < 0.5) return [fromX, fromY, toX, toY]
   return [fromX, fromY, fromX, gapY, toX, gapY, toX, toY]
+}
+
+export function routePanelSceneSurfaceTransition(
+  source: Pick<PanelSceneSurface, 'x' | 'y' | 'width' | 'height'>,
+  target: Pick<PanelSceneSurface, 'x' | 'y' | 'width' | 'height'>
+): number[] {
+  const sourceCenterX = source.x + source.width / 2
+  const sourceCenterY = source.y + source.height / 2
+  const targetCenterX = target.x + target.width / 2
+  const targetCenterY = target.y + target.height / 2
+  const dx = targetCenterX - sourceCenterX
+  const dy = targetCenterY - sourceCenterY
+  if (Math.abs(dx) > Math.abs(dy)) {
+    const sourceX = dx >= 0 ? source.x + source.width : source.x
+    const targetX = dx >= 0 ? target.x : target.x + target.width
+    const corridorX = (sourceX + targetX) / 2
+    return [
+      sourceX,
+      sourceCenterY,
+      corridorX,
+      sourceCenterY,
+      corridorX,
+      targetCenterY,
+      targetX,
+      targetCenterY,
+    ]
+  }
+  const sourceY = dy >= 0 ? source.y + source.height : source.y
+  const targetY = dy >= 0 ? target.y : target.y + target.height
+  return routePanelSceneConnector(
+    sourceCenterX,
+    sourceY,
+    targetCenterX,
+    targetY,
+    (sourceY + targetY) / 2
+  )
 }
 
 /**
@@ -200,52 +283,41 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
   const firstRootOption = rootOptions[0]
   if (!firstRootOption) return null
 
-  const rootGap = 56
+  const hasConverterBackupRoot = rootOptions.some((option) =>
+    findConverterBackupPanelFeed(currentProject, option.panel.id)
+  )
+  const rootGap = hasConverterBackupRoot ? 120 : 56
   const levelGap = 72
   const siblingGap = 48
 
   const installation = getElectricalInstallationFromProject(currentProject)
   const rootPanels = getElectricalPanelsFromProject(currentProject)
-  const sharedProjection = installation
-    ? getPanelFeedProjection(installation, rootPanels, firstRootOption.panel)
-    : null
-  const explicitMainSharedKeys = new Set(
-    rootOptions.flatMap((option) =>
-      (option.panel.gridView?.slots ?? [])
-        .filter((slot) => slot.module.kind === 'trunkDevice' && slot.module.scope === 'supply')
-        .map((slot) => panelGridModuleRefKey(slot.module))
-    )
-  )
-  const sharedRefs: PanelGridModuleRef[] = (sharedProjection?.sharedFeed.trunkDevices ?? [])
+  const sharedRefs: PanelGridModuleRef[] = getAllSupplyTrunkDevices(currentProject)
     .filter((device) => device.type !== 'junction_box' && device.type !== 'junction_panel')
+    .filter((device) => resolveSupplyDeviceMounting(currentProject, device.id)?.kind === 'grid')
     .map((device) => ({ kind: 'trunkDevice' as const, id: device.id, scope: 'supply' as const }))
-    .filter((ref) => !explicitMainSharedKeys.has(panelGridModuleRefKey(ref)))
   const sharedRefKeys = new Set(sharedRefs.map((ref) => panelGridModuleRefKey(ref)))
+  const baseRootCols = firstRootOption.panel.gridView?.columns ?? DEFAULT_PANEL_GRID_COLUMNS
   const sharedSlotMap = new Map(
     (firstRootOption.panel.gridView?.supplyPanelSlots ?? [])
       .filter((slot) => sharedRefKeys.has(panelGridModuleRefKey(slot.module)))
       .map((slot) => [panelGridModuleRefKey(slot.module), slot] as const)
   )
 
-  const sharedPlacements: ModulePlacement[] = []
-  let sharedCursorCol = 0
-  for (const ref of sharedRefs) {
-    const key = panelGridModuleRefKey(ref)
-    const widthCols = Math.max(1, resolveModuleWidthCols(ref, currentProject))
-    const slot = sharedSlotMap.get(key)
-    const col = slot?.col ?? sharedCursorCol
-    sharedPlacements.push({
-      ref,
-      x: col * CELL_W,
-      y: 0,
-      width: widthCols * CELL_W,
-      height: CELL_H,
-      row: 0,
-      col,
-    })
-    if (slot == null) sharedCursorCol += widthCols
+  const sharedLayoutPanel: Panel = {
+    ...firstRootOption.panel,
+    gridView: {
+      rows: 1,
+      columns: baseRootCols,
+      feedFromTop: hierarchyFeedFromTop,
+      slots: [...sharedSlotMap.values()],
+    },
   }
-  const baseRootCols = firstRootOption.panel.gridView?.columns ?? DEFAULT_PANEL_GRID_COLUMNS
+  const sharedPlacements = getPanelGridPlacements(
+    sharedLayoutPanel,
+    currentProject,
+    sharedRefs.map((ref) => ({ ref, slot: sharedSlotMap.get(panelGridModuleRefKey(ref)) }))
+  )
   const baseRootContentWidth = baseRootCols * CELL_W
   const sharedContentWidth = baseRootContentWidth
   const sharedWidth = sharedContentWidth + PANEL_SCENE_FRAME_MARGIN * 2
@@ -269,6 +341,9 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
     const mainModules = modules.filter((module) => module.inSupplyPanel !== true)
     const supplyModulesRaw = modules.filter((module) => module.inSupplyPanel === true)
     const supplyModules = panel.isMain ? [] : supplyModulesRaw
+    const converterBackupFeed = findConverterBackupPanelFeed(currentProject, panel.id)
+    const converterBackupSourceFeed =
+      findConverterBackupPanelFeedsFromSource(currentProject, panel.id)[0] ?? null
 
     const mainPlacements = getPanelGridPlacements(panel, currentProject, mainModules).map(
       (placement) => ({
@@ -311,6 +386,71 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
       placements: [...mainPlacementsWithOffset, ...supplyPlacements],
       supplyPanelVisible,
       label: getPanelDisplayName(panel, currentProject),
+      converterBackupFeed,
+      converterBackupSourceFeed,
+    }
+  }
+
+  const supplyDeviceIds = new Set(getAllSupplyTrunkDevices(currentProject).map(({ id }) => id))
+  const buildSurfaceForEnclosure = (enclosure: AuxiliaryElectricalEnclosure): PanelSceneSurface => {
+    const rows = Math.max(1, enclosure.gridView.rows)
+    const cols = Math.max(MIN_AUXILIARY_COLUMNS, enclosure.gridView.columns)
+    const contentWidth = cols * CELL_W
+    const contentHeight = rows * CELL_H + Math.max(0, rows - 1) * ROW_GAP
+    const slotByKey = new Map(
+      enclosure.gridView.slots.map((slot) => [panelGridModuleRefKey(slot.module), slot] as const)
+    )
+    const auxiliaryRefs = getAuxiliaryEnclosureSupplyDeviceIds(currentProject, enclosure.id)
+      .filter((deviceId) => supplyDeviceIds.has(deviceId))
+      .map(
+        (deviceId): PanelGridModuleRef => ({
+          kind: 'trunkDevice',
+          id: deviceId,
+          scope: 'supply',
+        })
+      )
+    const layoutPanel: Panel = {
+      ...firstRootOption.panel,
+      gridView: { ...enclosure.gridView, rows, columns: cols },
+    }
+    const placements = getPanelGridPlacements(
+      layoutPanel,
+      currentProject,
+      auxiliaryRefs.map((ref) => ({
+        ref,
+        slot: slotByKey.get(panelGridModuleRefKey(ref)),
+      }))
+    ).map((placement) => ({
+      ...placement,
+      x: placement.x + M,
+      y: placement.y + M,
+      inSupplyPanel: true as const,
+    }))
+    return {
+      id: enclosure.id,
+      panel: null,
+      enclosure,
+      kind: 'auxiliary',
+      x: enclosure.panelViewPosition?.x ?? 0,
+      y: sharedHeight + rootGap,
+      width: contentWidth + M * 2,
+      height: contentHeight + M * 2,
+      mainPanelY: 0,
+      supplyPanelY: 0,
+      panelFrameHeight: contentHeight + M * 2,
+      supplyFrameHeight: contentHeight + M * 2,
+      contentWidth,
+      supplyContentWidth: contentWidth,
+      supplyRows: rows,
+      supplyCols: cols,
+      rows,
+      cols,
+      feedFromTop: enclosure.gridView.feedFromTop,
+      placements,
+      supplyPanelVisible: true,
+      label: enclosure.name,
+      converterBackupFeed: null,
+      converterBackupSourceFeed: null,
     }
   }
 
@@ -359,14 +499,45 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
     }
   }
 
+  const auxiliaryEnclosures = getAuxiliaryElectricalEnclosuresFromProject(currentProject).filter(
+    (enclosure) => enclosure.hidden !== true
+  )
+  const auxiliarySurfaces = auxiliaryEnclosures
+    .map(buildSurfaceForEnclosure)
+    .sort((left, right) => {
+      const leftX = left.enclosure?.panelViewPosition?.x ?? 0
+      const rightX = right.enclosure?.panelViewPosition?.x ?? 0
+      return leftX - rightX || left.id.localeCompare(right.id)
+    })
+  const auxiliaryBandHeight = auxiliarySurfaces.reduce(
+    (height, surface) => Math.max(height, surface.height),
+    0
+  )
+  const auxiliaryGap = 56
+  const minimumPreferredX =
+    auxiliarySurfaces.length > 0
+      ? Math.min(
+          ...auxiliarySurfaces.map((surface) => surface.enclosure?.panelViewPosition?.x ?? 0)
+        )
+      : 0
+  let auxiliaryCursorX = 0
+  for (const surface of auxiliarySurfaces) {
+    const preferredX = (surface.enclosure?.panelViewPosition?.x ?? 0) - minimumPreferredX
+    surface.x = Math.max(preferredX, auxiliaryCursorX)
+    auxiliaryCursorX = surface.x + surface.width + auxiliaryGap
+  }
+  const auxiliaryWidth = Math.max(0, auxiliaryCursorX - auxiliaryGap)
   const rootNodes = rootOptions.map((option) => measureNode(option.panel))
   const rootsWidth =
     rootNodes.reduce((sum, node) => sum + node.subtreeWidth, 0) +
     rootGap * Math.max(0, rootNodes.length - 1)
-  const totalSceneWidth = Math.max(sharedWidth, rootsWidth)
+  const totalSceneWidth = Math.max(sharedWidth, rootsWidth, auxiliaryWidth)
   const sharedX = (totalSceneWidth - sharedWidth) / 2
+  const auxiliaryOffsetX = (totalSceneWidth - auxiliaryWidth) / 2
+  for (const surface of auxiliarySurfaces) surface.x += auxiliaryOffsetX
   let rootCursorX = (totalSceneWidth - rootsWidth) / 2
-  const rootY = sharedHeight + rootGap
+  const rootY =
+    sharedHeight + rootGap + (auxiliaryBandHeight > 0 ? auxiliaryBandHeight + rootGap : 0)
   for (const node of rootNodes) {
     layoutNode(node, rootCursorX, rootY)
     rootCursorX += node.subtreeWidth + rootGap
@@ -400,7 +571,10 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
       })),
       supplyPanelVisible: true,
       label: sharedSupplyLabel,
+      converterBackupFeed: null,
+      converterBackupSourceFeed: null,
     },
+    ...auxiliarySurfaces,
   ]
   const connectors: PanelSceneConnector[] = []
 
@@ -412,18 +586,7 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
     })
     const targetCenterX = node.x + node.surface.width / 2
     const targetTopY = node.y
-    if (parent == null) {
-      const busY = sharedHeight + rootGap / 2
-      connectors.push({
-        points: routePanelSceneConnector(
-          sharedX + sharedWidth / 2,
-          sharedHeight,
-          targetCenterX,
-          targetTopY,
-          busY
-        ),
-      })
-    } else {
+    if (parent != null) {
       const busY = parent.y + parent.surface.height + levelGap / 2
       connectors.push({
         points: routePanelSceneConnector(
@@ -438,6 +601,45 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
     for (const child of node.children) collect(child, node)
   }
   for (const node of rootNodes) collect(node, null)
+
+  const sharedSurface = surfaces.find((surface) => surface.kind === 'shared_supply')!
+  for (const rootNode of rootNodes) {
+    if (rootNode.surface.converterBackupFeed) continue
+    const rootSurface = surfaces.find(
+      (surface) => surface.kind === 'panel' && surface.panel?.id === rootNode.panel.id
+    )!
+    const rootSupplyDevices = installation
+      ? (getPanelFeedProjection(installation, rootPanels, rootNode.panel)?.devices ?? [])
+      : []
+    const surfaceForDevice = (deviceId: string): PanelSceneSurface | undefined => {
+      const mounting = resolveSupplyDeviceMounting(currentProject, deviceId)
+      if (!mounting || mounting.kind === 'grid') return sharedSurface
+      if (mounting.kind === 'auxiliary') {
+        return surfaces.find(
+          (surface) => surface.kind === 'auxiliary' && surface.id === mounting.enclosureId
+        )
+      }
+      return surfaces.find(
+        (surface) => surface.kind === 'panel' && surface.panel?.id === mounting.panelId
+      )
+    }
+    const transitionChain = [
+      sharedSurface,
+      ...rootSupplyDevices.map((device) => surfaceForDevice(device.id)),
+      rootSurface,
+    ].filter((surface): surface is PanelSceneSurface => surface != null)
+    const collapsedTransitionChain = transitionChain.filter(
+      (surface, index) => index === 0 || transitionChain[index - 1]?.id !== surface.id
+    )
+    for (let index = 0; index < collapsedTransitionChain.length - 1; index++) {
+      connectors.push({
+        points: routePanelSceneSurfaceTransition(
+          collapsedTransitionChain[index]!,
+          collapsedTransitionChain[index + 1]!
+        ),
+      })
+    }
+  }
 
   const maxBottom = Math.max(...surfaces.map((surface) => surface.y + surface.height))
   if (!hierarchyFeedFromTop) {

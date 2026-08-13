@@ -35,7 +35,10 @@ export function useAutoSave({ disabled = false }: { disabled?: boolean } = {}) {
         }
       }, 30000) // 30 seconds
 
-      // Also save immediately after a short delay (debounce rapid changes)
+      // Start persistence on the next task. Waiting multiple seconds here leaves a
+      // real data-loss window when somebody refreshes immediately after a drop.
+      // Same-task edits are still batched, and saveCurrentProject follows mutations
+      // made while its persistence pass is in flight.
       const timeoutId = setTimeout(() => {
         const { isDirty: currentIsDirty } = useProjectStore.getState()
         if (currentIsDirty) {
@@ -43,7 +46,7 @@ export function useAutoSave({ disabled = false }: { disabled?: boolean } = {}) {
             logger.error('Auto-save failed:', error)
           })
         }
-      }, 2000) // 2 seconds delay
+      }, 0)
 
       return () => {
         if (intervalRef.current) {
@@ -60,4 +63,25 @@ export function useAutoSave({ disabled = false }: { disabled?: boolean } = {}) {
       return undefined
     }
   }, [disabled, isDirty, saveCurrentProject])
+
+  useEffect(() => {
+    if (disabled) return
+    const flushDirtyProject = () => {
+      const state = useProjectStore.getState()
+      if (!state.isDirty) return
+      void state.saveCurrentProject().catch((error: unknown) => {
+        logger.error('Save before page suspension failed:', error)
+      })
+    }
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flushDirtyProject()
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('pagehide', flushDirtyProject)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('pagehide', flushDirtyProject)
+    }
+  }, [disabled])
 }

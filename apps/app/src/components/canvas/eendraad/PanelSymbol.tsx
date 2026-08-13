@@ -40,6 +40,7 @@ interface PanelSymbolProps {
   circuitCount?: number // Number of circuits in this sub-panel
   symbolLabelDisplay?: SymbolLabelDisplayConfig
   maxLabelWidth?: number
+  labelPosition?: 'right' | 'top'
   onDragStart?: (altKey: boolean, evt: MouseEvent) => boolean
   onDragMove?: (position: Point) => void
   onDragEnd?: (position: Point) => boolean | void
@@ -52,6 +53,7 @@ export function PanelSymbol({
   subPanelId,
   circuitCount = 0,
   maxLabelWidth,
+  labelPosition = 'right',
   onDragStart,
   onDragMove,
   onDragEnd,
@@ -244,8 +246,12 @@ export function PanelSymbol({
 
       {panelName && isPanelNameVisible && (
         <Text
-          x={EENDRAAD_PANEL_SYMBOL_WIDTH / 2 + 5}
-          y={-3}
+          x={
+            labelPosition === 'top'
+              ? -(maxLabelWidth ?? 120) / 2
+              : EENDRAAD_PANEL_SYMBOL_WIDTH / 2 + 5
+          }
+          y={labelPosition === 'top' ? -EENDRAAD_PANEL_SYMBOL_HEIGHT / 2 - 13 : -3}
           width={maxLabelWidth}
           text={panelName}
           fontSize={11}
@@ -253,6 +259,7 @@ export function PanelSymbol({
           wrap={maxLabelWidth != null ? 'char' : 'none'}
           fontFamily={fontFamily}
           fill={symbolColor}
+          align={labelPosition === 'top' ? 'center' : 'left'}
           listening={false}
         />
       )}

@@ -44,6 +44,21 @@ export interface BusbarPhaseConfiguration {
   secondary?: Record<string, AcLinePhase[]>
 }
 
+/**
+ * One independently supplied top-level busbar section inside a physical panel.
+ *
+ * The source and available conductors are resolved from the root feed or supply
+ * assembly handoff that targets this section. `role` is only a presentation and
+ * preset hint; it must never be used as the electrical source of truth.
+ */
+export interface PanelBusSection {
+  id: string
+  label: string
+  role?: 'normal' | 'backup' | 'custom'
+  /** Independent automatic phase sequence for circuits attached to this section. */
+  phaseOrder?: AcLinePhase[]
+}
+
 export type CircuitPhaseAssignmentKind =
   | 'inherit'
   | 'single_phase'
@@ -120,6 +135,10 @@ export interface Panel {
   subPanels: Panel[] // Nested panels, connected via MCB
   /** Phase rotations reset independently for this panel's main and secondary busbars. */
   busbarPhases?: BusbarPhaseConfiguration
+  /** Optional independently supplied top-level busbar sections. Missing means one legacy main bus. */
+  busSections?: PanelBusSection[]
+  /** Default destination for legacy/unassigned top-level devices when bus sections exist. */
+  primaryBusSectionId?: string
   /** Optional config for panel (kast) grid view; only affects display in that view */
   gridView?: PanelGridConfig
   /** Generic one-wire label rendering options for the panel symbol label. */
@@ -189,6 +208,8 @@ export interface ProtectionDevice {
   rulesetDateOverride?: number
   /** Generic one-wire label rendering options next to this protection symbol. */
   symbolLabelDisplay?: SymbolLabelDisplayConfig
+  /** Top-level panel bus section supplying this protection; nested circuits inherit it. */
+  busSectionId?: string
 }
 
 /** Electrical properties remembered from the last edited protection of each type. */
@@ -237,6 +258,13 @@ export interface Branch {
 export interface Circuit {
   id: string
   code: string
+  /** Optional non-bus origin for a circuit fed by a standalone supply converter backup port. */
+  supplySource?: {
+    kind: 'converter-backup'
+    converterId: string
+  }
+  /** Bus section for an unprotected top-level circuit; protected circuits inherit their protection. */
+  busSectionId?: string
   /** Preserve this code during automatic main-bus naming, used for plan-created circuits with chosen labels. */
   eendraadManualCodeLock?: boolean
   kind: CircuitKind
@@ -331,6 +359,7 @@ export type ElectricalDomain = 'AC' | 'DC'
 export const DEFAULT_ELECTRICAL_DOMAIN: ElectricalDomain = 'AC'
 
 export type SymbolKey =
+  | 'mains'
   | 'socket'
   | 'socket_gnd'
   | 'socket_child'
@@ -380,6 +409,7 @@ export type SymbolKey =
   | 'main_switch'
   | 'spd'
   | 'rotating_switch'
+  | 'source_changeover'
   // Grid & earthing symbols (used by ground trunk devices)
   | 'earthing_separator'
   | 'junction_box'
@@ -435,13 +465,21 @@ export type TrunkDeviceType =
   | 'earthing_separator'
   | 'junction_box'
   | 'junction_panel'
+  | 'changeover'
   | 'conversion'
+  | 'storage'
+  | 'generation'
 
 export interface TrunkDevice {
   id: string
   type: TrunkDeviceType
   symbol: SymbolKey
   label: string
+  /** Physical panel-canvas mounting for supply devices; independent from electrical feed ownership. */
+  panelMounting?:
+    | { kind: 'grid' }
+    | { kind: 'panel'; panelId: string }
+    | { kind: 'auxiliary'; enclosureId: string }
   /** Situation-plan instances for trunk devices that also have a physical plan symbol. */
   placements?: Placement[]
   /** Show domain-change label (AC/DC symbol) after this device on 1draad trunk. Defaults to true. */
@@ -449,6 +487,15 @@ export interface TrunkDevice {
   energyMeterProps?: EnergyMeterDeviceProps
   /** When type === 'conversion' — energy conversion specific properties */
   conversionProps?: EnergyConversionDeviceProps
+  /** When type === 'storage' and symbol === 'battery'. */
+  batteryProps?: BatteryDeviceProps
+  /** When type === 'generation' and symbol === 'solar_panel'. */
+  solarPanelProps?: SolarPanelDeviceProps
+  /** Display labels for the two source ports of a supply changeover switch. */
+  changeoverProps?: {
+    port1Label?: string
+    port2Label?: string
+  }
   /** Protection-specific properties (when type === 'protection') */
   protectionType?: ProtectionType
   ratingA?: number
@@ -465,6 +512,16 @@ export interface TrunkDevice {
   notes?: string
   /** Position on trunk relative to branches (circuit) or sequential index (supply). */
   trunkPosition: number
+  /** Supply-only branch ownership. Omitted/serial devices stay on the ordinary grid-to-panel path. */
+  supplyPath?:
+    | 'serial'
+    | 'backup'
+    | 'backup-output'
+    | 'changeover-grid'
+    | 'converter-grid'
+    | 'converter-branch'
+    | 'converter-dc'
+    | 'converter-dc-top'
   /** ISO installation date. Preferred over the legacy year override. */
   installationDate?: string
   /** Explicitly keeps automatic/version-derived installation dates off this entity. */
@@ -685,6 +742,10 @@ export interface SynergridCertification {
 export type TransformerSafetyType = 'none' | 'safety_closed' | 'safety_open'
 
 export interface EnergyConversionDeviceProps {
+  /** Shared AC phase set used by every AC port of a supply-wire converter. */
+  acPhaseAssignment?: CircuitPhaseAssignment
+  /** Ordered per-unit AC assignments for a multiplied supply-wire inverter. */
+  acPhaseAssignments?: CircuitPhaseAssignment[]
   /** Transformer: safety transformer type (none, gesloten/type closed, open/type open) */
   transformerSafetyType?: TransformerSafetyType
   /** Transformer: short-circuit-proof (Kortsluitvast) */
@@ -707,6 +768,8 @@ export interface EnergyConversionDeviceProps {
   model?: string
   /** Inverter/rectifier: serial number (certification listing) */
   serialNumber?: string
+  /** Ordered inverter-unit serials; index matches the device's placement index. */
+  serialNumbers?: string[]
   /** Inverter/rectifier: rated power (certification listing, e.g. "5 kW") */
   power?: string
   synergrid?: SynergridCertification
@@ -1184,6 +1247,8 @@ export interface RootPanelFeedPath {
   kind: 'root_panel'
   connectorId: string
   panelId: string
+  /** Optional destination bus section. Missing targets the panel's primary/legacy main bus. */
+  busSectionId?: string
   /** Omitted when there is only one main panel (`mainSupply.cable` applies). Set when multiple mains may use different drops. */
   cable?: CableSpec
   /** Optional phase set carried by this panel's private supply section. */
@@ -1217,6 +1282,10 @@ export interface WireSegment {
   phaseAssignment?: CircuitPhaseAssignment
   /** Effective phase-label visibility carried by this segment. */
   showPhaseLabel?: boolean
+  /** Mandatory source-boundary annotation; cannot be hidden by wire label preferences. */
+  forcePhaseLabel?: boolean
+  /** Optional derived canvas anchor for a mandatory phase label. */
+  phaseLabelAnchor?: Point2
   installationType?: 'in-wall' | 'in-tube' | 'surface' | 'conduit'
   inTube?: boolean // Flag: wire is in tube (independent)
   inWall?: boolean // @deprecated use wireRoute === 'wall'
@@ -1240,6 +1309,15 @@ export interface WireSegment {
   toElementType?: 'protection' | 'endpoint' | 'rcd' | 'mainBus' | 'secondaryBus'
   circuitId?: string // For branch wires
   panelId: string
+  /** Top-level panel bus section represented by this busbar or incoming stub. */
+  busSectionId?: string
+  /** Derived source marker shown on a bus-section incoming stub. */
+  busFeedKind?: 'grid' | 'backup'
+  showBusFeedMarker?: boolean
+  /** Optional side placement used by compact detached-supply rail markers. */
+  busFeedMarkerSide?: 'left' | 'right' | 'below' | 'below-left' | 'below-right'
+  /** Ephemeral one-wire frame identity when one panel renders in multiple frames. */
+  diagramId?: string
   /** True for horizontal supply trunk segments (between supply symbol and main bus). */
   isSupplyTrunk?: boolean
   /** True for a sub-panel incoming supply wire segment (parent panel feeder shown inside child panel). */
@@ -1257,14 +1335,19 @@ export interface WireSegment {
    * or main-panel side including the vertical to the bus (`downstream`).
    */
   supplyWireRole?: 'upstream' | 'crossing' | 'downstream'
-  /** Dashed separator X for crossing trunk labels (horizontal segments only). */
+  /** Canonical dashed panel-boundary X carried by the horizontal crossing segment. */
   supplySeparatorX?: number
+  /** Derived enclosure transition carried by the physical supply-assembly connection. */
+  supplyEnclosureBoundary?: boolean
   /** Bus-drop vertical that also includes the bus-side crossing run (no trunk device before the separator). */
   supplyMergesCrossingToBus?: boolean
   /** Horizontal crossing run absorbed into the bus drop; not a separate property segment. */
   supplyMergedIntoBusDrop?: boolean
   /** Feed path for supply trunk segments (shared = supply panel, root = main panel). */
   supplyFeedScope?: 'shared' | 'root'
+  /** Canonical supply-assembly connection represented by this drawable segment. */
+  supplyAssemblyId?: string
+  supplyConnectionId?: string
   /** When this segment is a domotica module output wire, group indicates 'endpoint' or 'control'. */
   domoticaOutputGroup?: 'endpoint' | 'control'
   /** When this segment is a domotica module output wire, index is the absolute output index within that group. */
@@ -1359,6 +1442,8 @@ export type OrphanReason =
   | 'panelGridDuplicateModule'
   /** Supply trunk device slotted on main panel grid instead of supply strip (one-line vs canvas mismatch). */
   | 'supplyTrunkMisplacedInMainGrid'
+  /** Main panel retains multiple source bus sections without a connected backup supply path. */
+  | 'splitBusWithoutBackupSupply'
   | 'danglingReference'
   | 'invalidGeometry'
 

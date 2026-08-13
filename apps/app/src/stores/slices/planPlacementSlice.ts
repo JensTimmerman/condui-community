@@ -47,6 +47,8 @@ import type {
   ProtectionDevice,
 } from '@/types/schema'
 import { findCircuitForEndpointInPanel, generateId, getNextAvailableCircuitCode } from '@/utils/project'
+import { getAllSupplyTrunkDevices } from '@/lib/feedTopology'
+import { removeSupplyInverterPlacements } from '@/utils/inverterMultipliers'
 
 type MutablePlacementOwner = {
   placement: Placement
@@ -57,7 +59,7 @@ type MutablePlacementOwner = {
 function findMutablePlacementOwner(project: Project, placementId: string): MutablePlacementOwner | null {
   const installation = getMutableElectricalInstallationForProject(project)
   const installationTrunkDevices = [
-    ...(installation?.mainSupply?.supplyTrunkDevices ?? []),
+    ...getAllSupplyTrunkDevices(project),
     ...(installation?.groundTrunkDevices ?? []),
   ]
   for (const device of installationTrunkDevices) {
@@ -300,7 +302,10 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
                 !!result.circuit.code && /^[A-Z]+$/.test(result.circuit.code.trim())
               let assignedCircuitCode: string | null = null
 
-              if (isFirstEndpoint && !hasAlphabeticCode) {
+              const usesMainBusAutomaticNaming =
+                result.circuit.supplySource?.kind !== 'converter-backup'
+
+              if (isFirstEndpoint && !hasAlphabeticCode && usesMainBusAutomaticNaming) {
                 const project = state.currentProject
                 const circuitOwner = project
                   ? findCircuitOwner(getElectricalPanelsFromProject(project), circuitId)
@@ -1114,6 +1119,15 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
           return
         }
         if (state.currentProject) {
+          for (const device of getAllSupplyTrunkDevices(state.currentProject)) {
+            const index = device.placements?.findIndex((placement) => placement.id === id) ?? -1
+            if (index === -1) continue
+            if (!removeSupplyInverterPlacements(device, new Set([id]))) {
+              device.placements!.splice(index, 1)
+            }
+            state.isDirty = true
+            return
+          }
           for (const panel of getMutableElectricalPanelsForProject(state.currentProject)) {
             const endpoints = getAllEndpoints(panel)
             for (const endpoint of endpoints) {
@@ -1189,6 +1203,15 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
                 if (device.placements) {
                   device.placements = device.placements.filter((placement) => !idsSet.has(placement.id))
                 }
+              }
+            }
+          }
+          for (const device of getAllSupplyTrunkDevices(project)) {
+            if (device.placements) {
+              if (!removeSupplyInverterPlacements(device, idsSet)) {
+                device.placements = device.placements.filter(
+                  (placement) => !idsSet.has(placement.id)
+                )
               }
             }
           }

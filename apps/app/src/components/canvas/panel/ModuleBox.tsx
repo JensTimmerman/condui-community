@@ -44,6 +44,7 @@ interface ModuleBoxProps {
   onHoverChange?: (data: ModuleTooltipData | null) => void
   onHoverRefChange?: (ref: PanelGridModuleRef | null) => void
   onResizeEnd?: (ref: PanelGridModuleRef, newWidthCols: number) => void
+  isResizeWidthValid?: (ref: PanelGridModuleRef, newWidthCols: number) => boolean
   maxWidthCols?: number
   onRewireDragStart?: (ref: PanelGridModuleRef, x: number, y: number) => boolean
   onRewireDragMove?: (stage: Konva.Stage, pointerPos: { x: number; y: number }) => void
@@ -111,7 +112,7 @@ type ModuleMouseEvent = KonvaEventObject<MouseEvent>
 type ModuleClickEvent = KonvaEventObject<MouseEvent | TouchEvent>
 type ModuleDragEvent = KonvaEventObject<DragEvent>
 
-function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove, onDragStart, draggable = false, onAssignTargetClick, onHoverChange, onHoverRefChange, onResizeEnd, maxWidthCols, onRewireDragStart, onRewireDragMove, onRewireDragEnd, isRewireOrigin = false, isRewireTarget = false, isRewireTargetValid = true, onSelectionIntent, debugMode = false, debugSupplyTrunkKind }: ModuleBoxProps) {
+function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove, onDragStart, draggable = false, onAssignTargetClick, onHoverChange, onHoverRefChange, onResizeEnd, isResizeWidthValid, maxWidthCols, onRewireDragStart, onRewireDragMove, onRewireDragEnd, isRewireOrigin = false, isRewireTarget = false, isRewireTargetValid = true, onSelectionIntent, debugMode = false, debugSupplyTrunkKind }: ModuleBoxProps) {
   const selection = useUIStore((s) => s.selection)
   const setSelection = useUIStore((s) => s.setSelection)
   const colors = useThemeColors()
@@ -128,6 +129,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
   const specTextRef = useRef<Konva.Text>(null)
   const handleVisualRef = useRef<Konva.Rect>(null)
   const resizeWidthRef = useRef<number | null>(null)
+  const resizeInvalidRef = useRef(false)
   const [isHovered, setIsHovered] = useState(false)
   const isMarqueeSelecting = useIsMarqueeSelecting()
   const isPreviewSelected = useIsPreviewSelected(
@@ -143,6 +145,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
     Partial<Record<'programmed_control' | 'wireless_control' | 'detection_control' | 'button_control', HTMLImageElement | null>>
   >({})
   const [liveWidth, setLiveWidth] = useState<number | null>(null)
+  const [resizeInvalid, setResizeInvalid] = useState(false)
 
   useEffect(() => {
     return () => {
@@ -464,7 +467,9 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
     if (moduleRef.kind === 'trunkDevice' && moduleRef.scope === 'circuit') return '#06b6d4' // MCIR
     return '#22c55e' // MINT (unexpected)
   })()
-  const border = isRewireTarget
+  const border = resizeInvalid
+    ? '#ef4444'
+    : isRewireTarget
     ? (isRewireTargetValid ? '#10b981' : '#ef4444') // Green for valid rewire target, red for invalid
     : (isRewireOrigin
       ? '#f59e0b' // Amber for rewire origin
@@ -472,8 +477,8 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
         ? colors.moduleBorderSelected
         : colors.moduleBorder))
   const debugBorder = debugModuleColor ?? border
-  const debugBg = debugModuleColor ? `${debugModuleColor}14` : bg
-  const borderWidth = isRewireTarget || isRewireOrigin ? 3 : (isSelected || isPreviewSelected ? 2 : 1)
+  const debugBg = resizeInvalid ? '#ef44441a' : debugModuleColor ? `${debugModuleColor}14` : bg
+  const borderWidth = resizeInvalid || isRewireTarget || isRewireOrigin ? 3 : (isSelected || isPreviewSelected ? 2 : 1)
   const borderDash = isRewireTarget || isRewireOrigin
     ? [6, 4]
     : (isHovered && !isMarqueeSelecting && !isSelected && !isPreviewSelected ? [4, 3] : undefined)
@@ -520,8 +525,12 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
   const isRotatingSwitchModule =
     trunkInfo?.device.symbol === 'rotating_switch' ||
     protectionDevice?.type === 'ROTATING_SWITCH'
-  const rotatingSwitchSymbolMeta = isRotatingSwitchModule
-    ? getSymbolById('rotating_switch')
+  const isSourceChangeoverModule = trunkInfo?.device.symbol === 'source_changeover'
+  const isSelectorSwitchModule = isRotatingSwitchModule || isSourceChangeoverModule
+  const selectorSwitchCustomLabel =
+    (trunkInfo?.device.label ?? protectionDevice?.label ?? '').trim()
+  const rotatingSwitchSymbolMeta = isSelectorSwitchModule
+    ? getSymbolById(isSourceChangeoverModule ? 'source_changeover' : 'rotating_switch')
     : null
   const spdDevice = protectionDevice?.type === 'SPD'
     ? protectionDevice
@@ -540,6 +549,8 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
   const [energyDeviceImage, setEnergyDeviceImage] = useState<HTMLImageElement | null>(null)
   const [rotatingSwitchImage, setRotatingSwitchImage] = useState<HTMLImageElement | null>(null)
   const [spdSymbolImage, setSpdSymbolImage] = useState<HTMLImageElement | null>(null)
+  const [relaySymbolImage, setRelaySymbolImage] = useState<HTMLImageElement | null>(null)
+  const [relayControlOverlayImage, setRelayControlOverlayImage] = useState<HTMLImageElement | null>(null)
 
   // Load AC/DC domain symbols for energy conversion modules (panel view)
   useEffect(() => {
@@ -569,14 +580,14 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
   }, [energySymbolMeta?.svgPath, isEnergyConversionModule, themeMode])
 
   useEffect(() => {
-    if (!isRotatingSwitchModule || !rotatingSwitchSymbolMeta?.svgPath) {
+    if (!isSelectorSwitchModule || !rotatingSwitchSymbolMeta?.svgPath) {
       setRotatingSwitchImage(null)
       return
     }
     loadProcessedSymbol(rotatingSwitchSymbolMeta.svgPath, themeMode === 'dark')
       .then(setRotatingSwitchImage)
       .catch(() => setRotatingSwitchImage(null))
-  }, [isRotatingSwitchModule, rotatingSwitchSymbolMeta?.svgPath, themeMode])
+  }, [isSelectorSwitchModule, rotatingSwitchSymbolMeta?.svgPath, themeMode])
 
   useEffect(() => {
     if (!spdSymbolPath) {
@@ -587,6 +598,21 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
       .then(setSpdSymbolImage)
       .catch(() => setSpdSymbolImage(null))
   }, [spdSymbolPath, themeMode])
+
+  useEffect(() => {
+    if (!info.relay) {
+      setRelaySymbolImage(null)
+      setRelayControlOverlayImage(null)
+      return
+    }
+    const isDark = themeMode === 'dark'
+    loadProcessedSymbol(info.relay.symbolPath, isDark)
+      .then(setRelaySymbolImage)
+      .catch(() => setRelaySymbolImage(null))
+    loadProcessedSymbol(info.relay.controlOverlayPath, isDark)
+      .then(setRelayControlOverlayImage)
+      .catch(() => setRelayControlOverlayImage(null))
+  }, [info.relay, themeMode])
 
   // Load domotica main symbol image for panel modules
   useEffect(() => {
@@ -814,7 +840,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
           )
         })()
       )}
-      {isRotatingSwitchModule && (
+      {isSelectorSwitchModule && (
         (() => {
           const padding = 3
           const centerTop = topBandHeight
@@ -831,7 +857,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
           )
           return (
             <Group name="panel-rotating-switch-graphic" listening={false}>
-              {rotatingSwitchImage && (
+              {rotatingSwitchImage && !selectorSwitchCustomLabel && (
                 <Image
                   name="panel-rotating-switch-symbol"
                   image={rotatingSwitchImage}
@@ -846,7 +872,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
                 x={dialX - dialRadius * 1.75 - positionFontSize * 0.65}
                 y={dialY - dialRadius * 1.15 + positionFontSize}
                 width={positionFontSize * 1.3}
-                text="0"
+                text={isSourceChangeoverModule ? '1' : '0'}
                 fontSize={positionFontSize}
                 fontFamily={fontFamily}
                 fill={secondaryColor}
@@ -857,13 +883,26 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
                 x={dialX - positionFontSize * 0.65}
                 y={dialY - dialRadius * 1.45 - positionFontSize * 0.35}
                 width={positionFontSize * 1.3}
-                text="1"
+                text={isSourceChangeoverModule ? '0' : '1'}
                 fontSize={positionFontSize}
                 fontFamily={fontFamily}
                 fill={secondaryColor}
                 align="center"
                 listening={false}
               />
+              {isSourceChangeoverModule && (
+                <Text
+                  x={dialX + dialRadius * 1.75 - positionFontSize * 0.65}
+                  y={dialY - dialRadius * 1.15 + positionFontSize}
+                  width={positionFontSize * 1.3}
+                  text="2"
+                  fontSize={positionFontSize}
+                  fontFamily={fontFamily}
+                  fill={secondaryColor}
+                  align="center"
+                  listening={false}
+                />
+              )}
               <Circle
                 x={dialX}
                 y={dialY}
@@ -899,6 +938,59 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
           )
         })()
       )}
+      {info.relay && (
+        (() => {
+          const symbolSize = Math.min(effectiveModuleWidth * 0.72, centerBandHeight * 0.58)
+          const symbolX = effectiveModuleWidth / 2
+          const symbolY = topBandHeight + centerBandHeight * 0.42
+          const polesHeight = Math.max(1, centerBandHeight * 0.2)
+          return (
+            <Group name="panel-relay-graphic" listening={false}>
+              {relaySymbolImage && (
+                <Image
+                  name="panel-relay-symbol"
+                  image={relaySymbolImage}
+                  x={symbolX}
+                  y={symbolY}
+                  width={symbolSize}
+                  height={symbolSize}
+                  offsetX={symbolSize / 2}
+                  offsetY={symbolSize / 2}
+                  listening={false}
+                />
+              )}
+              {relayControlOverlayImage && (
+                <Image
+                  name="panel-relay-control-overlay"
+                  image={relayControlOverlayImage}
+                  x={symbolX}
+                  y={symbolY}
+                  width={symbolSize}
+                  height={symbolSize}
+                  offsetX={symbolSize / 2}
+                  offsetY={symbolSize / 2}
+                  listening={false}
+                />
+              )}
+              <Text
+                name="panel-relay-poles"
+                x={textSidePadding}
+                y={bottomBandTop - polesHeight - 1}
+                width={textWidth}
+                height={polesHeight}
+                text={info.relay.polesLabel}
+                fontSize={SPEC_FONT_SIZE}
+                fontStyle="bold"
+                fontFamily={fontFamily}
+                fill={secondaryColor}
+                align="center"
+                verticalAlign="middle"
+                listening={false}
+              />
+            </Group>
+          )
+        })()
+      )}
       {/* Label - prominent, bold */}
       <Text
         ref={labelTextRef}
@@ -907,8 +999,8 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
         width={textWidth}
         height={topTextHeight}
         text={
-          isRotatingSwitchModule
-            ? ''
+          isSelectorSwitchModule
+            ? selectorSwitchCustomLabel
             : isSpdModule
               ? (hasSpdLabel ? spdRawLabel : '')
               : energyMeterCircuitLabel
@@ -1104,7 +1196,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
             y={height * 0.15}
             width={4}
             height={height * 0.7}
-            fill="#0284c7"
+            fill={resizeInvalid ? '#ef4444' : '#0284c7'}
             opacity={0.9}
             cornerRadius={2}
             perfectDrawEnabled={false}
@@ -1123,6 +1215,8 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
             onDragStart={(e: KonvaEventObject<DragEvent>) => {
               e.cancelBubble = true
               resizeWidthRef.current = width
+              resizeInvalidRef.current = false
+              setResizeInvalid(false)
             }}
             onDragMove={(e: KonvaEventObject<DragEvent>) => {
               e.cancelBubble = true
@@ -1130,6 +1224,9 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
               const handleCenter = node.x() + RESIZE_HANDLE_W / 2
               const newCols = Math.max(1, Math.min(maxWidthCols ?? 999, Math.round(handleCenter / CELL_W)))
               const snapped = newCols * CELL_W
+              const invalid = isResizeWidthValid
+                ? !isResizeWidthValid(moduleRef, newCols)
+                : false
               const nextTextPadding = Math.min(4, Math.max(2, snapped * 0.08))
               const nextTextWidth = Math.max(1, snapped - nextTextPadding * 2)
               node.x(snapped - RESIZE_HANDLE_W / 2)
@@ -1141,6 +1238,8 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
               specTextRef.current?.x(nextTextPadding)
               specTextRef.current?.width(nextTextWidth)
               resizeWidthRef.current = snapped
+              resizeInvalidRef.current = invalid
+              setResizeInvalid(invalid)
               setLiveWidth(snapped)
             }}
             onDragEnd={(e: KonvaEventObject<DragEvent>) => {
@@ -1149,7 +1248,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
               const finalCols = Math.round(finalWidthPx / CELL_W)
               const originalCols = Math.round(width / CELL_W)
               resizeWidthRef.current = null
-              if (finalCols !== originalCols && onResizeEnd) {
+              if (!resizeInvalidRef.current && finalCols !== originalCols && onResizeEnd) {
                 onResizeEnd(moduleRef, finalCols)
               } else {
                 e.target.x(width - RESIZE_HANDLE_W / 2)
@@ -1160,6 +1259,8 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
                 specTextRef.current?.x(textSidePadding)
                 specTextRef.current?.width(textWidth)
               }
+              resizeInvalidRef.current = false
+              setResizeInvalid(false)
               setLiveWidth(null)
             }}
             onMouseEnter={(e: KonvaEventObject<MouseEvent>) => {

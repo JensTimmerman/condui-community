@@ -60,6 +60,9 @@ import {
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { collectCircuits, findPanelById } from '@/lib/panel/panelTree'
+import { isFunctionalProtectionType } from '@/lib/protectionKind'
+import { hasExplicitPanelBusSections } from '@/lib/panel/panelBusSections'
+import { panelHasBackupOutput } from '@/lib/panel/panelFeedOrganization'
 
 type OrphanDetectionProject = ProjectWithOptionalV2Electrical &
   ProjectWithOptionalV2Building &
@@ -184,6 +187,11 @@ export interface DetectedOrphan {
         contentId: string
         contentType: 'endpoint' | 'protection' | 'trunkDevice' | 'ground' | 'circuit'
       }
+    | {
+        /** Collapse stale split-feed data back onto the main panel's single grid feed. */
+        kind: 'collapsePanelFeedToSingleGrid'
+        panelId: string
+      }
 }
 
 /** Build circuit id -> circuit for a panel (same logic as layout) */
@@ -204,7 +212,12 @@ function buildCircuitMap(panel: Panel): Map<string, Circuit> {
 
 function hasDirectProtectionForCircuit(panel: Panel, circuitId: string): boolean {
   for (const protection of panel.protections) {
-    if (protection.circuits?.some((circuit) => circuit.id === circuitId)) return true
+    if (
+      isFunctionalProtectionType(protection.type) &&
+      protection.circuits?.some((circuit) => circuit.id === circuitId)
+    ) {
+      return true
+    }
   }
   return false
 }
@@ -366,6 +379,12 @@ export interface OrphanReport {
     row: number
     col: number
   }>
+  /** Main panel has several bus sections but no connected backup path capable of supplying one. */
+  splitBusWithoutBackupSupply: Array<{
+    panelId: string
+    panelName: string
+    busSectionCount: number
+  }>
 }
 
 /**
@@ -390,6 +409,7 @@ export function detectPanelOrphans(project: OrphanDetectionProject, panelId: str
     branchMultiplierEndpointsSplit: [],
     panelGridDuplicateModule: [],
     supplyTrunkMisplacedInMainGrid: [],
+    splitBusWithoutBackupSupply: [],
   }
 
   const projectPanels = getElectricalPanelsFromProject(project)
@@ -397,6 +417,18 @@ export function detectPanelOrphans(project: OrphanDetectionProject, panelId: str
   const panel = findPanelById(projectPanels, panelId)
   if (!panel) return report
   const currentPanel = panel
+  if (
+    currentPanel.isMain !== false &&
+    hasExplicitPanelBusSections(currentPanel) &&
+    currentPanel.busSections!.length > 1 &&
+    !panelHasBackupOutput(project, currentPanel.id)
+  ) {
+    report.splitBusWithoutBackupSupply.push({
+      panelId: currentPanel.id,
+      panelName: currentPanel.name,
+      busSectionCount: currentPanel.busSections!.length,
+    })
+  }
   const reportedMissingOneWirePanelIds = new Set<string>()
   const reportMissingOneWirePanel = (
     missingPanel: Panel,
@@ -1216,6 +1248,20 @@ export function getDetectedOrphans(project: OrphanDetectionProject): DetectedOrp
         },
       })
     }
+    for (const item of report.splitBusWithoutBackupSupply) {
+      out.push({
+        id: `split-bus-without-backup-${item.panelId}`,
+        kind: 'circuit',
+        reason: 'splitBusWithoutBackupSupply',
+        summary: `Panel "${item.panelName}" has a split bus but no connected backup supply`,
+        panelId: item.panelId,
+        focusSelection: { type: 'circuit', ids: [] },
+        resolutionPayload: {
+          kind: 'collapsePanelFeedToSingleGrid',
+          panelId: item.panelId,
+        },
+      })
+    }
   }
   return out
 }
@@ -1266,7 +1312,8 @@ export function logOrphanReport(project: OrphanDetectionProject): void {
       report.panelMissingOneWireSymbol.length +
       report.branchMultiplierEndpointsSplit.length +
       report.panelGridDuplicateModule.length +
-      report.supplyTrunkMisplacedInMainGrid.length
+      report.supplyTrunkMisplacedInMainGrid.length +
+      report.splitBusWithoutBackupSupply.length
     if (count === 0) continue
 
     totalCount += count
@@ -1524,6 +1571,16 @@ export function logOrphanReport(project: OrphanDetectionProject): void {
         { type: 'supplyTrunkMisplacedInMainGrid', ...item, panelId }
       )
     }
+
+    for (const item of report.splitBusWithoutBackupSupply) {
+      logger.error(
+        `${ORPHAN_LOG_PREFIX} Split bus without backup supply: panel "${item.panelName}" (id: ${item.panelId}) retains ${item.busSectionCount} bus sections but no connected backup path.`
+      )
+      logger.error(
+        `${ORPHAN_LOG_PREFIX} Likely cause: the supply assembly was removed or disconnected without collapsing its panel bus sections. Use Repair in the Orphan Inspector to restore one grid-fed bus.`,
+        { type: 'splitBusWithoutBackupSupply', ...item }
+      )
+    }
   }
 
   if (totalCount > 0) {
@@ -1559,6 +1616,7 @@ export function orphanReportToIssues(
     panelMissingOneWireSymbol: (opts: Record<string, string>) => string
     panelGridDuplicateModule: (opts: Record<string, string>) => string
     supplyTrunkMisplacedInMainGrid: (opts: Record<string, string>) => string
+    splitBusWithoutBackupSupply: (opts: Record<string, string>) => string
   }
 ): Issue[] {
   const issues: Issue[] = []
@@ -1945,6 +2003,25 @@ export function orphanReportToIssues(
       details: undefined,
       citations: [],
       tags: ['orphan', 'panel-grid', 'consistency'],
+    })
+  }
+
+  for (const item of report.splitBusWithoutBackupSupply) {
+    issues.push({
+      id: `${ruleId}:board:${panelId}:split-bus-without-backup`,
+      ruleId,
+      severity: 'error',
+      jurisdiction,
+      rulesetVersion,
+      scope: { type: 'board', id: panelId },
+      offenders: [],
+      message: msg.splitBusWithoutBackupSupply({
+        panelName: item.panelName,
+        busSectionCount: String(item.busSectionCount),
+      }),
+      details: undefined,
+      citations: [],
+      tags: ['orphan', 'eendraad', 'supply', 'consistency'],
     })
   }
 

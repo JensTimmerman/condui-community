@@ -1,16 +1,18 @@
 import { useCallback, useEffect } from 'react'
 import type { TFunction } from 'i18next'
-import HiddenItemsDialog from '@/components/common/HiddenItemsDialog'
 import type { ContextMenuItem } from '@/components/common/ContextMenu'
 import { getContextMenuIcon } from '@/components/common/ContextMenuIcons'
-import { useDialogStore, type DialogConfig } from '@/stores/dialogStore'
+import type { DialogConfig } from '@/stores/dialogStore'
 import { useProjectStore, type ProjectState } from '@/stores/projectStore'
 import { useUIStore } from '@/stores/uiStore'
 import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
 import { linkedSubPanelDisplayNamesForProtectionIds } from '@/lib/panel/linkedSubPanelDeleteWarning'
 import { createLinkedProtectionDeleteDialog } from '@/lib/panel/linkedProtectionDeleteDialog'
+import { confirmDeleteSupplyTrunkDevice } from '@/lib/supplyAssembly/deleteSupplyTrunkDevice'
+import { isEendraadDeleteKey } from '@/lib/eendraad/deleteKeyboardKey'
 import { isKeyboardTypingTarget } from '@/lib/ui/keyboardTypingTarget'
 import { panelGridModuleRefKey } from '@/components/canvas/panel/panelGridLayout'
+import { openPanelHiddenModulesDialog } from '@/components/canvas/panel/openPanelHiddenModulesDialog'
 import type { Panel, PanelGridModuleRef } from '@/types/schema'
 import type { Point, Selection as CanvasSelection } from '@/types/ui'
 
@@ -56,7 +58,6 @@ type UsePanelContextMenuOptions = {
   setSupplyPanelVisible: ProjectState['setSupplyPanelVisible']
   sharedSupplyRefKeys: Set<string>
   t: TFunction
-  unhideModuleFromPanel: ProjectState['unhideModuleFromPanel']
 }
 
 export function usePanelContextMenu({
@@ -64,9 +65,7 @@ export function usePanelContextMenu({
   clearSelection,
   effectiveActivePanelId,
   ejectToSupplyPanel,
-  getEndpointById,
   getPanelHiddenModuleRefs,
-  getProtectionById,
   getTrunkDeviceById,
   hideModuleFromPanel,
   modules,
@@ -78,10 +77,27 @@ export function usePanelContextMenu({
   setSupplyPanelVisible,
   sharedSupplyRefKeys,
   t,
-  unhideModuleFromPanel,
 }: UsePanelContextMenuOptions) {
+  const deleteAuxiliaryEnclosures = useCallback(
+    (enclosureIds: string[]) => {
+      useProjectStore.getState().deleteAuxiliaryElectricalEnclosure(enclosureIds)
+      clearSelection()
+    },
+    [clearSelection]
+  )
+
   const handleGetContextMenuItems = useCallback(
     (position: Point, elementId: string | null): ContextMenuItem[] => {
+      if (selection.type === 'auxiliaryEnclosure' && selection.ids.length > 0) {
+        return [
+          {
+            label: t('contextMenu.delete'),
+            icon: getContextMenuIcon('delete'),
+            variant: 'danger',
+            onClick: () => deleteAuxiliaryEnclosures(selection.ids),
+          },
+        ]
+      }
       const resolvedContext = resolvePanelContext?.(position, elementId)
       const contextPanel = resolvedContext?.panel ?? panel
       const contextPanelId = resolvedContext?.panelId ?? effectiveActivePanelId
@@ -94,15 +110,13 @@ export function usePanelContextMenu({
       const findModuleItemInList = (
         list: ModuleItem[],
         selType: typeof selection.type,
-        entityId: string,
+        entityId: string
       ): ModuleItem | undefined => {
         if (selType === 'protection') {
           return list.find((x) => x.ref.kind === 'protection' && x.ref.id === entityId)
         }
         if (selType === 'trunkDevice') {
-          const matches = list.filter(
-            (x) => x.ref.kind === 'trunkDevice' && x.ref.id === entityId,
-          )
+          const matches = list.filter((x) => x.ref.kind === 'trunkDevice' && x.ref.id === entityId)
           return matches.find((x) => x.inSupplyPanel === true) ?? matches[0]
         }
         if (selType === 'endpoint') {
@@ -114,7 +128,7 @@ export function usePanelContextMenu({
       /** Shared supply / supply-strip modules live in {@link getPanelGridModules} for the owning main panel only. */
       const resolveModuleItemForPanelCanvas = (
         selType: typeof selection.type,
-        entityId: string,
+        entityId: string
       ): ModuleItem | undefined => {
         const m = findModuleItemInList(contextModules, selType, entityId)
         if (m) return m
@@ -187,7 +201,6 @@ export function usePanelContextMenu({
                   deleteProtections,
                   deleteEndpoints,
                   deleteTrunkDevice,
-                  deleteSupplyTrunkDevice,
                   deleteGroundTrunkDevice,
                   getTrunkDeviceById: getTrunkById,
                 } = store
@@ -207,7 +220,7 @@ export function usePanelContextMenu({
                     if (!res) continue
                     const { isSupplyDevice, isGroundDevice, circuit } = res
                     if (isSupplyDevice) {
-                      deleteSupplyTrunkDevice(id)
+                      confirmDeleteSupplyTrunkDevice(id)
                     } else if (isGroundDevice) {
                       deleteGroundTrunkDevice(id)
                     } else if (circuit) {
@@ -221,7 +234,7 @@ export function usePanelContextMenu({
                 const linkedPanelNames = linkedSubPanelDisplayNamesForProtectionIds(
                   store.currentProject,
                   store.getPanelById,
-                  protectionIds,
+                  protectionIds
                 )
                 if (linkedPanelNames.length > 0) {
                   openDialog(
@@ -254,7 +267,9 @@ export function usePanelContextMenu({
           if (!key) {
             key = resolveKeyFromSelection() ?? key
           } else {
-            const matchedByKey = contextModules.some((m: ModuleItem) => panelGridModuleRefKey(m.ref) === key)
+            const matchedByKey = contextModules.some(
+              (m: ModuleItem) => panelGridModuleRefKey(m.ref) === key
+            )
             if (!matchedByKey) {
               const resolved = resolveKeyFromSelection()
               if (resolved) key = resolved
@@ -265,7 +280,7 @@ export function usePanelContextMenu({
         if (!key) {
           if (elementId === contextPanel.id) {
             items.push({
-              label: t('panelCanvas.hideSupplyPanel', 'Hide supply panel'),
+              label: t('panelCanvas.hideSupplyPanel', 'Hide grid panel'),
               onClick: () => setSupplyPanelVisible(contextPanelId, false),
             })
           }
@@ -285,7 +300,7 @@ export function usePanelContextMenu({
               contextSharedSupplyRefKeys.has(panelGridModuleRefKey(ref))
             ) {
               items.push({
-                label: t('panelCanvas.moveToSupplyPanel', 'Move to supply panel'),
+                label: t('panelCanvas.moveToSupplyPanel', 'Move to grid panel'),
                 onClick: () => ejectToSupplyPanel(contextPanelId, ref),
               })
             }
@@ -329,7 +344,6 @@ export function usePanelContextMenu({
                   deleteProtection,
                   deleteEndpoints,
                   deleteTrunkDevice,
-                  deleteSupplyTrunkDevice,
                   deleteGroundTrunkDevice,
                 } = store
 
@@ -341,7 +355,7 @@ export function usePanelContextMenu({
                   const linkedNames = linkedSubPanelDisplayNamesForProtectionIds(
                     store.currentProject,
                     store.getPanelById,
-                    [ref.id],
+                    [ref.id]
                   )
                   if (linkedNames.length > 0) {
                     openDialog(
@@ -363,7 +377,7 @@ export function usePanelContextMenu({
                   if (info) {
                     const { isSupplyDevice, isGroundDevice, circuit } = info
                     if (isSupplyDevice) {
-                      deleteSupplyTrunkDevice(ref.id)
+                      confirmDeleteSupplyTrunkDevice(ref.id)
                     } else if (isGroundDevice) {
                       deleteGroundTrunkDevice(ref.id)
                     } else if (circuit) {
@@ -383,72 +397,22 @@ export function usePanelContextMenu({
       // show the action disabled instead of returning an empty menu.
       const hiddenRefs = getPanelHiddenModuleRefs(contextPanelId)
       appendPanelShowHiddenMenuEntry(items, hiddenRefs.length > 0, {
-          label: t('contextMenu.showHidden', 'Show hidden…'),
-          icon: getContextMenuIcon('showHidden'),
-          onClick: () => {
-            const store = useProjectStore.getState()
-            const panelForDialog = store.getPanelById(contextPanelId)
-            if (!panelForDialog) return
-            const currentHidden = getPanelHiddenModuleRefs(contextPanelId)
-            if (currentHidden.length === 0) return
-
-            const dialogItems = currentHidden.map((ref: PanelGridModuleRef) => {
-              let label = ''
-              if (ref.kind === 'protection') {
-                const prot = getProtectionById(ref.id)
-                label =
-                  prot?.label || t('hiddenItemsDialog.protectionFallback', 'Protection device')
-              } else if (ref.kind === 'trunkDevice') {
-                const info = getTrunkDeviceById(ref.id)
-                const base =
-                  info?.device.label || t('hiddenItemsDialog.trunkDeviceFallback', 'Trunk device')
-                if (ref.scope === 'supply') {
-                  label = `${base} (${t('panelCanvas.supplyScope', 'Supply')})`
-                } else if (ref.scope === 'ground') {
-                  label = `${base} (${t('panelCanvas.groundScope', 'Ground')})`
-                } else {
-                  label = base
-                }
-              } else {
-                const ep = getEndpointById(ref.endpointId)
-                label =
-                  ep?.label ||
-                  ep?.symbol ||
-                  t('hiddenItemsDialog.domoticaFallback', 'Domotica module')
-              }
-              return {
-                id: panelGridModuleRefKey(ref),
-                label,
-              }
-            })
-
-            openDialog({
-              type: 'custom',
+        label: t('contextMenu.showHidden', 'Show hidden…'),
+        icon: getContextMenuIcon('showHidden'),
+        onClick: () => {
+          const store = useProjectStore.getState()
+          const panelForDialog = store.getPanelById(contextPanelId)
+          if (!panelForDialog || !store.currentProject) return
+          const currentHidden = getPanelHiddenModuleRefs(contextPanelId)
+          if (currentHidden.length === 0) return
+          openPanelHiddenModulesDialog(
+            [{ panelId: contextPanelId, panelName: panelForDialog.name }],
+            t,
+            {
               title: t('contextMenu.showHidden', 'Show hidden…'),
-              content: (
-                <HiddenItemsDialog
-                  items={dialogItems}
-                  description={t(
-                    'panelCanvas.showHiddenDescription',
-                    'Select one or more devices to show.'
-                  )}
-                  onConfirm={(selectedKeys) => {
-                    if (selectedKeys.length === 0) {
-                      useDialogStore.getState().closeDialog()
-                      return
-                    }
-                    selectedKeys.forEach((key) =>
-                      unhideModuleFromPanel(contextPanelId, key)
-                    )
-                    useDialogStore.getState().closeDialog()
-                  }}
-                  onCancel={() => {
-                    useDialogStore.getState().closeDialog()
-                  }}
-                />
-              ),
-            })
-          },
+            }
+          )
+        },
       })
 
       return items
@@ -464,27 +428,31 @@ export function usePanelContextMenu({
       hideModuleFromPanel,
       setSupplyPanelVisible,
       getPanelHiddenModuleRefs,
-      getProtectionById,
       getTrunkDeviceById,
-      getEndpointById,
-      unhideModuleFromPanel,
       openDialog,
       clearSelection,
       sharedSupplyRefKeys,
       resolvePanelContext,
+      deleteAuxiliaryEnclosures,
     ]
   )
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!canDeleteItems) return
-      const isDeleteKey = e.key === 'Delete' || e.code === 'Delete'
-      if (!isDeleteKey) return
+      if (!isEendraadDeleteKey(e)) return
 
       if (isKeyboardTypingTarget(e.target)) return
 
       const effectiveSelection = useUIStore.getState().selection
       if (effectiveSelection.ids.length === 0) return
+      if (effectiveSelection.type === 'auxiliaryEnclosure') {
+        e.preventDefault()
+        e.stopPropagation()
+        e.stopImmediatePropagation()
+        deleteAuxiliaryEnclosures(effectiveSelection.ids)
+        return
+      }
 
       const contextElementId =
         effectiveSelection.ids.length === 1 ? (effectiveSelection.ids[0] ?? null) : null
@@ -512,9 +480,7 @@ export function usePanelContextMenu({
 
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [canDeleteItems, handleGetContextMenuItems, t])
-
-
+  }, [canDeleteItems, deleteAuxiliaryEnclosures, handleGetContextMenuItems, t])
 
   return handleGetContextMenuItems
 }

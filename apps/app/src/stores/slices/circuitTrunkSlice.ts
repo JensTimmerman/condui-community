@@ -29,16 +29,69 @@ import { ensureInstallationFeedTopology } from '@/lib/feedTopology'
 import { clamp } from '@/lib/geometry'
 import { mutateTrunkDeviceRelocation } from '@/lib/layout/eendraadPreviewSimulation'
 import { findPanelById } from '@/lib/panel/panelTree'
+import {
+  reconcileInvalidPanelFeedOrganizationsInProject,
+  syncPanelBackupBusPhaseOrderInProject,
+} from '@/lib/panel/panelFeedOrganization'
 import { healPlanWiring } from '@/lib/plan/planWiring'
 import { syncPanelAndSituationPlanDeviceVisibility } from '@/lib/plan/panelPlanPlacementVisibility'
+import {
+  reconcileDirectConverterDcDevices,
+  reconcileDirectConverterGridProtections,
+  downgradeChangeoverToDirectConverterAssembly,
+  reconcileInverterUnitMultiplier,
+  reconcileSupplyAssemblyBranchProtections,
+} from '@/lib/supplyAssembly/editorIntegration'
+import { summarizeConverterDcPersistence } from '@/lib/supplyAssembly/persistenceDiagnostics'
 import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
   getMutableElectricalInstallationForProject,
   getMutableElectricalPanelsForProject,
+  getMutableSupplyAssembliesForProject,
 } from '@/lib/projectV2/electrical'
 import { getSymbolById } from '@/lib/symbols'
 import type { Circuit, Panel, PanelGridModuleRef, ProtectionDevice } from '@/types/schema'
+
+function removeConverterBackupDependents(panels: Panel[], converterId: string): string[] {
+  const removedIds: string[] = []
+  const linkedPanelIds = new Set<string>()
+  const visit = (panel: Panel) => {
+    for (let index = panel.protections.length - 1; index >= 0; index--) {
+      const protection = panel.protections[index]!
+      const ownedCircuits = (protection.circuits ?? []).filter(
+        (circuit) =>
+          circuit.supplySource?.kind === 'converter-backup' &&
+          circuit.supplySource.converterId === converterId
+      )
+      if (ownedCircuits.length === 0) continue
+      removedIds.push(
+        protection.id,
+        ...ownedCircuits.flatMap((circuit) => [
+          circuit.id,
+          ...circuit.endpoints.map((endpoint) => endpoint.id),
+          ...(circuit.trunkDevices ?? []).map((device) => device.id),
+        ])
+      )
+      if (protection.subPanelId) linkedPanelIds.add(protection.subPanelId)
+      panel.protections.splice(index, 1)
+    }
+    panel.subPanels.forEach(visit)
+  }
+  panels.forEach(visit)
+
+  const removePanels = (panelList: Panel[]) => {
+    for (let index = panelList.length - 1; index >= 0; index--) {
+      const panel = panelList[index]!
+      removePanels(panel.subPanels)
+      if (!linkedPanelIds.has(panel.id)) continue
+      removedIds.push(panel.id)
+      panelList.splice(index, 1)
+    }
+  }
+  removePanels(panels)
+  return removedIds
+}
 
 export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
     // Circuit actions
@@ -722,6 +775,25 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
           devices.forEach((item, index) => {
             item.trunkPosition = index
           })
+          if (
+            target?.panelId &&
+            (device.supplyPath === 'backup-output' ||
+              device.supplyPath === 'changeover-grid' ||
+              device.supplyPath === 'converter-grid')
+          ) {
+            reconcileSupplyAssemblyBranchProtections(state.currentProject, target.panelId)
+            reconcileDirectConverterGridProtections(state.currentProject, target.panelId)
+          }
+          if (
+            target?.panelId &&
+            (device.supplyPath === 'converter-dc' || device.supplyPath === 'converter-dc-top')
+          ) {
+            reconcileDirectConverterDcDevices(state.currentProject, target.panelId)
+            const dcPersistenceSummary = summarizeConverterDcPersistence(state.currentProject)
+            if (dcPersistenceSummary) {
+              logger.debug('[SUPPLY-PERSIST] added converter DC device', dcPersistenceSummary)
+            }
+          }
           syncPanelAndSituationPlanDeviceVisibility(state.currentProject)
           state.isDirty = true
         }
@@ -759,6 +831,37 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
                   }
                 : updates
             Object.assign(device, nextUpdates)
+            if (
+              owningPanel &&
+              (device.supplyPath === 'backup-output' ||
+                device.supplyPath === 'changeover-grid' ||
+                device.supplyPath === 'converter-grid')
+            ) {
+              reconcileSupplyAssemblyBranchProtections(state.currentProject, owningPanel.id)
+              reconcileDirectConverterGridProtections(state.currentProject, owningPanel.id)
+            }
+            if (
+              owningPanel &&
+              (device.supplyPath === 'converter-dc' || device.supplyPath === 'converter-dc-top')
+            ) {
+              reconcileDirectConverterDcDevices(state.currentProject, owningPanel.id)
+            }
+            if (owningPanel && device.type === 'conversion') {
+              if (device.supplyPath === 'backup') {
+                reconcileSupplyAssemblyBranchProtections(state.currentProject, owningPanel.id)
+              } else if (device.supplyPath === 'converter-branch') {
+                reconcileDirectConverterGridProtections(state.currentProject, owningPanel.id)
+              }
+            }
+            if (
+              device.symbol === 'inverter' &&
+              (device.supplyPath === 'backup' || device.supplyPath === 'converter-branch')
+            ) {
+              reconcileInverterUnitMultiplier(state.currentProject, device)
+              if (owningPanel && device.supplyPath === 'backup') {
+                syncPanelBackupBusPhaseOrderInProject(state.currentProject, owningPanel.id)
+              }
+            }
             syncManualChronologyForInstallDateUpdate(
               state.currentProject,
               { id: deviceId, type: 'trunkDevice' },
@@ -799,17 +902,124 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
           if (devices) {
             const index = devices.findIndex((d) => d.id === deviceId)
             if (index !== -1) {
-              const [removed] = devices.splice(index, 1)
+              const owningPanel = findPanelOwningSupplyDevice(project, deviceId)
+              const target = devices[index]
+              const removedIds = new Set([deviceId])
+              if (target?.symbol === 'source_changeover') {
+                const backupConverter = devices.find(
+                  (device) => device.supplyPath === 'backup' && device.symbol === 'inverter'
+                )
+                const downgraded =
+                  owningPanel && backupConverter
+                    ? downgradeChangeoverToDirectConverterAssembly(
+                        project,
+                        owningPanel.id,
+                        target.id,
+                        backupConverter
+                      )
+                    : undefined
+                if (downgraded) {
+                  const assemblies = getMutableSupplyAssembliesForProject(project)
+                  const assemblyIndex = assemblies.findIndex(
+                    (assembly) => assembly.id === downgraded.id
+                  )
+                  if (assemblyIndex >= 0) assemblies[assemblyIndex] = downgraded
+                  else assemblies.push(downgraded)
+                }
+                devices.forEach((device) => {
+                  if (device.supplyPath === 'changeover-grid') {
+                    delete device.supplyPath
+                  }
+                  if (downgraded && device.id === backupConverter?.id) {
+                    device.supplyPath = 'converter-branch'
+                  } else if (downgraded && device.supplyPath === 'backup-output') {
+                    delete device.supplyPath
+                  } else if (
+                    !downgraded &&
+                    device.supplyPath &&
+                    new Set([
+                      'backup',
+                      'backup-output',
+                      'converter-grid',
+                      'converter-dc',
+                      'converter-dc-top',
+                      'converter-branch',
+                    ]).has(device.supplyPath)
+                  ) {
+                    removedIds.add(device.id)
+                  }
+                })
+              } else if (target?.supplyPath === 'converter-branch') {
+                devices.forEach((device) => {
+                  if (
+                    device.supplyPath === 'converter-dc' ||
+                    device.supplyPath === 'converter-dc-top'
+                  ) removedIds.add(device.id)
+                })
+                const dependentIds = removeConverterBackupDependents(panels, target.id)
+                dependentIds.forEach((id) => removedIds.add(id))
+              }
+              const removedDevices = devices.filter((device) => removedIds.has(device.id))
+              for (let deviceIndex = devices.length - 1; deviceIndex >= 0; deviceIndex--) {
+                if (removedIds.has(devices[deviceIndex]!.id)) {
+                  devices.splice(deviceIndex, 1)
+                }
+              }
+              devices.forEach((device, deviceIndex) => {
+                device.trunkPosition = deviceIndex
+              })
+              const removed = removedDevices.find((device) => device.id === deviceId)
+              if (
+                removed?.symbol === 'source_changeover' ||
+                removed?.supplyPath === 'backup' ||
+                removed?.supplyPath === 'converter-branch'
+              ) {
+                const assemblies = getMutableSupplyAssembliesForProject(project)
+                for (let assemblyIndex = assemblies.length - 1; assemblyIndex >= 0; assemblyIndex--) {
+                  if (
+                    assemblies[assemblyIndex]?.nodes.some((node) =>
+                      removedIds.has(node.deviceId ?? node.id)
+                    )
+                  ) {
+                    assemblies.splice(assemblyIndex, 1)
+                  }
+                }
+              }
               if (removed?.type === 'junction_panel') {
                 removedLabel = removed.label
               }
-              const deviceRef: PanelGridModuleRef = {
-                kind: 'trunkDevice',
-                id: deviceId,
-                scope: 'supply',
+              if (
+                owningPanel &&
+                (removed?.supplyPath === 'backup-output' ||
+                  removed?.supplyPath === 'changeover-grid' ||
+                  removed?.supplyPath === 'converter-grid')
+              ) {
+                reconcileSupplyAssemblyBranchProtections(project, owningPanel.id)
+                reconcileDirectConverterGridProtections(project, owningPanel.id)
               }
-              cleanupPanelGridSlotsForDevice(panels, deviceRef)
-              pruneEendraadFrames(project, { removedMemberIds: [deviceId] })
+              if (
+                owningPanel &&
+                (removed?.supplyPath === 'converter-dc' ||
+                  removed?.supplyPath === 'converter-dc-top')
+              ) {
+                reconcileDirectConverterDcDevices(project, owningPanel.id)
+              }
+              if (owningPanel && target?.symbol === 'source_changeover') {
+                reconcileDirectConverterGridProtections(project, owningPanel.id)
+                reconcileDirectConverterDcDevices(project, owningPanel.id)
+                syncPanelBackupBusPhaseOrderInProject(project, owningPanel.id)
+              }
+              for (const removedId of removedIds) {
+                const deviceRef: PanelGridModuleRef = {
+                  kind: 'trunkDevice',
+                  id: removedId,
+                  scope: 'supply',
+                }
+                cleanupPanelGridSlotsForDevice(panels, deviceRef)
+              }
+              pruneEendraadFrames(project, { removedMemberIds: [...removedIds] })
+              reconcileInvalidPanelFeedOrganizationsInProject(project)
+              syncPanelAndSituationPlanDeviceVisibility(project)
               state.isDirty = true
             }
           }

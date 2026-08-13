@@ -19,10 +19,7 @@ import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
 } from '@/lib/projectV2/electrical'
-import {
-  TRANSFORMER_OVERLAY_PATHS,
-  SWITCH_SYMBOLS_WITH_VERKLIKKERLAMP,
-} from '@/lib/symbols'
+import { TRANSFORMER_OVERLAY_PATHS, SWITCH_SYMBOLS_WITH_VERKLIKKERLAMP } from '@/lib/symbols'
 import {
   findMatchingSynergridEntry,
   formatSynergridPower,
@@ -51,6 +48,7 @@ import {
   visibilityToggleClass,
 } from '../shared/propertiesSharedUtils'
 import { EndpointCertificationSection } from './EndpointControls'
+import { AutomaticNamingLockedField } from '../shared/AutomaticNamingLockedField'
 import {
   ApplianceTypeDropdown,
   DomoticaEndpointFields,
@@ -66,10 +64,7 @@ import {
   SwitchTypeDropdown,
   TwoWayPolesGrid,
 } from './EndpointControls'
-import {
-  normalizeSocketSymbol,
-  normalizeSwitchSymbol,
-} from './endpointControlsUtils'
+import { normalizeSocketSymbol, normalizeSwitchSymbol } from './endpointControlsUtils'
 
 const SYNERGRID_AUTO_MATCH_DEBOUNCE_MS = 450
 type Project = NonNullable<ProjectState['currentProject']>
@@ -94,15 +89,15 @@ export function EndpointProperties({
         : false)
   )
   const findCircuitForEndpoint = useProjectStore(
-    (state: ProjectState) => state.findCircuitForEndpoint,
+    (state: ProjectState) => state.findCircuitForEndpoint
   )
   const getCircuitIdentifier = useProjectStore((state: ProjectState) => state.getCircuitIdentifier)
   const getProtectionForCircuit = useProjectStore(
-    (state: ProjectState) => state.getProtectionForCircuit,
+    (state: ProjectState) => state.getProtectionForCircuit
   )
   const [synergridPickerOpen, setSynergridPickerOpen] = useState(false)
   const { synergridCatalog: showSynergridCatalog } = useEditionFeatureAvailability(
-    project?.project.id,
+    project?.project.id
   )
   const endpointSymbol = endpoint?.symbol
   const applySynergridEntryToEndpoint = useCallback(
@@ -150,21 +145,15 @@ export function EndpointProperties({
         })
       }
     },
-    [
-      endpoint,
-      endpointId,
-      endpointSymbol,
-      onUpdate,
-    ]
+    [endpoint, endpointId, endpointSymbol, onUpdate]
   )
   const synergridPlugAndPlayOnly =
     (endpointSymbol === 'solar_panel' && endpoint?.solarPanelProps?.plugIn === true) ||
     (endpointSymbol === 'battery' && endpoint?.batteryProps?.plugIn === true)
   const isSynergridListEligible = Boolean(
     endpointSymbol === 'rectifier' ||
-      endpointSymbol === 'inverter' ||
-      ((endpointSymbol === 'solar_panel' || endpointSymbol === 'battery') &&
-        synergridPlugAndPlayOnly)
+    endpointSymbol === 'inverter' ||
+    ((endpointSymbol === 'solar_panel' || endpointSymbol === 'battery') && synergridPlugAndPlayOnly)
   )
   const canUseSynergridList = showSynergridCatalog && isSynergridListEligible
   const circuitInfo = endpoint ? findCircuitForEndpoint(endpointId) : undefined
@@ -294,13 +283,17 @@ export function EndpointProperties({
 
   // Get all circuits for the dropdown (deduplicated by id to avoid React duplicate-key warnings)
   const circuits: Circuit[] = project
-    ? deduplicateCircuitsById(getElectricalPanelsFromProject(project).flatMap((panel) => collectCircuits(panel)))
+    ? deduplicateCircuitsById(
+        getElectricalPanelsFromProject(project).flatMap((panel) => collectCircuits(panel))
+      )
     : []
   const selectableCircuits = circuits.filter((circuit) => circuit.code !== 'PANEL')
   const endpointBranchLabelLocked =
     eendraadAutomaticNaming &&
     endpoint.symbol !== 'panel_distribution' &&
-    !!currentCircuit?.branches?.some((b: { endpointIds: string[] }) => b.endpointIds.includes(endpointId))
+    !!currentCircuit?.branches?.some((b: { endpointIds: string[] }) =>
+      b.endpointIds.includes(endpointId)
+    )
   const symbol = endpoint.symbol
   const isSwitch = endpoint.type === 'switch' && symbol !== 'relay'
   const isLight = endpoint.type === 'light_point'
@@ -350,22 +343,16 @@ export function EndpointProperties({
       />
       <div>
         <label className={labelClass}>{t('endpoints.label', 'Label')}</label>
-        <DebouncedTextInput
-          type="text"
-          value={endpoint.label}
-          resetKey={endpointId}
-          onCommit={(v) => onUpdate(endpointId, { label: v })}
-          className={selectClass}
-          disabled={endpointBranchLabelLocked}
-          title={
-            endpointBranchLabelLocked
-              ? t(
-                  'canvas.eendraadNaming.endpointBranchLabelLocked',
-                  'Branch labels follow automatic naming (circuit letter + number).'
-                )
-              : undefined
-          }
-        />
+        <AutomaticNamingLockedField locked={endpointBranchLabelLocked}>
+          <DebouncedTextInput
+            type="text"
+            value={endpoint.label}
+            resetKey={endpointId}
+            onCommit={(v) => onUpdate(endpointId, { label: v })}
+            className={selectClass}
+            disabled={endpointBranchLabelLocked}
+          />
+        </AutomaticNamingLockedField>
       </div>
 
       <div>
@@ -375,7 +362,8 @@ export function EndpointProperties({
           onChange={(newCircuitId) => {
             if (newCircuitId === '__add_new__') {
               const panelId =
-                (project ? getElectricalPanelsFromProject(project) : []).find((p) => p.isMain)?.id ??
+                (project ? getElectricalPanelsFromProject(project) : []).find((p) => p.isMain)
+                  ?.id ??
                 circuitInfo?.panel?.id ??
                 (project ? getElectricalPanelsFromProject(project) : [])[0]?.id
               if (panelId) {
@@ -801,7 +789,6 @@ export function EndpointProperties({
                 </div>
               )}
             </div>
-
           </div>
         </>
       )}
@@ -868,9 +855,7 @@ export function EndpointProperties({
             />
           </div>
           <div>
-            <label className={labelClass}>
-              {t('endpoints.lightCount', 'Number of lights')}
-            </label>
+            <label className={labelClass}>{t('endpoints.lightCount', 'Number of lights')}</label>
             <input
               key={`light-count-${endpointId}-${getEndpointMultiplier(endpoint)}`}
               type="number"
@@ -880,11 +865,7 @@ export function EndpointProperties({
                 const target = Math.floor(Number(e.target.value || 1))
                 if (!Number.isFinite(target) || target < 1) return
                 if (target === getEndpointMultiplier(endpoint)) return
-                syncEndpointMultiplierCount(
-                  createSyncEndpointMultiplierDeps(),
-                  endpointId,
-                  target
-                )
+                syncEndpointMultiplierCount(createSyncEndpointMultiplierDeps(), endpointId, target)
               }}
               className={selectClass}
             />
@@ -1102,7 +1083,10 @@ export function EndpointProperties({
                         value: 'electricity',
                         label: t('endpoints.hvac.energy_electricity', 'Electricity'),
                       },
-                      { value: 'gas_fan', label: t('endpoints.hvac.energy_gas_fan', 'Gas (fan flue)') },
+                      {
+                        value: 'gas_fan',
+                        label: t('endpoints.hvac.energy_gas_fan', 'Gas (fan flue)'),
+                      },
                       {
                         value: 'gas_atmospheric',
                         label: t('endpoints.hvac.energy_gas_atmospheric', 'Gas (atmospheric)'),
@@ -1131,8 +1115,14 @@ export function EndpointProperties({
                         value: 'heat_exchange',
                         label: t('endpoints.hvac.type_heat_exchange', 'Heat exchange'),
                       },
-                      { value: 'cogeneration', label: t('endpoints.hvac.type_cogeneration', 'Cogeneration') },
-                      { value: 'tap_spiral', label: t('endpoints.hvac.type_tap_spiral', 'Tap spiral') },
+                      {
+                        value: 'cogeneration',
+                        label: t('endpoints.hvac.type_cogeneration', 'Cogeneration'),
+                      },
+                      {
+                        value: 'tap_spiral',
+                        label: t('endpoints.hvac.type_tap_spiral', 'Tap spiral'),
+                      },
                       { value: 'boiler', label: t('endpoints.hvac.type_boiler', 'Boiler') },
                     ]}
                     className={selectClass}
@@ -1152,7 +1142,10 @@ export function EndpointProperties({
                     }
                     options={[
                       { value: 'none', label: t('endpoints.hvac.function_none', 'None') },
-                      { value: 'heat_cool', label: t('endpoints.hvac.function_heat_cool', 'Heat / Cool') },
+                      {
+                        value: 'heat_cool',
+                        label: t('endpoints.hvac.function_heat_cool', 'Heat / Cool'),
+                      },
                       { value: 'heat', label: t('endpoints.hvac.function_heat', 'Heat') },
                       { value: 'cool', label: t('endpoints.hvac.function_cool', 'Cool') },
                     ]}
@@ -1484,7 +1477,3 @@ export function EndpointProperties({
     </div>
   )
 }
-
-
-
-
