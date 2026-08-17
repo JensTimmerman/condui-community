@@ -1,4 +1,4 @@
-import { useState, useMemo, type FocusEvent, type KeyboardEvent } from 'react'
+import { useEffect, useState, useMemo, type FocusEvent, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Search, ChevronDown, ChevronRight, Star, Clock, X } from 'lucide-react'
 import { useLibraryStore } from '@/stores/libraryStore'
@@ -10,6 +10,80 @@ import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEl
 
 /** Categories shown in the library when panel canvas is maximized */
 const PANEL_VIEW_CATEGORIES = ['protection', 'domotica', 'metering', 'notes', 'grid'] as const
+const SEARCH_COMMIT_DELAY_MS = 120
+
+interface LibrarySearchFieldProps {
+  query: string
+  onCommit: (query: string) => void
+  placeholder: string
+  wrapperClassName?: string
+  inputClassName: string
+  iconClassName: string
+  clearButtonClassName: string
+  clearIconClassName: string
+}
+
+function LibrarySearchField({
+  query,
+  onCommit,
+  placeholder,
+  wrapperClassName = 'relative',
+  inputClassName,
+  iconClassName,
+  clearButtonClassName,
+  clearIconClassName,
+}: LibrarySearchFieldProps) {
+  const [draft, setDraft] = useState(query)
+
+  useEffect(() => {
+    setDraft(query)
+  }, [query])
+
+  useEffect(() => {
+    if (draft === query) return
+    const timeout = window.setTimeout(() => onCommit(draft), SEARCH_COMMIT_DELAY_MS)
+    return () => window.clearTimeout(timeout)
+  }, [draft, onCommit, query])
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== 'Enter') return
+    onCommit(draft)
+    event.currentTarget.blur()
+  }
+
+  const handleFocus = (event: FocusEvent<HTMLInputElement>) => {
+    const input = event.currentTarget
+    window.setTimeout(() => {
+      input.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    }, 60)
+  }
+
+  const clear = () => {
+    setDraft('')
+    onCommit('')
+  }
+
+  return (
+    <div className={wrapperClassName}>
+      <Search className={iconClassName} />
+      <input
+        type="search"
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={handleKeyDown}
+        onFocus={handleFocus}
+        enterKeyHint="search"
+        placeholder={placeholder}
+        className={inputClassName}
+      />
+      {draft && (
+        <button type="button" onClick={clear} className={clearButtonClassName}>
+          <X className={clearIconClassName} />
+        </button>
+      )}
+    </div>
+  )
+}
 
 interface LibraryPanelProps {
   onDragStart?: (symbol: SymbolMetadata) => void
@@ -48,22 +122,6 @@ export default function LibraryPanel({
       }
       return next
     })
-  }
-
-  const clearSearch = () => {
-    setSearchQuery('')
-  }
-
-  const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key !== 'Enter') return
-    event.currentTarget.blur()
-  }
-
-  const handleSearchFocus = (event: FocusEvent<HTMLInputElement>) => {
-    const input = event.currentTarget
-    window.setTimeout(() => {
-      input.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-    }, 60)
   }
 
   const getLocalizedName = (symbol: SymbolMetadata) => {
@@ -120,9 +178,11 @@ export default function LibraryPanel({
     />
   )
 
+  const visibleSymbols = filterByScope(getFilteredSymbols())
+
   if (compact) {
     const compactSymbols = searchQuery
-      ? filterByScope(getFilteredSymbols())
+      ? visibleSymbols
       : activeTab === 'recent'
         ? filterByScope(getRecentSymbolsList())
         : activeTab === 'favorites'
@@ -141,28 +201,15 @@ export default function LibraryPanel({
       return (
         <div className="flex h-full min-h-0 flex-col overflow-hidden bg-white dark:bg-gray-800">
           <div className="flex flex-shrink-0 flex-col gap-2 border-b border-gray-200 px-2 py-2 dark:border-gray-700">
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-              <input
-                type="search"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={handleSearchKeyDown}
-                onFocus={handleSearchFocus}
-                enterKeyHint="search"
-                placeholder={t('common.search')}
-                className="w-full rounded-md border border-gray-300 bg-white py-1.5 pl-8 pr-7 text-sm text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
-              />
-              {searchQuery && (
-                <button
-                  type="button"
-                  onClick={clearSearch}
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 hover:bg-gray-100 dark:hover:bg-gray-600"
-                >
-                  <X className="h-4 w-4 text-gray-400" />
-                </button>
-              )}
-            </div>
+            <LibrarySearchField
+              query={searchQuery}
+              onCommit={setSearchQuery}
+              placeholder={t('common.search')}
+              inputClassName="w-full rounded-md border border-gray-300 bg-white py-1.5 pl-8 pr-7 text-sm text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
+              iconClassName="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400"
+              clearButtonClassName="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 hover:bg-gray-100 dark:hover:bg-gray-600"
+              clearIconClassName="h-4 w-4 text-gray-400"
+            />
             <div className="flex rounded-md border border-gray-200 dark:border-gray-700">
               {(['all', 'recent', 'favorites'] as const).map((tab) => (
                 <button
@@ -220,28 +267,16 @@ export default function LibraryPanel({
     return (
       <div className="flex h-full min-h-0 flex-col overflow-hidden bg-white dark:bg-gray-800">
         <div className="flex flex-shrink-0 items-center gap-2 border-b border-gray-200 px-2 py-2 dark:border-gray-700">
-          <div className="relative min-w-[9rem] flex-1">
-            <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-            <input
-              type="search"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={handleSearchKeyDown}
-              onFocus={handleSearchFocus}
-              enterKeyHint="search"
-              placeholder={t('common.search')}
-              className="w-full rounded-md border border-gray-300 bg-white py-1.5 pl-8 pr-7 text-sm text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={clearSearch}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 hover:bg-gray-100 dark:hover:bg-gray-600"
-              >
-                <X className="h-4 w-4 text-gray-400" />
-              </button>
-            )}
-          </div>
+          <LibrarySearchField
+            query={searchQuery}
+            onCommit={setSearchQuery}
+            placeholder={t('common.search')}
+            wrapperClassName="relative min-w-[9rem] flex-1"
+            inputClassName="w-full rounded-md border border-gray-300 bg-white py-1.5 pl-8 pr-7 text-sm text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
+            iconClassName="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400"
+            clearButtonClassName="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 hover:bg-gray-100 dark:hover:bg-gray-600"
+            clearIconClassName="h-4 w-4 text-gray-400"
+          />
           <div className="flex flex-shrink-0 rounded-md border border-gray-200 dark:border-gray-700">
             {(['all', 'recent', 'favorites'] as const).map((tab) => (
               <button
@@ -303,27 +338,15 @@ export default function LibraryPanel({
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-white dark:bg-gray-800">
       {/* Search Bar */}
       <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
-            type="search"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyDown={handleSearchKeyDown}
-            onFocus={handleSearchFocus}
-            enterKeyHint="search"
-            placeholder={t('common.search')}
-            className="w-full pl-9 pr-8 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-500 dark:focus:ring-gray-400"
-          />
-          {searchQuery && (
-            <button
-              onClick={clearSearch}
-              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-gray-100 dark:hover:bg-gray-600 rounded transition-colors"
-            >
-              <X className="w-4 h-4 text-gray-400" />
-            </button>
-          )}
-        </div>
+        <LibrarySearchField
+          query={searchQuery}
+          onCommit={setSearchQuery}
+          placeholder={t('common.search')}
+          inputClassName="w-full pl-9 pr-8 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-500 dark:focus:ring-gray-400"
+          iconClassName="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"
+          clearButtonClassName="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-gray-100 dark:hover:bg-gray-600 rounded transition-colors"
+          clearIconClassName="w-4 h-4 text-gray-400"
+        />
       </div>
 
       {/* Tabs */}
@@ -377,12 +400,12 @@ export default function LibraryPanel({
             {searchQuery ? (
               // Filtered view (flat list)
               <div className="space-y-0.25">
-                {filterByScope(getFilteredSymbols()).length === 0 ? (
+                {visibleSymbols.length === 0 ? (
                   <div className="p-4 text-center text-gray-500 dark:text-gray-400 text-sm">
                     No symbols found
                   </div>
                 ) : (
-                  filterByScope(getFilteredSymbols()).map(renderSymbol)
+                  visibleSymbols.map(renderSymbol)
                 )}
               </div>
             ) : (
@@ -456,12 +479,12 @@ export default function LibraryPanel({
       <div className="px-4 py-2 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
         <div className="text-xs text-gray-500 dark:text-gray-400">
           {activeTab === 'all' && searchQuery
-            ? `${filterByScope(getFilteredSymbols()).length} symbols found`
+            ? `${visibleSymbols.length} symbols found`
             : activeTab === 'recent'
             ? `${getRecentSymbolsList().length} recent`
             : activeTab === 'favorites'
             ? `${getFavoriteSymbolsList().length} favorites`
-            : `${filterByScope(getFilteredSymbols()).length} symbols`}
+            : `${visibleSymbols.length} symbols`}
         </div>
       </div>
     </div>

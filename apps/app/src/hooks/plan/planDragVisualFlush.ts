@@ -1,13 +1,13 @@
 import { usePlanDragVisualStore } from '@/stores/planDragVisualStore'
 import type { Point } from '@/types/ui'
-import type { Rotation } from '@/types/schema'
+import type { SituationPlanRotation } from '@/types/schema'
 
 type LabelPoint = { x: number; y: number }
 
 type PendingDragVisual = {
   positions: Map<string, Point> | null
   labels: Map<string, LabelPoint> | null
-  rotations: Map<string, Rotation> | null
+  rotations: Map<string, SituationPlanRotation> | null
   clear: boolean
 }
 
@@ -36,9 +36,9 @@ function mergeLabels(
 }
 
 function mergeRotations(
-  target: Map<string, Rotation> | null,
-  source: Map<string, Rotation>,
-): Map<string, Rotation> {
+  target: Map<string, SituationPlanRotation> | null,
+  source: Map<string, SituationPlanRotation>,
+): Map<string, SituationPlanRotation> {
   const next = new Map(target ?? undefined)
   source.forEach((value, key) => next.set(key, value))
   return next
@@ -60,7 +60,7 @@ function flushPlanDragVisual() {
   const update: {
     positions?: Map<string, Point>
     labels?: Map<string, LabelPoint>
-    rotations?: Map<string, Rotation>
+    rotations?: Map<string, SituationPlanRotation>
   } = {}
   const store = usePlanDragVisualStore.getState()
 
@@ -85,7 +85,7 @@ function flushPlanDragVisual() {
 export function schedulePlanDragVisualFlush(partial: {
   positions?: Map<string, Point>
   labels?: Map<string, LabelPoint>
-  rotations?: Map<string, Rotation>
+  rotations?: Map<string, SituationPlanRotation>
   clear?: boolean
 }) {
   if (partial.clear) pending.clear = true

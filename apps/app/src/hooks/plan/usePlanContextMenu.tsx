@@ -34,6 +34,7 @@ import { confirmDeleteEarthing } from '@/lib/installation/deleteEarthing'
 import { getCompatibilityFloorsFromProject } from '@/lib/projectV2/buildingFloors'
 import { restoreHiddenSituationPlanPlacementsToActiveView } from '@/lib/plan/restoreHiddenSituationPlanPlacements'
 import { hasCustomPlacement } from '@/lib/plan/customPlacement'
+import { deleteSelectedPlanGraphicElements } from '@/lib/plan/planGraphicElementDeletion'
 
 /**
  * Hook to generate context menu items for the plan canvas
@@ -118,8 +119,14 @@ export function usePlanContextMenu(
           label: t('contextMenu.delete'),
           icon: getContextMenuIcon('delete'),
           onClick: () => {
-            selectedGraphicIds.forEach((id) => deletePlanGraphicElement(id))
-            clearSelection()
+            if (
+              deleteSelectedPlanGraphicElements(
+                { type: 'graphicElement', ids: selectedGraphicIds },
+                deletePlanGraphicElement
+              )
+            ) {
+              clearSelection()
+            }
           },
           variant: 'danger',
         })
@@ -130,8 +137,14 @@ export function usePlanContextMenu(
           label: t('contextMenu.delete'),
           icon: getContextMenuIcon('delete'),
           onClick: () => {
-            deletePlanGraphicElement(hitGraphicElementId)
-            useUIStore.getState().clearSelection()
+            if (
+              deleteSelectedPlanGraphicElements(
+                { type: 'graphicElement', ids: [hitGraphicElementId] },
+                deletePlanGraphicElement
+              )
+            ) {
+              useUIStore.getState().clearSelection()
+            }
           },
           variant: 'danger',
         })

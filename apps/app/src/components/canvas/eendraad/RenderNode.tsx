@@ -415,7 +415,9 @@ const RenderNode = memo(function RenderNode({
       // Supply trunk devices have IDs starting with 'supplyTrunkDevice-' and are on horizontal wire
       const isSupplyTrunkDevice = node.id?.startsWith('supplyTrunkDevice-')
       const isVerticalSupplyBranchDevice =
-        isSupplyTrunkDevice && trunkDevice.supplyPath === 'converter-grid'
+        isSupplyTrunkDevice &&
+        trunkDevice.supplyPath === 'converter-grid' &&
+        trunkDevice.converterGridPlacement === 'input-leg'
       const isSubPanelSupplyTrunkDevice = node.id?.startsWith('subpanelSupplyTrunkDevice-')
       const isGroundTrunkDevice = node.id?.startsWith('groundTrunkDevice-')
       const isDraggableTrunkDevice = !isGroundTrunkDevice
@@ -436,6 +438,13 @@ const RenderNode = memo(function RenderNode({
               ? (p) => onElementDragMove(trunkDevice.id, 'trunkDevice', p)
               : undefined
           }
+          onDragStart={
+            isDraggableTrunkDevice && onElementDragStart
+              ? (altKey, nativeEvt) =>
+                  onElementDragStart(trunkDevice.id, 'trunkDevice', altKey, nativeEvt)
+              : undefined
+          }
+          shouldSuppressKonvaDragEnd={shouldSuppressKonvaDragEnd}
           onDragEnd={
             isDraggableTrunkDevice && onElementDragEnd
               ? (p) => onElementDragEnd(trunkDevice.id, 'trunkDevice', p)

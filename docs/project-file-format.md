@@ -91,9 +91,16 @@ branch devices belong to a root-panel feed and must not be stored on the shared 
 before the root-panel boundary.
 Supply-trunk devices may contain `supplyPath: "backup"` for the converter,
 `"backup-output"` for serial protection between the converter backup output and the
-changeover, `"changeover-grid"` for serial devices on the grid-only lower lane between
-the changeover and the converter grid tap, or `"converter-grid"` for serial protection
-on the vertical connection between the grid tap and the converter grid input. A
+changeover, `"changeover-grid"` for serial devices on the grid-only lower lane before
+the changeover grid tap, or `"converter-grid"` for serial protection between that tap
+and the converter grid input. A `"converter-grid"` device is inline on the horizontal
+run by default; `converterGridPlacement: "input-leg"` places it on the converter's
+vertical input leg. An inverter trunk device may persist
+`converterGridInputConnected: false` to represent an intentionally isolated grid AC
+input; missing means connected for backward compatibility. A disconnected grid input
+has no `inverter-grid-ac` assembly connection and cannot own `converter-grid`
+protection devices. Without a changeover it requires separate grid and backup panel
+bus sections; an external changeover may instead feed one shared switchable bus. A
 changeover-less grid-connected storage branch uses
 `"converter-branch"` for its inverter or rectifier and `"converter-dc"` for a battery
 or solar source connected to its DC port. Missing `supplyPath` (or `"serial"`) means
@@ -164,24 +171,29 @@ integrity error. When loading older conversion devices without placements, the
 editor creates visible placements. Conversion placements stored as hidden by an
 older editor version are automatically made visible while loading.
 
-An inverter trunk device may contain `conversionProps.serialNumbers`. The ordered
-array maps one-to-one to the device's ordered situation-plan placements and represents
-multiple physical inverter units rendered as one multiplied symbol in the one-wire
-view. A missing array keeps the legacy single-unit `serialNumber` behavior. Readers
-must preserve placement, serial, and per-unit AC phase ordering together when adding or
-removing units. Supported supply-inverter unit counts are one, two, and three.
+A supply-trunk inverter, battery, or solar-panel device may contain an ordered
+`serialNumbers` array in its device-specific properties. The array maps one-to-one to
+the device's ordered situation-plan placements and represents multiple physical units
+rendered as one multiplied symbol in the one-wire view. A missing array keeps the
+legacy single-unit `serialNumber` behavior. Readers must preserve placement and serial
+ordering together when adding or removing units. Inverter unit arrays live in
+`conversionProps`; battery and solar arrays live in `batteryProps` and
+`solarPanelProps`. Per-unit inverter AC phase ordering must remain aligned as well.
+Supported supply-inverter unit counts are one, two, and three; battery and solar groups
+may contain up to 99 units.
 
 Supply-trunk devices on a hybrid inverter's secondary DC branch use
 `supplyPath: "converter-dc-top"`; the original right-hand DC chain continues to use
 `"converter-dc"`. Devices within either branch remain ordered by their position in the
 owning supply trunk array.
 
-Situation-plan placements store their orientation in `rotationDeg` as a clockwise
-quarter-turn (`0`, `90`, `180`, or `270`). A placement with
-`rotationMode: "explicit"` was rotated by the user and must not be auto-oriented to
-nearby walls. Missing `rotationMode` is backward-compatible and leaves auto-orientation
-available for symbol kinds that support it; a missing or invalid legacy angle is read as
-zero.
+Situation-plan placements store their orientation in `rotationDeg` as clockwise degrees.
+User rotation commands use quarter-turns (`0`, `90`, `180`, or `270`); automatic
+orientation beside a drawn curved wall may store an intermediate angle matching the
+wall normal at that point. A placement with `rotationMode: "explicit"` was rotated by
+the user and must not be auto-oriented to nearby walls. Missing `rotationMode` is
+backward-compatible and leaves auto-orientation available for symbol kinds that support
+it; a missing or invalid legacy angle is read as zero.
 
 Situation-plan wall elements may optionally contain a `curve` property with
 `kind: "rationalQuadratic"` and a positive numeric `weight`. A curved wall stores
@@ -231,6 +243,12 @@ reduced-pole protection on that root feed determines and locks the effective inc
 phase set after the protection. That lock overrides incompatible stored choices and is
 inherited by the panel busbar, all circuits in the panel, and their downstream panel
 chains. Missing fields remain a full-phase incoming supply for backward compatibility.
+The same root-feed record may contain a `wireSections` map keyed by a stable physical
+run identifier. Each value stores the cable, installation method, route, label
+visibility, fire-class visibility, and optional length for one uninterrupted run
+between supply devices or terminals. Orthogonal drawing pieces around a corner share
+one key; a protection or other inline device starts a new run. Missing `wireSections`
+keeps the role-level main-supply defaults used by older projects.
 
 Some current documents also require the reserved compatibility containers `collaboration`, `comments`, and `chronology`. Local implementations must preserve unknown members in these containers and use the neutral values produced by `createEmptyProjectV2` or the official migration code rather than constructing them by hand. They must not infer local permissions or enable features from their contents.
 

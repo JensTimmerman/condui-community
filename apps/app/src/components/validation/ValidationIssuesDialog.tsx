@@ -12,7 +12,7 @@ import {
   ChevronRight,
 } from 'lucide-react'
 import { focusIssue } from '@/lib/validation/core/api'
-import type { Issue } from '@/lib/validation/core/types'
+import type { Issue, ScopeType } from '@/lib/validation/core/types'
 import type { Selection } from '@/types/ui'
 import type { Panel, Circuit, WireSegment } from '@/types/schema'
 import { useEendraadWireSegments } from '@/hooks/eendraad/useEendraadWireSegments'
@@ -47,6 +47,15 @@ interface ValidationIssuesDialogProps {
 
 const DC_CROSS_SECTION_HEURISTIC_RULE_ID = 'be.areibook1.2025.dc-cross-section-heuristic'
 const MINIMUM_CROSS_SECTION_RULE_ID = 'be.areibook1.2025.minimum-cross-section'
+
+const DEFAULT_SCOPE_LABELS: Record<ScopeType, string> = {
+  circuit: 'Circuit',
+  board: 'Panel',
+  device: 'Device',
+  placement: 'Plan symbol',
+  segment: 'Wire',
+  subgraph: 'Supply',
+}
 
 /** Endpoint symbols the DC cross-section heuristic uses for P/U estimates (matches primitives). */
 const DC_HEURISTIC_FOCUS_SYMBOLS = new Set<string>([
@@ -351,6 +360,15 @@ function ValidationIssuesDialog({
     return Array.from(labels)
   }
 
+  const getIssueBadgeLabel = (issue: Issue): string => {
+    const labels = getIssueLabels(issue)
+    if (labels.length > 0) return labels.join(', ')
+
+    return t(`validation.scopeLabels.${issue.scope.type}`, {
+      defaultValue: DEFAULT_SCOPE_LABELS[issue.scope.type],
+    })
+  }
+
   const handleIssueClick = (issue: Issue) => {
     if (issue.ruleId === HIDDEN_SITUATION_PLAN_RULE_ID && currentProject) {
       if (!openHiddenSituationPlanValidationDialog(currentProject, t)) {
@@ -453,6 +471,11 @@ function ValidationIssuesDialog({
           ...(ws.supplySegmentIndex !== undefined
             ? { supplySegmentIndex: ws.supplySegmentIndex }
             : {}),
+          ...(ws.supplyAssemblyId !== undefined ? { supplyAssemblyId: ws.supplyAssemblyId } : {}),
+          ...(ws.supplyConnectionId !== undefined
+            ? { supplyConnectionId: ws.supplyConnectionId }
+            : {}),
+          ...(ws.supplySectionKey !== undefined ? { supplySectionKey: ws.supplySectionKey } : {}),
         })),
       }
       return true
@@ -720,7 +743,13 @@ function ValidationIssuesDialog({
           .map((offender) => offender.id)
       )
       const exactLive = eendraadWireSegments.find(
-        (segment) => offenderSegmentIds.has(segment.id) && isVisibleWireSegment(segment)
+        (segment) =>
+          (offenderSegmentIds.has(segment.id) ||
+            (segment.supplyConnectionId != null &&
+              offenderSegmentIds.has(segment.supplyConnectionId)) ||
+            (segment.supplySectionKey != null &&
+              offenderSegmentIds.has(segment.supplySectionKey))) &&
+          isVisibleWireSegment(segment)
       )
       const root =
         exactLive ??
@@ -825,17 +854,6 @@ function ValidationIssuesDialog({
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-2 py-1.5 sm:px-4 sm:py-3">
-        <p
-          className="mb-1 cursor-help truncate border-b border-gray-200 pb-1 text-[11px] leading-tight text-gray-500 dark:border-gray-700 dark:text-gray-400 sm:mb-2 sm:pb-2 sm:text-xs"
-          title={t('validation.disclaimerTooltip', {
-            defaultValue:
-              'Checks are based on the available project information and do not cover every AREI requirement.',
-          })}
-        >
-          {t('validation.disclaimer', {
-            defaultValue: 'Automated checks to help review your installation.',
-          })}
-        </p>
         {status === 'ok' && issues.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">
             <CheckCircle2 className="mb-3 h-14 w-14 text-green-500" />
@@ -978,11 +996,7 @@ function ValidationIssuesDialog({
                                 handleIssueClick(issue)
                               }}
                             >
-                              {(() => {
-                                const tokens = getIssueLabels(issue)
-                                if (tokens.length === 0) return issue.scope.type
-                                return tokens.join(', ')
-                              })()}
+                              {getIssueBadgeLabel(issue)}
                             </span>
                           </div>
                           <p className="mb-1.5 text-sm text-gray-600 dark:text-gray-400">

@@ -14,6 +14,7 @@ import {
   DEFAULT_ELECTRICAL_DOMAIN,
   calculateBottomUpLayout,
   MAX_BREAKER_BY_SECTION,
+  getMaxProtectionRatingForSection,
   getCircuitMinSectionForCableProtectedByDevice,
   getCircuitSegmentsForValidation,
   buildLayoutTree,
@@ -111,7 +112,7 @@ function breakerSizeMatchesCrossSection(
     return { passed: true }
   }
 
-  const maxRating = MAX_BREAKER_BY_SECTION[section]
+  const maxRating = getMaxProtectionRatingForSection(section, protection.type)
   if (maxRating == null) {
     // Section not covered by our simplified table; skip check.
     return { passed: true }

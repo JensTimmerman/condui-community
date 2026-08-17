@@ -2,7 +2,7 @@
  * Circuit cable cross-section resolution for validation (matches primitives logic).
  * Derived layout wires can differ from stored one-wire segments; validation uses derived when available.
  */
-import type { WireSegment } from '@/types/schema'
+import type { ProtectionType, WireSegment } from '@/types/schema'
 import type { ElectricalDomain } from '@/types/schema'
 import type { InstallationQueryAPI } from '@/lib/validation/core/query-api'
 import { calculateBottomUpLayout } from '@/lib/layout/bottomUpLayout'
@@ -13,14 +13,41 @@ import {
   getElectricalPanelsFromProject,
 } from '@/lib/projectV2/electrical'
 
-/** AREI-style max breaker (A) per copper section (mm²), simplified 230 V table. */
+/** AREI Book 1 table 4.11: max circuit-breaker rating (A) per conductor section (mm²). */
 export const MAX_BREAKER_BY_SECTION: Record<number, number> = {
+  0.5: 4,
+  0.75: 6,
+  1: 10,
   1.5: 16,
   2.5: 20,
   4: 25,
+  6: 40,
+  10: 63,
+  16: 80,
+  25: 100,
+  35: 125,
+}
+
+/** AREI Book 1 table 4.11: max fuse rating (A) per conductor section (mm²). */
+export const MAX_FUSE_BY_SECTION: Record<number, number> = {
+  0.5: 2,
+  0.75: 4,
+  1: 6,
+  1.5: 10,
+  2.5: 16,
+  4: 20,
   6: 32,
-  10: 40,
+  10: 50,
   16: 63,
+  25: 80,
+  35: 100,
+}
+
+export function getMaxProtectionRatingForSection(
+  sectionMm2: number,
+  protectionType: ProtectionType
+): number | undefined {
+  return (protectionType === 'FUSE' ? MAX_FUSE_BY_SECTION : MAX_BREAKER_BY_SECTION)[sectionMm2]
 }
 
 /**

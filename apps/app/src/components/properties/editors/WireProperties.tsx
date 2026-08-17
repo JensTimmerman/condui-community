@@ -38,6 +38,62 @@ import {
   getElectricalPanelsFromProject,
   getSupplyAssembliesFromProject,
 } from '@/lib/projectV2/electrical'
+import {
+  getSupplyWireDiagnostic,
+  type SupplyWireDiagnostic,
+} from '@/lib/wires/supplyWireDiagnostic'
+import { resolveSupplyWireSegmentByMetadata } from '@/lib/eendraad/wireSelectionIdentity'
+import { getPrimaryPanelBusSectionId } from '@/lib/panel/panelBusSections'
+
+function SupplyWireDiagnosticBadge({ diagnostic }: { diagnostic?: SupplyWireDiagnostic }) {
+  if (!diagnostic) return null
+
+  return (
+    <div
+      className="flex w-fit items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-2.5 py-1 dark:border-gray-700 dark:bg-gray-800"
+      title={diagnostic.propertyKey}
+    >
+      <span
+        className="h-2.5 w-2.5 rounded-full"
+        style={{ backgroundColor: diagnostic.color }}
+        aria-hidden
+      />
+      <span className="font-mono text-sm font-semibold text-gray-800 dark:text-gray-100">
+        {diagnostic.code}
+      </span>
+    </div>
+  )
+}
+
+function WireDomainBadge({ domain, title }: { domain: 'AC' | 'DC'; title: string }) {
+  const isDC = domain === 'DC'
+
+  return (
+    <div className="flex items-center gap-3">
+      <span
+        className={`shrink-0 inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium rounded ${
+          isDC
+            ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300'
+            : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
+        }`}
+        title={title}
+      >
+        <img
+          src={
+            isDC
+              ? '/symbols/energy-conversion/symbol_DC.svg'
+              : '/symbols/energy-conversion/symbol_AC.svg'
+          }
+          alt=""
+          className="h-4 w-4 shrink-0 object-contain opacity-90 dark:invert dark:opacity-90"
+          aria-hidden
+        />
+        {domain}
+      </span>
+    </div>
+  )
+}
+
 function BusbarPhaseOrderProperties({
   panel,
   ownerId,
@@ -143,15 +199,16 @@ function WireProperties({
   if (!wireSegment && selection.wireMetadata) {
     const metadata = selection.wireMetadata.find((m) => m.id === wireSegmentId)
     if (metadata) {
-      if (metadata.supplyAssemblyId && metadata.supplyConnectionId) {
-        wireSegment = wireSegments.find(
-          (ws) =>
-            ws.supplyAssemblyId === metadata.supplyAssemblyId &&
-            ws.supplyConnectionId === metadata.supplyConnectionId
-        )
+      if (
+        metadata.supplySectionKey ||
+        (metadata.supplyAssemblyId && metadata.supplyConnectionId) ||
+        metadata.isSupply
+      ) {
+        wireSegment = resolveSupplyWireSegmentByMetadata(wireSegments, metadata) ?? undefined
       }
       // Domotica output/control wires: first try to re-resolve by domotica metadata
-      if (!wireSegment &&
+      if (
+        !wireSegment &&
         metadata.domoticaOutputGroup &&
         typeof metadata.domoticaOutputIndex === 'number' &&
         metadata.circuitId
@@ -164,7 +221,7 @@ function WireProperties({
             ws.domoticaOutputGroup === metadata.domoticaOutputGroup &&
             ws.domoticaOutputIndex === metadata.domoticaOutputIndex
         )
-      } else if (metadata.isGround) {
+      } else if (!wireSegment && metadata.isGround) {
         // Find ground wire (vertical, fromElementType === 'ground')
         wireSegment = wireSegments.find(
           (ws) =>
@@ -172,37 +229,7 @@ function WireProperties({
             ws.fromElementType === 'ground' &&
             ws.panelId === metadata.panelId
         )
-      } else if (metadata.isSupply) {
-        if (metadata.supplyWireRole) {
-          wireSegment = wireSegments.find(
-            (ws) =>
-              ws.panelId === metadata.panelId &&
-              (ws.supplyWireRole === metadata.supplyWireRole ||
-                (metadata.supplyWireRole === 'downstream' &&
-                  ws.type === 'vertical' &&
-                  !ws.circuitId &&
-                  !ws.fromElementType)) &&
-              (metadata.supplyWireRole !== 'crossing' || ws.isSupplyTrunk === true)
-          )
-        }
-        if (!wireSegment && metadata.supplySegmentIndex !== undefined) {
-          wireSegment = wireSegments.find(
-            (ws) =>
-              ws.isSupplyTrunk &&
-              ws.panelId === metadata.panelId &&
-              ws.supplySegmentIndex === metadata.supplySegmentIndex
-          )
-        }
-        if (!wireSegment) {
-          wireSegment = wireSegments.find(
-            (ws) =>
-              ws.type === 'vertical' &&
-              !ws.circuitId &&
-              !ws.fromElementType &&
-              ws.panelId === metadata.panelId
-          )
-        }
-      } else if (metadata.circuitId) {
+      } else if (!wireSegment && metadata.circuitId) {
         // Prefer exact segment match with same wire type and endpoint linkage.
         if (metadata.fromElementId !== undefined || metadata.toElementId !== undefined) {
           wireSegment = wireSegments.find(
@@ -251,13 +278,92 @@ function WireProperties({
     )
   }
 
+  const supplyWireDiagnostic = import.meta.env.DEV
+    ? getSupplyWireDiagnostic(wireSegment, wireSegments)
+    : undefined
+
+  if (wireSegment.supplySectionKey && currentProject) {
+    const installation = getElectricalInstallationFromProject(currentProject)
+    const panels = getElectricalPanelsFromProject(currentProject)
+    if (installation) {
+      const topology = ensureInstallationFeedTopology(installation, panels)
+      const rootFeed = topology.rootFeeds.find(({ panelId }) => panelId === wireSegment.panelId)
+      if (rootFeed) {
+        const assembly = wireSegment.supplyAssemblyId
+          ? getSupplyAssembliesFromProject(currentProject).find(
+              ({ id }) => id === wireSegment.supplyAssemblyId
+            )
+          : undefined
+        const connectionProperties = wireSegment.supplyConnectionId
+          ? assembly?.connections.find(({ id }) => id === wireSegment.supplyConnectionId)
+              ?.wireProperties
+          : undefined
+        const wireProperties =
+          rootFeed.wireSections?.[wireSegment.supplySectionKey] ?? connectionProperties
+        const wireFormState: WireRouteFormState = {
+          cable: wireProperties?.cable ?? wireSegment.cable,
+          wireRoute: wireProperties?.wireRoute ?? wireSegment.wireRoute,
+          inTube: wireProperties?.inTube ?? wireSegment.inTube,
+          inWall: wireProperties?.inWall ?? wireSegment.inWall,
+          hideWireLabel: wireProperties?.hideWireLabel ?? wireSegment.hideWireLabel,
+          showFireClassLabel: wireProperties?.showFireClassLabel ?? wireSegment.showFireClassLabel,
+          wireLengthM: wireProperties?.wireLengthM ?? wireSegment.wireLengthM,
+          showWireLengthLabel:
+            wireProperties?.showWireLengthLabel ?? wireSegment.showWireLengthLabel,
+          defaultWireLabelVisible: wireSegment.hideWireLabel !== true,
+        }
+        const setWireProperties = (updates: Partial<WireRouteFormState>) => {
+          const next = {
+            ...wireProperties,
+            ...updates,
+            cable: updates.cable ?? wireFormState.cable,
+          }
+          delete next.defaultWireLabelVisible
+          delete next.phaseAssignment
+          delete next.phaseConstraint
+          delete next.showPhaseLabel
+          updateInstallation({
+            feedTopology: {
+              ...topology,
+              rootFeeds: topology.rootFeeds.map((feed) =>
+                feed.id === rootFeed.id
+                  ? {
+                      ...feed,
+                      wireSections: {
+                        ...feed.wireSections,
+                        [wireSegment.supplySectionKey!]: next,
+                      },
+                    }
+                  : feed
+              ),
+            },
+          })
+        }
+        return (
+          <div className="space-y-4">
+            <SupplyWireDiagnosticBadge diagnostic={supplyWireDiagnostic} />
+            <WireDomainBadge
+              domain={wireSegment.domain === 'DC' ? 'DC' : 'AC'}
+              title={t('wires.domainTag', 'Electrical domain')}
+            />
+            <WireRouteAndCableForm
+              state={wireFormState}
+              onChange={setWireProperties}
+              isDC={(wireSegment.domain ?? 'AC') === 'DC'}
+              phaseSystem={installation.nominalVoltage.system}
+              t={panelStringT(t)}
+            />
+          </div>
+        )
+      }
+    }
+  }
+
   if (wireSegment.supplyAssemblyId && wireSegment.supplyConnectionId && currentProject) {
     const assembly = getSupplyAssembliesFromProject(currentProject).find(
       ({ id }) => id === wireSegment.supplyAssemblyId
     )
-    const connection = assembly?.connections.find(
-      ({ id }) => id === wireSegment.supplyConnectionId
-    )
+    const connection = assembly?.connections.find(({ id }) => id === wireSegment.supplyConnectionId)
     if (assembly && connection) {
       const wireProperties = connection.wireProperties
       const wireFormState: WireRouteFormState = {
@@ -281,9 +387,11 @@ function WireProperties({
       }
       return (
         <div className="space-y-4">
-          <p className="text-xs font-medium text-gray-600 dark:text-gray-400">
-            {connection.domain === 'DC' ? t('wires.domainDc', 'DC') : 'AC'}
-          </p>
+          <SupplyWireDiagnosticBadge diagnostic={supplyWireDiagnostic} />
+          <WireDomainBadge
+            domain={connection.domain === 'DC' ? 'DC' : 'AC'}
+            title={t('wires.domainTag', 'Electrical domain')}
+          />
           <WireRouteAndCableForm
             state={wireFormState}
             onChange={setWireProperties}
@@ -414,27 +522,7 @@ function WireProperties({
 
     return (
       <div className="space-y-4">
-        <div className="flex items-center gap-3">
-          <span
-            className={`shrink-0 inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium rounded ${
-              isDC
-                ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300'
-                : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
-            }`}
-          >
-            <img
-              src={
-                isDC
-                  ? '/symbols/energy-conversion/symbol_DC.svg'
-                  : '/symbols/energy-conversion/symbol_AC.svg'
-              }
-              alt=""
-              className="h-4 w-4 shrink-0 object-contain opacity-90 dark:invert dark:opacity-90"
-              aria-hidden
-            />
-            {wireDomain}
-          </span>
-        </div>
+        <WireDomainBadge domain={wireDomain} title={t('wires.domainTag', 'Electrical domain')} />
         <WireRouteAndCableForm
           state={wireFormState}
           onChange={setWireProps}
@@ -514,7 +602,11 @@ function WireProperties({
 
   const effectiveSupplyWireRole: SupplyWireRole | undefined = wireSegment.supplyMergedIntoBusDrop
     ? 'downstream'
-    : supplyWireRole
+    : wireSegment.type === 'vertical' &&
+        wireSegment.busFeedKind != null &&
+        wireSegment.fromElementType === 'mainBus'
+      ? 'downstream'
+      : supplyWireRole
 
   if (effectiveSupplyWireRole && !isSubPanelSupplyWire) {
     const installation = currentProject
@@ -546,9 +638,18 @@ function WireProperties({
     const soleMain = collectRootPanels(panels).length === 1
     const rootFeed =
       ensureInstallationFeedTopology(installation, panels).rootFeeds.find(
-        (feed) => feed.panelId === wireSegment.panelId
+        (feed) =>
+          feed.panelId === wireSegment.panelId &&
+          (feed.busSectionId ?? getPrimaryPanelBusSectionId(panel)) ===
+            (wireSegment.busSectionId ?? getPrimaryPanelBusSectionId(panel))
       ) ?? null
-    const incomingPhaseState = getPanelIncomingPhaseState(installation, panels, panel)
+    const incomingPhaseState = getPanelIncomingPhaseState(
+      installation,
+      panels,
+      panel,
+      wireSegment.busSectionId,
+      getSupplyAssembliesFromProject(currentProject)
+    )
     const editsPanelIncomingPhase = effectiveSupplyWireRole === 'downstream'
 
     const supplyCable =
@@ -598,7 +699,7 @@ function WireProperties({
         feedTopology: {
           ...topology,
           rootFeeds: topology.rootFeeds.map((feed) =>
-            feed.panelId === wireSegment.panelId ? { ...feed, cable } : feed
+            feed.id === rootFeed.id ? { ...feed, cable } : feed
           ),
         },
       })
@@ -613,7 +714,7 @@ function WireProperties({
         feedTopology: {
           ...topology,
           rootFeeds: topology.rootFeeds.map((feed) =>
-            feed.panelId === wireSegment.panelId ? { ...feed, ...updates } : feed
+            feed.id === rootFeed.id ? { ...feed, ...updates } : feed
           ),
         },
       })
@@ -621,6 +722,7 @@ function WireProperties({
 
     return (
       <div className="space-y-3">
+        <SupplyWireDiagnosticBadge diagnostic={supplyWireDiagnostic} />
         <p className="text-xs font-medium text-gray-600 dark:text-gray-400">
           {t(segmentTitleKey, segmentTitleDefault)}
         </p>
@@ -639,13 +741,9 @@ function WireProperties({
           effectivePhaseAssignment={
             editsPanelIncomingPhase ? incomingPhaseState.assignment : undefined
           }
-          showPhaseLabel={
-            editsPanelIncomingPhase ? incomingPhaseState.showPhaseLabel : undefined
-          }
+          showPhaseLabel={editsPanelIncomingPhase ? incomingPhaseState.showPhaseLabel : undefined}
           phaseConstraint={editsPanelIncomingPhase ? incomingPhaseState.constraint : undefined}
-          phaseLocked={
-            editsPanelIncomingPhase && incomingPhaseState.lockedByProtectionId != null
-          }
+          phaseLocked={editsPanelIncomingPhase && incomingPhaseState.lockedByProtectionId != null}
           onUpdatePhase={editsPanelIncomingPhase ? onUpdateSupplyPhase : undefined}
           t={panelStringT(t)}
         />
@@ -857,26 +955,7 @@ function WireProperties({
     <div className="space-y-4">
       {!isBusBarProtectionStub && (
         <div className="flex items-center gap-3">
-          <span
-            className={`shrink-0 inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium rounded ${
-              isDC
-                ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300'
-                : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
-            }`}
-            title={t('wires.domainTag', 'Electrical domain')}
-          >
-            <img
-              src={
-                isDC
-                  ? '/symbols/energy-conversion/symbol_DC.svg'
-                  : '/symbols/energy-conversion/symbol_AC.svg'
-              }
-              alt=""
-              className="h-4 w-4 shrink-0 object-contain opacity-90 dark:invert dark:opacity-90"
-              aria-hidden
-            />
-            {wireDomain}
-          </span>
+          <WireDomainBadge domain={wireDomain} title={t('wires.domainTag', 'Electrical domain')} />
 
           {isDomainChangeExitWire && fromTrunkDevice && (
             <button

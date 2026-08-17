@@ -6,16 +6,7 @@ import { useProjectStore } from '@/stores/projectStore'
 import { useDialogStore } from '@/stores/dialogStore'
 import { endpointSupportsMultiplier } from '@/utils/endpointMultipliers'
 import { logger } from '@/lib/logger'
-import type {
-  Door,
-  Floor,
-  Panel,
-  Placement,
-  PlanGraphicElement,
-  Stair,
-  Wall,
-  Window,
-} from '@/types/schema'
+import type { Door, Floor, Panel, Placement, Stair, Wall, Window } from '@/types/schema'
 import {
   isMainPanelDistributionEndpoint,
   resolvePanelForDistributionEndpoint,
@@ -24,6 +15,7 @@ import { resolveSelectionToEndpointIds } from '@/lib/plan/selectionResolvers'
 import { confirmDeleteEarthing } from '@/lib/installation/deleteEarthing'
 import {
   getBuildingFloorsFromProject,
+  getCompatibilityFloorsFromProject,
   type ProjectWithOptionalV2Building,
 } from '@/lib/projectV2/buildingFloors'
 import type { ProjectWithOptionalV2Electrical } from '@/lib/projectV2/electrical'
@@ -34,6 +26,7 @@ import {
   PLAN_ARROW_KEY_PRECEDENCE,
 } from '@/lib/plan/planKeyboardDecisions'
 import { explicitClockwiseRotationPatch } from '@/lib/plan/situationPlanRotation'
+import { deleteSelectedPlanGraphicElements } from '@/lib/plan/planGraphicElementDeletion'
 
 type PlanKeyboardProject = ProjectWithOptionalV2Building & ProjectWithOptionalV2Electrical
 
@@ -228,15 +221,29 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
     const getCurrentProjectFloors = (): Floor[] =>
       getProjectFloors(useProjectStore.getState().currentProject)
     const getAllPlanWalls = (project: PlanKeyboardProject | null): Wall[] =>
-      getProjectFloors(project).flatMap((floor: Floor) => floor.floorPlan?.walls ?? [])
+      project
+        ? getCompatibilityFloorsFromProject(project).flatMap(
+            (floor) => floor.floorPlan?.walls ?? []
+          )
+        : []
     const getAllPlanDoors = (project: PlanKeyboardProject | null): Door[] =>
-      getProjectFloors(project).flatMap((floor: Floor) => floor.floorPlan?.doors ?? [])
+      project
+        ? getCompatibilityFloorsFromProject(project).flatMap(
+            (floor) => floor.floorPlan?.doors ?? []
+          )
+        : []
     const getAllPlanWindows = (project: PlanKeyboardProject | null): Window[] =>
-      getProjectFloors(project).flatMap((floor: Floor) => floor.floorPlan?.windows ?? [])
+      project
+        ? getCompatibilityFloorsFromProject(project).flatMap(
+            (floor) => floor.floorPlan?.windows ?? []
+          )
+        : []
     const getAllPlanStairs = (project: PlanKeyboardProject | null): Stair[] =>
-      getProjectFloors(project).flatMap((floor: Floor) => floor.floorPlan?.stairs ?? [])
-    const getAllPlanGraphicElements = (project: PlanKeyboardProject | null): PlanGraphicElement[] =>
-      getProjectFloors(project).flatMap((floor: Floor) => floor.floorPlan?.graphicElements ?? [])
+      project
+        ? getCompatibilityFloorsFromProject(project).flatMap(
+            (floor) => floor.floorPlan?.stairs ?? []
+          )
+        : []
 
     if (isPlanKeyboardDebugEnabled()) {
       logger.info(
@@ -477,12 +484,10 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
         const allDoors = getAllPlanDoors(project)
         const allWindows = getAllPlanWindows(project)
         const allStairs = getAllPlanStairs(project)
-        const allGraphicElements = getAllPlanGraphicElements(project)
         const wallIdSet = new Set(allWalls.map((wall) => wall.id))
         const doorIdSet = new Set(allDoors.map((door) => door.id))
         const windowIdSet = new Set(allWindows.map((window) => window.id))
         const stairIdSet = new Set(allStairs.map((stair) => stair.id))
-        const graphicElementIdSet = new Set(allGraphicElements.map((element) => element.id))
 
         // Delete selection
         if (selection.ids.length > 0) {
@@ -579,11 +584,10 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
             }
             useUIStore.getState().clearSelection()
           } else if (selection.type === 'graphicElement') {
-            e.preventDefault()
-            selection.ids
-              .filter((id) => graphicElementIdSet.has(id))
-              .forEach((id) => deletePlanGraphicElement(id))
-            useUIStore.getState().clearSelection()
+            if (deleteSelectedPlanGraphicElements(selection, deletePlanGraphicElement)) {
+              e.preventDefault()
+              useUIStore.getState().clearSelection()
+            }
           } else if (selection.type === 'ground' && selection.ids.includes('ground')) {
             e.preventDefault()
             confirmDeleteEarthing()

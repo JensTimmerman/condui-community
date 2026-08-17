@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ZOOM_100 } from '@/constants/canvasConstants'
-import { Group, Image, Rect, Text } from 'react-konva'
+import { Group, Image, Line, Rect, Text } from 'react-konva'
 import { getSwitchSymbolPaths, getSymbolById, TRANSFORMER_OVERLAY_PATHS } from '@/lib/symbols'
 import { SYMBOL_EXPORT_ATTR_SVG_PATH, loadProcessedSymbol } from '@/lib/symbolImage'
 import {
@@ -29,6 +30,7 @@ import {
   getSecondaryTextColor,
   getSymbolColor,
   getTextColor,
+  SELECTION_COLOR,
 } from './canvasSymbols'
 import { ProtectionOneWireLabels } from './ProtectionOneWireLabels'
 import { useEendraadWireSegments } from '@/hooks/eendraad'
@@ -38,7 +40,10 @@ import { getVisibleConversionLabelParts } from '@/lib/conversionLabels'
 import { isSymbolLabelVisible } from '@/lib/symbolLabels'
 import type { SymbolLabelPosition, TrunkDevice } from '@/types/schema'
 import type { Point } from '@/types/ui'
-import { getSupplyInverterMultiplier } from '@/utils/inverterMultipliers'
+import { getSupplyDeviceMultiplier } from '@/utils/inverterMultipliers'
+import { openSupplyDeviceAddMoreDialog } from '@/components/endpoints/AddMoreCountDialog'
+import { MultiplierBadge } from './MultiplierBadge'
+import { useCanvasPanOrClickGesture } from './CanvasPanOrClickGesture'
 import { DomainMarker } from './DomainMarker'
 import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
 import {
@@ -46,6 +51,12 @@ import {
   phaseAssignmentDiffersFromInstallation,
 } from '@/lib/wires/phaseAssignment'
 import { getSupplyConverterAcPhaseAssignment } from '@/lib/supplyAssembly/supplyConverterPhases'
+import { countSymbolLabelVisualLines } from '@/lib/symbolLabelMetrics'
+import { measureSymbolLabelTextWidth } from '@/lib/symbolLabelTextWidth'
+import {
+  getSupplyMetadataCalloutPlacement,
+  shouldUseSupplyMetadataCallout,
+} from '@/lib/supplyMetadataCallout'
 
 type EendraadPointerEvent = {
   cancelBubble: boolean
@@ -74,6 +85,8 @@ interface TrunkDeviceSymbolProps {
   getCanvasPositionFromEvent?: (e: unknown) => Point | null
   onDragMove?: (newPos: Point) => void
   onDragEnd?: (newPos: Point) => boolean | void
+  onDragStart?: (altKey: boolean, nativeEvt: MouseEvent) => boolean
+  shouldSuppressKonvaDragEnd?: () => boolean
   /** Circuit trunk devices: allow 1‑draad drag to another trunk when selected alone. */
   draggableCircuitTrunk?: boolean
 }
@@ -92,9 +105,12 @@ export function TrunkDeviceSymbol({
   getCanvasPositionFromEvent,
   onDragMove,
   onDragEnd,
+  onDragStart,
+  shouldSuppressKonvaDragEnd,
   draggableCircuitTrunk = false,
 }: TrunkDeviceSymbolProps) {
   const setSelection = useSetSelection()
+  const { t } = useTranslation()
   const isSelected = useTrunkDeviceSelected(device)
   const canDragTrunk = useUIStore(
     (s) => draggableCircuitTrunk && s.selection.ids.includes(device.id)
@@ -125,7 +141,7 @@ export function TrunkDeviceSymbol({
   )
   const isTransformer = device.symbol === 'transformer'
   const conversionProps = device.conversionProps
-  const inverterMultiplier = getSupplyInverterMultiplier(device)
+  const supplyDeviceMultiplier = getSupplyDeviceMultiplier(device)
   const isConversionSymbol =
     device.symbol === 'transformer' ||
     device.symbol === 'rectifier' ||
@@ -152,7 +168,9 @@ export function TrunkDeviceSymbol({
     : (switchSymbolPaths?.basePath ?? symbol?.svgPath)
   const nameLabelText = (device.label ?? '').trim()
   const isVerticalSupplyProtection =
-    isProtection && device.supplyPath === 'converter-grid'
+    isProtection &&
+    device.supplyPath === 'converter-grid' &&
+    device.converterGridPlacement === 'input-leg'
   const showSupplyProtectionNameLabel =
     (isHorizontal === true || isVerticalSupplyProtection) &&
     (isProtection || device.symbol === 'source_changeover') &&
@@ -170,6 +188,7 @@ export function TrunkDeviceSymbol({
         Math.min(segment.startPoint.y, segment.endPoint.y) < position.y &&
         Math.max(segment.startPoint.y, segment.endPoint.y) <= position.y + 1
     )
+  const hasConnectedBottomWire = isConversionSymbol && device.converterGridInputConnected !== false
   const conversionLabelParts = getVisibleConversionLabelParts(device)
   const certificationLabelParts = getVisibleCertificationLabelParts(device)
   const notesText = (device.notes ?? '').trim()
@@ -182,7 +201,7 @@ export function TrunkDeviceSymbol({
   const placeNotesOnTop = isDomoticaDevice || isHorizontal === true || forceProtectionLabelStack
   const stackedRightLabelItems = useMemo(
     () => [
-      ...(isConversionSymbol || device.symbol === 'solar_panel'
+      ...(isConversionSymbol || device.symbol === 'solar_panel' || device.symbol === 'battery'
         ? conversionLabelParts.map((part) => ({ key: part.key, text: part.text }))
         : []),
       ...(!placeNotesOnTop
@@ -207,7 +226,76 @@ export function TrunkDeviceSymbol({
     ],
     [certificationLabelParts, notesText, showNotesLabel]
   )
-
+  const topStackVisualLineCount = useMemo(
+    () =>
+      topStackLabelItems.reduce((total, item) => total + countSymbolLabelVisualLines(item.text), 0),
+    [topStackLabelItems]
+  )
+  const metadataCalloutItems = useMemo(
+    () => [
+      ...certificationLabelParts.map((part) => ({
+        key: part.key,
+        text:
+          part.key === 'certificationModel' && supplyDeviceMultiplier > 1
+            ? `${supplyDeviceMultiplier}× ${part.text}`
+            : part.text,
+      })),
+      ...conversionLabelParts.map((part) => ({ key: part.key, text: part.text })),
+      ...(showNotesLabel ? [{ key: 'trunkDeviceNotes' as const, text: notesText }] : []),
+    ],
+    [
+      certificationLabelParts,
+      conversionLabelParts,
+      notesText,
+      showNotesLabel,
+      supplyDeviceMultiplier,
+    ]
+  )
+  const metadataCalloutLines = useMemo(
+    () => metadataCalloutItems.map((item) => item.text),
+    [metadataCalloutItems]
+  )
+  const isMetadataCalloutSymbol =
+    device.symbol === 'inverter' || device.symbol === 'solar_panel' || device.symbol === 'battery'
+  const metadataCalloutPlacementKind = device.symbol === 'inverter' ? 'upper-left' : 'top'
+  const useMetadataCallout =
+    isMetadataCalloutSymbol &&
+    isHorizontal === true &&
+    shouldUseSupplyMetadataCallout(metadataCalloutLines, supplyDeviceMultiplier)
+  const metadataCalloutVisualLineCount = useMemo(
+    () =>
+      metadataCalloutLines.reduce((total, line) => total + countSymbolLabelVisualLines(line), 0),
+    [metadataCalloutLines]
+  )
+  const metadataCalloutWidth = useMemo(
+    () =>
+      Math.min(
+        260,
+        Math.max(
+          96,
+          ...metadataCalloutLines.map((line) => measureSymbolLabelTextWidth(line, fontFamily, 8))
+        ) + 12
+      ),
+    [fontFamily, metadataCalloutLines]
+  )
+  const metadataCalloutHeight = metadataCalloutVisualLineCount * 10 + 12
+  const metadataCalloutPlacement = useMemo(
+    () =>
+      getSupplyMetadataCalloutPlacement({
+        symbolPosition: position,
+        width: metadataCalloutWidth,
+        height: metadataCalloutHeight,
+        segments: wireSegments,
+        placement: metadataCalloutPlacementKind,
+      }),
+    [
+      metadataCalloutHeight,
+      metadataCalloutPlacementKind,
+      metadataCalloutWidth,
+      position,
+      wireSegments,
+    ]
+  )
   const renderedSymbolSize = useMemo(() => {
     if (!processedImage || !isDomoticaDevice) {
       return { width: SYMBOL_SIZE, height: SYMBOL_SIZE }
@@ -228,6 +316,20 @@ export function TrunkDeviceSymbol({
       height: SYMBOL_SIZE,
     }
   }, [isDomoticaDevice, processedImage])
+  const metadataCalloutLeaderPoints =
+    metadataCalloutPlacementKind === 'top'
+      ? [
+          metadataCalloutPlacement.x + metadataCalloutWidth / 2,
+          metadataCalloutPlacement.y + metadataCalloutHeight,
+          0,
+          -renderedSymbolSize.height / 2 - 2,
+        ]
+      : [
+          metadataCalloutPlacement.x + metadataCalloutWidth,
+          metadataCalloutPlacement.y + metadataCalloutHeight,
+          -renderedSymbolSize.width / 2 - 2,
+          -renderedSymbolSize.height / 2 - 2,
+        ]
 
   const certificationSideLabelExtraOffset = useMemo(
     () =>
@@ -328,6 +430,7 @@ export function TrunkDeviceSymbol({
     },
     [device.id, setSelection]
   )
+  const metadataCalloutGestureHandlers = useCanvasPanOrClickGesture((event) => handleClick(event))
 
   const rotateForHorizontal = isHorizontal && isProtection && !isInlineSwitch
   const protectionLabelSource = isInlineSwitch
@@ -370,16 +473,31 @@ export function TrunkDeviceSymbol({
       onTap={handleClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
+      onDragStart={
+        canDragTrunk && onDragStart
+          ? (e) => {
+              const evt = e.evt as MouseEvent
+              if (onDragStart(!!evt.altKey, evt)) {
+                e.target.stopDrag()
+                e.target.position({ x: position.x, y: position.y })
+              }
+            }
+          : undefined
+      }
       onDragMove={
         canDragTrunk && onDragMove
           ? (e) => {
-              onDragMove({ x: e.target.x(), y: e.target.y() })
+              onDragMove(getCanvasPositionFromEvent?.(e) ?? { x: e.target.x(), y: e.target.y() })
             }
           : undefined
       }
       onDragEnd={
         canDragTrunk && onDragEnd
           ? (e) => {
+              if (shouldSuppressKonvaDragEnd?.()) {
+                e.target.position({ x: position.x, y: position.y })
+                return
+              }
               const pos = getCanvasPositionFromEvent?.(e) ?? { x: e.target.x(), y: e.target.y() }
               onDragEnd(pos)
               e.target.position({ x: position.x, y: position.y })
@@ -457,12 +575,14 @@ export function TrunkDeviceSymbol({
               y={-5.5}
               color={getSecondaryTextColor(isDark ?? false)}
             />
-            <DomainMarker
-              domain="AC"
-              x={7}
-              y={renderedSymbolSize.height / 2 + 6}
-              color={getSecondaryTextColor(isDark ?? false)}
-            />
+            {hasConnectedBottomWire && (
+              <DomainMarker
+                domain="AC"
+                x={7}
+                y={renderedSymbolSize.height / 2 + 6}
+                color={getSecondaryTextColor(isDark ?? false)}
+              />
+            )}
             <DomainMarker
               domain="DC"
               x={renderedSymbolSize.width / 2 + 6}
@@ -490,32 +610,75 @@ export function TrunkDeviceSymbol({
                   fill={getSecondaryTextColor(isDark ?? false)}
                   listening={false}
                 />
-                <Text
-                  x={-30}
-                  y={renderedSymbolSize.height / 2 + 3}
-                  width={24}
-                  text={converterAcPhaseLabel}
-                  align="right"
-                  fontSize={6}
-                  fontFamily={fontFamily}
-                  fill={getSecondaryTextColor(isDark ?? false)}
-                  listening={false}
-                />
+                {hasConnectedBottomWire && (
+                  <Text
+                    x={-30}
+                    y={renderedSymbolSize.height / 2 + 3}
+                    width={24}
+                    text={converterAcPhaseLabel}
+                    align="right"
+                    fontSize={6}
+                    fontFamily={fontFamily}
+                    fill={getSecondaryTextColor(isDark ?? false)}
+                    listening={false}
+                  />
+                )}
               </>
             )}
           </>
         )}
-      {inverterMultiplier > 1 && (
-        <Text
-          text={`${inverterMultiplier}x`}
-          x={ENDPOINT_OUTLINE_SIZE / 2 - 2}
-          y={-ENDPOINT_OUTLINE_SIZE / 2 - 10}
-          fontSize={8}
-          fontStyle="bold"
+      {supplyDeviceMultiplier > 1 && (
+        <MultiplierBadge
+          count={supplyDeviceMultiplier}
+          x={renderedSymbolSize.width / 2 + 11}
+          y={-renderedSymbolSize.height / 2 - 18}
+          fontFamily={fontFamily}
           fill={getSymbolColor(theme?.mode === 'dark')}
-          align="right"
-          listening={false}
+          onActivate={() => openSupplyDeviceAddMoreDialog(device, t)}
         />
+      )}
+
+      {useMetadataCallout && metadataCalloutLines.length > 0 && (
+        <>
+          <Line
+            points={metadataCalloutLeaderPoints}
+            stroke={getSecondaryTextColor(isDark ?? false)}
+            strokeWidth={0.7}
+            dash={[3, 3]}
+            listening={false}
+          />
+          <Group
+            x={metadataCalloutPlacement.x}
+            y={metadataCalloutPlacement.y}
+            {...metadataCalloutGestureHandlers}
+          >
+            <Rect
+              width={metadataCalloutWidth}
+              height={metadataCalloutHeight}
+              stroke={
+                isSelected || isHoveredAny
+                  ? SELECTION_COLOR
+                  : getSecondaryTextColor(isDark ?? false)
+              }
+              strokeWidth={isSelected ? 1.2 : 0.7}
+              cornerRadius={2}
+              fill="transparent"
+            />
+            <Text
+              x={6}
+              y={6}
+              width={metadataCalloutWidth - 12}
+              height={metadataCalloutHeight - 12}
+              text={metadataCalloutLines.join('\n')}
+              fontFamily={fontFamily}
+              fontSize={8}
+              lineHeight={1.25}
+              fill={getSecondaryTextColor(isDark ?? false)}
+              wrap="word"
+              listening={false}
+            />
+          </Group>
+        </>
       )}
 
       {/* Transformer overlays on trunk device */}
@@ -554,7 +717,7 @@ export function TrunkDeviceSymbol({
       )}
 
       {/* Generic trunk labels on the right: conversion details + notes (single stacked flow). */}
-      {stackedRightLabelItems.length > 0 && (
+      {!useMetadataCallout && stackedRightLabelItems.length > 0 && (
         <SymbolTextLabels
           items={stackedRightLabelItems}
           config={{ position: 'right', layout: 'stack' }}
@@ -567,31 +730,37 @@ export function TrunkDeviceSymbol({
           symbolHeight={renderedSymbolSize.height}
         />
       )}
-      {placeNotesOnTop && topStackLabelItems.length > 0 && !hasConnectedTopWire && (
-        <SymbolTextLabels
-          items={topStackLabelItems}
-          config={{ position: 'top', layout: 'stack' }}
-          textColor={getSecondaryTextColor(isDark ?? false)}
-          fontFamily={fontFamily}
-          fontSize={8}
-          symbolWidth={renderedSymbolSize.width}
-          symbolHeight={renderedSymbolSize.height}
-        />
-      )}
-      {placeNotesOnTop && topStackLabelItems.length > 0 && hasConnectedTopWire && (
-        <Text
-          x={-164}
-          y={-renderedSymbolSize.height / 2 - topStackLabelItems.length * 10 - 4}
-          width={160}
-          text={topStackLabelItems.map((item) => item.text).join('\n')}
-          align="right"
-          fontFamily={fontFamily}
-          fontSize={8}
-          lineHeight={1.25}
-          fill={getSecondaryTextColor(isDark ?? false)}
-          listening={false}
-        />
-      )}
+      {placeNotesOnTop &&
+        !useMetadataCallout &&
+        topStackLabelItems.length > 0 &&
+        !hasConnectedTopWire && (
+          <SymbolTextLabels
+            items={topStackLabelItems}
+            config={{ position: 'top', layout: 'stack' }}
+            textColor={getSecondaryTextColor(isDark ?? false)}
+            fontFamily={fontFamily}
+            fontSize={8}
+            symbolWidth={renderedSymbolSize.width}
+            symbolHeight={renderedSymbolSize.height}
+          />
+        )}
+      {placeNotesOnTop &&
+        !useMetadataCallout &&
+        topStackLabelItems.length > 0 &&
+        hasConnectedTopWire && (
+          <Text
+            x={-164}
+            y={-renderedSymbolSize.height / 2 - topStackVisualLineCount * 10 - 4}
+            width={160}
+            text={topStackLabelItems.map((item) => item.text).join('\n')}
+            align="right"
+            fontFamily={fontFamily}
+            fontSize={8}
+            lineHeight={1.25}
+            fill={getSecondaryTextColor(isDark ?? false)}
+            listening={false}
+          />
+        )}
       {showSupplyProtectionNameLabel && (
         <SymbolTextLabels
           items={[{ key: 'supplyProtectionNameLabel', text: nameLabelText }]}

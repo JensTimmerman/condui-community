@@ -8,6 +8,10 @@ import {
   buildSegmentMeasurementGuides,
   type DistanceMeasurementInterval,
 } from '@/lib/plan/segmentMeasurements'
+import {
+  clearFloorPlanDrawDimensionEditor,
+  setFloorPlanDrawDimensionEditor,
+} from './floorPlanDrawDimensionEditorStore'
 
 interface SegmentMeasurementOverlayProps {
   wall: Wall
@@ -75,6 +79,7 @@ export function SegmentMeasurementOverlay({
   const [editingSegmentIndex, setEditingSegmentIndex] = useState<number | null>(null)
   const [draftText, setDraftText] = useState('')
   const dimensionDragRef = useRef<DimensionDragState | null>(null)
+  const suppressDimensionEditUntilRef = useRef(0)
   const editableSegmentSet = useMemo(
     () => new Set(editableSegmentIndices),
     [editableSegmentIndices]
@@ -204,6 +209,9 @@ export function SegmentMeasurementOverlay({
           })
         : { x: 0, y: 0 }
       dimensionDragRef.current = null
+      if (drag.didDrag) {
+        suppressDimensionEditUntilRef.current = Date.now() + 350
+      }
       if (cancelled || !drag.didDrag) {
         onSegmentDimensionDrag?.(drag.segmentIndex, delta, 'cancel', precise)
       } else {
@@ -266,19 +274,81 @@ export function SegmentMeasurementOverlay({
   const fontSize = screenPxToCanvasUnits(zoom, 12, 8, 18)
   const minDashedLength = screenPxToCanvasUnits(zoom, 36, 18, 72)
 
-  const segmentGuides = buildSegmentMeasurementGuides({
-    points: wall.points,
-    segmentIndices,
-    pxPerMeter,
-    extensionOffset,
-  })
-  const intervalGuides = buildDistanceMeasurementGuides({
-    points: wall.points,
-    intervals: distanceIntervals,
-    pxPerMeter,
-    extensionOffset,
-  })
-  const guides = [...segmentGuides, ...intervalGuides]
+  const guides = useMemo(
+    () => [
+      ...buildSegmentMeasurementGuides({
+        points: wall.points,
+        segmentIndices,
+        pxPerMeter,
+        extensionOffset,
+      }),
+      ...buildDistanceMeasurementGuides({
+        points: wall.points,
+        intervals: distanceIntervals,
+        pxPerMeter,
+        extensionOffset,
+      }),
+    ],
+    [distanceIntervals, extensionOffset, pxPerMeter, segmentIndices, wall.points]
+  )
+  const dimensionEditorOwnerId = `wall-segment:${wall.id}`
+
+  useEffect(() => {
+    if (editingSegmentIndex == null) {
+      clearFloorPlanDrawDimensionEditor(dimensionEditorOwnerId)
+      return
+    }
+    const guide = guides.find((candidate) => candidate.segmentIndex === editingSegmentIndex)
+    if (!guide) {
+      clearFloorPlanDrawDimensionEditor(dimensionEditorOwnerId)
+      return
+    }
+    let rotationDeg = (guide.angleRad * 180) / Math.PI
+    if (rotationDeg > 90 || rotationDeg < -90) rotationDeg += 180
+    const roundedCm = Math.round(guide.lengthCm * 10) / 10
+    const displayValue = Number.isInteger(roundedCm) ? `${roundedCm}` : roundedCm.toFixed(1)
+
+    setFloorPlanDrawDimensionEditor({
+      ownerId: dimensionEditorOwnerId,
+      fields: [
+        {
+          id: `segment-${editingSegmentIndex}`,
+          anchor: guide.midpoint,
+          placement: 'center',
+          value: draftText || displayValue,
+          active: true,
+          rotationDeg,
+        },
+      ],
+      onActivate: () => undefined,
+      onChange: (_id, value) => setDraftText(value),
+      onEnter: () => {
+        const valueCm = Number.parseFloat(draftText.replace(',', '.'))
+        if (Number.isFinite(valueCm) && valueCm > 0) {
+          onSegmentLengthCommit?.(editingSegmentIndex, valueCm)
+        }
+        setEditingSegmentIndex(null)
+        setDraftText('')
+      },
+      onTab: () => undefined,
+      onEscape: () => {
+        setEditingSegmentIndex(null)
+        setDraftText('')
+      },
+    })
+
+  }, [
+    dimensionEditorOwnerId,
+    draftText,
+    editingSegmentIndex,
+    guides,
+    onSegmentLengthCommit,
+  ])
+
+  useEffect(
+    () => () => clearFloorPlanDrawDimensionEditor(dimensionEditorOwnerId),
+    [dimensionEditorOwnerId]
+  )
 
   return (
     <Group listening>
@@ -396,8 +466,6 @@ export function SegmentMeasurementOverlay({
                 if ('pointerType' in event.evt && event.evt.pointerType === 'touch') {
                   event.evt.preventDefault()
                 }
-                setEditingSegmentIndex(guide.segmentIndex)
-                setDraftText('')
                 const clientPoint = getClientPoint(event.evt)
                 if (clientPoint && onSegmentDimensionDrag) {
                   dimensionDragRef.current = {
@@ -431,8 +499,6 @@ export function SegmentMeasurementOverlay({
                 if (!touch || !onSegmentDimensionDrag) return
                 event.cancelBubble = true
                 event.evt.preventDefault()
-                setEditingSegmentIndex(guide.segmentIndex)
-                setDraftText('')
                 dimensionDragRef.current = {
                   source: 'touch',
                   touchIdentifier: touch.identifier,
@@ -460,17 +526,19 @@ export function SegmentMeasurementOverlay({
               onClick={(event) => {
                 if (!editable || !isPrimaryPlanActivationEvent(event.evt)) return
                 event.cancelBubble = true
+                if (Date.now() < suppressDimensionEditUntilRef.current) return
                 setEditingSegmentIndex(guide.segmentIndex)
                 setDraftText('')
               }}
               onTap={(event) => {
                 if (!editable) return
                 event.cancelBubble = true
+                if (Date.now() < suppressDimensionEditUntilRef.current) return
                 setEditingSegmentIndex(guide.segmentIndex)
                 setDraftText('')
               }}
             >
-              {editable && (
+              {editable && !isEditing && (
                 <Rect
                   x={-hitBoxWidth / 2}
                   y={-hitBoxHeight / 2}
@@ -491,15 +559,17 @@ export function SegmentMeasurementOverlay({
                   cornerRadius={screenPxToCanvasUnits(zoom, 4, 2, 8)}
                 />
               )}
-              <Text
-                text={displayLabel}
-                fontSize={fontSize}
-                fill={textColor}
-                fontStyle="bold"
-                offsetX={approxLabelWidth / 2}
-                offsetY={fontSize / 2}
-                listening={editable}
-              />
+              {!isEditing && (
+                <Text
+                  text={displayLabel}
+                  fontSize={fontSize}
+                  fill={textColor}
+                  fontStyle="bold"
+                  offsetX={approxLabelWidth / 2}
+                  offsetY={fontSize / 2}
+                  listening={editable}
+                />
+              )}
             </Group>
           </Group>
         )

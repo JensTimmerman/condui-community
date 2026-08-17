@@ -3,12 +3,17 @@ import {
   isHorizontalSupplyTrunkSegment,
   isMainSupplyVerticalWireSegment,
 } from '@/lib/wireTextLabel'
-import { resolveShowFireClassLabel, resolveShowWireLengthLabel } from '@/lib/wires/circuitWireDefaults'
+import {
+  resolveShowFireClassLabel,
+  resolveShowWireLengthLabel,
+} from '@/lib/wires/circuitWireDefaults'
 
 export function isSupplyWireSegmentForLabel(wireSegment: WireSegment): boolean {
   return (
     wireSegment.isSupplyTrunk === true ||
     wireSegment.isSubPanelSupply === true ||
+    wireSegment.supplySectionKey != null ||
+    wireSegment.supplyConnectionId != null ||
     isMainSupplyVerticalWireSegment(wireSegment)
   )
 }
@@ -23,6 +28,9 @@ export function isBusBarProtectionStubSegment(wireSegment: WireSegment): boolean
 
 export function isRouteIndicatorVisibleForSegment(wireSegment: WireSegment): boolean {
   const isVertical = wireSegment.startPoint.x === wireSegment.endPoint.x
+  if (isSupplyWireSegmentForLabel(wireSegment)) {
+    return !isBusBarProtectionStubSegment(wireSegment)
+  }
   return (
     isVertical &&
     wireSegment.type === 'vertical' &&
@@ -47,8 +55,7 @@ export function isWireLabelVisibleForSegment(wireSegment: WireSegment): boolean 
   if (wireSegment.hideWireLabel === false) return true
 
   const isCircuitProtectionOutput =
-    wireSegment.fromElementType === 'protection' &&
-    wireSegment.toElementType !== 'protection'
+    wireSegment.fromElementType === 'protection' && wireSegment.toElementType !== 'protection'
   const isMergedPanelFeederBusToEndpoint =
     !!wireSegment.feederProtectionId &&
     !!wireSegment.circuitId &&

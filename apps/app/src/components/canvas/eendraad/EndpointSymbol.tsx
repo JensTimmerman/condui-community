@@ -1,4 +1,5 @@
 import { memo, useState, useEffect, useCallback, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ZOOM_100 } from '@/constants/canvasConstants'
 import { Group, Image, Line, Rect, Text } from 'react-konva'
 import { useUIStore } from '@/stores/uiStore'
@@ -24,6 +25,7 @@ import {
   showLightPointSafetyOverlay,
 } from '@/lib/lightPointProps'
 import { endpointSupportsMultiplier, getEndpointMultiplier } from '@/utils/endpointMultipliers'
+import { openAddMoreDialogForEndpoint } from '@/components/endpoints/AddMoreCountDialog'
 import { useIsPreviewSelected } from '@/contexts/SelectionPreviewContext'
 import { useCanvasFontFamily, useEffectiveCanvasZoom, useTouchPrimaryDevice } from '@/editions/community/communityHooks'
 import { applyTouchHitPadding } from '@/lib/canvas/touchHitZones'
@@ -55,6 +57,7 @@ import {
   HVAC_FUNCTION_OFFSET_X_FACTOR,
   HVAC_HEAT_EXCHANGE_TYPE_OFFSET_Y,
 } from './canvasSymbols'
+import { MultiplierBadge } from './MultiplierBadge'
 import type { Endpoint, DomoticaControlKey } from '@/types/schema'
 import type { Point } from '@/types/ui'
 import { getVisibleCertificationLabelParts } from '@/lib/certificationLabels'
@@ -112,6 +115,7 @@ export const EndpointSymbol = memo(function EndpointSymbol({
   bottomLabelMaximumRightX,
 }: EndpointSymbolProps) {
   const setSelection = useSetSelection()
+  const { t } = useTranslation()
   const isSelected = useEndpointSelected(endpoint)
   const isHoveredFromBreadcrumb = useHoverIncludes('endpoint', endpoint.id)
   const canvasZoom = useEffectiveCanvasZoom(ZOOM_100, 'eendraad')
@@ -1010,15 +1014,13 @@ export const EndpointSymbol = memo(function EndpointSymbol({
         />
       )}
       {multiplier > 1 && (
-        <Text
-          text={`${multiplier}x`}
+        <MultiplierBadge
+          count={multiplier}
           x={ENDPOINT_OUTLINE_SIZE / 2 + socketExtraWidth - 2}
           y={-ENDPOINT_OUTLINE_SIZE / 2 - 10}
-          fontSize={8}
-          fontStyle="bold"
+          fontFamily={fontFamily}
           fill={getSymbolColor(theme?.mode === 'dark')}
-          align="right"
-          listening={false}
+          onActivate={() => openAddMoreDialogForEndpoint(endpoint, t)}
         />
       )}
       {/* Preview highlight (during selection rectangle drag) — grows for multi-socket */}

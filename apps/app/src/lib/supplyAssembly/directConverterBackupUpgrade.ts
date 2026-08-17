@@ -8,6 +8,12 @@ import type { Circuit, ProtectionDevice } from '@/types/schema'
 import type { TrunkDevice } from '@/types/schema'
 import { protectionTypeToSymbolKey } from '@/lib/protectionKind'
 import { getSupplyFeedDevicesForPanel } from '@/lib/feedTopology'
+import { generateId } from '@/utils'
+import {
+  createDefaultAcCircuitCable,
+  DEFAULT_AC_CIRCUIT_WIRE_LABEL_FLAGS,
+} from '@/lib/wires/circuitWireDefaults'
+import { getSupplyConverterAcPhaseAssignment } from './supplyConverterPhases'
 
 export type DirectConverterBackupProtection = {
   protection: ProtectionDevice
@@ -132,4 +138,57 @@ export function directConverterBackupInlineDevicesToTrunkDevices(
     directConverterBackupProtectionToTrunkDevice(backup.protection),
     ...inlineDevices.map((device) => ({ ...device, supplyPath: 'backup-output' as const })),
   ].map((device, trunkPosition) => ({ ...device, trunkPosition }))
+}
+
+/** Rebuild the standalone inverter-backup circuit hidden inside a switched backup lane. */
+export function restoreDirectConverterBackupProtectionFromTrunkDevices(
+  project: ProjectWithOptionalV2Electrical,
+  converter: TrunkDevice,
+  devices: TrunkDevice[]
+): DirectConverterBackupProtection | null {
+  const ordered = [...devices].sort((a, b) => a.trunkPosition - b.trunkPosition)
+  const source = ordered.find((device) => device.type === 'protection')
+  if (!source) return null
+  const installation = getElectricalInstallationFromProject(project)
+  const circuit: Circuit = {
+    id: generateId(),
+    code: source.label,
+    kind: 'other',
+    cable: createDefaultAcCircuitCable(),
+    phaseAssignment: getSupplyConverterAcPhaseAssignment(
+      converter,
+      installation?.nominalVoltage.system ?? '1N~'
+    ),
+    supplySource: { kind: 'converter-backup', converterId: converter.id },
+    endpoints: [],
+    trunkDevices: ordered
+      .filter((device) => device.id !== source.id)
+      .map((device, trunkPosition) => {
+        const restored = { ...device, trunkPosition }
+        delete restored.supplyPath
+        return restored
+      }),
+    ...DEFAULT_AC_CIRCUIT_WIRE_LABEL_FLAGS,
+  }
+  const protection: ProtectionDevice = {
+    id: source.id,
+    type: source.protectionType ?? 'MCB',
+    label: source.label,
+    ratingA: source.ratingA,
+    curve: source.curve,
+    sensitivityMa: source.sensitivityMa,
+    residualCurrentType: source.residualCurrentType,
+    breakingCapacityKa: source.breakingCapacityKa,
+    breakingCapacityOption: source.breakingCapacityOption,
+    surgeProtectionKind: source.surgeProtectionKind,
+    polesConfig: source.polesConfig,
+    poles: source.poles,
+    notes: source.notes,
+    installationDate: source.installationDate,
+    installationDateSuppressed: source.installationDateSuppressed,
+    rulesetDateOverride: source.rulesetDateOverride,
+    symbolLabelDisplay: source.symbolLabelDisplay,
+    circuits: [circuit],
+  }
+  return { protection, circuit }
 }

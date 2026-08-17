@@ -9,7 +9,7 @@ import { useCanvasRegistryStore } from '@/stores/canvasRegistryStore'
 import { generateId } from '@/utils'
 import { isDemoProjectId } from '@/lib/demoProject'
 import { ensurePanelPlacement } from '@/utils/panelPlacement'
-import type { CanvasDropMeta, Point, Selection } from '@/types/ui'
+import type { CanvasDropMeta, CanvasSize, Point, Selection } from '@/types/ui'
 import type {
   Endpoint,
   Circuit,
@@ -33,12 +33,14 @@ import {
   DragPreview,
   DropZoneHintsOverlay,
   HitZoneDebugOverlay,
+  OffscreenPreviewIndicator,
 } from './eendraad'
 import { FrameComponent } from './eendraad/FrameComponent'
 import RenderNode from './eendraad/RenderNode'
 import InstallDateOverlay from './eendraad/InstallDateOverlay'
 import { NoteSymbol } from './eendraad/NoteSymbol'
 import { SYMBOL_SIZE } from './eendraad/canvasSymbols'
+import { CanvasPanOrClickProvider } from './eendraad/CanvasPanOrClickProvider'
 import { linkedSubPanelDisplayNamesForProtectionIds } from '@/lib/panel/linkedSubPanelDeleteWarning'
 import { createLinkedProtectionDeleteDialog } from '@/lib/panel/linkedProtectionDeleteDialog'
 import { panelHasModularChangeover } from '@/lib/panel/panelFeedOrganization'
@@ -46,10 +48,23 @@ import { canCreateSupplyTopologyFromDrop } from '@/lib/supplyTopologyFeature'
 import { getMainBusInsertionSectionId } from '@/lib/panel/panelBusSections'
 import { panelHasContent, isLastMainPanel } from '@/utils/eendraad'
 import { endpointSupportsMultiplier } from '@/utils/endpointMultipliers'
-import { supportsSupplyInverterMultiplier } from '@/utils/inverterMultipliers'
+import { supportsSupplyDeviceMultiplier } from '@/utils/inverterMultipliers'
+import {
+  findSameSymbolAddMoreLayoutTargets,
+  incrementSameSymbolAddMoreTarget,
+  positionHitsMultiplierBadge,
+} from '@/lib/eendraad/sameSymbolAddMore'
+import {
+  createSyncEndpointMultiplierDeps,
+  syncEndpointMultiplierCount,
+} from '@/lib/eendraad/syncEndpointMultiplierCount'
+import {
+  createSyncSupplyInverterMultiplierDeps,
+  syncSupplyDeviceMultiplierCount,
+} from '@/lib/eendraad/syncSupplyInverterMultiplier'
 import {
   openAddMoreDialogForEndpoint,
-  openSupplyInverterAddMoreDialog,
+  openSupplyDeviceAddMoreDialog,
 } from '@/components/endpoints/AddMoreCountDialog'
 import {
   useEendraadLayout,
@@ -65,7 +80,9 @@ import { pickRepresentativeCircuitIdForMainBusMove } from '@/lib/eendraad/mainBu
 import { resolveSecondaryBusEjectSelection } from '@/lib/eendraad/secondaryBusEjectEligibility'
 import { normalizeProtectionPlacementDropTarget } from '@/lib/eendraad/protectionPlacementDropTarget'
 import { useEendraadPreviewGraph } from '@/hooks/eendraad/useEendraadPreviewGraph'
+import { resolveOffscreenSupplyPreviewDirection } from '@/lib/layout/offscreenSupplyPreviewIndicator'
 import type { LayoutNode } from '@/lib/layout/layoutTree'
+import type { DropZoneHintRelocation } from '@/lib/layout/collectDropZoneHints'
 import {
   findDomoticaOutputDropTarget,
   findDropTargetWithDebug,
@@ -76,7 +93,7 @@ import {
 } from '@/lib/layout/findDropTarget'
 import { createFindElementsInRectangleHandler } from '@/handlers/eendraad'
 import { executeDropBehavior, type DropBehaviorCallbacks } from '@/handlers/eendraad/dropBehaviors'
-import { PROTECTION_SYMBOL_IDS } from '@/lib/protectionKind'
+import { PROTECTION_SYMBOL_IDS, protectionTypeToSymbolKey } from '@/lib/protectionKind'
 import { getSupplyEnclosureBoundaryCenter } from '@/lib/layout/supplyEnclosureBoundaryGeometry'
 import { getSymbolById, type SymbolMetadata } from '@/lib/symbols'
 import AddElementPicker from '@/components/eendraad/AddElementPicker'
@@ -111,6 +128,7 @@ import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
   getMutableElectricalPanelsForProject,
+  getSupplyAssembliesFromProject,
 } from '@/lib/projectV2/electrical'
 import {
   canDuplicateEendraadSelection,
@@ -197,7 +215,10 @@ import {
 } from '@/lib/installDatePropagation'
 import { getEendraadNotesFromProject } from '@/lib/projectV2/annotations'
 import { clamp } from '@/lib/geometry'
-import { resolveCircuitWireSegmentByMetadata } from '@/lib/eendraad/wireSelectionIdentity'
+import {
+  resolveCircuitWireSegmentByMetadata,
+  resolveSupplyWireSegmentByMetadata,
+} from '@/lib/eendraad/wireSelectionIdentity'
 
 const EMPTY_PANELS: Panel[] = []
 
@@ -351,6 +372,9 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   const getFramesByPanel = useProjectStore((s: ProjectState) => s.getFramesByPanel)
   const openDialog = useDialogStore((s) => s.openDialog)
   const canvasRef = useRef<BaseCanvasHandle>(null)
+  const beginInteractiveOverlayPan = useCallback((clientX: number, clientY: number) => {
+    canvasRef.current?.beginDeferredMousePan(clientX, clientY)
+  }, [])
   const containerRef = useRef<HTMLDivElement>(null)
   const pointerOverEendraadRef = useRef(false)
   const contextMenuItemsResolverRef = useRef<
@@ -364,6 +388,10 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   const suppressKonvaDragEndRef = useRef(false)
   const altDuplicatePointerCleanupRef = useRef<(() => void) | null>(null)
   const draggingProtectionIdRef = useRef<string | null>(null)
+  const internalDragElementIdRef = useRef<string | null>(null)
+  const [internalDragPlacement, setInternalDragPlacement] = useState<
+    (DropZoneHintRelocation & { symbol: SymbolMetadata }) | null
+  >(null)
   const [altDuplicatePointerDragActive, setAltDuplicatePointerDragActive] = useState(false)
   const [addElementDropPosition, setAddElementDropPosition] = useState<Point | null>(null)
   const [openEendraadMenu, setOpenEendraadMenu] = useState<'naming' | null>(null)
@@ -404,6 +432,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   const [dateToolMonth, setDateToolMonth] = useState(1)
   const [dateToolDay, setDateToolDay] = useState(1)
   const [dateToolCalendarOpen, setDateToolCalendarOpen] = useState(false)
+  const [viewportPixelSize, setViewportPixelSize] = useState<CanvasSize>({ width: 0, height: 0 })
   const [closedDateToolSelectionKey, setClosedDateToolSelectionKey] = useState<string | null>(null)
   const [dateToolFrameSelection, setDateToolFrameSelection] = useState<{
     year: number
@@ -527,13 +556,12 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
       return
     const resolveByMetadata = (metadata: NonNullable<typeof selection.wireMetadata>[number]) => {
       let matched = null as (typeof wireSegments)[number] | null
-      if (metadata.supplyAssemblyId && metadata.supplyConnectionId) {
-        matched =
-          wireSegments.find(
-            (ws) =>
-              ws.supplyAssemblyId === metadata.supplyAssemblyId &&
-              ws.supplyConnectionId === metadata.supplyConnectionId
-          ) ?? null
+      if (
+        metadata.supplySectionKey ||
+        (metadata.supplyAssemblyId && metadata.supplyConnectionId) ||
+        metadata.isSupply
+      ) {
+        matched = resolveSupplyWireSegmentByMetadata(wireSegments, metadata)
       } else if (
         metadata.domoticaOutputGroup &&
         typeof metadata.domoticaOutputIndex === 'number' &&
@@ -556,39 +584,6 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
               ws.fromElementType === 'ground' &&
               ws.panelId === metadata.panelId
           ) ?? null
-      } else if (metadata.isSupply) {
-        if (metadata.supplyWireRole) {
-          matched =
-            wireSegments.find(
-              (ws) =>
-                ws.panelId === metadata.panelId &&
-                (ws.supplyWireRole === metadata.supplyWireRole ||
-                  (metadata.supplyWireRole === 'downstream' &&
-                    ws.type === 'vertical' &&
-                    !ws.circuitId &&
-                    !ws.fromElementType)) &&
-                (metadata.supplyWireRole !== 'crossing' || ws.isSupplyTrunk === true)
-            ) ?? null
-        }
-        if (!matched && metadata.supplySegmentIndex !== undefined) {
-          matched =
-            wireSegments.find(
-              (ws) =>
-                ws.isSupplyTrunk &&
-                ws.panelId === metadata.panelId &&
-                ws.supplySegmentIndex === metadata.supplySegmentIndex
-            ) ?? null
-        }
-        if (!matched) {
-          matched =
-            wireSegments.find(
-              (ws) =>
-                ws.type === 'vertical' &&
-                !ws.circuitId &&
-                !ws.fromElementType &&
-                ws.panelId === metadata.panelId
-            ) ?? null
-        }
       } else if (metadata.circuitId) {
         matched = resolveCircuitWireSegmentByMetadata(wireSegments, metadata)
       }
@@ -651,10 +646,23 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
     {
       draggingProtectionIdRef,
       getProtectionById: (id) => getProtectionById(id),
+      resolveSameSymbolAddMore: (position, symbol) => {
+        if (!layoutTree) return null
+        const target = findSameSymbolAddMoreLayoutTargets(symbol.id, layoutTree, position)[0]
+        if (!target) return null
+        const targetId = target.target.endpoint?.id ?? target.target.trunkDevice?.id
+        return targetId === internalDragElementIdRef.current ? null : target
+      },
+      isBlockedDropPosition: (position) =>
+        layoutTree ? positionHitsMultiplierBadge(layoutTree, position) : false,
     }
   )
 
-  const activePlacementSymbol = dragPreview?.symbolData ?? libraryDragSymbol
+  // Keep an internally dragged symbol active independently from the currently
+  // hovered target. Relocation may clear dragPreview while the pointer is
+  // between wires, but the legal drop-zone hints should remain visible.
+  const activePlacementSymbol =
+    dragPreview?.symbolData ?? internalDragPlacement?.symbol ?? libraryDragSymbol
   const activePlacementSymbolId = activePlacementSymbol?.id
 
   const activeDropTargetNodeId = useMemo(() => {
@@ -680,7 +688,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   }, [activePlacementSymbolId, layoutTree, dragPreview])
 
   // Layout + wires preview graph based on simulated drop
-  const previewGraph = useEendraadPreviewGraph(dragPreview)
+  const previewGraph = useEendraadPreviewGraph(dragPreview?.sameSymbolAddMore ? null : dragPreview)
 
   useEffect(() => {
     if (!import.meta.env.VITE_E2E) return
@@ -850,6 +858,23 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   const showLegacyDragPreview =
     !!dragPreview && (preferLegacyDragPreview || !hasSimulatedPreviewVisuals)
   const showSimulatedDragPreview = hasSimulatedPreviewVisuals && !preferLegacyDragPreview
+  const offscreenSupplyPreviewDirection = useMemo(() => {
+    if (!layout || !previewGraph || !showSimulatedDragPreview) return null
+    return resolveOffscreenSupplyPreviewDirection({
+      currentLayout: layout,
+      previewLayout: previewGraph.layout,
+      pan: eendraadView.pan,
+      zoom: eendraadView.zoom,
+      viewport: viewportPixelSize,
+    })
+  }, [
+    eendraadView.pan,
+    eendraadView.zoom,
+    layout,
+    previewGraph,
+    showSimulatedDragPreview,
+    viewportPixelSize,
+  ])
 
   const handleZoomChange = useCallback(
     (zoom: number) => {
@@ -925,39 +950,12 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                     ws.fromElementType === 'ground' &&
                     ws.panelId === metadata.panelId
                 ) ?? null
-            } else if (metadata.isSupply) {
-              if (metadata.supplyWireRole) {
-                matched =
-                  wireSegments.find(
-                    (ws) =>
-                      ws.panelId === metadata.panelId &&
-                      (ws.supplyWireRole === metadata.supplyWireRole ||
-                        (metadata.supplyWireRole === 'downstream' &&
-                          ws.type === 'vertical' &&
-                          !ws.circuitId &&
-                          !ws.fromElementType)) &&
-                      (metadata.supplyWireRole !== 'crossing' || ws.isSupplyTrunk === true)
-                  ) ?? null
-              }
-              if (!matched && metadata.supplySegmentIndex !== undefined) {
-                matched =
-                  wireSegments.find(
-                    (ws) =>
-                      ws.isSupplyTrunk === true &&
-                      ws.panelId === metadata.panelId &&
-                      ws.supplySegmentIndex === metadata.supplySegmentIndex
-                  ) ?? null
-              }
-              if (!matched) {
-                matched =
-                  wireSegments.find(
-                    (ws) =>
-                      ws.type === 'vertical' &&
-                      ws.panelId === metadata.panelId &&
-                      ws.circuitId == null &&
-                      ws.fromElementType !== 'ground'
-                  ) ?? null
-              }
+            } else if (
+              metadata.supplySectionKey ||
+              (metadata.supplyAssemblyId && metadata.supplyConnectionId) ||
+              metadata.isSupply
+            ) {
+              matched = resolveSupplyWireSegmentByMetadata(wireSegments, metadata)
             } else if (metadata.circuitId) {
               if (metadata.fromElementId !== undefined || metadata.toElementId !== undefined) {
                 matched =
@@ -1708,7 +1706,6 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
       if (!currentProject || !symbolData) return
 
       const symbol = symbolData as SymbolMetadata
-      if (!canCreateSupplyTopologyFromDrop(symbol, null)) return
       const protectionIds = [...PROTECTION_SYMBOL_IDS]
       const isProtectionPlacement = protectionIds.includes(
         symbol.id as (typeof PROTECTION_SYMBOL_IDS)[number]
@@ -1720,17 +1717,81 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
         return
       }
 
-      const { target: rawTarget } = findDropTargetWithDebug(
+      if (positionHitsMultiplierBadge(layoutTree, position)) return
+
+      const directSameSymbolTarget = findSameSymbolAddMoreLayoutTargets(
+        symbol.id,
+        layoutTree,
+        position
+      )[0]
+
+      const { target: rawTarget, debug: dropDebug } = findDropTargetWithDebug(
         layoutTree,
         position,
         symbol.id === 'earthing_separator'
           ? undefined
           : {
               preferMainBusOverGroundWire: true,
-              preferMainBusOverSupplyWire: Boolean(symbol.busFeedKind),
+              preferMainBusOverSupplyWire: Boolean(symbol.busFeedKind) || isProtectionPlacement,
               preferSecondaryBusForNestedProtection: isProtectionPlacement,
             }
       )
+
+      const matchedDomainId = dropDebug.path.find((step) => step.matched)?.domainId
+      const sameSymbolEndpointId =
+        directSameSymbolTarget?.target.endpoint?.id ?? rawTarget.endpointId ?? matchedDomainId
+      const sameSymbolEndpoint = sameSymbolEndpointId
+        ? getEndpointById(sameSymbolEndpointId)
+        : undefined
+      const sameSymbolTrunkDevice =
+        directSameSymbolTarget?.target.trunkDevice ??
+        (matchedDomainId ? getTrunkDeviceById(matchedDomainId)?.device : undefined)
+      const sameSymbolAddMoreResult: {
+        current: ReturnType<typeof incrementSameSymbolAddMoreTarget>
+      } = { current: 'not-applicable' }
+      const didAddMore = withSingleUndoEntry(
+        () => {
+          const target = sameSymbolEndpoint
+            ? { endpoint: sameSymbolEndpoint }
+            : sameSymbolTrunkDevice
+              ? { trunkDevice: sameSymbolTrunkDevice }
+              : null
+          if (!target) return false
+          sameSymbolAddMoreResult.current = incrementSameSymbolAddMoreTarget(symbol.id, target, {
+            updateSocketCount: (endpointId, count) => {
+              const latest = useProjectStore.getState().getEndpointById(endpointId)
+              if (!latest) return
+              useProjectStore.getState().updateEndpoint(endpointId, {
+                socketProps: {
+                  ...latest.socketProps,
+                  socketCount: count <= 1 ? undefined : count,
+                },
+              })
+            },
+            syncEndpointCount: (endpointId, count) =>
+              syncEndpointMultiplierCount(createSyncEndpointMultiplierDeps(), endpointId, count),
+            syncSupplyDeviceCount: (deviceId, count) =>
+              syncSupplyDeviceMultiplierCount(
+                createSyncSupplyInverterMultiplierDeps(),
+                deviceId,
+                count
+              ),
+          })
+          return sameSymbolAddMoreResult.current === 'incremented'
+        },
+        { sessionLabel: 'add more by dropping same symbol' }
+      )
+      if (didAddMore) {
+        trackSymbolPlace({
+          canvas: 'eendraad',
+          symbol,
+          placementMethod: 'library_drop',
+          targetType: sameSymbolEndpoint ? 'endpoint' : 'trunkDevice',
+        })
+        return
+      }
+      if (sameSymbolAddMoreResult.current === 'blocked') return
+      if (!canCreateSupplyTopologyFromDrop(symbol, null)) return
 
       // Augment drop target with wire-domain information from the actual wire segments under the cursor.
       let dropTarget = rawTarget
@@ -1790,19 +1851,19 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
             ? true
             : withSingleUndoEntry(
                 () =>
-                  useProjectStore.getState().setPanelFeedOrganization(
-                    panel.id,
-                    panelHasModularChangeover(currentProject, panel.id)
-                      ? 'split-switchable'
-                      : 'split-backup',
-                  ),
-                { sessionLabel: 'enable split panel feed' },
+                  useProjectStore
+                    .getState()
+                    .setPanelFeedOrganization(
+                      panel.id,
+                      panelHasModularChangeover(currentProject, panel.id)
+                        ? 'split-switchable'
+                        : 'split-backup'
+                    ),
+                { sessionLabel: 'enable split panel feed' }
               )
           if (didEnableSplit) {
             const busSectionId =
-              symbol.busFeedKind === 'backup'
-                ? `bus-backup-${panel.id}`
-                : `bus-grid-${panel.id}`
+              symbol.busFeedKind === 'backup' ? `bus-backup-${panel.id}` : `bus-grid-${panel.id}`
             setSelection({
               type: 'busSection',
               ids: [busSectionId],
@@ -1828,13 +1889,11 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
             useProjectStore
               .getState()
               .setPanelBusFeedBoundary(panel.id, symbol.busFeedKind!, insertIndex),
-          { sessionLabel: 'split main bus feed' },
+          { sessionLabel: 'split main bus feed' }
         )
         if (didPlaceFeedBoundary) {
           const busSectionId =
-            symbol.busFeedKind === 'backup'
-              ? `bus-backup-${panel.id}`
-              : `bus-grid-${panel.id}`
+            symbol.busFeedKind === 'backup' ? `bus-backup-${panel.id}` : `bus-grid-${panel.id}`
           setSelection({
             type: 'busSection',
             ids: [busSectionId],
@@ -1955,6 +2014,8 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
       addGroundTrunkDevice,
       ensureJunctionPanelPlacementForLabel,
       getCircuitById,
+      getEndpointById,
+      getTrunkDeviceById,
       updateCircuit,
       updateProtection,
       updateInstallation,
@@ -1990,6 +2051,8 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
     draggingProtectionIdRef.current = null
     suppressKonvaDragEndRef.current = false
     setAltDuplicatePointerDragActive(false)
+    internalDragElementIdRef.current = null
+    setInternalDragPlacement(null)
     setDragPreview(null)
     trunkDnDLoggedStartRef.current = false
     elementDragModeRef.current = 'move'
@@ -2194,6 +2257,8 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   // a boolean so the symbol can snap back when the drop was invalid.
   const handleElementDragEnd = useCallback(
     (elementId: string, elementType: string, position: Point) => {
+      internalDragElementIdRef.current = null
+      setInternalDragPlacement(null)
       const isDuplicateDrag = elementDragModeRef.current === 'duplicate'
       // Clear any preview once the drop is committed (pointer-drag path clears in endAltDuplicatePointerDrag)
       if (!altDuplicatePointerCleanupRef.current) {
@@ -3081,7 +3146,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                     const destinationBusSectionId = getMainBusInsertionSectionId(
                       panel,
                       desiredIndex,
-                      new Set([currentItem.id]),
+                      new Set([currentItem.id])
                     )
                     const direction: 'left' | 'right' =
                       desiredIndex > currentIndex ? 'right' : 'left'
@@ -3090,12 +3155,12 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                     if (steps > 0 && destinationBusSectionId) {
                       if (currentItem.type === 'protection') {
                         const movedProtection = panel.protections.find(
-                          (candidate) => candidate.id === currentItem.id,
+                          (candidate) => candidate.id === currentItem.id
                         )
                         if (movedProtection) movedProtection.busSectionId = destinationBusSectionId
                       } else {
                         const movedCircuit = panel.circuits.find(
-                          (candidate) => candidate.id === currentItem.id,
+                          (candidate) => candidate.id === currentItem.id
                         )
                         if (movedCircuit) movedCircuit.busSectionId = destinationBusSectionId
                       }
@@ -3481,6 +3546,92 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
 
   const handleElementDragStart = useCallback(
     (elementId: string, elementType: string, altKey: boolean, nativeEvt?: MouseEvent): boolean => {
+      internalDragElementIdRef.current = elementId
+      setInternalDragPlacement(null)
+      if (elementType === 'trunkDevice') {
+        const info = getTrunkDeviceById(elementId)
+        const symbol = info ? getSymbolById(info.device.symbol) : undefined
+        if (info && symbol) {
+          if (info.isSupplyDevice) {
+            const sourcePanelLayout = layout?.panels.find((candidate) =>
+              candidate.supplyDevices?.some(({ device }) => device.id === elementId)
+            )
+            const sourceDeviceLayout = sourcePanelLayout?.supplyDevices?.find(
+              ({ device }) => device.id === elementId
+            )
+            setInternalDragPlacement({
+              elementId,
+              symbol,
+              supply: {
+                panelId: sourcePanelLayout?.panel.id,
+                feedScope: info.supplyFeedScope ?? sourceDeviceLayout?.feedScope ?? 'shared',
+                index: sourceDeviceLayout?.feedIndex ?? info.device.trunkPosition ?? 0,
+                supplyPath: info.device.supplyPath,
+                converterGridPlacement: info.device.converterGridPlacement,
+              },
+            })
+          } else if (info.circuit) {
+            setInternalDragPlacement({
+              elementId,
+              symbol,
+              circuitTrunk: {
+                circuitId: info.circuit.id,
+                index: Math.max(
+                  0,
+                  info.circuit.trunkDevices?.findIndex((device) => device.id === elementId) ?? 0
+                ),
+              },
+            })
+          }
+        }
+      } else if (elementType === 'endpoint') {
+        const endpoint = getEndpointById(elementId)
+        const symbol = endpoint?.symbol ? getSymbolById(endpoint.symbol) : undefined
+        if (symbol) setInternalDragPlacement({ elementId, symbol })
+      } else if (elementType === 'protection') {
+        const store = useProjectStore.getState()
+        const protection = store.getProtectionById(elementId)
+        const panel = store.getPanelForProtection(elementId)
+        const symbolId = protection ? protectionTypeToSymbolKey(protection.type) : undefined
+        const symbol = symbolId ? getSymbolById(symbolId) : undefined
+        if (protection && panel && symbol) {
+          const busCircuitId = pickRepresentativeCircuitIdForMainBusMove(panel, protection)
+          const mainBusItems = getMainBusItemsWithIndices(panel)
+          const mainIndex = mainBusItems.findIndex(
+            (item) =>
+              (item.type === 'protection' && item.id === protection.id) ||
+              (item.type === 'circuit' && item.id === busCircuitId)
+          )
+          if (mainIndex >= 0) {
+            setInternalDragPlacement({
+              elementId,
+              symbol,
+              protectionBus: { kind: 'main', panelId: panel.id, index: mainIndex },
+            })
+          } else if (busCircuitId) {
+            const panelCircuits = [
+              ...panel.circuits,
+              ...panel.protections.flatMap((candidate) => candidate.circuits ?? []),
+            ]
+            const parentCircuit = panelCircuits.find((candidate) =>
+              candidate.subCircuitIds?.includes(busCircuitId)
+            )
+            const secondaryIndex = parentCircuit?.subCircuitIds?.indexOf(busCircuitId) ?? -1
+            if (parentCircuit && secondaryIndex >= 0) {
+              setInternalDragPlacement({
+                elementId,
+                symbol,
+                protectionBus: {
+                  kind: 'secondary',
+                  panelId: panel.id,
+                  parentCircuitId: parentCircuit.id,
+                  index: secondaryIndex,
+                },
+              })
+            }
+          }
+        }
+      }
       const selection = useUIStore.getState().selection
       endpointDragStartSelectionIdsRef.current = selection.ids.includes(elementId)
         ? [...selection.ids]
@@ -3498,7 +3649,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
       beginAltDuplicatePointerDrag(elementId, elementType, nativeEvt)
       return true
     },
-    [beginAltDuplicatePointerDrag]
+    [beginAltDuplicatePointerDrag, getEndpointById, getTrunkDeviceById, layout?.panels]
   )
   handleElementDragStartRef.current = handleElementDragStart
 
@@ -3885,6 +4036,41 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
       let resolvedElementId = elementId
       if (!resolvedElementId && selection.ids.length === 1 && selection.ids[0]) {
         resolvedElementId = selection.ids[0]
+      }
+
+      if (selection.type === 'wire' && selection.ids.length === 1) {
+        const metadata = selection.wireMetadata?.find(
+          (candidate) => candidate.id === selection.ids[0]
+        )
+        const selectedWire =
+          wireSegments.find((candidate) => candidate.id === selection.ids[0]) ??
+          (metadata ? resolveSupplyWireSegmentByMetadata(wireSegments, metadata) : undefined)
+        const assembly =
+          currentProject && selectedWire?.supplyAssemblyId
+            ? getSupplyAssembliesFromProject(currentProject).find(
+                ({ id }) => id === selectedWire.supplyAssemblyId
+              )
+            : undefined
+        const connection = assembly?.connections.find(
+          ({ id }) => id === selectedWire?.supplyConnectionId
+        )
+        if (
+          selectedWire?.type === 'vertical' &&
+          selectedWire.panelId &&
+          assembly &&
+          connection?.pathRole === 'inverter-grid-ac'
+        ) {
+          items.push({
+            label: t('contextMenu.delete'),
+            icon: getContextMenuIcon('delete'),
+            onClick: () => {
+              projectState.disconnectSupplyInverterGridInput(assembly.id, selectedWire.panelId!)
+              clearSelection()
+            },
+            variant: 'danger',
+          })
+          return items
+        }
       }
 
       // Check for multi-selection (2+ items selected, regardless of whether right-click hit an element)
@@ -4538,7 +4724,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
           // Trunk device context menu (energy meter, protection on wire)
           const trunkResult = getTrunkDeviceById(resolvedElementId!)
           const trunkDevice = trunkResult?.device
-          const supportsInverterMultiplier = supportsSupplyInverterMultiplier(trunkDevice)
+          const supportsDeviceMultiplier = supportsSupplyDeviceMultiplier(trunkDevice)
           let panelIdForFrame: string | undefined
           if (layout) {
             for (const panelLayout of layout.panels) {
@@ -4554,11 +4740,11 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
           }
           items.push(
             ...addElementAndNoteItems,
-            ...(supportsInverterMultiplier && trunkDevice
+            ...(supportsDeviceMultiplier && trunkDevice
               ? [
                   {
                     label: t('contextMenu.addMore', 'Add more...'),
-                    onClick: () => openSupplyInverterAddMoreDialog(trunkDevice, t),
+                    onClick: () => openSupplyDeviceAddMoreDialog(trunkDevice, t),
                   },
                 ]
               : []),
@@ -4814,6 +5000,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
       addGroundTrunkDevice,
       insertProtectionAfter,
       layout,
+      wireSegments,
       setSelection,
       withSingleUndoEntry,
       ejectSecondaryBusProtectionsToNewPanel,
@@ -4939,9 +5126,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
 
               {/* Supply/panel dashed separator — behind wires and labels */}
               {supplySeparators
-                .filter(
-                  (separator) => separator.diagramId === getPanelDiagramId(panelLayout)
-                )
+                .filter((separator) => separator.diagramId === getPanelDiagramId(panelLayout))
                 .map((separator) => (
                   <Line
                     key={separator.id}
@@ -5037,6 +5222,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
           onPanChange={handlePanChange}
           onViewTransformCommit={handleViewTransformCommit}
           onViewportPanStateChange={handleViewportPanStateChange}
+          onViewportPixelSizeChange={setViewportPixelSize}
           onDrop={canPlaceSymbols ? handleDrop : undefined}
           onDragOver={canPlaceSymbols ? handleDragOver : undefined}
           onFindElementsInRectangle={handleFindElementsInRectangle}
@@ -5050,7 +5236,9 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
           gridOpacity={0.1}
         >
           <Group name="canvas-content">
-            {normalScene}
+            <CanvasPanOrClickProvider onBeginPan={beginInteractiveOverlayPan}>
+              {normalScene}
+            </CanvasPanOrClickProvider>
 
             {/* Preview overlay: show only the changed circuits and wires for the current drag preview. */}
             {showSimulatedDragPreview &&
@@ -5062,74 +5250,355 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                     .map((previewPanelLayout) => ({ panelId, previewPanelLayout }))
                 )
                 .map(({ panelId, previewPanelLayout }) => {
-                const diagramId = getPanelDiagramId(previewPanelLayout)
-                const previewPanelNode = previewGraph.layoutTree.panels.find(
-                  (p: LayoutNode) => p.diagramId === diagramId
-                )
-                const currentPanelNode = layoutTree?.panels.find(
-                  (p: LayoutNode) => p.diagramId === diagramId
-                )
-                if (!previewPanelLayout || !previewPanelNode) return null
+                  const diagramId = getPanelDiagramId(previewPanelLayout)
+                  const previewPanelNode = previewGraph.layoutTree.panels.find(
+                    (p: LayoutNode) => p.diagramId === diagramId
+                  )
+                  const currentPanelNode = layoutTree?.panels.find(
+                    (p: LayoutNode) => p.diagramId === diagramId
+                  )
+                  if (!previewPanelLayout || !previewPanelNode) return null
 
-                // Generated wire IDs are unstable between layouts, so compare topology and
-                // geometry. This avoids tinting unchanged panel/supply buses for endpoint drops.
-                const previewWiresForPanel = getChangedPreviewWireSegments(
-                  previewGraph.wireSegments,
-                  wireSegments,
-                  panelId,
-                  previewPanelNode,
-                  diagramId
-                )
+                  // Generated wire IDs are unstable between layouts, so compare topology and
+                  // geometry. This avoids tinting unchanged panel/supply buses for endpoint drops.
+                  const previewWiresForPanel = getChangedPreviewWireSegments(
+                    previewGraph.wireSegments,
+                    wireSegments,
+                    panelId,
+                    previewPanelNode,
+                    diagramId
+                  )
 
-                // Collect nodes for newly created symbols (endpoints, protections, trunk devices).
-                const createdNodes: LayoutNode[] = []
-                const collectCreated = (node: LayoutNode) => {
-                  if (
-                    (node.type === 'endpoint' &&
-                      node.domainId &&
-                      previewGraph.createdEndpointIds.includes(node.domainId)) ||
-                    ((node.type === 'mcb' || node.type === 'rcd') &&
-                      node.domainId &&
-                      previewGraph.createdProtectionIds.includes(node.domainId)) ||
-                    (node.type === 'trunkDevice' &&
-                      node.domainId &&
-                      previewGraph.createdTrunkDeviceIds.includes(node.domainId))
-                  ) {
-                    createdNodes.push(node)
-                  }
-                  if (node.children && node.children.length > 0) {
-                    node.children.forEach(collectCreated)
-                  }
-                }
-                collectCreated(previewPanelNode)
-                const dropTarget = dragPreview?.dropTarget
-                const insertBetweenMovedProtectionNodes: LayoutNode[] = []
-                if (dropTarget?.insertBeforeNestedCircuitId) {
-                  let movedRoot: LayoutNode | null = null
-                  const findMovedRoot = (node: LayoutNode) => {
-                    if (movedRoot) return
+                  // Collect nodes for newly created symbols (endpoints, protections, trunk devices).
+                  const createdNodes: LayoutNode[] = []
+                  const collectCreated = (node: LayoutNode) => {
                     if (
-                      (node.type === 'mcb' || node.type === 'rcd') &&
-                      node.circuitIdForWires === dropTarget.insertBeforeNestedCircuitId
+                      (node.type === 'endpoint' &&
+                        node.domainId &&
+                        previewGraph.createdEndpointIds.includes(node.domainId)) ||
+                      ((node.type === 'mcb' || node.type === 'rcd') &&
+                        node.domainId &&
+                        previewGraph.createdProtectionIds.includes(node.domainId)) ||
+                      (node.type === 'trunkDevice' &&
+                        node.domainId &&
+                        previewGraph.createdTrunkDeviceIds.includes(node.domainId))
                     ) {
-                      movedRoot = node
-                      return
+                      createdNodes.push(node)
                     }
-                    node.children?.forEach(findMovedRoot)
+                    if (node.children && node.children.length > 0) {
+                      node.children.forEach(collectCreated)
+                    }
                   }
-                  findMovedRoot(previewPanelNode)
+                  collectCreated(previewPanelNode)
+                  const dropTarget = dragPreview?.dropTarget
+                  const insertBetweenMovedProtectionNodes: LayoutNode[] = []
+                  if (dropTarget?.insertBeforeNestedCircuitId) {
+                    let movedRoot: LayoutNode | null = null
+                    const findMovedRoot = (node: LayoutNode) => {
+                      if (movedRoot) return
+                      if (
+                        (node.type === 'mcb' || node.type === 'rcd') &&
+                        node.circuitIdForWires === dropTarget.insertBeforeNestedCircuitId
+                      ) {
+                        movedRoot = node
+                        return
+                      }
+                      node.children?.forEach(findMovedRoot)
+                    }
+                    findMovedRoot(previewPanelNode)
 
-                  const collectMovedProtections = (node: LayoutNode) => {
-                    if (node.type === 'mcb' || node.type === 'rcd') {
-                      insertBetweenMovedProtectionNodes.push(node)
+                    const collectMovedProtections = (node: LayoutNode) => {
+                      if (node.type === 'mcb' || node.type === 'rcd') {
+                        insertBetweenMovedProtectionNodes.push(node)
+                      }
+                      node.children?.forEach(collectMovedProtections)
                     }
-                    node.children?.forEach(collectMovedProtections)
+                    if (movedRoot) collectMovedProtections(movedRoot)
                   }
-                  if (movedRoot) collectMovedProtections(movedRoot)
-                }
-                const expandingDomoticaParentNode: LayoutNode | null =
-                  dropTarget?.domoticaOutput?.expands && dropTarget.endpointId
-                    ? (() => {
+                  const expandingDomoticaParentNode: LayoutNode | null =
+                    dropTarget?.domoticaOutput?.expands && dropTarget.endpointId
+                      ? (() => {
+                          let found: LayoutNode | null = null
+                          const visit = (node: LayoutNode) => {
+                            if (found) return
+                            if (
+                              node.type === 'endpoint' &&
+                              node.domainId === dropTarget.endpointId
+                            ) {
+                              found = node
+                              return
+                            }
+                            node.children?.forEach(visit)
+                          }
+                          visit(previewPanelNode)
+                          return found
+                        })()
+                      : null
+
+                  // Preview nodes are taken from the same simulated layout graph that
+                  // will be used after commit, including domotica output branches.
+                  const previewNodes: LayoutNode[] = []
+                  const seenNodeIds = new Set<string>()
+                  if (
+                    expandingDomoticaParentNode &&
+                    !seenNodeIds.has((expandingDomoticaParentNode as LayoutNode).id)
+                  ) {
+                    seenNodeIds.add((expandingDomoticaParentNode as LayoutNode).id)
+                    previewNodes.push(expandingDomoticaParentNode)
+                  }
+                  for (const node of createdNodes) {
+                    if (!seenNodeIds.has(node.id)) {
+                      seenNodeIds.add(node.id)
+                      previewNodes.push(node)
+                    }
+                  }
+                  for (const node of insertBetweenMovedProtectionNodes) {
+                    if (!seenNodeIds.has(node.id)) {
+                      seenNodeIds.add(node.id)
+                      previewNodes.push(node)
+                    }
+                  }
+
+                  const previewStroke = '#0284c7'
+                  const previewSeparatorStroke = '#38bdf8'
+                  const dashPattern = [8, 4]
+                  const previewSupplySeparators = getChangedSupplySeparatorsForDiagram(
+                    previewGraph.wireSegments,
+                    wireSegments,
+                    diagramId
+                  )
+                  if (dragPreview?.movingPanelAttachment) {
+                    const panelPreviewTarget =
+                      dragPreview.dropTarget?.type === 'mainBus' && dragPreview.dropTarget.panelId
+                        ? {
+                            type: 'mainBus' as const,
+                            panelId: dragPreview.dropTarget.panelId,
+                          }
+                        : dragPreview.dropTarget?.type === 'circuit' &&
+                            dragPreview.dropTarget.panelId &&
+                            dragPreview.dropTarget.circuitId
+                          ? {
+                              type: 'circuit' as const,
+                              panelId: dragPreview.dropTarget.panelId,
+                              circuitId: dragPreview.dropTarget.circuitId,
+                            }
+                          : dragPreview.dropTarget?.type === 'rcd' &&
+                              dragPreview.dropTarget.panelId &&
+                              dragPreview.dropTarget.protectionId
+                            ? {
+                                type: 'rcd' as const,
+                                panelId: dragPreview.dropTarget.panelId,
+                                protectionId: dragPreview.dropTarget.protectionId,
+                              }
+                            : null
+                    const geometry = panelPreviewTarget
+                      ? resolvePanelAttachmentPreviewGeometry(
+                          wireSegments,
+                          panelPreviewTarget,
+                          dragPreview.position.x
+                        )
+                      : null
+
+                    // Never fall through to the generic changed-wire preview for a
+                    // panel move. A panel reflow can change almost every wire and
+                    // would render a second, ghost copy of the entire bus layout.
+                    if (!geometry || panelPreviewTarget?.panelId !== panelId) return null
+
+                    const { busSegment, busY, ghostX, symbolY } = geometry
+                    return (
+                      <Group
+                        key={`preview-panel-attachment-${panelId}`}
+                        name={`preview-panel-attachment-${panelId}`}
+                        opacity={0.88}
+                        listening={false}
+                      >
+                        <Line
+                          points={[
+                            busSegment.startPoint.x,
+                            busSegment.startPoint.y,
+                            busSegment.endPoint.x,
+                            busSegment.endPoint.y,
+                          ]}
+                          stroke={previewStroke}
+                          strokeWidth={8}
+                          opacity={0.6}
+                          lineCap="round"
+                          listening={false}
+                        />
+                        <Line
+                          points={[ghostX, busY, ghostX, symbolY + 14]}
+                          stroke={previewStroke}
+                          strokeWidth={4}
+                          dash={dashPattern}
+                          lineCap="round"
+                          listening={false}
+                        />
+                        <Rect
+                          x={ghostX - 13}
+                          y={symbolY}
+                          width={26}
+                          height={14}
+                          stroke={previewStroke}
+                          strokeWidth={2}
+                          dash={dashPattern}
+                          cornerRadius={3}
+                          fill="rgba(59,130,246,0.12)"
+                          listening={false}
+                        />
+                      </Group>
+                    )
+                  }
+
+                  if (
+                    previewWiresForPanel.length === 0 &&
+                    previewNodes.length === 0 &&
+                    previewSupplySeparators.length === 0
+                  ) {
+                    return null
+                  }
+
+                  const mainBusInsertIndex = dropTarget?.mainBusInsertIndex
+                  const isDomoticaOutputPreview =
+                    !!dropTarget?.domoticaOutput &&
+                    !!dropTarget.endpointId &&
+                    !!dropTarget.circuitId
+
+                  // Special-case: when inserting a protection on the main or
+                  // secondary bus, show a very explicit ghost (highlighted bus
+                  // segment + vertical line + box) at the resolved insertion slot.
+                  const isMainBusProtectionPreview =
+                    dropTarget?.type === 'mainBus' && previewGraph.createdProtectionIds.length > 0
+                  const isSecondaryBusProtectionPreview =
+                    dropTarget?.type === 'circuit' &&
+                    typeof dropTarget.secondaryBusInsertIndex === 'number' &&
+                    previewGraph.createdProtectionIds.length > 0
+
+                  const shouldUseMainBusInsertionGhost =
+                    isMainBusProtectionPreview &&
+                    typeof mainBusInsertIndex === 'number' &&
+                    typeof dropTarget.mainBusItemCount === 'number'
+                  const nestCircuitIdAtCursor = (() => {
+                    if (!layoutTree || !dragPreview?.position) return undefined
+                    const matched = findDropTargetWithDebug(
+                      layoutTree,
+                      dragPreview.position
+                    ).debug.path.find(
+                      (step) => step.matched && step.nodeId?.startsWith('circuit-nest-')
+                    )
+                    const id = matched?.nodeId?.slice('circuit-nest-'.length)
+                    return id && id.length > 0 ? id : undefined
+                  })()
+
+                  const nestCircuitIdForPreview = resolveProtectionNestPreviewCircuitId(
+                    dropTarget,
+                    nestCircuitIdAtCursor
+                  )
+
+                  const isProtectionNestOnCircuitPreview =
+                    !!nestCircuitIdForPreview && previewGraph.createdProtectionIds.length > 0
+
+                  // A second child turns the single nested connection into a real
+                  // secondary bus. Prefer that simulated geometry over the compact
+                  // single-child ghost so the hover preview matches the committed drop.
+                  const nestedProtectionPreviewBusSegments = nestCircuitIdForPreview
+                    ? previewGraph.wireSegments.filter(
+                        (ws) =>
+                          ws.panelId === panelId &&
+                          (ws.diagramId ?? ws.panelId) === diagramId &&
+                          ws.type === 'mainBus' &&
+                          ws.fromElementType === 'secondaryBus' &&
+                          ws.circuitId === nestCircuitIdForPreview
+                      )
+                    : []
+                  const createsSecondaryBusFromNestedDrop =
+                    isProtectionNestOnCircuitPreview &&
+                    nestedProtectionPreviewBusSegments.length > 0
+
+                  const nestedPreviewOffsetX = (() => {
+                    if (
+                      dropTarget?.insertBeforeNestedCircuitId ||
+                      !isProtectionNestOnCircuitPreview ||
+                      !nestCircuitIdForPreview ||
+                      isSecondaryBusProtectionPreview ||
+                      !currentPanelNode
+                    ) {
+                      return 0
+                    }
+
+                    const createdProtectionNode = previewNodes.find(
+                      (node) =>
+                        (node.type === 'mcb' || node.type === 'rcd') &&
+                        !!node.domainId &&
+                        previewGraph.createdProtectionIds.includes(node.domainId)
+                    )
+                    if (!createdProtectionNode) return 0
+
+                    const currentMatch: {
+                      nest: LayoutNode | null
+                      protection: LayoutNode | null
+                    } = { nest: null, protection: null }
+                    const visit = (node: LayoutNode) => {
+                      if (node.id === `circuit-nest-${nestCircuitIdForPreview}`) {
+                        currentMatch.nest = node
+                      }
+                      if (
+                        (node.type === 'mcb' || node.type === 'rcd') &&
+                        node.circuitIdForWires === nestCircuitIdForPreview
+                      ) {
+                        currentMatch.protection = node
+                      }
+                      node.children?.forEach(visit)
+                    }
+                    visit(currentPanelNode)
+                    if (currentMatch.protection) {
+                      return currentMatch.protection.bounds.x - createdProtectionNode.bounds.x
+                    }
+                    if (!currentMatch.nest) return 0
+
+                    const currentNestBounds = getHitZoneBounds(currentMatch.nest, 'core')
+                    const currentAttachX = (currentNestBounds.left + currentNestBounds.right) / 2
+                    return currentAttachX - createdProtectionNode.bounds.x
+                  })()
+
+                  if (isDomoticaOutputPreview) {
+                    const currentDomoticaWires = wireSegments
+                      .filter(
+                        (ws) =>
+                          ws.panelId === panelId &&
+                          ws.circuitId === dropTarget.circuitId &&
+                          ws.type === 'branch' &&
+                          ws.fromElementId === dropTarget.endpointId
+                      )
+                      .sort((a, b) => a.startPoint.y - b.startPoint.y)
+                    const bottomWire = currentDomoticaWires[currentDomoticaWires.length - 1]
+                    const targetWire =
+                      currentDomoticaWires.find(
+                        (ws) => ws.domoticaOutputIndex === dropTarget.domoticaOutput?.index
+                      ) ?? currentDomoticaWires[dropTarget.domoticaOutput!.index]
+                    const allCurrentRowsOccupied =
+                      currentDomoticaWires.length > 0 &&
+                      currentDomoticaWires.every((ws) => !!ws.toElementId)
+                    const shouldRenderExpandPreview =
+                      !!dropTarget.domoticaOutput?.expands ||
+                      (allCurrentRowsOccupied &&
+                        currentDomoticaWires.length < DOMOTICA_MAX_ENDPOINT_OUTPUTS &&
+                        !!targetWire?.toElementId)
+                    if (!shouldRenderExpandPreview) {
+                      // Non-expanding domotica output previews use the generic simulated graph.
+                    } else {
+                      const anchorWire = dropTarget.domoticaOutput?.expands
+                        ? bottomWire
+                        : targetWire
+                      if (!anchorWire) return null
+
+                      const outputStartX = anchorWire.startPoint.x
+                      const outputY = dropTarget.domoticaOutput?.expands
+                        ? anchorWire.startPoint.y + DOMOTICA_OUTPUT_SPACING
+                        : anchorWire.startPoint.y - DOMOTICA_OUTPUT_SPACING
+                      const ghostX = outputStartX + DOMOTICA_BRANCH_LEAD
+                      const ghostSize = SYMBOL_SIZE
+                      const expandCueHeight = Math.max(12, DOMOTICA_OUTPUT_SPACING - 4)
+                      const domoticaParentPreviewNode: LayoutNode | null = (() => {
                         let found: LayoutNode | null = null
                         const visit = (node: LayoutNode) => {
                           if (found) return
@@ -5142,279 +5611,172 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                         visit(previewPanelNode)
                         return found
                       })()
-                    : null
 
-                // Preview nodes are taken from the same simulated layout graph that
-                // will be used after commit, including domotica output branches.
-                const previewNodes: LayoutNode[] = []
-                const seenNodeIds = new Set<string>()
-                if (
-                  expandingDomoticaParentNode &&
-                  !seenNodeIds.has((expandingDomoticaParentNode as LayoutNode).id)
-                ) {
-                  seenNodeIds.add((expandingDomoticaParentNode as LayoutNode).id)
-                  previewNodes.push(expandingDomoticaParentNode)
-                }
-                for (const node of createdNodes) {
-                  if (!seenNodeIds.has(node.id)) {
-                    seenNodeIds.add(node.id)
-                    previewNodes.push(node)
-                  }
-                }
-                for (const node of insertBetweenMovedProtectionNodes) {
-                  if (!seenNodeIds.has(node.id)) {
-                    seenNodeIds.add(node.id)
-                    previewNodes.push(node)
-                  }
-                }
-
-                const previewStroke = '#0284c7'
-                const previewSeparatorStroke = '#38bdf8'
-                const dashPattern = [8, 4]
-                const previewSupplySeparators = getChangedSupplySeparatorsForDiagram(
-                  previewGraph.wireSegments,
-                  wireSegments,
-                  diagramId
-                )
-                if (dragPreview?.movingPanelAttachment) {
-                  const panelPreviewTarget =
-                    dragPreview.dropTarget?.type === 'mainBus' && dragPreview.dropTarget.panelId
-                      ? {
-                          type: 'mainBus' as const,
-                          panelId: dragPreview.dropTarget.panelId,
-                        }
-                      : dragPreview.dropTarget?.type === 'circuit' &&
-                          dragPreview.dropTarget.panelId &&
-                          dragPreview.dropTarget.circuitId
-                        ? {
-                            type: 'circuit' as const,
-                            panelId: dragPreview.dropTarget.panelId,
-                            circuitId: dragPreview.dropTarget.circuitId,
-                          }
-                        : dragPreview.dropTarget?.type === 'rcd' &&
-                            dragPreview.dropTarget.panelId &&
-                            dragPreview.dropTarget.protectionId
-                          ? {
-                              type: 'rcd' as const,
-                              panelId: dragPreview.dropTarget.panelId,
-                              protectionId: dragPreview.dropTarget.protectionId,
-                            }
-                          : null
-                  const geometry = panelPreviewTarget
-                    ? resolvePanelAttachmentPreviewGeometry(
-                        wireSegments,
-                        panelPreviewTarget,
-                        dragPreview.position.x
+                      return (
+                        <Group
+                          key={`preview-panel-${panelId}`}
+                          name={`preview-panel-${panelId}`}
+                          opacity={0.85}
+                          listening={false}
+                        >
+                          {domoticaParentPreviewNode &&
+                            (() => {
+                              const { x, y, width, height } = (
+                                domoticaParentPreviewNode as LayoutNode
+                              ).bounds
+                              const inset = 2
+                              const adjWidth = Math.max(0, width - inset * 2)
+                              const adjHeight = Math.max(0, height - inset * 2)
+                              return (
+                                <Rect
+                                  key={`preview-node-${(domoticaParentPreviewNode as LayoutNode).id}`}
+                                  x={x - adjWidth / 2}
+                                  y={y - adjHeight / 2}
+                                  width={adjWidth}
+                                  height={adjHeight}
+                                  stroke={previewStroke}
+                                  strokeWidth={2}
+                                  dash={dashPattern}
+                                  cornerRadius={4}
+                                  fill="rgba(59,130,246,0.08)"
+                                  listening={false}
+                                />
+                              )
+                            })()}
+                          <Rect
+                            x={outputStartX - 6}
+                            y={outputY - expandCueHeight / 2}
+                            width={12}
+                            height={expandCueHeight}
+                            stroke={previewStroke}
+                            strokeWidth={2}
+                            dash={dashPattern}
+                            cornerRadius={6}
+                            fill="rgba(59,130,246,0.16)"
+                            listening={false}
+                          />
+                          <Circle
+                            x={outputStartX}
+                            y={outputY}
+                            radius={4}
+                            fill={previewStroke}
+                            opacity={0.9}
+                            listening={false}
+                          />
+                          <Line
+                            points={[outputStartX, outputY, ghostX, outputY]}
+                            stroke={previewStroke}
+                            strokeWidth={3}
+                            dash={dashPattern}
+                            lineCap="round"
+                            lineJoin="round"
+                            listening={false}
+                          />
+                          <Rect
+                            x={ghostX - ghostSize / 2}
+                            y={outputY - ghostSize / 2}
+                            width={ghostSize}
+                            height={ghostSize}
+                            stroke={previewStroke}
+                            strokeWidth={2}
+                            dash={dashPattern}
+                            cornerRadius={4}
+                            fill="rgba(59,130,246,0.12)"
+                            listening={false}
+                          />
+                        </Group>
                       )
-                    : null
+                    }
+                  }
 
-                  // Never fall through to the generic changed-wire preview for a
-                  // panel move. A panel reflow can change almost every wire and
-                  // would render a second, ghost copy of the entire bus layout.
-                  if (!geometry || panelPreviewTarget?.panelId !== panelId) return null
-
-                  const { busSegment, busY, ghostX, symbolY } = geometry
-                  return (
-                    <Group
-                      key={`preview-panel-attachment-${panelId}`}
-                      name={`preview-panel-attachment-${panelId}`}
-                      opacity={0.88}
-                      listening={false}
-                    >
-                      <Line
-                        points={[
-                          busSegment.startPoint.x,
-                          busSegment.startPoint.y,
-                          busSegment.endPoint.x,
-                          busSegment.endPoint.y,
-                        ]}
-                        stroke={previewStroke}
-                        strokeWidth={8}
-                        opacity={0.6}
-                        lineCap="round"
-                        listening={false}
-                      />
-                      <Line
-                        points={[ghostX, busY, ghostX, symbolY + 14]}
-                        stroke={previewStroke}
-                        strokeWidth={4}
-                        dash={dashPattern}
-                        lineCap="round"
-                        listening={false}
-                      />
-                      <Rect
-                        x={ghostX - 13}
-                        y={symbolY}
-                        width={26}
-                        height={14}
-                        stroke={previewStroke}
-                        strokeWidth={2}
-                        dash={dashPattern}
-                        cornerRadius={3}
-                        fill="rgba(59,130,246,0.12)"
-                        listening={false}
-                      />
-                    </Group>
-                  )
-                }
-
-                if (
-                  previewWiresForPanel.length === 0 &&
-                  previewNodes.length === 0 &&
-                  previewSupplySeparators.length === 0
-                ) {
-                  return null
-                }
-
-                const mainBusInsertIndex = dropTarget?.mainBusInsertIndex
-                const isDomoticaOutputPreview =
-                  !!dropTarget?.domoticaOutput && !!dropTarget.endpointId && !!dropTarget.circuitId
-
-                // Special-case: when inserting a protection on the main or
-                // secondary bus, show a very explicit ghost (highlighted bus
-                // segment + vertical line + box) at the resolved insertion slot.
-                const isMainBusProtectionPreview =
-                  dropTarget?.type === 'mainBus' && previewGraph.createdProtectionIds.length > 0
-                const isSecondaryBusProtectionPreview =
-                  dropTarget?.type === 'circuit' &&
-                  typeof dropTarget.secondaryBusInsertIndex === 'number' &&
-                  previewGraph.createdProtectionIds.length > 0
-
-                const shouldUseMainBusInsertionGhost =
-                  isMainBusProtectionPreview &&
-                  typeof mainBusInsertIndex === 'number' &&
-                  typeof dropTarget.mainBusItemCount === 'number'
-                const nestCircuitIdAtCursor = (() => {
-                  if (!layoutTree || !dragPreview?.position) return undefined
-                  const matched = findDropTargetWithDebug(
-                    layoutTree,
-                    dragPreview.position
-                  ).debug.path.find(
-                    (step) => step.matched && step.nodeId?.startsWith('circuit-nest-')
-                  )
-                  const id = matched?.nodeId?.slice('circuit-nest-'.length)
-                  return id && id.length > 0 ? id : undefined
-                })()
-
-                const nestCircuitIdForPreview = resolveProtectionNestPreviewCircuitId(
-                  dropTarget,
-                  nestCircuitIdAtCursor
-                )
-
-                const isProtectionNestOnCircuitPreview =
-                  !!nestCircuitIdForPreview && previewGraph.createdProtectionIds.length > 0
-
-                // A second child turns the single nested connection into a real
-                // secondary bus. Prefer that simulated geometry over the compact
-                // single-child ghost so the hover preview matches the committed drop.
-                const nestedProtectionPreviewBusSegments = nestCircuitIdForPreview
-                  ? previewGraph.wireSegments.filter(
-                      (ws) =>
-                        ws.panelId === panelId &&
-                        (ws.diagramId ?? ws.panelId) === diagramId &&
-                        ws.type === 'mainBus' &&
-                        ws.fromElementType === 'secondaryBus' &&
-                        ws.circuitId === nestCircuitIdForPreview
-                    )
-                  : []
-                const createsSecondaryBusFromNestedDrop =
-                  isProtectionNestOnCircuitPreview && nestedProtectionPreviewBusSegments.length > 0
-
-                const nestedPreviewOffsetX = (() => {
                   if (
-                    dropTarget?.insertBeforeNestedCircuitId ||
-                    !isProtectionNestOnCircuitPreview ||
-                    !nestCircuitIdForPreview ||
-                    isSecondaryBusProtectionPreview ||
-                    !currentPanelNode
+                    (isMainBusProtectionPreview && !nestCircuitIdAtCursor) ||
+                    isSecondaryBusProtectionPreview
                   ) {
-                    return 0
-                  }
-
-                  const createdProtectionNode = previewNodes.find(
-                    (node) =>
-                      (node.type === 'mcb' || node.type === 'rcd') &&
-                      !!node.domainId &&
-                      previewGraph.createdProtectionIds.includes(node.domainId)
-                  )
-                  if (!createdProtectionNode) return 0
-
-                  const currentMatch: {
-                    nest: LayoutNode | null
-                    protection: LayoutNode | null
-                  } = { nest: null, protection: null }
-                  const visit = (node: LayoutNode) => {
-                    if (node.id === `circuit-nest-${nestCircuitIdForPreview}`) {
-                      currentMatch.nest = node
-                    }
-                    if (
-                      (node.type === 'mcb' || node.type === 'rcd') &&
-                      node.circuitIdForWires === nestCircuitIdForPreview
-                    ) {
-                      currentMatch.protection = node
-                    }
-                    node.children?.forEach(visit)
-                  }
-                  visit(currentPanelNode)
-                  if (currentMatch.protection) {
-                    return currentMatch.protection.bounds.x - createdProtectionNode.bounds.x
-                  }
-                  if (!currentMatch.nest) return 0
-
-                  const currentNestBounds = getHitZoneBounds(currentMatch.nest, 'core')
-                  const currentAttachX = (currentNestBounds.left + currentNestBounds.right) / 2
-                  return currentAttachX - createdProtectionNode.bounds.x
-                })()
-
-                if (isDomoticaOutputPreview) {
-                  const currentDomoticaWires = wireSegments
-                    .filter(
-                      (ws) =>
-                        ws.panelId === panelId &&
-                        ws.circuitId === dropTarget.circuitId &&
-                        ws.type === 'branch' &&
-                        ws.fromElementId === dropTarget.endpointId
+                    const createdProtectionNode = previewNodes.find(
+                      (node) =>
+                        (node.type === 'mcb' || node.type === 'rcd') &&
+                        !!node.domainId &&
+                        previewGraph.createdProtectionIds.includes(node.domainId)
                     )
-                    .sort((a, b) => a.startPoint.y - b.startPoint.y)
-                  const bottomWire = currentDomoticaWires[currentDomoticaWires.length - 1]
-                  const targetWire =
-                    currentDomoticaWires.find(
-                      (ws) => ws.domoticaOutputIndex === dropTarget.domoticaOutput?.index
-                    ) ?? currentDomoticaWires[dropTarget.domoticaOutput!.index]
-                  const allCurrentRowsOccupied =
-                    currentDomoticaWires.length > 0 &&
-                    currentDomoticaWires.every((ws) => !!ws.toElementId)
-                  const shouldRenderExpandPreview =
-                    !!dropTarget.domoticaOutput?.expands ||
-                    (allCurrentRowsOccupied &&
-                      currentDomoticaWires.length < DOMOTICA_MAX_ENDPOINT_OUTPUTS &&
-                      !!targetWire?.toElementId)
-                  if (!shouldRenderExpandPreview) {
-                    // Non-expanding domotica output previews use the generic simulated graph.
-                  } else {
-                    const anchorWire = dropTarget.domoticaOutput?.expands ? bottomWire : targetWire
-                    if (!anchorWire) return null
-
-                    const outputStartX = anchorWire.startPoint.x
-                    const outputY = dropTarget.domoticaOutput?.expands
-                      ? anchorWire.startPoint.y + DOMOTICA_OUTPUT_SPACING
-                      : anchorWire.startPoint.y - DOMOTICA_OUTPUT_SPACING
-                    const ghostX = outputStartX + DOMOTICA_BRANCH_LEAD
-                    const ghostSize = SYMBOL_SIZE
-                    const expandCueHeight = Math.max(12, DOMOTICA_OUTPUT_SPACING - 4)
-                    const domoticaParentPreviewNode: LayoutNode | null = (() => {
-                      let found: LayoutNode | null = null
-                      const visit = (node: LayoutNode) => {
-                        if (found) return
-                        if (node.type === 'endpoint' && node.domainId === dropTarget.endpointId) {
-                          found = node
-                          return
-                        }
-                        node.children?.forEach(visit)
+                    // Secondary-bus previews use the simulated node position so the
+                    // ghost shows the exact final slot instead of following the cursor.
+                    const shouldUseInsertionGhost = shouldUseMainBusInsertionGhost
+                    // `type: 'mainBus'` includes secondary bars; exclude `fromElementType === 'secondaryBus'`.
+                    const busSegments = (
+                      isSecondaryBusProtectionPreview
+                        ? previewWiresForPanel
+                        : previewGraph.wireSegments
+                    ).filter((ws) => {
+                      if (ws.panelId !== panelId || ws.type !== 'mainBus') return false
+                      if (!isSecondaryBusProtectionPreview) {
+                        return ws.fromElementType !== 'secondaryBus'
                       }
-                      visit(previewPanelNode)
-                      return found
-                    })()
+                      return (
+                        ws.fromElementType === 'secondaryBus' &&
+                        ws.circuitId === dropTarget?.circuitId
+                      )
+                    })
+                    const dragPreviewPosition = dragPreview?.position
+                    const targetX = shouldUseInsertionGhost
+                      ? dragPreviewPosition?.x
+                      : createdProtectionNode?.bounds.x
+
+                    // For insertion ghost, use REAL layout's bus segments (matches the
+                    // segments the drop logic will hit-test against) so the highlighted
+                    // segment and ghost X align with what the user actually clicks on.
+                    // The simulated layout has an extra ghost item which shifts its
+                    // segments away from the cursor's true position.
+                    const realBusSegments = isSecondaryBusProtectionPreview
+                      ? wireSegments.filter(
+                          (ws) =>
+                            ws.panelId === panelId &&
+                            ws.type === 'mainBus' &&
+                            ws.fromElementType === 'secondaryBus' &&
+                            ws.circuitId === dropTarget?.circuitId
+                        )
+                      : wireSegments.filter(
+                          (ws) =>
+                            ws.panelId === panelId &&
+                            ws.type === 'mainBus' &&
+                            ws.fromElementType !== 'secondaryBus'
+                        )
+                    const segmentsForHighlight =
+                      realBusSegments.length > 0 ? realBusSegments : busSegments
+
+                    const hitSegment =
+                      (targetX != null
+                        ? segmentsForHighlight.find((ws) => {
+                            const minX = Math.min(ws.startPoint.x, ws.endPoint.x)
+                            const maxX = Math.max(ws.startPoint.x, ws.endPoint.x)
+                            return targetX >= minX && targetX <= maxX
+                          })
+                        : undefined) ??
+                      (targetX != null && segmentsForHighlight.length > 0
+                        ? [...segmentsForHighlight].sort((a, b) => {
+                            const aMid = (a.startPoint.x + a.endPoint.x) / 2
+                            const bMid = (b.startPoint.x + b.endPoint.x) / 2
+                            return Math.abs(aMid - targetX) - Math.abs(bMid - targetX)
+                          })[0]
+                        : undefined)
+
+                    const busY = hitSegment?.startPoint.y ?? previewPanelLayout.mainBus.y
+                    // Approximate the real MCB geometry: short vertical from bus to symbol,
+                    // and a nearly square symbol box.
+                    const verticalLen = 40
+                    const symbolHeight = 20
+                    const symbolWidth = 20
+                    const symbolCenterY = busY - verticalLen
+                    // Main-bus insertion keeps its cursor-aligned ghost. Secondary-bus
+                    // insertion snaps to the simulated layout's final node position.
+                    const ghostCenterX = shouldUseInsertionGhost
+                      ? (targetX ??
+                        (hitSegment ? (hitSegment.startPoint.x + hitSegment.endPoint.x) / 2 : 0))
+                      : (createdProtectionNode?.bounds.x ?? targetX)
+
+                    if (ghostCenterX == null) {
+                      return null
+                    }
 
                     return (
                       <Group
@@ -5423,64 +5785,70 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                         opacity={0.85}
                         listening={false}
                       >
-                        {domoticaParentPreviewNode &&
-                          (() => {
-                            const { x, y, width, height } = (
-                              domoticaParentPreviewNode as LayoutNode
-                            ).bounds
-                            const inset = 2
-                            const adjWidth = Math.max(0, width - inset * 2)
-                            const adjHeight = Math.max(0, height - inset * 2)
-                            return (
-                              <Rect
-                                key={`preview-node-${(domoticaParentPreviewNode as LayoutNode).id}`}
-                                x={x - adjWidth / 2}
-                                y={y - adjHeight / 2}
-                                width={adjWidth}
-                                height={adjHeight}
-                                stroke={previewStroke}
-                                strokeWidth={2}
-                                dash={dashPattern}
-                                cornerRadius={4}
-                                fill="rgba(59,130,246,0.08)"
-                                listening={false}
-                              />
-                            )
-                          })()}
-                        <Rect
-                          x={outputStartX - 6}
-                          y={outputY - expandCueHeight / 2}
-                          width={12}
-                          height={expandCueHeight}
-                          stroke={previewStroke}
-                          strokeWidth={2}
-                          dash={dashPattern}
-                          cornerRadius={6}
-                          fill="rgba(59,130,246,0.16)"
-                          listening={false}
-                        />
-                        <Circle
-                          x={outputStartX}
-                          y={outputY}
-                          radius={4}
-                          fill={previewStroke}
-                          opacity={0.9}
-                          listening={false}
-                        />
+                        {/* Show the complete simulated secondary bus so end insertions visibly extend it. */}
+                        {isSecondaryBusProtectionPreview &&
+                          busSegments.map((ws) => (
+                            <Line
+                              key={`preview-extended-secondary-bus-${ws.id}`}
+                              name="eendraad-preview-secondary-bus"
+                              points={[
+                                ws.startPoint.x,
+                                ws.startPoint.y,
+                                ws.endPoint.x,
+                                ws.endPoint.y,
+                              ]}
+                              stroke={previewStroke}
+                              strokeWidth={6}
+                              opacity={0.6}
+                              listening={false}
+                            />
+                          ))}
+
+                        {/* Highlight the busbar segment we're inserting on */}
+                        {hitSegment && (
+                          <Line
+                            points={[
+                              hitSegment.startPoint.x,
+                              hitSegment.startPoint.y,
+                              hitSegment.endPoint.x,
+                              hitSegment.endPoint.y,
+                            ]}
+                            stroke={previewStroke}
+                            strokeWidth={8}
+                            opacity={0.6}
+                            listening={false}
+                          />
+                        )}
+
+                        {/* Vertical preview wire from bus to protection */}
                         <Line
-                          points={[outputStartX, outputY, ghostX, outputY]}
+                          points={[ghostCenterX, busY, ghostCenterX, symbolCenterY + symbolHeight]}
                           stroke={previewStroke}
-                          strokeWidth={3}
+                          strokeWidth={4}
                           dash={dashPattern}
                           lineCap="round"
                           lineJoin="round"
                           listening={false}
                         />
+
+                        {/* Vertical preview wire from protection to empty top */}
+                        <Line
+                          points={[ghostCenterX, symbolCenterY, ghostCenterX, symbolCenterY - 70]}
+                          stroke={previewStroke}
+                          strokeWidth={4}
+                          dash={dashPattern}
+                          lineCap="round"
+                          lineJoin="round"
+                          listening={false}
+                        />
+
+                        {/* Protection ghost box, centered on symbolCenterY */}
                         <Rect
-                          x={ghostX - ghostSize / 2}
-                          y={outputY - ghostSize / 2}
-                          width={ghostSize}
-                          height={ghostSize}
+                          name="eendraad-preview-created-protection"
+                          x={ghostCenterX - symbolWidth / 2}
+                          y={symbolCenterY}
+                          width={symbolWidth}
+                          height={symbolWidth}
                           stroke={previewStroke}
                           strokeWidth={2}
                           dash={dashPattern}
@@ -5490,222 +5858,31 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                         />
                       </Group>
                     )
-                  }
-                }
+                  } else if (createsSecondaryBusFromNestedDrop) {
+                    // When adding a nested circuit: draw the fat secondary bus bar, then use the same
+                    // wire segments and node positions from the preview graph as the general case, so
+                    // the preview matches the final layout exactly.
+                    const busSegments = nestedProtectionPreviewBusSegments
+                    const busSegmentIds = new Set(busSegments.map((ws) => ws.id))
 
-                if (
-                  (isMainBusProtectionPreview && !nestCircuitIdAtCursor) ||
-                  isSecondaryBusProtectionPreview
-                ) {
-                  const createdProtectionNode = previewNodes.find(
-                    (node) =>
-                      (node.type === 'mcb' || node.type === 'rcd') &&
-                      !!node.domainId &&
-                      previewGraph.createdProtectionIds.includes(node.domainId)
-                  )
-                  // Secondary-bus previews use the simulated node position so the
-                  // ghost shows the exact final slot instead of following the cursor.
-                  const shouldUseInsertionGhost = shouldUseMainBusInsertionGhost
-                  // `type: 'mainBus'` includes secondary bars; exclude `fromElementType === 'secondaryBus'`.
-                  const busSegments = (
-                    isSecondaryBusProtectionPreview
-                      ? previewWiresForPanel
-                      : previewGraph.wireSegments
-                  ).filter((ws) => {
-                    if (ws.panelId !== panelId || ws.type !== 'mainBus') return false
-                    if (!isSecondaryBusProtectionPreview) {
-                      return ws.fromElementType !== 'secondaryBus'
-                    }
-                    return (
-                      ws.fromElementType === 'secondaryBus' &&
-                      ws.circuitId === dropTarget?.circuitId
-                    )
-                  })
-                  const dragPreviewPosition = dragPreview?.position
-                  const targetX = shouldUseInsertionGhost
-                    ? dragPreviewPosition?.x
-                    : createdProtectionNode?.bounds.x
-
-                  // For insertion ghost, use REAL layout's bus segments (matches the
-                  // segments the drop logic will hit-test against) so the highlighted
-                  // segment and ghost X align with what the user actually clicks on.
-                  // The simulated layout has an extra ghost item which shifts its
-                  // segments away from the cursor's true position.
-                  const realBusSegments = isSecondaryBusProtectionPreview
-                    ? wireSegments.filter(
-                        (ws) =>
-                          ws.panelId === panelId &&
-                          ws.type === 'mainBus' &&
-                          ws.fromElementType === 'secondaryBus' &&
-                          ws.circuitId === dropTarget?.circuitId
+                    // If we have a secondary bus, draw fat bar + same wires/nodes as general case (exclude bar from wires to avoid double-draw)
+                    if (busSegments.length > 0) {
+                      const otherWires = previewWiresForPanel.filter(
+                        (ws) => !busSegmentIds.has(ws.id)
                       )
-                    : wireSegments.filter(
-                        (ws) =>
-                          ws.panelId === panelId &&
-                          ws.type === 'mainBus' &&
-                          ws.fromElementType !== 'secondaryBus'
-                      )
-                  const segmentsForHighlight =
-                    realBusSegments.length > 0 ? realBusSegments : busSegments
 
-                  const hitSegment =
-                    (targetX != null
-                      ? segmentsForHighlight.find((ws) => {
-                          const minX = Math.min(ws.startPoint.x, ws.endPoint.x)
-                          const maxX = Math.max(ws.startPoint.x, ws.endPoint.x)
-                          return targetX >= minX && targetX <= maxX
-                        })
-                      : undefined) ??
-                    (targetX != null && segmentsForHighlight.length > 0
-                      ? [...segmentsForHighlight].sort((a, b) => {
-                          const aMid = (a.startPoint.x + a.endPoint.x) / 2
-                          const bMid = (b.startPoint.x + b.endPoint.x) / 2
-                          return Math.abs(aMid - targetX) - Math.abs(bMid - targetX)
-                        })[0]
-                      : undefined)
-
-                  const busY = hitSegment?.startPoint.y ?? previewPanelLayout.mainBus.y
-                  // Approximate the real MCB geometry: short vertical from bus to symbol,
-                  // and a nearly square symbol box.
-                  const verticalLen = 40
-                  const symbolHeight = 20
-                  const symbolWidth = 20
-                  const symbolCenterY = busY - verticalLen
-                  // Main-bus insertion keeps its cursor-aligned ghost. Secondary-bus
-                  // insertion snaps to the simulated layout's final node position.
-                  const ghostCenterX = shouldUseInsertionGhost
-                    ? (targetX ??
-                      (hitSegment ? (hitSegment.startPoint.x + hitSegment.endPoint.x) / 2 : 0))
-                    : (createdProtectionNode?.bounds.x ?? targetX)
-
-                  if (ghostCenterX == null) {
-                    return null
-                  }
-
-                  return (
-                    <Group
-                      key={`preview-panel-${panelId}`}
-                      name={`preview-panel-${panelId}`}
-                      opacity={0.85}
-                      listening={false}
-                    >
-                      {/* Show the complete simulated secondary bus so end insertions visibly extend it. */}
-                      {isSecondaryBusProtectionPreview &&
-                        busSegments.map((ws) => (
-                          <Line
-                            key={`preview-extended-secondary-bus-${ws.id}`}
-                            name="eendraad-preview-secondary-bus"
-                            points={[
-                              ws.startPoint.x,
-                              ws.startPoint.y,
-                              ws.endPoint.x,
-                              ws.endPoint.y,
-                            ]}
-                            stroke={previewStroke}
-                            strokeWidth={6}
-                            opacity={0.6}
-                            listening={false}
-                          />
-                        ))}
-
-                      {/* Highlight the busbar segment we're inserting on */}
-                      {hitSegment && (
-                        <Line
-                          points={[
-                            hitSegment.startPoint.x,
-                            hitSegment.startPoint.y,
-                            hitSegment.endPoint.x,
-                            hitSegment.endPoint.y,
-                          ]}
-                          stroke={previewStroke}
-                          strokeWidth={8}
-                          opacity={0.6}
+                      return (
+                        <Group
+                          key={`preview-panel-${panelId}`}
+                          name={`preview-panel-${panelId}`}
+                          x={nestedPreviewOffsetX}
+                          opacity={0.85}
                           listening={false}
-                        />
-                      )}
-
-                      {/* Vertical preview wire from bus to protection */}
-                      <Line
-                        points={[ghostCenterX, busY, ghostCenterX, symbolCenterY + symbolHeight]}
-                        stroke={previewStroke}
-                        strokeWidth={4}
-                        dash={dashPattern}
-                        lineCap="round"
-                        lineJoin="round"
-                        listening={false}
-                      />
-
-                      {/* Vertical preview wire from protection to empty top */}
-                      <Line
-                        points={[ghostCenterX, symbolCenterY, ghostCenterX, symbolCenterY - 70]}
-                        stroke={previewStroke}
-                        strokeWidth={4}
-                        dash={dashPattern}
-                        lineCap="round"
-                        lineJoin="round"
-                        listening={false}
-                      />
-
-                      {/* Protection ghost box, centered on symbolCenterY */}
-                      <Rect
-                        name="eendraad-preview-created-protection"
-                        x={ghostCenterX - symbolWidth / 2}
-                        y={symbolCenterY}
-                        width={symbolWidth}
-                        height={symbolWidth}
-                        stroke={previewStroke}
-                        strokeWidth={2}
-                        dash={dashPattern}
-                        cornerRadius={4}
-                        fill="rgba(59,130,246,0.12)"
-                        listening={false}
-                      />
-                    </Group>
-                  )
-                } else if (createsSecondaryBusFromNestedDrop) {
-                  // When adding a nested circuit: draw the fat secondary bus bar, then use the same
-                  // wire segments and node positions from the preview graph as the general case, so
-                  // the preview matches the final layout exactly.
-                  const busSegments = nestedProtectionPreviewBusSegments
-                  const busSegmentIds = new Set(busSegments.map((ws) => ws.id))
-
-                  // If we have a secondary bus, draw fat bar + same wires/nodes as general case (exclude bar from wires to avoid double-draw)
-                  if (busSegments.length > 0) {
-                    const otherWires = previewWiresForPanel.filter(
-                      (ws) => !busSegmentIds.has(ws.id)
-                    )
-
-                    return (
-                      <Group
-                        key={`preview-panel-${panelId}`}
-                        name={`preview-panel-${panelId}`}
-                        x={nestedPreviewOffsetX}
-                        opacity={0.85}
-                        listening={false}
-                      >
-                        {/* Fat secondary bus bar (same segments as real layout, drawn thick for visibility) */}
-                        {busSegments.map((ws) => (
-                          <Line
-                            key={`preview-secondary-bus-${ws.id}`}
-                            points={[
-                              ws.startPoint.x,
-                              ws.startPoint.y,
-                              ws.endPoint.x,
-                              ws.endPoint.y,
-                            ]}
-                            stroke={previewStroke}
-                            strokeWidth={8}
-                            opacity={0.6}
-                            listening={false}
-                          />
-                        ))}
-
-                        {/* Same wire draw as general case: verticals and rest of circuit (layout positions) */}
-                        {otherWires.map((ws) => {
-                          const isThick = ws.type === 'trunk' || ws.type === 'mainBus'
-                          return (
+                        >
+                          {/* Fat secondary bus bar (same segments as real layout, drawn thick for visibility) */}
+                          {busSegments.map((ws) => (
                             <Line
-                              key={`preview-wire-${ws.id}`}
+                              key={`preview-secondary-bus-${ws.id}`}
                               points={[
                                 ws.startPoint.x,
                                 ws.startPoint.y,
@@ -5713,127 +5890,151 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                                 ws.endPoint.y,
                               ]}
                               stroke={previewStroke}
-                              strokeWidth={isThick ? 6 : 3}
-                              dash={dashPattern}
-                              lineCap="round"
-                              lineJoin="round"
+                              strokeWidth={8}
+                              opacity={0.6}
                               listening={false}
                             />
-                          )
-                        })}
+                          ))}
 
-                        {/* Same node draw as general case (layout positions) */}
-                        {previewNodes.map((node) => {
-                          const { x, y, width, height } = node.bounds
-                          const inset = 4
-                          const adjWidth = Math.max(0, width - inset * 2)
-                          const adjHeight = Math.max(0, height - inset * 2)
-                          const rectX = x - adjWidth / 2
-                          const rectY = y - adjHeight / 2
+                          {/* Same wire draw as general case: verticals and rest of circuit (layout positions) */}
+                          {otherWires.map((ws) => {
+                            const isThick = ws.type === 'trunk' || ws.type === 'mainBus'
+                            return (
+                              <Line
+                                key={`preview-wire-${ws.id}`}
+                                points={[
+                                  ws.startPoint.x,
+                                  ws.startPoint.y,
+                                  ws.endPoint.x,
+                                  ws.endPoint.y,
+                                ]}
+                                stroke={previewStroke}
+                                strokeWidth={isThick ? 6 : 3}
+                                dash={dashPattern}
+                                lineCap="round"
+                                lineJoin="round"
+                                listening={false}
+                              />
+                            )
+                          })}
 
-                          return (
-                            <Rect
-                              key={`preview-node-${node.id}`}
-                              name={
-                                node.domainId &&
-                                previewGraph.createdProtectionIds.includes(node.domainId)
-                                  ? 'eendraad-preview-created-protection'
-                                  : insertBetweenMovedProtectionNodes.includes(node)
-                                    ? 'eendraad-preview-moved-protection'
-                                    : undefined
-                              }
-                              x={rectX}
-                              y={rectY}
-                              width={adjWidth}
-                              height={adjHeight}
-                              stroke={previewStroke}
-                              strokeWidth={2}
-                              dash={dashPattern}
-                              cornerRadius={4}
-                              fill="rgba(59,130,246,0.10)"
-                              listening={false}
-                            />
-                          )
-                        })}
-                      </Group>
-                    )
+                          {/* Same node draw as general case (layout positions) */}
+                          {previewNodes.map((node) => {
+                            const { x, y, width, height } = node.bounds
+                            const inset = 4
+                            const adjWidth = Math.max(0, width - inset * 2)
+                            const adjHeight = Math.max(0, height - inset * 2)
+                            const rectX = x - adjWidth / 2
+                            const rectY = y - adjHeight / 2
+
+                            return (
+                              <Rect
+                                key={`preview-node-${node.id}`}
+                                name={
+                                  node.domainId &&
+                                  previewGraph.createdProtectionIds.includes(node.domainId)
+                                    ? 'eendraad-preview-created-protection'
+                                    : insertBetweenMovedProtectionNodes.includes(node)
+                                      ? 'eendraad-preview-moved-protection'
+                                      : undefined
+                                }
+                                x={rectX}
+                                y={rectY}
+                                width={adjWidth}
+                                height={adjHeight}
+                                stroke={previewStroke}
+                                strokeWidth={2}
+                                dash={dashPattern}
+                                cornerRadius={4}
+                                fill="rgba(59,130,246,0.10)"
+                                listening={false}
+                              />
+                            )
+                          })}
+                        </Group>
+                      )
+                    }
+                    // No secondary bus segments (e.g. adding first sub-circuit): fall through to general case
                   }
-                  // No secondary bus segments (e.g. adding first sub-circuit): fall through to general case
-                }
 
-                return (
-                  <Group
-                    key={`preview-panel-${panelId}`}
-                    name={`preview-panel-${panelId}`}
-                    x={nestedPreviewOffsetX}
-                    opacity={0.8}
-                    listening={false}
-                  >
-                    {previewSupplySeparators.map((separator) => (
-                      <Line
-                        key={`preview-${separator.id}`}
-                        name="eendraad-preview-supply-separator"
-                        points={separator.points}
-                        stroke={previewSeparatorStroke}
-                        strokeWidth={4}
-                        dash={[5, 5]}
-                        opacity={0.95}
-                        lineCap="round"
-                        listening={false}
-                      />
-                    ))}
-
-                    {previewWiresForPanel.map((ws) => {
-                      const isThick = ws.type === 'trunk' || ws.type === 'mainBus'
-                      return (
+                  return (
+                    <Group
+                      key={`preview-panel-${panelId}`}
+                      name={`preview-panel-${panelId}`}
+                      x={nestedPreviewOffsetX}
+                      opacity={0.8}
+                      listening={false}
+                    >
+                      {previewSupplySeparators.map((separator) => (
                         <Line
-                          key={`preview-wire-${ws.id}`}
-                          points={[ws.startPoint.x, ws.startPoint.y, ws.endPoint.x, ws.endPoint.y]}
-                          stroke={previewStroke}
-                          strokeWidth={isThick ? 6 : 3}
-                          dash={dashPattern}
+                          key={`preview-${separator.id}`}
+                          name="eendraad-preview-supply-separator"
+                          points={separator.points}
+                          stroke={previewSeparatorStroke}
+                          strokeWidth={4}
+                          dash={[5, 5]}
+                          opacity={0.95}
                           lineCap="round"
-                          lineJoin="round"
                           listening={false}
                         />
-                      )
-                    })}
+                      ))}
 
-                    {previewNodes.map((node) => {
-                      const { x, y, width, height } = node.bounds
-                      const inset = 4
-                      const adjWidth = Math.max(0, width - inset * 2)
-                      const adjHeight = Math.max(0, height - inset * 2)
-                      const rectX = x - adjWidth / 2
-                      const rectY = y - adjHeight / 2
+                      {previewWiresForPanel.map((ws) => {
+                        const isThick = ws.type === 'trunk' || ws.type === 'mainBus'
+                        return (
+                          <Line
+                            key={`preview-wire-${ws.id}`}
+                            points={[
+                              ws.startPoint.x,
+                              ws.startPoint.y,
+                              ws.endPoint.x,
+                              ws.endPoint.y,
+                            ]}
+                            stroke={previewStroke}
+                            strokeWidth={isThick ? 6 : 3}
+                            dash={dashPattern}
+                            lineCap="round"
+                            lineJoin="round"
+                            listening={false}
+                          />
+                        )
+                      })}
 
-                      return (
-                        <Rect
-                          key={`preview-node-${node.id}`}
-                          name={
-                            node.domainId &&
-                            previewGraph.createdProtectionIds.includes(node.domainId)
-                              ? 'eendraad-preview-created-protection'
-                              : insertBetweenMovedProtectionNodes.includes(node)
-                                ? 'eendraad-preview-moved-protection'
-                                : undefined
-                          }
-                          x={rectX}
-                          y={rectY}
-                          width={adjWidth}
-                          height={adjHeight}
-                          stroke={previewStroke}
-                          strokeWidth={2}
-                          dash={dashPattern}
-                          cornerRadius={4}
-                          fill="rgba(59,130,246,0.10)"
-                          listening={false}
-                        />
-                      )
-                    })}
-                  </Group>
-                )
-              })}
+                      {previewNodes.map((node) => {
+                        const { x, y, width, height } = node.bounds
+                        const inset = 4
+                        const adjWidth = Math.max(0, width - inset * 2)
+                        const adjHeight = Math.max(0, height - inset * 2)
+                        const rectX = x - adjWidth / 2
+                        const rectY = y - adjHeight / 2
+
+                        return (
+                          <Rect
+                            key={`preview-node-${node.id}`}
+                            name={
+                              node.domainId &&
+                              previewGraph.createdProtectionIds.includes(node.domainId)
+                                ? 'eendraad-preview-created-protection'
+                                : insertBetweenMovedProtectionNodes.includes(node)
+                                  ? 'eendraad-preview-moved-protection'
+                                  : undefined
+                            }
+                            x={rectX}
+                            y={rectY}
+                            width={adjWidth}
+                            height={adjHeight}
+                            stroke={previewStroke}
+                            strokeWidth={2}
+                            dash={dashPattern}
+                            cornerRadius={4}
+                            fill="rgba(59,130,246,0.10)"
+                            listening={false}
+                          />
+                        )
+                      })}
+                    </Group>
+                  )
+                })}
 
             {/* Drop-zone hints: legal targets while dragging from the library */}
             {canPlaceSymbols && activePlacementSymbol && (
@@ -5844,6 +6045,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                 activeDropTarget={dragPreview?.dropTarget ?? null}
                 activeDropTargetNodeId={activeDropTargetNodeId}
                 activePosition={dragPreview?.position ?? null}
+                relocation={internalDragPlacement}
               />
             )}
 
@@ -5899,12 +6101,16 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
             ) : null}
 
             {/* Debug: hit zone overlay (dev builds only, when enabled in settings) */}
-            {process.env.NODE_ENV !== 'production' && (
+            {import.meta.env.DEV && (
               <HitZoneDebugOverlay layoutTree={layoutTree} dragPreview={dragPreview} />
             )}
             {}
           </Group>
         </BaseCanvas>
+
+        {offscreenSupplyPreviewDirection ? (
+          <OffscreenPreviewIndicator direction={offscreenSupplyPreviewDirection} />
+        ) : null}
 
         <ViewNavigationToolbar
           zoom={eendraadView.zoom}
@@ -6326,7 +6532,9 @@ function getChangedSupplySeparatorsForDiagram(
       )
     return (
       !current ||
-      preview.points.some((coordinate, index) => Math.abs(coordinate - current.points[index]!) >= 0.001)
+      preview.points.some(
+        (coordinate, index) => Math.abs(coordinate - current.points[index]!) >= 0.001
+      )
     )
   })
 }

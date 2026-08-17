@@ -738,7 +738,11 @@ const protectionBehavior: DropBehavior = {
       label: autoCircuitCode,
       circuits: [],
       ...(target.type === 'mainBus'
-        ? { busSectionId: getMainBusInsertionSectionId(panel, target.mainBusInsertIndex) }
+        ? {
+            busSectionId:
+              target.busSectionId ??
+              getMainBusInsertionSectionId(panel, target.mainBusInsertIndex),
+          }
         : {}),
       ...defaults,
     }
@@ -898,7 +902,11 @@ const rcdBehavior: DropBehavior = {
       label: autoCircuitCode,
       circuits: [],
       ...(target.type === 'mainBus'
-        ? { busSectionId: getMainBusInsertionSectionId(panel, target.mainBusInsertIndex) }
+        ? {
+            busSectionId:
+              target.busSectionId ??
+              getMainBusInsertionSectionId(panel, target.mainBusInsertIndex),
+          }
         : {}),
       ...defaults,
     }
@@ -2384,7 +2392,12 @@ function addSupplyTrunkDevice(
         : target.type === 'supplyBackupOutputWire'
           ? { supplyPath: 'backup-output' as const }
           : target.type === 'supplyConverterGridWire'
-            ? { supplyPath: 'converter-grid' as const }
+            ? {
+                supplyPath: 'converter-grid' as const,
+                ...(target.converterGridPlacement
+                  ? { converterGridPlacement: target.converterGridPlacement }
+                  : {}),
+              }
             : target.type === 'supplyChangeoverGridWire'
               ? { supplyPath: 'changeover-grid' as const }
               : {}),
@@ -2489,7 +2502,7 @@ const noteBehavior: DropBehavior = {
 
 /** The source selector is a slotted supply-path device, never a free canvas symbol. */
 const sourceChangeoverBehavior: DropBehavior = {
-  validTargets: ['supplyWire'],
+  validTargets: ['supplyWire', 'supplyConverterBackupWire'],
   execute: (target, project, symbol, _t, callbacks) => {
     if (target.supplyFeedScope !== 'root') return
     const supplyDevices = getSupplyDevicesForDropTarget(target, project)
@@ -2544,12 +2557,23 @@ const sourceChangeoverBehavior: DropBehavior = {
     )
     if (!changeover) return
     callbacks.updateSupplyTrunkDevice(directConverter.id, { supplyPath: 'backup' })
-    const migratedOutputDevices = converterOutputChain.map((device) => ({
-      ...device,
-      supplyPath: 'backup-output' as const,
-    }))
+    const migratedOutputDevices = acceptsAnyGridFeedSegment
+      ? []
+      : converterOutputChain.map((device) => ({
+          ...device,
+          supplyPath: 'backup-output' as const,
+        }))
+    const migratedGridDevices = acceptsAnyGridFeedSegment
+      ? converterOutputChain.map((device) => ({
+          ...device,
+          supplyPath: 'changeover-grid' as const,
+        }))
+      : []
     migratedOutputDevices.forEach((device) => {
       callbacks.updateSupplyTrunkDevice!(device.id, { supplyPath: 'backup-output' })
+    })
+    migratedGridDevices.forEach((device) => {
+      callbacks.updateSupplyTrunkDevice!(device.id, { supplyPath: 'changeover-grid' })
     })
     const migratedBackupDevices = directBackup
       ? directConverterBackupInlineDevicesToTrunkDevices(directBackup)
@@ -2574,7 +2598,8 @@ const sourceChangeoverBehavior: DropBehavior = {
             ...migratedOutputDevices,
             ...migratedBackupDevices,
           ]
-        : undefined
+        : undefined,
+      migratedGridDevices.length > 0 ? migratedGridDevices : undefined
     )
     if (directAssembly) callbacks.replaceSupplyAssembly(directAssembly.id, upgraded)
     else callbacks.addSupplyAssembly(upgraded)

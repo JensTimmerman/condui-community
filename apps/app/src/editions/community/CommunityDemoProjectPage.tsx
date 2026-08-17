@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { getBuildingFloorsFromProject } from '@/lib/projectV2/buildingFloors'
 import { logger } from '@/lib/logger'
+import { startDemoProjectExpiry } from '@/lib/demoProject'
 import { preloadProjectRasterImages } from '@/lib/preloadProjectRasterImages'
 import { waitForOpenShellSettle } from '@/lib/waitForOpenShellSettle'
 import { useProjectStore } from '@/stores/projectStore'
@@ -58,6 +59,8 @@ export default function CommunityDemoProjectPage() {
   const [loadPhase, setLoadPhase] = useState<DemoLoadPhase>('opening')
 
   useLayoutEffect(() => setLoadPhase('opening'), [])
+
+  useEffect(() => startDemoProjectExpiry(), [])
 
   useEffect(() => {
     const projectStore = useProjectStore.getState()

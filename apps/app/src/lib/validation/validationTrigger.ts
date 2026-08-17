@@ -6,6 +6,7 @@ import {
 import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
+  getSupplyAssembliesFromProject,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import {
@@ -117,6 +118,7 @@ let lastProjectSlices: {
   project: unknown
   installation: ReturnType<typeof getElectricalInstallationFromProject>
   panels: ReturnType<typeof getElectricalPanelsFromProject>
+  supplyAssemblies: ReturnType<typeof getSupplyAssembliesFromProject>
   wireSegments: ReturnType<typeof getOneWireSegmentsFromProject>
   frames: ReturnType<typeof getEendraadFramesFromProject>
   floors: ReturnType<typeof getBuildingFloorsFromProject>
@@ -135,6 +137,7 @@ export function getValidationSignature(project: ValidationSignatureProject | nul
     project: project.project,
     installation: getElectricalInstallationFromProject(project),
     panels: getElectricalPanelsFromProject(project),
+    supplyAssemblies: getSupplyAssembliesFromProject(project),
     wireSegments: getOneWireSegmentsFromProject(project),
     frames: getEendraadFramesFromProject(project),
     floors: getBuildingFloorsFromProject(project),
@@ -145,6 +148,7 @@ export function getValidationSignature(project: ValidationSignatureProject | nul
     lastProjectSlices.project === slices.project &&
     lastProjectSlices.installation === slices.installation &&
     lastProjectSlices.panels === slices.panels &&
+    lastProjectSlices.supplyAssemblies === slices.supplyAssemblies &&
     lastProjectSlices.wireSegments === slices.wireSegments &&
     lastProjectSlices.frames === slices.frames &&
     lastProjectSlices.floors === slices.floors
@@ -163,6 +167,7 @@ export function getValidationSignature(project: ValidationSignatureProject | nul
     slice[key] = stripNonValidationFields(raw)
   }
   slice.wireSegments = stripNonValidationFields(slices.wireSegments)
+  slice.supplyAssemblies = stripNonValidationFields(slices.supplyAssemblies)
   slice.oneWireFrames = slices.frames.map((frame) => ({
     id: frame.id,
     title: frame.title,

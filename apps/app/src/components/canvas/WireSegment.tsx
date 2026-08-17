@@ -39,6 +39,7 @@ import {
   isBusBarProtectionStubSegment,
   isFireClassLabelVisibleForSegment,
   isRouteIndicatorVisibleForSegment,
+  isSupplyWireSegmentForLabel,
   isWireLabelVisibleForSegment,
   isWireLengthLabelVisibleForSegment,
 } from '@/lib/wireLabelVisibility'
@@ -62,6 +63,11 @@ import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical
 import { getPhaseAssignmentLabel, isPhaseAssignmentLabelVisible } from '@/lib/wires/phaseAssignment'
 import { getLeftBiasedBusFeedStubX } from '@/lib/panel/panelBusFeedPreview'
 import { orderWireSegmentsForRendering } from './wireRenderOrder'
+import { wireSegmentSelectsBusSection } from '@/lib/wires/wireSelectionTarget'
+import {
+  getSupplyWireDecorationOwnerIds,
+  hasStableSupplyWireDecorationIdentity,
+} from '@/lib/wires/supplyWireDecoration'
 
 type WireSegmentPointerEvent = KonvaEventObject<MouseEvent | TouchEvent>
 
@@ -76,6 +82,122 @@ const WALL_ROUTE_LINES: Array<[number, number, number, number]> = [
 interface WireSegmentProps {
   wireSegment: WireSegment
   onSelect?: (wireSegmentId: string) => void
+  isSupplyDecorationOwner?: boolean
+}
+
+type EffectiveRoute = 'inWall' | 'onWall' | 'ground' | 'air' | undefined
+
+function SupplyWireRouteIndicators({
+  wireSegment,
+  effectiveRoute,
+  color,
+}: {
+  wireSegment: WireSegment
+  effectiveRoute: EffectiveRoute
+  color: string
+}) {
+  if (!wireSegment.inTube && !effectiveRoute) return null
+
+  const isHorizontal = wireSegment.startPoint.y === wireSegment.endPoint.y
+  const anchor = getSupplyWireLabelAnchor(wireSegment) ?? {
+    x: (wireSegment.startPoint.x + wireSegment.endPoint.x) / 2,
+    y: (wireSegment.startPoint.y + wireSegment.endPoint.y) / 2,
+  }
+  // Cable text is above a horizontal supply wire and to the right of a
+  // vertical one. Keep route/tube glyphs on the quiet, opposite side.
+  const groupX = isHorizontal ? anchor.x : wireSegment.startPoint.x - 8
+  const groupY = isHorizontal ? anchor.y + 8 : anchor.y
+  const hasBoth = wireSegment.inTube && effectiveRoute
+  const isWallRoute = effectiveRoute === 'inWall' || effectiveRoute === 'onWall'
+  const tubeX = effectiveRoute !== 'air' && !isWallRoute && hasBoth && isHorizontal ? -6 : 0
+  const tubeY = effectiveRoute !== 'air' && !isWallRoute && hasBoth && !isHorizontal ? -6 : 0
+  const routePositions =
+    effectiveRoute === 'air'
+      ? [
+          {
+            // The air-route circle is the one route marker that sits directly on
+            // the conductor instead of beside the cable label.
+            x: isHorizontal ? 0 : 8,
+            y: isHorizontal ? -8 : 0,
+          },
+        ]
+      : isWallRoute
+        ? isHorizontal
+          ? [
+              { x: -14, y: 0 },
+              { x: 14, y: 0 },
+            ]
+          : [
+              { x: 0, y: -14 },
+              { x: 0, y: 14 },
+            ]
+        : [
+            {
+              x: hasBoth && isHorizontal ? 6 : 0,
+              y: hasBoth && !isHorizontal ? 6 : 0,
+            },
+          ]
+  const thickness = 1.35
+
+  const renderRouteGlyph = (x: number, y: number, key: number) => {
+    if (effectiveRoute === 'air') {
+      return (
+        <Circle
+          key={key}
+          x={x}
+          y={y}
+          radius={3.5}
+          stroke={color}
+          strokeWidth={thickness}
+          listening={false}
+        />
+      )
+    }
+    if (effectiveRoute === 'ground') {
+      return (
+        <Group key={key} x={x} y={y} listening={false}>
+          <Line points={[-6, -4, 6, -4]} stroke={color} strokeWidth={thickness} lineCap="round" />
+          <Line points={[-4, 0, 4, 0]} stroke={color} strokeWidth={thickness} lineCap="round" />
+          <Line points={[-2, 4, 2, 4]} stroke={color} strokeWidth={thickness} lineCap="round" />
+        </Group>
+      )
+    }
+    if (effectiveRoute === 'inWall' || effectiveRoute === 'onWall') {
+      return (
+        <Group
+          key={key}
+          x={x}
+          y={y}
+          scaleX={0.72}
+          scaleY={0.72}
+          offsetX={3}
+          rotation={(effectiveRoute === 'inWall' ? 0 : 180) + (isHorizontal ? -90 : 0)}
+          listening={false}
+        >
+          {WALL_ROUTE_LINES.map((points, index) => (
+            <Line
+              key={index}
+              points={points}
+              stroke={color}
+              strokeWidth={thickness}
+              lineCap="round"
+              listening={false}
+            />
+          ))}
+        </Group>
+      )
+    }
+    return null
+  }
+
+  return (
+    <Group x={groupX} y={groupY} name="export-strip-label" listening={false}>
+      {wireSegment.inTube ? (
+        <Circle x={tubeX} y={tubeY} radius={3} stroke={color} strokeWidth={1} listening={false} />
+      ) : null}
+      {routePositions.map(({ x, y }, index) => renderRouteGlyph(x, y, index))}
+    </Group>
+  )
 }
 
 const LocalizedWireTextLabel = memo(function LocalizedWireTextLabel({
@@ -97,6 +219,8 @@ const LocalizedWireTextLabel = memo(function LocalizedWireTextLabel({
 }) {
   const { t } = useTranslation()
   const translateWire = t as unknown as WireTranslateFn
+  const labelDistanceFromWire =
+    WIRE_LABEL_DISTANCE_FROM_WIRE + (wireSegment.wireRoute === 'air' ? 2 : 0)
 
   return (
     <WireTextLabel
@@ -118,7 +242,7 @@ const LocalizedWireTextLabel = memo(function LocalizedWireTextLabel({
       config={{
         orientation: getWireLabelOrientationForSegment(wireSegment),
         align: getWireLabelAlignForSegment(wireSegment),
-        distanceFromWire: WIRE_LABEL_DISTANCE_FROM_WIRE,
+        distanceFromWire: labelDistanceFromWire,
         offsetAlongWire: wireLabelOffsetAlongWire,
         labelAnchor: getSupplyWireLabelAnchor(wireSegment),
       }}
@@ -135,6 +259,7 @@ const LocalizedWireTextLabel = memo(function LocalizedWireTextLabel({
 export const WireSegmentComponent = memo(function WireSegmentComponent({
   wireSegment,
   onSelect,
+  isSupplyDecorationOwner = true,
 }: WireSegmentProps) {
   const { t } = useTranslation()
   const setSelection = useSetSelection()
@@ -151,7 +276,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
 
   // Determine line properties based on wire type
   const isBusBar = wireSegment.type === 'mainBus'
-  const selectsBusSection = Boolean(wireSegment.busSectionId)
+  const selectsBusSection = wireSegmentSelectsBusSection(wireSegment)
   const isSelected = selectsBusSection
     ? Boolean(
         isBusBar &&
@@ -170,14 +295,8 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
       ? 'square'
       : 'butt'
   const lineColor = colors.wireColor
-  const busFeedStubX = getLeftBiasedBusFeedStubX(
-    wireSegment.startPoint.x,
-    wireSegment.endPoint.x
-  )
-  const busFeedMarkerDistance = Math.max(
-    0,
-    wireSegment.endPoint.x - wireSegment.startPoint.x
-  )
+  const busFeedStubX = getLeftBiasedBusFeedStubX(wireSegment.startPoint.x, wireSegment.endPoint.x)
+  const busFeedMarkerDistance = Math.max(0, wireSegment.endPoint.x - wireSegment.startPoint.x)
   const busFeedMarkerPosition = (() => {
     switch (wireSegment.busFeedMarkerSide) {
       case 'left':
@@ -244,6 +363,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
       ...(wireSegment.supplyConnectionId && {
         supplyConnectionId: wireSegment.supplyConnectionId,
       }),
+      ...(wireSegment.supplySectionKey && { supplySectionKey: wireSegment.supplySectionKey }),
       ...(wireSegment.isSupplyTrunk &&
         wireSegment.supplySegmentIndex !== undefined && {
           supplySegmentIndex: wireSegment.supplySegmentIndex,
@@ -273,6 +393,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
       wireSegment.supplyFeedScope,
       wireSegment.supplyAssemblyId,
       wireSegment.supplyConnectionId,
+      wireSegment.supplySectionKey,
       wireSegment.supplySegmentIndex,
       wireSegment.fromElementType,
       wireSegment.fromElementId,
@@ -395,11 +516,20 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
   const isHorizontal = wireSegment.startPoint.y === wireSegment.endPoint.y
   const isVertical = wireSegment.startPoint.x === wireSegment.endPoint.x
   const isBusBarProtectionStub = isBusBarProtectionStubSegment(wireSegment)
-  const isWireLabelVisible = isWireLabelVisibleForSegment(wireSegment)
+  const isSupplyDecorationSegment = isSupplyWireSegmentForLabel(wireSegment)
+  const ownsStableSupplyDecoration =
+    !hasStableSupplyWireDecorationIdentity(wireSegment) || isSupplyDecorationOwner
+  const isWireLabelVisible = ownsStableSupplyDecoration && isWireLabelVisibleForSegment(wireSegment)
   const wireLabelOffsetAlongWire = getWireLabelOffsetAlongWire(wireSegment)
-  const showCableLabel =
+  const showCableLabel = Boolean(
     (!isBusBarProtectionStub || wireSegment.showWireLabelOnBusStub) && isWireLabelVisible
-  const showVerticalRouteIndicators = isRouteIndicatorVisibleForSegment(wireSegment)
+  )
+  const showSupplyRouteIndicators =
+    isSupplyDecorationSegment &&
+    ownsStableSupplyDecoration &&
+    isRouteIndicatorVisibleForSegment(wireSegment)
+  const showVerticalRouteIndicators =
+    !isSupplyDecorationSegment && isRouteIndicatorVisibleForSegment(wireSegment)
   const secondaryBusReferenceLabel = wireSegment.secondaryBusReferenceLabel?.trim()
   const secondaryBusReferenceFontSize = 8
   const secondaryBusReferenceTextWidth = secondaryBusReferenceLabel
@@ -457,8 +587,12 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
     wireSegment.supplyWireRole === 'downstream' &&
     wireSegment.supplyFeedScope === 'root' &&
     !wireSegment.circuitId
+  const isBusFeedStubPhaseSegment =
+    isVertical && wireSegment.showBusFeedMarker === true && !!wireSegment.busSectionId
   const incomingPanelPhaseLabel =
-    (wireSegment.forcePhaseLabel || isSubPanelIncomingPhaseSegment || isRootSupplyPhaseSegment) &&
+    (wireSegment.forcePhaseLabel ||
+      isSubPanelIncomingPhaseSegment ||
+      (isRootSupplyPhaseSegment && wireSegment.showPhaseLabel === true)) &&
     phaseSystem &&
     (wireSegment.forcePhaseLabel ||
       isPhaseAssignmentLabelVisible(
@@ -472,24 +606,26 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
   const incomingPanelPhaseLabelY =
     wireSegment.phaseLabelAnchor?.y ??
     (isVertical
-      ? wireSegment.isSubPanelSupply
+      ? isBusFeedStubPhaseSegment
         ? Math.min(wireSegment.startPoint.y, wireSegment.endPoint.y) + 4
-        : Math.max(wireSegment.startPoint.y, wireSegment.endPoint.y) +
-          (isRootSupplyPhaseSegment ? 4 : -10)
+        : wireSegment.isSubPanelSupply
+          ? Math.min(wireSegment.startPoint.y, wireSegment.endPoint.y) + 4
+          : Math.max(wireSegment.startPoint.y, wireSegment.endPoint.y) +
+            (isRootSupplyPhaseSegment ? 4 : -10)
       : (wireSegment.startPoint.y + wireSegment.endPoint.y) / 2 - 12)
   const incomingPanelPhaseLabelX =
     wireSegment.phaseLabelAnchor?.x ??
     (isVertical
-      ? wireSegment.startPoint.x
+      ? isBusFeedStubPhaseSegment
+        ? wireSegment.startPoint.x + 5
+        : wireSegment.startPoint.x
       : (wireSegment.startPoint.x + wireSegment.endPoint.x) / 2)
   const isProtectionInputPhaseSegment =
     wireSegment.type === 'vertical' &&
     !!wireSegment.circuitId &&
     wireSegment.toElementType === 'protection'
   const protectionPhaseLabel =
-    isProtectionInputPhaseSegment &&
-    phaseSystem &&
-    wireSegment.showPhaseLabel === true
+    isProtectionInputPhaseSegment && phaseSystem && wireSegment.showPhaseLabel === true
       ? getPhaseAssignmentLabel(wireSegment.phaseAssignment, phaseSystem)
       : undefined
   const protectionPhaseLabelWidth = 48
@@ -611,11 +747,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
       )}
 
       {wireSegment.showBusFeedMarker && wireSegment.busFeedKind && (
-        <Group
-          x={busFeedMarkerPosition.x}
-          y={busFeedMarkerPosition.y}
-          listening={false}
-        >
+        <Group x={busFeedMarkerPosition.x} y={busFeedMarkerPosition.y} listening={false}>
           <CatalogSymbolImage
             symbolId={wireSegment.busFeedKind === 'backup' ? 'backup_feed' : 'mains'}
             width={20}
@@ -677,10 +809,10 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
               wireSegment.phaseLabelAnchor
                 ? 0
                 : isVertical
-                ? isRootSupplyPhaseSegment
-                  ? 5
-                  : -incomingPanelPhaseLabelWidth - 5
-                : -incomingPanelPhaseLabelWidth / 2
+                  ? isRootSupplyPhaseSegment || isBusFeedStubPhaseSegment
+                    ? 5
+                    : -incomingPanelPhaseLabelWidth - 5
+                  : -incomingPanelPhaseLabelWidth / 2
             }
             y={0}
             width={incomingPanelPhaseLabelWidth}
@@ -692,7 +824,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
               wireSegment.phaseLabelAnchor
                 ? 'left'
                 : isVertical
-                  ? isRootSupplyPhaseSegment
+                  ? isRootSupplyPhaseSegment || isBusFeedStubPhaseSegment
                     ? 'left'
                     : 'right'
                   : 'center'
@@ -723,6 +855,14 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
           />
         </Group>
       )}
+
+      {showSupplyRouteIndicators ? (
+        <SupplyWireRouteIndicators
+          wireSegment={wireSegment}
+          effectiveRoute={effectiveRoute}
+          color={colors.wireColor}
+        />
+      ) : null}
 
       {/* Route indicators (tube, wall, air, ground) — vertical circuit wires only */}
       {showVerticalRouteIndicators && (
@@ -879,17 +1019,24 @@ export const WireSegments = memo(function WireSegments({
       orderWireSegmentsForRendering(
         wireSegments.filter(
           (ws) =>
-            ws.panelId === panelId &&
-            (!diagramId || (ws.diagramId ?? ws.panelId) === diagramId)
+            ws.panelId === panelId && (!diagramId || (ws.diagramId ?? ws.panelId) === diagramId)
         )
       ),
     [diagramId, panelId, wireSegments]
+  )
+  const supplyDecorationOwnerIds = useMemo(
+    () => getSupplyWireDecorationOwnerIds(panelWires),
+    [panelWires]
   )
 
   return (
     <>
       {panelWires.map((wireSegment) => (
-        <WireSegmentComponent key={wireSegment.id} wireSegment={wireSegment} />
+        <WireSegmentComponent
+          key={wireSegment.id}
+          wireSegment={wireSegment}
+          isSupplyDecorationOwner={supplyDecorationOwnerIds.has(wireSegment.id)}
+        />
       ))}
     </>
   )

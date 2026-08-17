@@ -28,10 +28,7 @@ const GRID_PATH_ROLES = new Set<SupplyConnection['pathRole']>([
   'grid-only-bypass-ac',
   'load-ac',
 ])
-const BACKUP_PATH_ROLES = new Set<SupplyConnection['pathRole']>([
-  'inverter-backup-ac',
-  'load-ac',
-])
+const BACKUP_PATH_ROLES = new Set<SupplyConnection['pathRole']>(['inverter-backup-ac', 'load-ac'])
 
 function portKey(nodeId: string, portId: string): string {
   return `${nodeId}:${portId}`
@@ -40,7 +37,7 @@ function portKey(nodeId: string, portId: string): string {
 function addEdge(
   adjacency: Map<string, TraversalEdge[]>,
   source: string,
-  edge: TraversalEdge,
+  edge: TraversalEdge
 ): void {
   const edges = adjacency.get(source) ?? []
   edges.push(edge)
@@ -51,7 +48,7 @@ function addBidirectionalEdge(
   adjacency: Map<string, TraversalEdge[]>,
   first: string,
   second: string,
-  connectionId?: string,
+  connectionId?: string
 ): void {
   addEdge(adjacency, first, { target: second, ...(connectionId ? { connectionId } : {}) })
   addEdge(adjacency, second, { target: first, ...(connectionId ? { connectionId } : {}) })
@@ -60,24 +57,22 @@ function addBidirectionalEdge(
 function internallyConnectedPorts(
   node: SupplyNode,
   mode: SupplyMode,
-  phase: LiveAcPhase,
+  phase: LiveAcPhase
 ): SupplyPort[][] {
   const acPorts = node.ports.filter(
-    (port) => port.domain === 'AC' && port.conductors.includes(phase),
+    (port) => port.domain === 'AC' && port.conductors.includes(phase)
   )
   if (node.kind === 'ac-distribution' || node.kind === 'protection') return [acPorts]
   if (node.kind !== 'changeover-switch') return []
 
   const sourceRole = mode === 'grid' ? 'source-grid-ac' : 'source-backup-ac'
-  return [
-    acPorts.filter((port) => port.role === sourceRole || port.role === 'load-ac'),
-  ]
+  return [acPorts.filter((port) => port.role === sourceRole || port.role === 'load-ac')]
 }
 
 function buildPhaseAdjacency(
   assembly: OffGridSupplyAssembly,
   phase: LiveAcPhase,
-  mode: SupplyMode,
+  mode: SupplyMode
 ): Map<string, TraversalEdge[]> {
   const adjacency = new Map<string, TraversalEdge[]>()
   const allowedRoles = mode === 'grid' ? GRID_PATH_ROLES : BACKUP_PATH_ROLES
@@ -95,7 +90,7 @@ function buildPhaseAdjacency(
       adjacency,
       portKey(first.nodeId, first.portId),
       portKey(second.nodeId, second.portId),
-      connection.id,
+      connection.id
     )
   }
 
@@ -106,7 +101,7 @@ function buildPhaseAdjacency(
           addBidirectionalEdge(
             adjacency,
             portKey(node.id, group[firstIndex]!.id),
-            portKey(node.id, group[secondIndex]!.id),
+            portKey(node.id, group[secondIndex]!.id)
           )
         }
       }
@@ -121,19 +116,20 @@ function findRoute(
   phase: LiveAcPhase,
   mode: SupplyMode,
   targetNodeIds: ReadonlySet<string> = new Set(
-    assembly.loadHandoffs.map((handoff) => handoff.handoffNodeId),
-  ),
+    assembly.loadHandoffs.map((handoff) => handoff.handoffNodeId)
+  )
 ): SupplyRoute | undefined {
   const adjacency = buildPhaseAdjacency(assembly, phase, mode)
   const sources = assembly.nodes.flatMap((node) => {
-    const isSource = mode === 'grid' ? node.kind === 'utility-source' : node.kind === 'inverter-unit'
+    const isSource =
+      mode === 'grid' ? node.kind === 'utility-source' : node.kind === 'inverter-unit'
     if (!isSource) return []
     return node.ports
       .filter(
         (port) =>
           port.domain === 'AC' &&
           port.conductors.includes(phase) &&
-          (mode === 'grid' || port.role === 'inverter-backup-ac'),
+          (mode === 'grid' || port.role === 'inverter-backup-ac')
       )
       .map((port) => ({ key: portKey(node.id, port.id), nodeId: node.id }))
   })
@@ -143,7 +139,7 @@ function findRoute(
       return node.ports
         .filter((port) => port.domain === 'AC' && port.conductors.includes(phase))
         .map((port) => portKey(node.id, port.id))
-    }),
+    })
   )
 
   const queue = sources.map((source) => ({
@@ -174,10 +170,28 @@ function findRoute(
   return undefined
 }
 
+function sourceHasPhase(
+  assembly: OffGridSupplyAssembly,
+  phase: LiveAcPhase,
+  mode: SupplyMode
+): boolean {
+  return assembly.nodes.some((node) => {
+    const isSource =
+      mode === 'grid' ? node.kind === 'utility-source' : node.kind === 'inverter-unit'
+    if (!isSource) return false
+    return node.ports.some(
+      (port) =>
+        port.domain === 'AC' &&
+        port.conductors.includes(phase) &&
+        (mode === 'grid' || port.role === 'inverter-backup-ac')
+    )
+  })
+}
+
 function derivePathsToHandoff(
   assembly: OffGridSupplyAssembly,
   handoff: SupplyLoadHandoff | undefined,
-  presentPhases: readonly LiveAcPhase[],
+  presentPhases: readonly LiveAcPhase[]
 ): DerivedPhaseSupplyPath[] {
   const targetNodeIds = handoff ? new Set([handoff.handoffNodeId]) : undefined
   const handoffConductors = handoff ? new Set(handoff.conductors) : undefined
@@ -189,6 +203,8 @@ function derivePathsToHandoff(
 
     const gridRoute = findRoute(assembly, phase, 'grid', targetNodeIds)
     const backupRoute = findRoute(assembly, phase, 'backup', targetNodeIds)
+    const hasGridSource = sourceHasPhase(assembly, phase, 'grid')
+    const hasBackupSource = sourceHasPhase(assembly, phase, 'backup')
     const gridChangeover = nodeIdOfKind(assembly, gridRoute, 'changeover-switch')
     const backupChangeover = nodeIdOfKind(assembly, backupRoute, 'changeover-switch')
     const inverterUnitNodeId = nodeIdOfKind(assembly, backupRoute, 'inverter-unit')
@@ -196,24 +212,33 @@ function derivePathsToHandoff(
       Boolean(gridRoute && backupRoute && inverterUnitNodeId && gridChangeover) &&
       gridChangeover === backupChangeover
     const isGridOnlyThroughChangeover = Boolean(
-      gridRoute && !backupRoute && gridChangeover,
+      gridRoute && !backupRoute && gridChangeover && !hasBackupSource
+    )
+    const isBackupOnlyThroughChangeover = Boolean(
+      !gridRoute && backupRoute && backupChangeover && inverterUnitNodeId && !hasGridSource
     )
 
     return {
       phase,
       gridConnectionIds: gridRoute?.connectionIds ?? [],
       backupConnectionIds: backupRoute?.connectionIds ?? [],
-      ...(gridChangeover && (isCoordinatedBackup || isGridOnlyThroughChangeover)
+      ...((isCoordinatedBackup || isGridOnlyThroughChangeover) && gridChangeover
         ? { changeoverNodeId: gridChangeover }
+        : isBackupOnlyThroughChangeover && backupChangeover
+          ? { changeoverNodeId: backupChangeover }
+          : {}),
+      ...((isCoordinatedBackup || isBackupOnlyThroughChangeover) && inverterUnitNodeId
+        ? { inverterUnitNodeId }
         : {}),
-      ...(isCoordinatedBackup && inverterUnitNodeId ? { inverterUnitNodeId } : {}),
       state: isCoordinatedBackup
         ? 'backup-switchable'
         : isGridOnlyThroughChangeover
           ? 'grid-only-through-changeover'
-          : gridRoute && !backupRoute
-            ? 'grid-only'
-            : 'invalid',
+          : isBackupOnlyThroughChangeover
+            ? 'backup-only-through-changeover'
+            : gridRoute && !backupRoute && !gridChangeover
+              ? 'grid-only'
+              : 'invalid',
     }
   })
 }
@@ -221,7 +246,7 @@ function derivePathsToHandoff(
 function nodeIdOfKind(
   assembly: OffGridSupplyAssembly,
   route: SupplyRoute | undefined,
-  kind: SupplyNode['kind'],
+  kind: SupplyNode['kind']
 ): string | undefined {
   return assembly.nodes.find((node) => node.kind === kind && route?.nodeIds.has(node.id))?.id
 }
@@ -229,7 +254,7 @@ function nodeIdOfKind(
 /** Derive live-phase supply semantics from graph connectivity; never persist this result. */
 export function derivePhaseSupplyPaths(
   assembly: OffGridSupplyAssembly,
-  presentPhases: readonly LiveAcPhase[],
+  presentPhases: readonly LiveAcPhase[]
 ): DerivedPhaseSupplyPath[] {
   return derivePathsToHandoff(assembly, undefined, presentPhases)
 }
@@ -241,13 +266,13 @@ export function derivePhaseSupplyPaths(
  */
 export function deriveHandoffPhaseSupplyPaths(
   assembly: OffGridSupplyAssembly,
-  presentPhases: readonly LiveAcPhase[],
+  presentPhases: readonly LiveAcPhase[]
 ): DerivedHandoffPhaseSupplyPath[] {
   return assembly.loadHandoffs.flatMap((handoff) =>
     derivePathsToHandoff(assembly, handoff, presentPhases).map((path) => ({
       ...path,
       handoffId: handoff.id,
       target: handoff.target,
-    })),
+    }))
   )
 }

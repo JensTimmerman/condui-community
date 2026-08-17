@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { Group, Line, Rect, Circle, Text } from 'react-konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import { useUIStore } from '@/stores/uiStore'
-import { useBlinkingCaret, withDimensionCaret } from '@/hooks/useBlinkingCaret'
 import { useProjectStore, type ProjectState } from '@/stores/projectStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { snapToGrid } from '@/utils/plan/gridSnap'
@@ -88,6 +87,11 @@ import {
   createPlanGraphicElementDraft,
   getPlanGraphicElementAsset,
 } from '@/lib/plan/graphicElements'
+import {
+  clearFloorPlanDrawDimensionEditor,
+  setFloorPlanDrawDimensionEditor,
+  type FloorPlanDrawDimensionEditor,
+} from './floorPlanDrawDimensionEditorStore'
 
 /** Second pointer-down / click inside this window is treated as double-click (no extra vertex). */
 const FLOOR_PLAN_DRAW_DOUBLE_CLICK_MS = 400
@@ -241,10 +245,6 @@ export function FloorPlanMode({
   const [rectLockedXMeters, setRectLockedXMeters] = useState<number | null>(null)
   const [rectLockedYMeters, setRectLockedYMeters] = useState<number | null>(null)
   const [rectActiveAxis, setRectActiveAxis] = useState<'x' | 'y'>('x')
-  const dimensionCaretVisible = useBlinkingCaret(
-    (activeTool === 'drawWall' && wallDrawingState.isDrawing) ||
-      (activeTool === 'drawWallRect' && wallDrawingState.rectStartPoint != null)
-  )
 
   const drawingUndoStackRef = useRef<FloorPlanDrawingUndoSnapshot[]>([])
   const drawingRedoStackRef = useRef<FloorPlanDrawingUndoSnapshot[]>([])
@@ -1399,6 +1399,154 @@ export function FloorPlanMode({
     }
   }, [tryUndoDrawing, tryRedoDrawing, pushDrawingUndoBeforeMutation, clearDrawingUndoStacks])
 
+  const commitPenDimensionInput = useCallback(() => {
+    if (activeTool !== 'drawWall' || !wallDrawingState.isDrawing) return
+    const previewPoint = mousePreviewPositionRef.current
+    if (!previewPoint) return
+
+    const commitPoints = resolvePenEnterCommitPoints(wallDrawingState.currentPoints, previewPoint)
+    if (commitPoints && activeFloorId) {
+      commitWallWithUndo(activeFloorId, commitPoints)
+      resetDrawingState()
+      setActiveTool('select')
+      return
+    }
+
+    const typedCentimeters = Number.parseFloat(penDimensionText.trim().replace(',', '.'))
+    appendPenPoint(previewPoint, {
+      lockedLengthMeters:
+        Number.isFinite(typedCentimeters) && typedCentimeters > 0
+          ? typedCentimeters / 100
+          : penLockedLengthMeters,
+    })
+  }, [
+    activeTool,
+    wallDrawingState.isDrawing,
+    wallDrawingState.currentPoints,
+    activeFloorId,
+    commitWallWithUndo,
+    resetDrawingState,
+    setActiveTool,
+    penDimensionText,
+    appendPenPoint,
+    penLockedLengthMeters,
+  ])
+
+  const drawDimensionEditor = useMemo<FloorPlanDrawDimensionEditor | null>(() => {
+    if (!currentMousePosition) return null
+
+    if (
+      activeTool === 'drawWall' &&
+      wallDrawingState.isDrawing &&
+      wallDrawingState.currentPoints.length > 0
+    ) {
+      const start = wallDrawingState.currentPoints[wallDrawingState.currentPoints.length - 1]!
+      const dx = currentMousePosition.x - start.x
+      const dy = currentMousePosition.y - start.y
+      const centimeters = (Math.sqrt(dx * dx + dy * dy) / canvasPxPerMeter) * 100
+      return {
+        ownerId: 'draw-tool',
+        fields: [
+          {
+            id: 'length',
+            anchor: {
+              x: (start.x + currentMousePosition.x) / 2,
+              y: (start.y + currentMousePosition.y) / 2,
+            },
+            placement: 'center',
+            value: penDimensionText || centimeters.toFixed(1),
+            active: true,
+          },
+        ],
+        onActivate: () => undefined,
+        onChange: (_id, value) => setPenDimensionText(value),
+        onEnter: commitPenDimensionInput,
+        onTab: () => undefined,
+        onEscape: () => undefined,
+      }
+    }
+
+    if (activeTool === 'drawWallRect' && wallDrawingState.rectStartPoint) {
+      const start = wallDrawingState.rectStartPoint
+      let end = snapToGrid(currentMousePosition, gridSize, planView.snapToGrid)
+      if (rectLockedXMeters != null) {
+        end = {
+          ...end,
+          x: start.x + (end.x >= start.x ? 1 : -1) * rectLockedXMeters * canvasPxPerMeter,
+        }
+      }
+      if (rectLockedYMeters != null) {
+        end = {
+          ...end,
+          y: start.y + (end.y >= start.y ? 1 : -1) * rectLockedYMeters * canvasPxPerMeter,
+        }
+      }
+
+      const widthPx = Math.abs(end.x - start.x)
+      const heightPx = Math.abs(end.y - start.y)
+      const fields: FloorPlanDrawDimensionEditor['fields'] = []
+      if (widthPx > 1e-3) {
+        fields.push({
+          id: 'x',
+          anchor: { x: (start.x + end.x) / 2, y: start.y },
+          placement: 'above',
+          value: rectDimensionTextX || ((widthPx / canvasPxPerMeter) * 100).toFixed(1),
+          active: rectActiveAxis === 'x',
+        })
+      }
+      if (heightPx > 1e-3) {
+        fields.push({
+          id: 'y',
+          anchor: { x: end.x, y: (start.y + end.y) / 2 },
+          placement: 'right',
+          value: rectDimensionTextY || ((heightPx / canvasPxPerMeter) * 100).toFixed(1),
+          active: rectActiveAxis === 'y',
+        })
+      }
+      if (fields.length === 0) return null
+
+      return {
+        ownerId: 'draw-tool',
+        fields,
+        onActivate: (id) => {
+          if (id === 'x' || id === 'y') setRectActiveAxis(id)
+        },
+        onChange: (id, value) => {
+          if (id === 'x') setRectDimensionTextX(value)
+          if (id === 'y') setRectDimensionTextY(value)
+        },
+        onEnter: () => undefined,
+        onTab: () => setRectActiveAxis((axis) => (axis === 'x' ? 'y' : 'x')),
+        onEscape: () => undefined,
+      }
+    }
+
+    return null
+  }, [
+    activeTool,
+    currentMousePosition,
+    wallDrawingState.isDrawing,
+    wallDrawingState.currentPoints,
+    wallDrawingState.rectStartPoint,
+    canvasPxPerMeter,
+    penDimensionText,
+    commitPenDimensionInput,
+    gridSize,
+    planView.snapToGrid,
+    rectLockedXMeters,
+    rectLockedYMeters,
+    rectDimensionTextX,
+    rectDimensionTextY,
+    rectActiveAxis,
+  ])
+
+  useEffect(() => {
+    if (drawDimensionEditor) setFloorPlanDrawDimensionEditor(drawDimensionEditor)
+    else clearFloorPlanDrawDimensionEditor('draw-tool')
+  }, [drawDimensionEditor])
+
+  useEffect(() => () => clearFloorPlanDrawDimensionEditor('draw-tool'), [])
+
   // Expose drawing mode so global Tab (dock collapse) can defer to dimension typing.
   useEffect(() => {
     const isPenTool = activeTool === 'drawWall'
@@ -1416,6 +1564,11 @@ export function FloorPlanMode({
   // Handle keyboard events for floor plan mode
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target
+      const isNativeDimensionInput =
+        target instanceof HTMLElement && target.dataset.floorPlanDimensionInput === 'true'
+      if (isNativeDimensionInput && e.key !== 'Escape') return
+
       if (e.key === 'Escape') {
         e.preventDefault()
         e.stopPropagation()
@@ -1473,26 +1626,7 @@ export function FloorPlanMode({
         e.preventDefault()
         e.stopPropagation()
         if (isPenDrawing) {
-          const previewPoint = mousePreviewPositionRef.current
-          if (previewPoint) {
-            const commitPoints = resolvePenEnterCommitPoints(
-              wallDrawingState.currentPoints,
-              previewPoint
-            )
-            if (commitPoints && activeFloorId) {
-              commitWallWithUndo(activeFloorId, commitPoints)
-              resetDrawingState()
-              setActiveTool('select')
-              return
-            }
-            const typedCentimeters = Number.parseFloat(penDimensionText.trim().replace(',', '.'))
-            appendPenPoint(previewPoint, {
-              lockedLengthMeters:
-                Number.isFinite(typedCentimeters) && typedCentimeters > 0
-                  ? typedCentimeters / 100
-                  : penLockedLengthMeters,
-            })
-          }
+          commitPenDimensionInput()
         } else if (isStairDrawing) {
           commitCurrentStairDrawing()
         }
@@ -1545,6 +1679,7 @@ export function FloorPlanMode({
     activeFloorId,
     commitWallWithUndo,
     commitCurrentStairDrawing,
+    commitPenDimensionInput,
     appendPenPoint,
     penDimensionText,
     penLockedLengthMeters,
@@ -3036,224 +3171,6 @@ export function FloorPlanMode({
                     strokeColor="#0284c7"
                   />
                 </Group>
-              )
-            })()}
-
-          {/* Dimension overlays for pen tool */}
-          {activeTool === 'drawWall' &&
-            wallDrawingState.isDrawing &&
-            wallDrawingState.currentPoints.length > 0 &&
-            currentMousePosition &&
-            (() => {
-              const start =
-                wallDrawingState.currentPoints[wallDrawingState.currentPoints.length - 1]!
-              const end = currentMousePosition
-              const midX = (start.x + end.x) / 2
-              const midY = (start.y + end.y) / 2
-              const dx = end.x - start.x
-              const dy = end.y - start.y
-              const lenPx = Math.sqrt(dx * dx + dy * dy)
-              const lengthCentimeters = (lenPx / canvasPxPerMeter) * 100
-              const valueText = penDimensionText || lengthCentimeters.toFixed(1)
-              const label = withDimensionCaret(valueText, ' cm', true, dimensionCaretVisible)
-              const fontSize = 13 / planView.zoom
-              const paddingX = 8 / planView.zoom
-              const paddingY = 4 / planView.zoom
-              const approxCharWidth = fontSize * 0.6
-              const textWidth = Math.max(24 / planView.zoom, label.length * approxCharWidth)
-              const boxWidth = textWidth + paddingX * 2
-              const boxHeight = fontSize + paddingY * 2
-              const boxX = midX - boxWidth / 2
-              const boxY = midY - boxHeight / 2
-
-              return (
-                <>
-                  <Rect
-                    x={boxX}
-                    y={boxY}
-                    width={boxWidth}
-                    height={boxHeight}
-                    fill={theme.mode === 'dark' ? 'rgba(17,24,39,0.9)' : 'rgba(243,244,246,0.95)'}
-                    stroke={theme.mode === 'dark' ? '#e5e7eb' : '#111827'}
-                    strokeWidth={drawStrokeCanvas}
-                    cornerRadius={drawHandleRadiusCanvas * 0.5}
-                    listening={false}
-                  />
-                  <Text
-                    x={boxX}
-                    y={boxY}
-                    width={boxWidth}
-                    height={boxHeight}
-                    align="center"
-                    verticalAlign="middle"
-                    text={label}
-                    fontSize={fontSize}
-                    fontFamily={fontFamily}
-                    fill={theme.mode === 'dark' ? '#f9fafb' : '#111827'}
-                    listening={false}
-                  />
-                </>
-              )
-            })()}
-
-          {/* Dimension overlays for rectangle tool (X and Y) */}
-          {activeTool === 'drawWallRect' &&
-            wallDrawingState.rectStartPoint &&
-            currentMousePosition &&
-            (() => {
-              const start = wallDrawingState.rectStartPoint
-              let end = snapToGrid(currentMousePosition, gridSize, planView.snapToGrid)
-              if (rectLockedXMeters != null) {
-                const dx = end.x - start.x
-                const signX = dx >= 0 ? 1 : -1
-                const targetPxX = rectLockedXMeters * canvasPxPerMeter
-                end = {
-                  ...end,
-                  x: start.x + signX * targetPxX,
-                }
-              }
-              if (rectLockedYMeters != null) {
-                const dy = end.y - start.y
-                const signY = dy >= 0 ? 1 : -1
-                const targetPxY = rectLockedYMeters * canvasPxPerMeter
-                end = {
-                  ...end,
-                  y: start.y + signY * targetPxY,
-                }
-              }
-
-              const widthPx = Math.abs(end.x - start.x)
-              const heightPx = Math.abs(end.y - start.y)
-              const hasWidth = widthPx > 1e-3
-              const hasHeight = heightPx > 1e-3
-              if (!hasWidth && !hasHeight) return null
-
-              const midTopX = (start.x + end.x) / 2
-              const midTopY = start.y
-              const midRightX = end.x
-              const midRightY = (start.y + end.y) / 2
-
-              const lenXCentimeters = (widthPx / canvasPxPerMeter) * 100
-              const lenYCentimeters = (heightPx / canvasPxPerMeter) * 100
-
-              const textX = rectDimensionTextX || lenXCentimeters.toFixed(1)
-              const textY = rectDimensionTextY || lenYCentimeters.toFixed(1)
-              const labelX = withDimensionCaret(
-                textX,
-                ' cm',
-                rectActiveAxis === 'x',
-                dimensionCaretVisible
-              )
-              const labelY = withDimensionCaret(
-                textY,
-                ' cm',
-                rectActiveAxis === 'y',
-                dimensionCaretVisible
-              )
-              const fontSize = 13 / planView.zoom
-              const paddingX = 8 / planView.zoom
-              const paddingY = 4 / planView.zoom
-              const approxCharWidth = fontSize * 0.6
-
-              const textWidthX = Math.max(24 / planView.zoom, labelX.length * approxCharWidth)
-              const boxWidthX = textWidthX + paddingX * 2
-              const boxHeightX = fontSize + paddingY * 2
-              const boxXTop = midTopX - boxWidthX / 2
-              const boxYTop = midTopY - boxHeightX - 6 / planView.zoom
-
-              const textWidthY = Math.max(24 / planView.zoom, labelY.length * approxCharWidth)
-              const boxWidthY = textWidthY + paddingX * 2
-              const boxHeightY = fontSize + paddingY * 2
-              const boxXRight = midRightX + 6 / planView.zoom
-              const boxYRight = midRightY - boxHeightY / 2
-
-              return (
-                <>
-                  {hasWidth && (
-                    <>
-                      <Rect
-                        x={boxXTop}
-                        y={boxYTop}
-                        width={boxWidthX}
-                        height={boxHeightX}
-                        fill={
-                          theme.mode === 'dark' ? 'rgba(17,24,39,0.9)' : 'rgba(243,244,246,0.95)'
-                        }
-                        stroke={
-                          rectActiveAxis === 'x'
-                            ? '#0284c7'
-                            : theme.mode === 'dark'
-                              ? '#e5e7eb'
-                              : '#111827'
-                        }
-                        strokeWidth={drawStrokeCanvas}
-                        cornerRadius={drawHandleRadiusCanvas * 0.5}
-                        listening={false}
-                      />
-                      <Text
-                        x={boxXTop}
-                        y={boxYTop}
-                        width={boxWidthX}
-                        height={boxHeightX}
-                        align="center"
-                        verticalAlign="middle"
-                        text={labelX}
-                        fontSize={fontSize}
-                        fontFamily={fontFamily}
-                        fill={
-                          rectActiveAxis === 'x'
-                            ? '#0284c7'
-                            : theme.mode === 'dark'
-                              ? '#f9fafb'
-                              : '#111827'
-                        }
-                        listening={false}
-                      />
-                    </>
-                  )}
-                  {hasHeight && (
-                    <>
-                      <Rect
-                        x={boxXRight}
-                        y={boxYRight}
-                        width={boxWidthY}
-                        height={boxHeightY}
-                        fill={
-                          theme.mode === 'dark' ? 'rgba(17,24,39,0.9)' : 'rgba(243,244,246,0.95)'
-                        }
-                        stroke={
-                          rectActiveAxis === 'y'
-                            ? '#0284c7'
-                            : theme.mode === 'dark'
-                              ? '#e5e7eb'
-                              : '#111827'
-                        }
-                        strokeWidth={drawStrokeCanvas}
-                        cornerRadius={drawHandleRadiusCanvas * 0.5}
-                        listening={false}
-                      />
-                      <Text
-                        x={boxXRight}
-                        y={boxYRight}
-                        width={boxWidthY}
-                        height={boxHeightY}
-                        align="center"
-                        verticalAlign="middle"
-                        text={labelY}
-                        fontSize={fontSize}
-                        fontFamily={fontFamily}
-                        fill={
-                          rectActiveAxis === 'y'
-                            ? '#0284c7'
-                            : theme.mode === 'dark'
-                              ? '#f9fafb'
-                              : '#111827'
-                        }
-                        listening={false}
-                      />
-                    </>
-                  )}
-                </>
               )
             })()}
 

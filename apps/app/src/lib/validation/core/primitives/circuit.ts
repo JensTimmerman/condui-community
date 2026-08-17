@@ -25,6 +25,7 @@ import {
   FIXED_APPLIANCE_DEDICATED_HINT_EXCLUDED_SYMBOLS,
 } from './common'
 import { isHouseholdInstallation } from '@/lib/installationProfile'
+import { getSupplyAssembliesFromProject } from '@/lib/projectV2/electrical'
 
 /** Circuit that owns `endpointId`, including nested panel circuits. */
 function findCircuitContainingEndpoint(
@@ -663,6 +664,28 @@ function installationHasMinimumLightingCircuits(
   const country = projectInstallation(project)?.address?.country
   if (country && country !== 'BE') return { passed: true }
   if (!isHouseholdInstallation(projectInstallation(project))) return { passed: true }
+
+  // A project that only draws the supply topology is not a complete dwelling
+  // installation. Do not infer missing household load circuits from that limited scope.
+  const householdEndUseKinds = new Set([
+    'lighting',
+    'mixed',
+    'sockets',
+    'fixed_appliance',
+    'stove',
+    'hvac',
+    'boiler',
+    'heating',
+    'ev',
+    'doorbell',
+  ])
+  const hasModeledHouseholdLoad = query.getCircuits().some(
+    (circuit) =>
+      circuit.endpoints.length > 0 && householdEndUseKinds.has(query.getCircuitKind(circuit.id))
+  )
+  if (getSupplyAssembliesFromProject(project).length > 0 && !hasModeledHouseholdLoad) {
+    return { passed: true }
+  }
 
   const threshold = (params?.threshold as number) || 2
   const lightingCircuitIds = listLightingFeedCircuits(query)

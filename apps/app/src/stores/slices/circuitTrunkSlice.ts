@@ -39,9 +39,13 @@ import {
   reconcileDirectConverterDcDevices,
   reconcileDirectConverterGridProtections,
   downgradeChangeoverToDirectConverterAssembly,
+  attachDirectConverterBackupCircuit,
+  reconcileChangeoverSupplyAssembly,
   reconcileInverterUnitMultiplier,
+  reconcileSupplyAssemblyAcConductorFlow,
   reconcileSupplyAssemblyBranchProtections,
 } from '@/lib/supplyAssembly/editorIntegration'
+import { restoreDirectConverterBackupProtectionFromTrunkDevices } from '@/lib/supplyAssembly/directConverterBackupUpgrade'
 import { summarizeConverterDcPersistence } from '@/lib/supplyAssembly/persistenceDiagnostics'
 import {
   getElectricalInstallationFromProject,
@@ -862,6 +866,18 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
                 syncPanelBackupBusPhaseOrderInProject(state.currentProject, owningPanel.id)
               }
             }
+            if (device.symbol === 'source_changeover') {
+              reconcileChangeoverSupplyAssembly(state.currentProject, device)
+              if (owningPanel) {
+                syncPanelBackupBusPhaseOrderInProject(state.currentProject, owningPanel.id)
+              }
+            }
+            if (owningPanel) {
+              reconcileSupplyAssemblyAcConductorFlow(
+                state.currentProject,
+                container?.scope === 'shared' ? undefined : owningPanel.id
+              )
+            }
             syncManualChronologyForInstallDateUpdate(
               state.currentProject,
               { id: deviceId, type: 'trunkDevice' },
@@ -905,11 +921,15 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
               const owningPanel = findPanelOwningSupplyDevice(project, deviceId)
               const target = devices[index]
               const removedIds = new Set([deviceId])
+              let downgradedGridOrder: string[] | undefined
               if (target?.symbol === 'source_changeover') {
+                const backupOutputDevices = devices.filter(
+                  (device) => device.supplyPath === 'backup-output'
+                )
                 const backupConverter = devices.find(
                   (device) => device.supplyPath === 'backup' && device.symbol === 'inverter'
                 )
-                const downgraded =
+                let downgraded =
                   owningPanel && backupConverter
                     ? downgradeChangeoverToDirectConverterAssembly(
                         project,
@@ -918,7 +938,30 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
                         backupConverter
                       )
                     : undefined
+                const restoredBackup =
+                  downgraded && backupConverter
+                    ? restoreDirectConverterBackupProtectionFromTrunkDevices(
+                        project,
+                        backupConverter,
+                        backupOutputDevices
+                      )
+                    : null
+                if (downgraded && restoredBackup && owningPanel && backupConverter) {
+                  owningPanel.protections.push(restoredBackup.protection)
+                  downgraded = attachDirectConverterBackupCircuit(
+                    downgraded,
+                    backupConverter,
+                    restoredBackup.protection,
+                    restoredBackup.circuit,
+                    owningPanel.id
+                  )
+                  backupOutputDevices.forEach((device) => removedIds.add(device.id))
+                }
                 if (downgraded) {
+                  downgradedGridOrder = [
+                    ...devices.filter((device) => device.supplyPath === 'changeover-grid'),
+                    ...devices.filter((device) => device.supplyPath === 'converter-grid'),
+                  ].map((device) => device.id)
                   const assemblies = getMutableSupplyAssembliesForProject(project)
                   const assemblyIndex = assemblies.findIndex(
                     (assembly) => assembly.id === downgraded.id
@@ -928,7 +971,13 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
                 }
                 devices.forEach((device) => {
                   if (device.supplyPath === 'changeover-grid') {
-                    delete device.supplyPath
+                    if (downgraded) {
+                      device.supplyPath = 'converter-grid'
+                      device.converterGridPlacement = 'inline'
+                    } else {
+                      delete device.supplyPath
+                      delete device.converterGridPlacement
+                    }
                   }
                   if (downgraded && device.id === backupConverter?.id) {
                     device.supplyPath = 'converter-branch'
@@ -964,6 +1013,19 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
                 if (removedIds.has(devices[deviceIndex]!.id)) {
                   devices.splice(deviceIndex, 1)
                 }
+              }
+              if (downgradedGridOrder?.length) {
+                const order = new Map(downgradedGridOrder.map((id, orderIndex) => [id, orderIndex]))
+                const gridDevices = devices
+                  .filter((device) => order.has(device.id))
+                  .sort((left, right) => order.get(left.id)! - order.get(right.id)!)
+                for (let deviceIndex = devices.length - 1; deviceIndex >= 0; deviceIndex--) {
+                  if (order.has(devices[deviceIndex]!.id)) devices.splice(deviceIndex, 1)
+                }
+                const converterIndex = devices.findIndex(
+                  (device) => device.supplyPath === 'converter-branch'
+                )
+                devices.splice(converterIndex < 0 ? devices.length : converterIndex, 0, ...gridDevices)
               }
               devices.forEach((device, deviceIndex) => {
                 device.trunkPosition = deviceIndex

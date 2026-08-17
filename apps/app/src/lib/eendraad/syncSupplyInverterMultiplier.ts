@@ -3,7 +3,10 @@ import { useProjectStore } from '@/stores/projectStore'
 import { useUIStore } from '@/stores/uiStore'
 import type { Placement, TrunkDevice } from '@/types/schema'
 import { generateId } from '@/utils'
-import { getSupplyInverterSerialNumbers } from '@/utils/inverterMultipliers'
+import {
+  getSupplyDeviceSerialNumbers,
+  supportsSupplyDeviceMultiplier,
+} from '@/utils/inverterMultipliers'
 import {
   getDefaultSupplyConverterAcPhaseAssignment,
   getSupplyInverterUnitPhaseAssignments,
@@ -20,20 +23,17 @@ export interface SyncSupplyInverterMultiplierDeps {
   >['nominalVoltage']['system']
 }
 
-export function syncSupplyInverterMultiplierCount(
-  deps: SyncSupplyInverterMultiplierDeps,
+export type SyncSupplyDeviceMultiplierDeps = SyncSupplyInverterMultiplierDeps
+
+export function syncSupplyDeviceMultiplierCount(
+  deps: SyncSupplyDeviceMultiplierDeps,
   deviceId: string,
   target: number
 ): boolean {
-  if (!Number.isInteger(target) || target < 1 || target > 3) return false
   const device = deps.getDevice(deviceId)
-  if (
-    !device ||
-    device.symbol !== 'inverter' ||
-    (device.supplyPath !== 'converter-branch' && device.supplyPath !== 'backup')
-  ) {
-    return false
-  }
+  const max = device?.symbol === 'inverter' ? 3 : 99
+  if (!device || !supportsSupplyDeviceMultiplier(device)) return false
+  if (!Number.isInteger(target) || target < 1 || target > max) return false
 
   const placements = [...(device.placements ?? [])]
   const basePlacement = placements[0]
@@ -53,24 +53,61 @@ export function syncSupplyInverterMultiplierCount(
     })
   }
 
-  const serialNumbers = getSupplyInverterSerialNumbers(device).slice(0, target)
+  const serialNumbers = getSupplyDeviceSerialNumbers(device).slice(0, target)
   while (serialNumbers.length < target) serialNumbers.push('')
-  const system = deps.getInstallationSystem()
-  const previousUnitAssignments = getSupplyInverterUnitPhaseAssignments(device, system, target)
-  const conversionProps = {
-    ...(device.conversionProps ?? {}),
+  const certificationPatch = {
     serialNumber: target === 1 ? serialNumbers[0] || undefined : undefined,
     serialNumbers: target > 1 ? serialNumbers : undefined,
-    acPhaseAssignment:
-      target >= 3
-        ? getDefaultSupplyConverterAcPhaseAssignment(system)
-        : target === 1
-          ? previousUnitAssignments[0]
-          : undefined,
-    acPhaseAssignments: target === 2 ? previousUnitAssignments : undefined,
   }
-  deps.updateDevice(deviceId, { placements: nextPlacements, conversionProps })
+
+  if (device.symbol === 'battery') {
+    deps.updateDevice(deviceId, {
+      placements: nextPlacements,
+      batteryProps: { ...(device.batteryProps ?? {}), ...certificationPatch },
+    })
+    return true
+  }
+  if (device.symbol === 'solar_panel') {
+    deps.updateDevice(deviceId, {
+      placements: nextPlacements,
+      solarPanelProps: { ...(device.solarPanelProps ?? {}), ...certificationPatch },
+    })
+    return true
+  }
+
+  const system = deps.getInstallationSystem()
+  const previousUnitAssignments = getSupplyInverterUnitPhaseAssignments(device, system, target)
+  deps.updateDevice(deviceId, {
+    placements: nextPlacements,
+    conversionProps: {
+      ...(device.conversionProps ?? {}),
+      ...certificationPatch,
+      acPhaseAssignment:
+        target >= 3
+          ? getDefaultSupplyConverterAcPhaseAssignment(system)
+          : target === 1
+            ? previousUnitAssignments[0]
+            : undefined,
+      acPhaseAssignments: target === 2 ? previousUnitAssignments : undefined,
+    },
+  })
   return true
+}
+
+export function syncSupplyInverterMultiplierCount(
+  deps: SyncSupplyInverterMultiplierDeps,
+  deviceId: string,
+  target: number
+): boolean {
+  const device = deps.getDevice(deviceId)
+  if (
+    !device ||
+    device.symbol !== 'inverter' ||
+    (device.supplyPath !== 'converter-branch' && device.supplyPath !== 'backup')
+  ) {
+    return false
+  }
+  return syncSupplyDeviceMultiplierCount(deps, deviceId, target)
 }
 
 export function createSyncSupplyInverterMultiplierDeps(): SyncSupplyInverterMultiplierDeps {
@@ -90,4 +127,4 @@ export function createSyncSupplyInverterMultiplierDeps(): SyncSupplyInverterMult
   }
 }
 
-export { getSupplyInverterMultiplier } from '@/utils/inverterMultipliers'
+export { getSupplyDeviceMultiplier, getSupplyInverterMultiplier } from '@/utils/inverterMultipliers'

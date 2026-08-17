@@ -114,6 +114,20 @@ type PhaseProtectionDevice = {
 
 type PhaseCompatibilityReason = 'neutralUnavailable' | 'tooManyPoles' | 'tooFewPoles'
 
+type PhaseCompatibilityCandidate = {
+  device: PhaseProtectionDevice
+  assignment: CircuitPhaseAssignment
+  reason: PhaseCompatibilityReason
+  offenderKind: 'protection' | 'device'
+  poleCount: number
+  availablePoleCount: number
+  deviceLabel: string
+}
+
+function phaseAssignmentGroupKey(assignment: CircuitPhaseAssignment): string {
+  return `${assignment.kind}:${assignment.phases.join('-')}:${assignment.neutral ?? ''}`
+}
+
 function getPhaseCompatibilityReason(
   device: PhaseProtectionDevice,
   assignment: CircuitPhaseAssignment
@@ -142,9 +156,9 @@ function protectionPhaseCompatibility(context: CheckContext): Issue[] {
   const panels = projectPanels(project)
   const fullAssignment = getFullInstallationPhaseAssignment(system)
   const panelIncoming = getPanelIncomingPhaseState(installation, panels, panel)
-  const issues: Issue[] = []
+  const candidates: PhaseCompatibilityCandidate[] = []
   const seen = new Set<string>()
-  const addIssue = (
+  const addCandidate = (
     device: PhaseProtectionDevice,
     assignment: CircuitPhaseAssignment | undefined,
     offenderKind: 'protection' | 'device'
@@ -152,7 +166,8 @@ function protectionPhaseCompatibility(context: CheckContext): Issue[] {
     if (!assignment) return
     const reason = getPhaseCompatibilityReason(device, assignment)
     if (!reason) return
-    const key = `${device.id}:${reason}`
+    const assignmentKey = phaseAssignmentGroupKey(assignment)
+    const key = `${device.id}:${reason}:${assignmentKey}`
     if (seen.has(key)) return
     seen.add(key)
 
@@ -164,41 +179,14 @@ function protectionPhaseCompatibility(context: CheckContext): Issue[] {
       i18n.t('validation.primitives.protectionPhaseCompatibility.deviceLabel', {
         defaultValue: 'Protection',
       })
-    const messageKey = `validation.primitives.protectionPhaseCompatibility.${reason}.message`
-    const detailsKey = `validation.primitives.protectionPhaseCompatibility.${reason}.details`
-    const defaults: Record<PhaseCompatibilityReason, { message: string; details: string }> = {
-      neutralUnavailable: {
-        message: `{{deviceLabel}} uses neutral, but this network has none`,
-        details: 'This combination may not make sense. Check the phase or pole setting.',
-      },
-      tooManyPoles: {
-        message: `{{deviceLabel}} is {{poleCount}}-pole; that may be too many for this {{availablePoleCount}}-pole supply`,
-        details: 'This combination may not make sense. Check the pole setting.',
-      },
-      tooFewPoles: {
-        message: `{{deviceLabel}} is {{poleCount}}-pole; that may be too few for this three-phase network`,
-        details: 'This combination may not make sense. Check the pole setting.',
-      },
-    }
-    issues.push({
-      id: `be.areibook1.2025.phase-protection-compatibility:board:${panel.id}:${device.id}:${reason}`,
-      ruleId: 'be.areibook1.2025.phase-protection-compatibility',
-      severity: 'warning',
-      jurisdiction: installation.address.country || 'BE',
-      rulesetVersion: '2025',
-      scope: { type: 'board', id: panel.id },
-      offenders: [{ kind: offenderKind, id: device.id, viewHint: 'both' }],
-      message: i18n.t(messageKey, {
-        deviceLabel,
-        poleCount,
-        availablePoleCount,
-        defaultValue: defaults[reason].message,
-      }),
-      details: i18n.t(detailsKey, {
-        defaultValue: defaults[reason].details,
-      }),
-      citations: [],
-      tags: ['phase', 'protection', 'consistency'],
+    candidates.push({
+      device,
+      assignment,
+      reason,
+      offenderKind,
+      poleCount,
+      availablePoleCount,
+      deviceLabel,
     })
   }
 
@@ -209,7 +197,7 @@ function protectionPhaseCompatibility(context: CheckContext): Issue[] {
     if (assignments.length === 0) {
       assignments.push(panelIncoming.assignment ?? fullAssignment)
     }
-    for (const assignment of assignments) addIssue(protection, assignment, 'protection')
+    for (const assignment of assignments) addCandidate(protection, assignment, 'protection')
   }
 
   // Root-feed devices are ordered from supply to bus. Once the incoming protection
@@ -219,14 +207,88 @@ function protectionPhaseCompatibility(context: CheckContext): Issue[] {
   let rootAssignment = projection?.rootFeed?.phaseAssignment ?? fullAssignment
   for (const device of rootDevices) {
     if (trunkDeviceCountsAsProtection(device)) {
-      addIssue(device, rootAssignment, 'device')
+      addCandidate(device, rootAssignment, 'device')
     }
     if (device.id === panelIncoming.lockedByProtectionId) {
       rootAssignment = panelIncoming.assignment
     }
   }
 
-  return issues
+  const grouped = new Map<string, PhaseCompatibilityCandidate[]>()
+  for (const candidate of candidates) {
+    const key = phaseAssignmentGroupKey(candidate.assignment)
+    const bucket = grouped.get(key) ?? []
+    bucket.push(candidate)
+    grouped.set(key, bucket)
+  }
+
+  const defaults: Record<PhaseCompatibilityReason, { message: string; details: string }> = {
+    neutralUnavailable: {
+      message: `{{deviceLabel}} uses neutral, but this network has none`,
+      details: 'This combination may not make sense. Check the phase or pole setting.',
+    },
+    tooManyPoles: {
+      message: `{{deviceLabel}} is {{poleCount}}-pole; that may be too many for this {{availablePoleCount}}-pole supply`,
+      details: 'This combination may not make sense. Check the pole setting.',
+    },
+    tooFewPoles: {
+      message: `{{deviceLabel}} is {{poleCount}}-pole; that may be too few for this three-phase network`,
+      details: 'This combination may not make sense. Check the pole setting.',
+    },
+  }
+
+  return Array.from(grouped.entries()).map(([assignmentKey, group]): Issue => {
+    const first = group[0]!
+    const isGrouped = group.length > 1
+    const genericLabel = i18n.t('validation.primitives.protectionPhaseCompatibility.deviceLabel', {
+      defaultValue: 'Protection',
+    })
+    const deviceLabels = group
+      .map((candidate, index) => candidate.device.label?.trim() || `${genericLabel} ${index + 1}`)
+      .join(', ')
+    const message = isGrouped
+      ? i18n.t('validation.primitives.protectionPhaseCompatibility.group.message', {
+          count: group.length,
+          availablePoleCount: first.availablePoleCount,
+          defaultValue:
+            '{{count}} protections may not match this {{availablePoleCount}}-pole supply',
+        })
+      : i18n.t(
+          `validation.primitives.protectionPhaseCompatibility.${first.reason}.message`,
+          {
+            deviceLabel: first.deviceLabel,
+            poleCount: first.poleCount,
+            availablePoleCount: first.availablePoleCount,
+            defaultValue: defaults[first.reason].message,
+          }
+        )
+    const details = isGrouped
+      ? i18n.t('validation.primitives.protectionPhaseCompatibility.group.details', {
+          deviceLabels,
+          defaultValue:
+            'Affected protections: {{deviceLabels}}. Check their phase and pole settings at this supply transition.',
+        })
+      : i18n.t(`validation.primitives.protectionPhaseCompatibility.${first.reason}.details`, {
+          defaultValue: defaults[first.reason].details,
+        })
+    return {
+      id: `be.areibook1.2025.phase-protection-compatibility:board:${panel.id}:${assignmentKey}:${isGrouped ? 'group' : first.reason}`,
+      ruleId: 'be.areibook1.2025.phase-protection-compatibility',
+      severity: 'warning',
+      jurisdiction: installation.address.country || 'BE',
+      rulesetVersion: '2025',
+      scope: { type: 'board', id: panel.id },
+      offenders: group.map((candidate) => ({
+        kind: candidate.offenderKind,
+        id: candidate.device.id,
+        viewHint: 'both',
+      })),
+      message,
+      details,
+      citations: [],
+      tags: ['phase', 'protection', 'consistency'],
+    }
+  })
 }
 
 function canDisconnectAllActiveConductors(

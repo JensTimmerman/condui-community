@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { symbols, type SymbolMetadata } from '@/lib/symbols'
-import { fuzzyMatchAny } from '@/utils/search'
+import { filterBySearchRelevance } from '@/utils/search'
 import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
 import { isSymbolAvailableInLibrary } from '@/lib/supplyTopologyFeature'
 
@@ -70,15 +70,14 @@ export const useLibraryStore = create<LibraryState>()(
 
         // Filter by search query with fuzzy matching and synonyms
         if (searchQuery) {
-          filtered = filtered.filter((s) => {
-            // Check all name variations and tags with fuzzy matching
-            const searchableTexts = [
+          filtered = filterBySearchRelevance(filtered, searchQuery, (s) => {
+            // Check all name variations and tags, preferring literal matches.
+            return [
               s.name,
               s.nameNL,
               s.nameFR,
               ...s.tags,
             ]
-            return fuzzyMatchAny(searchableTexts, searchQuery)
           })
         }
 

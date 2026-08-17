@@ -16,9 +16,7 @@ import type {
   TransformerSafetyType,
   TrunkDevice,
 } from '@/types/schema'
-import {
-  CERTIFICATION_LISTING_VISIBILITY_KEY,
-} from '@/lib/certificationLabels'
+import { CERTIFICATION_LISTING_VISIBILITY_KEY } from '@/lib/certificationLabels'
 import { isSymbolLabelVisible } from '@/lib/symbolLabels'
 import {
   applyNominalVoltageSystem,
@@ -80,6 +78,8 @@ import {
 } from '../ProtectionDeviceElectricalFields'
 import { SynergridListPicker } from '../SynergridListPicker'
 import {
+  getSupplyDeviceMultiplier,
+  getSupplyDeviceSerialNumbers,
   getSupplyInverterMultiplier,
   getSupplyInverterSerialNumbers,
 } from '@/utils/inverterMultipliers'
@@ -101,6 +101,7 @@ import {
   getPanelFeedOrganization,
   panelCanConfigureBackupOutput,
   panelHasModularChangeover,
+  panelRequiresSplitFeed,
   type PanelFeedOrganization,
 } from '@/lib/panel/panelFeedOrganization'
 import { getPanelBusSections } from '@/lib/panel/panelBusSections'
@@ -125,23 +126,29 @@ export function TrunkDeviceProperties({
       ensureJunctionPanelPlacementForLabel: state.ensureJunctionPanelPlacementForLabel,
       addJunctionPanelPlacement: state.addJunctionPanelPlacement,
       removeJunctionPanelPlacement: state.removeJunctionPanelPlacement,
-    })),
+    }))
   )
   const activeFloorId = useUIStore((state) => state.activeFloorId)
   const { synergridCatalog: showSynergridCatalog } = useEditionFeatureAvailability(
-    currentProject?.project.id,
+    currentProject?.project.id
   )
   const supplyProtectionTypeOptions = useMemo(
     () => getProtectionTypeDropdownOptions(t, 'supplyTrunk'),
     [t]
   )
   const result = useProjectStore(
-    useShallow((state: ProjectState) => state.getTrunkDeviceById(deviceId)),
+    useShallow((state: ProjectState) => state.getTrunkDeviceById(deviceId))
   )
   const updateTrunkDevice = useProjectStore((state: ProjectState) => state.updateTrunkDevice)
-  const updateSupplyTrunkDevice = useProjectStore((state: ProjectState) => state.updateSupplyTrunkDevice)
-  const updateGroundTrunkDevice = useProjectStore((state: ProjectState) => state.updateGroundTrunkDevice)
-  const getProtectionForCircuit = useProjectStore((state: ProjectState) => state.getProtectionForCircuit)
+  const updateSupplyTrunkDevice = useProjectStore(
+    (state: ProjectState) => state.updateSupplyTrunkDevice
+  )
+  const updateGroundTrunkDevice = useProjectStore(
+    (state: ProjectState) => state.updateGroundTrunkDevice
+  )
+  const getProtectionForCircuit = useProjectStore(
+    (state: ProjectState) => state.getProtectionForCircuit
+  )
   const getCircuitIdentifier = useProjectStore((state: ProjectState) => state.getCircuitIdentifier)
   const [junctionPanelPickerOpen, setJunctionPanelPickerOpen] = useState(false)
   const [synergridPickerOpen, setSynergridPickerOpen] = useState(false)
@@ -178,25 +185,28 @@ export function TrunkDeviceProperties({
     : false
 
   // Helper to update the device (circuit, supply, or ground trunk device)
-  const handleUpdate = useCallback((updates: Partial<TrunkDevice>) => {
-    if (!device) return
-    if (isSupplyDevice) {
-      updateSupplyTrunkDevice(deviceId, updates)
-    } else if (isGroundDevice) {
-      updateGroundTrunkDevice(deviceId, updates)
-    } else if (circuit) {
-      updateTrunkDevice(circuit.id, deviceId, updates)
-    }
-  }, [
-    circuit,
-    device,
-    deviceId,
-    isGroundDevice,
-    isSupplyDevice,
-    updateGroundTrunkDevice,
-    updateSupplyTrunkDevice,
-    updateTrunkDevice,
-  ])
+  const handleUpdate = useCallback(
+    (updates: Partial<TrunkDevice>) => {
+      if (!device) return
+      if (isSupplyDevice) {
+        updateSupplyTrunkDevice(deviceId, updates)
+      } else if (isGroundDevice) {
+        updateGroundTrunkDevice(deviceId, updates)
+      } else if (circuit) {
+        updateTrunkDevice(circuit.id, deviceId, updates)
+      }
+    },
+    [
+      circuit,
+      device,
+      deviceId,
+      isGroundDevice,
+      isSupplyDevice,
+      updateGroundTrunkDevice,
+      updateSupplyTrunkDevice,
+      updateTrunkDevice,
+    ]
+  )
 
   // Supply converters carry one explicit AC phase set shared by both AC ports.
   useEffect(() => {
@@ -223,8 +233,7 @@ export function TrunkDeviceProperties({
     if (Object.keys(updates).length > 0) handleUpdate(updates)
   }, [device, handleUpdate, isInlineSwitch])
   const canUseSynergridList =
-    showSynergridCatalog &&
-    (device?.symbol === 'rectifier' || device?.symbol === 'inverter')
+    showSynergridCatalog && (device?.symbol === 'rectifier' || device?.symbol === 'inverter')
   const synergridCatalogFocus = getSynergridFocusForCircuit(circuit, device?.symbol)
 
   useEffect(() => {
@@ -280,14 +289,19 @@ export function TrunkDeviceProperties({
     : 'other'
   const em = device.energyMeterProps || {}
   const conv = device.conversionProps || {}
+  const supplyDeviceMultiplier = getSupplyDeviceMultiplier(device)
+  const supplyDeviceSerialNumbers = getSupplyDeviceSerialNumbers(device)
+  const selectedSupplyUnitIndex = placementId
+    ? (device.placements?.findIndex((placement) => placement.id === placementId) ?? -1)
+    : -1
+  const isGroupedSupplyDevice = supplyDeviceMultiplier > 1
+  const isSelectedSupplyUnit = isGroupedSupplyDevice && selectedSupplyUnitIndex >= 0
   const inverterMultiplier = getSupplyInverterMultiplier(device)
   const converterPhaseOptions =
     isSupplyDevice && installationSystem && supportsExplicitPhaseSelection(installationSystem)
       ? getPhaseAssignmentOptions(installationSystem).filter((option) => {
           const kind = option.assignment?.kind
-          return (
-            kind === 'single_phase' || kind === 'phase_to_phase' || kind === 'three_phase'
-          )
+          return kind === 'single_phase' || kind === 'phase_to_phase' || kind === 'three_phase'
         })
       : []
   const inverterUnitPhaseOptions = converterPhaseOptions.filter((option) => {
@@ -301,7 +315,7 @@ export function TrunkDeviceProperties({
   const inverterSerialNumbers = getSupplyInverterSerialNumbers(device)
   const selectedInverterUnitIndex =
     device.symbol === 'inverter' && placementId
-      ? device.placements?.findIndex((placement) => placement.id === placementId) ?? -1
+      ? (device.placements?.findIndex((placement) => placement.id === placementId) ?? -1)
       : -1
   const isGroupedInverter = device.symbol === 'inverter' && inverterMultiplier > 1
   const isSelectedInverterUnit = isGroupedInverter && selectedInverterUnitIndex >= 0
@@ -321,6 +335,19 @@ export function TrunkDeviceProperties({
     const battery = device.batteryProps ?? {}
     const solar = device.solarPanelProps ?? {}
     const certification = isBattery ? battery : solar
+    const updateSupplyDeviceSerialNumber = (index: number, serialNumber: string) => {
+      const serialNumbers = [...supplyDeviceSerialNumbers]
+      serialNumbers[index] = serialNumber
+      if (isBattery) {
+        handleUpdate({
+          batteryProps: { ...battery, serialNumber: undefined, serialNumbers },
+        })
+      } else {
+        handleUpdate({
+          solarPanelProps: { ...solar, serialNumber: undefined, serialNumbers },
+        })
+      }
+    }
     const updateNumber = (value: string, apply: (next: number | undefined) => void) => {
       const parsed = value === '' ? undefined : Number(value)
       apply(parsed === undefined || Number.isFinite(parsed) ? parsed : undefined)
@@ -335,6 +362,22 @@ export function TrunkDeviceProperties({
           },
         },
       })
+    const diagramFieldLabel = (text: string, key: string) => {
+      const visible = isSymbolLabelVisible(device.symbolLabelDisplay, key, true)
+      return (
+        <div className="flex items-center gap-2 mb-1">
+          <label className={labelClass + ' mb-0'}>{text}</label>
+          <button
+            type="button"
+            onClick={() => setDiagramVisibility(key, !visible)}
+            className={visibilityToggleClass(visible)}
+            title={visible ? t('common.hide', 'Hide') : t('common.show', 'Show')}
+          >
+            {visible ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+          </button>
+        </div>
+      )
+    }
 
     return (
       <div className="space-y-4">
@@ -365,7 +408,7 @@ export function TrunkDeviceProperties({
         {isBattery ? (
           <div className="space-y-2">
             <div>
-              <label className={labelClass}>{t('endpoints.battery.voltage', 'Voltage (V)')}</label>
+              {diagramFieldLabel(t('endpoints.battery.voltage', 'Voltage (V)'), 'batteryVoltage')}
               <input
                 type="number"
                 min={0}
@@ -379,9 +422,10 @@ export function TrunkDeviceProperties({
               />
             </div>
             <div>
-              <label className={labelClass}>
-                {t('endpoints.battery.capacity', 'Capacity (kWh)')}
-              </label>
+              {diagramFieldLabel(
+                t('endpoints.battery.capacity', 'Capacity (kWh)'),
+                'batteryCapacity'
+              )}
               <input
                 type="number"
                 min={0}
@@ -399,9 +443,7 @@ export function TrunkDeviceProperties({
         ) : (
           <div className="space-y-2">
             <div>
-              <label className={labelClass}>
-                {t('endpoints.solarPanel.wattage', 'Wattage (W)')}
-              </label>
+              {diagramFieldLabel(t('endpoints.solarPanel.wattage', 'Wattage (W)'), 'solarPower')}
               <input
                 type="number"
                 min={0}
@@ -415,9 +457,7 @@ export function TrunkDeviceProperties({
               />
             </div>
             <div>
-              <label className={labelClass}>
-                {t('endpoints.solarPanel.voltage', 'Voltage (V)')}
-              </label>
+              {diagramFieldLabel(t('endpoints.solarPanel.voltage', 'Voltage (V)'), 'solarVoltage')}
               <input
                 type="number"
                 min={0}
@@ -433,13 +473,28 @@ export function TrunkDeviceProperties({
           </div>
         )}
         <CertificationListingFields
-          fields={['brand', 'model', 'serialNumber']}
-          values={certification}
-          onCommit={(patch) =>
-            isBattery
-              ? handleUpdate({ batteryProps: { ...battery, ...patch } })
-              : handleUpdate({ solarPanelProps: { ...solar, ...patch } })
+          fields={
+            isGroupedSupplyDevice && !isSelectedSupplyUnit
+              ? ['brand', 'model']
+              : ['brand', 'model', 'serialNumber']
           }
+          values={{
+            ...certification,
+            serialNumber: isSelectedSupplyUnit
+              ? supplyDeviceSerialNumbers[selectedSupplyUnitIndex]
+              : certification.serialNumber,
+          }}
+          onCommit={(patch) => {
+            if (isSelectedSupplyUnit && 'serialNumber' in patch) {
+              updateSupplyDeviceSerialNumber(selectedSupplyUnitIndex, patch.serialNumber ?? '')
+              return
+            }
+            if (isBattery) {
+              handleUpdate({ batteryProps: { ...battery, ...patch } })
+            } else {
+              handleUpdate({ solarPanelProps: { ...solar, ...patch } })
+            }
+          }}
           numberFields={
             isBattery
               ? [
@@ -453,9 +508,7 @@ export function TrunkDeviceProperties({
                 ]
               : undefined
           }
-          onNumberCommit={(_, powerKw) =>
-            handleUpdate({ batteryProps: { ...battery, powerKw } })
-          }
+          onNumberCommit={(_, powerKw) => handleUpdate({ batteryProps: { ...battery, powerKw } })}
           labelClass={labelClass}
           selectClass={selectClass}
           t={t}
@@ -477,6 +530,23 @@ export function TrunkDeviceProperties({
           }
           visibilityToggleClass={visibilityToggleClass}
         />
+        {isGroupedSupplyDevice && !isSelectedSupplyUnit && (
+          <div className="space-y-2">
+            {supplyDeviceSerialNumbers.map((serialNumber, index) => (
+              <div key={index}>
+                <label className={labelClass}>
+                  {t('endpoints.certification.serialNumber', 'Serial number')} {index + 1}
+                </label>
+                <DebouncedTextInput
+                  type="text"
+                  value={serialNumber}
+                  onCommit={(value) => updateSupplyDeviceSerialNumber(index, value)}
+                  className={selectClass}
+                />
+              </div>
+            ))}
+          </div>
+        )}
         <div>
           <label className={labelClass}>{t('endpoints.notes', 'Notes')}</label>
           <DebouncedTextarea
@@ -516,7 +586,10 @@ export function TrunkDeviceProperties({
             project={currentProject}
             inheritedYear={
               currentProject
-                ? getInstallDateTargetInheritedYear(currentProject, { id: device.id, type: 'trunkDevice' })
+                ? getInstallDateTargetInheritedYear(currentProject, {
+                    id: device.id,
+                    type: 'trunkDevice',
+                  })
                 : undefined
             }
             onUpdate={(updates) =>
@@ -628,10 +701,12 @@ export function TrunkDeviceProperties({
             className={selectClass}
           />
         </div>
-        {([
-          ['port1Label', 'changeoverPort1Label', port1Visible, t('supply.port1', 'Port 1')],
-          ['port2Label', 'changeoverPort2Label', port2Visible, t('supply.port2', 'Port 2')],
-        ] as const).map(([valueKey, visibilityKey, visible, label]) => (
+        {(
+          [
+            ['port1Label', 'changeoverPort1Label', port1Visible, t('supply.port1', 'Port 1')],
+            ['port2Label', 'changeoverPort2Label', port2Visible, t('supply.port2', 'Port 2')],
+          ] as const
+        ).map(([valueKey, visibilityKey, visible, label]) => (
           <div key={valueKey}>
             <div className="mb-1 flex items-center gap-2">
               <label className={labelClass + ' mb-0'}>{label}</label>
@@ -669,9 +744,7 @@ export function TrunkDeviceProperties({
   // Junction panel: label (matches multiple 1draad symbols to one sitplan placement) + pick existing
   if (device.symbol === 'junction_panel') {
     const set = new Set<string>()
-    const inst = currentProject
-      ? getElectricalInstallationFromProject(currentProject)
-      : undefined
+    const inst = currentProject ? getElectricalInstallationFromProject(currentProject) : undefined
     const allJunctionDevices: { id: string; label: string | undefined }[] = []
     inst?.mainSupply?.supplyTrunkDevices?.forEach((d: TrunkDevice) => {
       if (d.type === 'junction_panel') {
@@ -686,20 +759,22 @@ export function TrunkDeviceProperties({
       }
     })
     inst?.junctionPanelPlacements?.forEach((jp: JunctionPanelPlacement) => set.add(jp.label))
-    ;(currentProject ? getElectricalPanelsFromProject(currentProject) : []).forEach((panel: Panel) => {
-      const circuits = [
-        ...(panel.circuits ?? []),
-        ...(panel.protections?.flatMap((pr: ProtectionDevice) => pr.circuits ?? []) ?? []),
-      ]
-      circuits.forEach((c: Circuit) =>
-        c.trunkDevices?.forEach((d: TrunkDevice) => {
-          if (d.type === 'junction_panel') {
-            if (d.label) set.add(d.label)
-            allJunctionDevices.push({ id: d.id, label: d.label })
-          }
-        })
-      )
-    })
+    ;(currentProject ? getElectricalPanelsFromProject(currentProject) : []).forEach(
+      (panel: Panel) => {
+        const circuits = [
+          ...(panel.circuits ?? []),
+          ...(panel.protections?.flatMap((pr: ProtectionDevice) => pr.circuits ?? []) ?? []),
+        ]
+        circuits.forEach((c: Circuit) =>
+          c.trunkDevices?.forEach((d: TrunkDevice) => {
+            if (d.type === 'junction_panel') {
+              if (d.label) set.add(d.label)
+              allJunctionDevices.push({ id: d.id, label: d.label })
+            }
+          })
+        )
+      }
+    )
     const existingLabels = Array.from(set).sort()
 
     const currentLabel = device.label || ''
@@ -791,7 +866,9 @@ export function TrunkDeviceProperties({
       }
 
       const oldLabel = currentLabel
-      const existingPlacement = inst.junctionPanelPlacements?.find((jp: JunctionPanelPlacement) => jp.label === oldLabel)
+      const existingPlacement = inst.junctionPanelPlacements?.find(
+        (jp: JunctionPanelPlacement) => jp.label === oldLabel
+      )
 
       handleUpdate({ label: next })
 
@@ -829,7 +906,10 @@ export function TrunkDeviceProperties({
             project={currentProject}
             inheritedYear={
               currentProject
-                ? getInstallDateTargetInheritedYear(currentProject, { id: device.id, type: 'trunkDevice' })
+                ? getInstallDateTargetInheritedYear(currentProject, {
+                    id: device.id,
+                    type: 'trunkDevice',
+                  })
                 : undefined
             }
             onUpdate={(updates) =>
@@ -948,7 +1028,10 @@ export function TrunkDeviceProperties({
           project={currentProject}
           inheritedYear={
             currentProject
-              ? getInstallDateTargetInheritedYear(currentProject, { id: device.id, type: 'trunkDevice' })
+              ? getInstallDateTargetInheritedYear(currentProject, {
+                  id: device.id,
+                  type: 'trunkDevice',
+                })
               : undefined
           }
           onUpdate={(updates) =>
@@ -1047,13 +1130,10 @@ export function TrunkDeviceProperties({
           {device.symbol === 'switch' && (
             <SwitchPolesGrid
               value={(device.poles ?? 1) as 1 | 2 | 3 | 4}
-              onChange={(poles) =>
-                handleUpdate({ poles, polesConfig: `${poles}P` as PolesConfig })
-              }
+              onChange={(poles) => handleUpdate({ poles, polesConfig: `${poles}P` as PolesConfig })}
             />
           )}
-          {(device.symbol === 'switch_1p_twoway' ||
-            device.symbol === 'switch_2p_twoway') && (
+          {(device.symbol === 'switch_1p_twoway' || device.symbol === 'switch_2p_twoway') && (
             <TwoWayPolesGrid
               value={device.symbol === 'switch_2p_twoway' ? 2 : 1}
               onChange={(poles) =>
@@ -1070,7 +1150,8 @@ export function TrunkDeviceProperties({
       )}
 
       {/* Protection-specific properties (when type === 'protection') */}
-      {device.type === 'protection' && !isInlineSwitch &&
+      {device.type === 'protection' &&
+        !isInlineSwitch &&
         (() => {
           const isProtectionLabelVisible = (key: ProtectionLabelKey) =>
             isProtectionLabelPartVisible(device, key)
@@ -1103,8 +1184,7 @@ export function TrunkDeviceProperties({
               typeDropdownOptions={supplyProtectionTypeOptions}
               onProtectionTypeChange={(nextType) => {
                 const sym = protectionTypeToSymbolKey(nextType)
-                const polesConfig =
-                  device.polesConfig ?? getVoltagePolesConfig(currentProject)
+                const polesConfig = device.polesConfig ?? getVoltagePolesConfig(currentProject)
                 handleUpdate({
                   protectionType: nextType,
                   ...(sym ? { symbol: sym } : {}),
@@ -1228,7 +1308,10 @@ export function TrunkDeviceProperties({
                         type="button"
                         onClick={() =>
                           handleUpdate({
-                            conversionProps: { ...conv, transformerSafetyType: opt.key as TransformerSafetyType },
+                            conversionProps: {
+                              ...conv,
+                              transformerSafetyType: opt.key as TransformerSafetyType,
+                            },
                           })
                         }
                         className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md border flex flex-col items-center justify-center gap-0.5 ${
@@ -1521,7 +1604,6 @@ export function TrunkDeviceProperties({
               </div>
             )}
           </div>
-
         </>
       )}
 
@@ -1568,10 +1650,7 @@ export function TrunkDeviceProperties({
             }}
             onCommit={(patch) => {
               if (isSelectedInverterUnit && 'serialNumber' in patch) {
-                updateInverterSerialNumber(
-                  selectedInverterUnitIndex,
-                  patch.serialNumber ?? ''
-                )
+                updateInverterSerialNumber(selectedInverterUnitIndex, patch.serialNumber ?? '')
                 return
               }
               handleUpdate({
@@ -1581,10 +1660,7 @@ export function TrunkDeviceProperties({
             labelClass={labelClass}
             selectClass={selectClass}
             t={t}
-            title={t(
-              'endpoints.certification.groupTitle',
-              'Device identification (certification)'
-            )}
+            title={t('endpoints.certification.groupTitle', 'Device identification (certification)')}
             diagramVisible={isSymbolLabelVisible(
               device.symbolLabelDisplay,
               CERTIFICATION_LISTING_VISIBILITY_KEY,
@@ -1736,7 +1812,7 @@ export function SupplyProperties({
   const currentProject = useProjectStore((state: ProjectState) => state.currentProject)
   const updateInstallation = useProjectStore((state: ProjectState) => state.updateInstallation)
   const setPanelFeedOrganization = useProjectStore(
-    (state: ProjectState) => state.setPanelFeedOrganization,
+    (state: ProjectState) => state.setPanelFeedOrganization
   )
 
   const installation = currentProject
@@ -1756,10 +1832,13 @@ export function SupplyProperties({
   const organization =
     currentProject && panel ? getPanelFeedOrganization(currentProject, panel) : 'single'
   const hasChangeover = Boolean(
-    currentProject && panel && panelHasModularChangeover(currentProject, panel.id),
+    currentProject && panel && panelHasModularChangeover(currentProject, panel.id)
   )
   const hasBackup = Boolean(
-    currentProject && panel && panelCanConfigureBackupOutput(currentProject, panel.id),
+    currentProject && panel && panelCanConfigureBackupOutput(currentProject, panel.id)
+  )
+  const requiresSplitFeed = Boolean(
+    currentProject && panel && panelRequiresSplitFeed(currentProject, panel.id)
   )
   const splitOrganization: PanelFeedOrganization = hasChangeover
     ? 'split-switchable'
@@ -1799,7 +1878,10 @@ export function SupplyProperties({
               },
             ].map((option) => {
               const active = organization === option.value
-              const disabled = readOnly || (option.value !== 'single' && !hasBackup)
+              const disabled =
+                readOnly ||
+                (option.value === 'single' && requiresSplitFeed) ||
+                (option.value !== 'single' && !hasBackup)
               return (
                 <button
                   key={option.value}
@@ -1850,22 +1932,22 @@ export function SupplyProperties({
             className={`grid gap-3 ${hidesLineToNeutralField(normalizeNominalVoltageSystem(installation.nominalVoltage.system)) ? 'grid-cols-1' : 'grid-cols-2'}`}
           >
             {!hidesLineToNeutralField(
-              normalizeNominalVoltageSystem(installation.nominalVoltage.system),
+              normalizeNominalVoltageSystem(installation.nominalVoltage.system)
             ) && (
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                    {t('installation.lineToNeutral', 'Line-to-Neutral (V)')}
-                  </label>
-                  <input
-                    type="number"
-                    value={installation.nominalVoltage.uLineToNeutral}
-                    disabled
-                    min="0"
-                    step="1"
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-400 cursor-not-allowed [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                  />
-                </div>
-              )}
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                  {t('installation.lineToNeutral', 'Line-to-Neutral (V)')}
+                </label>
+                <input
+                  type="number"
+                  value={installation.nominalVoltage.uLineToNeutral}
+                  disabled
+                  min="0"
+                  step="1"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-400 cursor-not-allowed [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                />
+              </div>
+            )}
             <div>
               <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
                 {t('installation.lineToLine', 'Line-to-Line (V)')}

@@ -244,12 +244,7 @@ export function getMainBusProtectionPhaseAssignment(
   if (poles > 2 && normalizeNominalVoltageSystem(system ?? '2~') !== '3~') {
     return getFullInstallationPhaseAssignment(system)
   }
-  return assignmentForBusbarSlot(
-    system,
-    phaseOrder,
-    slot,
-    poles
-  )
+  return assignmentForBusbarSlot(system, phaseOrder, slot, poles)
 }
 
 /** Automatic phase set supplied by the circuit's own busbar attachment. */
@@ -472,6 +467,47 @@ export function getProtectionPhaseConstraint(
   }
 }
 
+/**
+ * Resolve the exact conductors downstream of one serial protection. The result is
+ * monotonic: a wider downstream device never restores a conductor already removed.
+ */
+export function getDownstreamProtectionPhaseAssignment(
+  protection: Pick<ProtectionDevice, 'polesConfig' | 'poles'>,
+  system: VoltageSystem,
+  upstreamAssignment?: CircuitPhaseAssignment
+): CircuitPhaseAssignment | undefined {
+  const upstream = isConcretePhaseAssignment(upstreamAssignment)
+    ? upstreamAssignment
+    : getFullInstallationPhaseAssignment(system)
+  if (!isConcretePhaseAssignment(upstream)) return upstreamAssignment
+  const poles = getProtectionPoles(protection)
+  if (poles == null) return upstream
+  const availableLines = upstream.phases.filter(
+    (phase): phase is AcLinePhase => phase === 'L1' || phase === 'L2' || phase === 'L3'
+  )
+  const hasNeutral = upstream.phases.includes('N')
+  const normalized = normalizeNominalVoltageSystem(system ?? '2~')
+  let phases: AcPhase[]
+  if (normalized === '3N~') {
+    if (poles <= 2 && hasNeutral) phases = [...availableLines.slice(0, 1), 'N']
+    else if (poles <= 2) phases = availableLines.slice(0, poles)
+    else if (poles === 3) phases = availableLines.slice(0, 3)
+    else phases = [...availableLines, ...(hasNeutral ? (['N'] as const) : [])]
+  } else {
+    phases = availableLines.slice(0, Math.min(poles, availableLines.length))
+  }
+  if (phases.length >= upstream.phases.length) return upstream
+  const lineCount = phases.filter(
+    (phase) => phase === 'L1' || phase === 'L2' || phase === 'L3'
+  ).length
+  return {
+    kind: lineCount >= 3 ? 'three_phase' : lineCount === 2 ? 'phase_to_phase' : 'single_phase',
+    phases,
+    neutral: phases.includes('N') ? 'used' : 'not_present',
+    source: 'derived_from_busbar',
+  }
+}
+
 function getRootFeedForPanel(
   installation: Installation,
   panels: Panel[],
@@ -493,13 +529,11 @@ function getAssemblyBusSectionAssignment(
   system: VoltageSystem
 ): CircuitPhaseAssignment | undefined {
   const legacyPanelInputSectionId = hasExplicitPanelBusSections(panel)
-    ? panel.busSections?.find((section) => section.role === 'backup')?.id ??
-      getPrimaryPanelBusSectionId(panel)
+    ? (panel.busSections?.find((section) => section.role === 'backup')?.id ??
+      getPrimaryPanelBusSectionId(panel))
     : getPrimaryPanelBusSectionId(panel)
   const match = assemblies
-    .flatMap((assembly) =>
-      assembly.loadHandoffs.map((handoff) => ({ assembly, handoff }))
-    )
+    .flatMap((assembly) => assembly.loadHandoffs.map((handoff) => ({ assembly, handoff })))
     .find(({ handoff }) =>
       handoff.target.kind === 'panel-bus-input'
         ? handoff.target.panelId === panel.id && handoff.target.busSectionId === busSectionId
@@ -512,10 +546,9 @@ function getAssemblyBusSectionAssignment(
   const installationLinePhases = getInstallationPhases(system).filter(
     (phase): phase is AcLinePhase => phase === 'L1' || phase === 'L2' || phase === 'L3'
   )
-  const handoffPaths = deriveHandoffPhaseSupplyPaths(
-    match.assembly,
-    installationLinePhases
-  ).filter((path) => path.handoffId === match.handoff.id)
+  const handoffPaths = deriveHandoffPhaseSupplyPaths(match.assembly, installationLinePhases).filter(
+    (path) => path.handoffId === match.handoff.id
+  )
   const linePhases = handoffPaths
     .filter((path) => path.backupConnectionIds.length > 0)
     .map((path) => path.phase)
@@ -552,6 +585,10 @@ function getFirstNarrowingRootProtection(
   if (fullCount == null) return undefined
   return feed?.trunkDevices?.find((device) => {
     if (device.type !== 'protection') return false
+    // Branch protections do not sit between the utility and this panel bus. In
+    // particular, a 1P DC fuse on the inverter battery/PV branch must never be
+    // mistaken for the panel's incoming AC narrowing protection.
+    if (device.supplyPath && device.supplyPath !== 'serial') return false
     const constraint = getProtectionPhaseConstraint(device, system)
     return constraint?.activeConductorCount != null && constraint.activeConductorCount < fullCount
   })
@@ -607,6 +644,19 @@ export function getPanelIncomingPhaseState(
     system
   )
   const sectionOrder = getPanelBusSectionPhaseOrder(panel, busSectionId)
+  const panelHasSupplyAssembly = supplyAssemblies.some(
+    (assembly) =>
+      ((assembly.incomingAttachment.kind === 'panel-input' ||
+        assembly.incomingAttachment.kind === 'panel-bus-input') &&
+        assembly.incomingAttachment.panelId === panel.id) ||
+      assembly.loadHandoffs.some(
+        (handoff) =>
+          (handoff.target.kind === 'panel-input' ||
+            handoff.target.kind === 'panel-bus-input' ||
+            handoff.target.kind === 'circuit-input') &&
+          handoff.target.panelId === panel.id
+      )
+  )
   const normalizedSystem = normalizeNominalVoltageSystem(system ?? '2~')
   const sectionAssignment: CircuitPhaseAssignment | undefined =
     sectionOrder && sectionOrder.length > 0 && sectionOrder.length < 3
@@ -626,9 +676,14 @@ export function getPanelIncomingPhaseState(
             }
           : undefined
       : undefined
-  const configuredAssignment = isConcretePhaseAssignment(rootFeed?.phaseAssignment)
-    ? rootFeed.phaseAssignment
-    : (assemblyAssignment ?? sectionAssignment)
+  // A split panel's source graph is authoritative. Persisted per-feed/section hints can
+  // outlive an earlier 1x/2x inverter setup and must not keep narrowing a now-full 3x
+  // assembly after every physical protection has been expanded to the installation width.
+  const configuredAssignment = panelHasSupplyAssembly
+    ? assemblyAssignment
+    : isConcretePhaseAssignment(rootFeed?.phaseAssignment)
+      ? rootFeed.phaseAssignment
+      : sectionAssignment
   const narrowingProtection = getFirstNarrowingRootProtection(rootFeed, system)
   if (!narrowingProtection) {
     return {

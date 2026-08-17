@@ -101,19 +101,27 @@ function normalizeQuery(query: string): string {
     .replace(/\s+/g, ' ')
 }
 
+const normalizedSynonymsByTerm = (() => {
+  const index = new Map<string, Set<string>>()
+
+  for (const values of Object.values(synonymMap)) {
+    const normalizedValues = values.map(normalizeQuery)
+    for (const value of normalizedValues) {
+      const synonyms = index.get(value) ?? new Set<string>()
+      normalizedValues.forEach((synonym) => synonyms.add(synonym))
+      index.set(value, synonyms)
+    }
+  }
+
+  return index
+})()
+
 /**
  * Get all synonyms for a given term
  */
 function getSynonyms(term: string): string[] {
   const normalized = normalizeQuery(term)
-  // Also check if any synonym map contains this term
-  const allSynonyms = new Set<string>([normalized])
-  for (const [, values] of Object.entries(synonymMap)) {
-    const normalizedValues = values.map(normalizeQuery)
-    if (normalizedValues.includes(normalized)) {
-      normalizedValues.forEach(v => allSynonyms.add(v))
-    }
-  }
+  const allSynonyms = new Set<string>([normalized, ...(normalizedSynonymsByTerm.get(normalized) ?? [])])
   return Array.from(allSynonyms)
 }
 
@@ -124,6 +132,7 @@ export function expandSearchQuery(query: string): string[] {
   if (!query) return []
   
   const normalized = normalizeQuery(query)
+  if (isShortExactQuery(normalized)) return [normalized]
   const words = normalized.split(/\s+/)
   
   // Get synonyms for each word
@@ -153,13 +162,25 @@ export function expandSearchQuery(query: string): string[] {
  */
 export function fuzzyMatch(text: string, query: string): boolean {
   if (!query) return true
-  
-  const normalizedText = normalizeQuery(text)
   const searchTerms = expandSearchQuery(query)
-  
+
+  return matchesSearchTerms(text, searchTerms, isShortExactQuery(normalizeQuery(query)))
+}
+
+function isShortExactQuery(normalizedQuery: string): boolean {
+  return normalizedQuery.length > 0 && normalizedQuery.length <= 3 && !normalizedQuery.includes(' ')
+}
+
+function matchesSearchTerms(
+  text: string,
+  searchTerms: readonly string[],
+  exactTokensOnly: boolean,
+): boolean {
+  const normalizedText = normalizeQuery(text)
   const textTokens = normalizedText.split(' ').filter(Boolean)
 
   return searchTerms.some(term => {
+    if (exactTokensOnly) return textTokens.includes(term)
     if (normalizedText.includes(term)) return true
     const queryTokens = term.split(' ').filter(Boolean)
     return queryTokens.length > 0 && queryTokens.every(queryToken =>
@@ -169,7 +190,8 @@ export function fuzzyMatch(text: string, query: string): boolean {
 }
 
 function fuzzyTokenMatch(textToken: string, queryToken: string): boolean {
-  if (textToken.includes(queryToken) || queryToken.includes(textToken)) return true
+  if (textToken.includes(queryToken)) return true
+  if (textToken.length >= 4 && queryToken.includes(textToken)) return true
   const shortestLength = Math.min(textToken.length, queryToken.length)
   if (shortestLength < 5) return false
   const allowedDistance = shortestLength >= 10 ? 2 : 1
@@ -198,5 +220,53 @@ function levenshteinDistance(left: string, right: string): number {
  */
 export function fuzzyMatchAny(texts: string[], query: string): boolean {
   if (!query) return true
-  return texts.some(text => fuzzyMatch(text, query))
+  const searchTerms = expandSearchQuery(query)
+  const exactTokensOnly = isShortExactQuery(normalizeQuery(query))
+  return texts.some((text) => matchesSearchTerms(text, searchTerms, exactTokensOnly))
+}
+
+/**
+ * Prepare a reusable matcher when the same query is applied to many records.
+ * Query normalization and synonym expansion happen once instead of once per record.
+ */
+export function createFuzzyMatcher(query: string): (texts: readonly string[]) => boolean {
+  if (!query) return () => true
+  const searchTerms = expandSearchQuery(query)
+  const exactTokensOnly = isShortExactQuery(normalizeQuery(query))
+  return (texts) =>
+    texts.some((text) => matchesSearchTerms(text, searchTerms, exactTokensOnly))
+}
+
+function createLiteralMatcher(query: string): (texts: readonly string[]) => boolean {
+  const normalizedQuery = normalizeQuery(query)
+  if (!normalizedQuery) return () => true
+  const exactTokensOnly = isShortExactQuery(normalizedQuery)
+
+  return (texts) =>
+    texts.some((text) => {
+      const normalizedText = normalizeQuery(text)
+      if (exactTokensOnly) {
+        return normalizedText.split(' ').includes(normalizedQuery)
+      }
+      return normalizedText.includes(normalizedQuery)
+    })
+}
+
+/**
+ * Prefer literal catalog matches and use synonyms/typo tolerance only when there are none.
+ * This keeps precise terms relevant without losing fuzzy fallback for misspellings.
+ */
+export function filterBySearchRelevance<T>(
+  items: readonly T[],
+  query: string,
+  getSearchableTexts: (item: T) => readonly string[],
+): T[] {
+  if (!query) return Array.from(items)
+
+  const matchesLiteral = createLiteralMatcher(query)
+  const literalMatches = items.filter((item) => matchesLiteral(getSearchableTexts(item)))
+  if (literalMatches.length > 0) return literalMatches
+
+  const matchesFuzzy = createFuzzyMatcher(query)
+  return items.filter((item) => matchesFuzzy(getSearchableTexts(item)))
 }

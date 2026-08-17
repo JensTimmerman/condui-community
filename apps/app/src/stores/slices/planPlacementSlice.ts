@@ -48,7 +48,7 @@ import type {
 } from '@/types/schema'
 import { findCircuitForEndpointInPanel, generateId, getNextAvailableCircuitCode } from '@/utils/project'
 import { getAllSupplyTrunkDevices } from '@/lib/feedTopology'
-import { removeSupplyInverterPlacements } from '@/utils/inverterMultipliers'
+import { removeSupplyDevicePlacements } from '@/utils/inverterMultipliers'
 
 type MutablePlacementOwner = {
   placement: Placement
@@ -1122,7 +1122,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
           for (const device of getAllSupplyTrunkDevices(state.currentProject)) {
             const index = device.placements?.findIndex((placement) => placement.id === id) ?? -1
             if (index === -1) continue
-            if (!removeSupplyInverterPlacements(device, new Set([id]))) {
+            if (!removeSupplyDevicePlacements(device, new Set([id]))) {
               device.placements!.splice(index, 1)
             }
             state.isDirty = true
@@ -1208,7 +1208,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
           }
           for (const device of getAllSupplyTrunkDevices(project)) {
             if (device.placements) {
-              if (!removeSupplyInverterPlacements(device, idsSet)) {
+              if (!removeSupplyDevicePlacements(device, idsSet)) {
                 device.placements = device.placements.filter(
                   (placement) => !idsSet.has(placement.id)
                 )

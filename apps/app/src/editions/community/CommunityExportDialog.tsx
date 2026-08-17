@@ -69,7 +69,7 @@ export function ExportDialog({ onExport, onCancel }: CommunityExportDialogProps)
               onChange={(event) => setIncludeEendraad(event.target.checked)}
             />
             <span className="text-sm text-gray-700 dark:text-gray-300">
-              {t('export.dialog.eendraad', '1draad (Single-line diagram)')}
+              {t('export.dialog.eendraad', 'One-wire diagram')}
             </span>
           </label>
           <label

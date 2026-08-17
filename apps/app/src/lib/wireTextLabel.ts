@@ -9,29 +9,25 @@ export const WIRE_LABEL_DEFAULT_OFFSET_ALONG_WIRE = 5
 
 /** Main supply drop (bus → horizontal): label sits at the bus end, not mid-span. */
 export function isMainSupplyVerticalWireSegment(wireSegment: WireSegment): boolean {
-  return (
-    wireSegment.type === 'vertical' &&
-    !wireSegment.circuitId &&
-    !wireSegment.fromElementType
-  )
+  return wireSegment.type === 'vertical' && !wireSegment.circuitId && !wireSegment.fromElementType
 }
 
 export function isHorizontalSupplyTrunkSegment(wireSegment: WireSegment): boolean {
   return (
-    wireSegment.isSupplyTrunk === true &&
+    (wireSegment.isSupplyTrunk === true ||
+      wireSegment.supplySectionKey != null ||
+      wireSegment.supplyConnectionId != null) &&
     wireSegment.startPoint.y === wireSegment.endPoint.y
   )
 }
 
 export function getWireLabelOrientationForSegment(
-  wireSegment: WireSegment,
+  wireSegment: WireSegment
 ): 'vertical' | 'horizontal' {
   return isHorizontalSupplyTrunkSegment(wireSegment) ? 'horizontal' : 'vertical'
 }
 
-export function getWireLabelAlignForSegment(
-  wireSegment: WireSegment,
-): WireLabelAlignment {
+export function getWireLabelAlignForSegment(wireSegment: WireSegment): WireLabelAlignment {
   if (isMainSupplyVerticalWireSegment(wireSegment)) return 'center'
   if (isHorizontalSupplyTrunkSegment(wireSegment)) return 'center'
   return 'center'
@@ -174,10 +170,7 @@ export interface FormatWireLabelOptions {
   otherLabel?: string
 }
 
-export function formatCableTypeLabel(
-  cable: CableSpec,
-  options?: FormatWireLabelOptions,
-): string {
+export function formatCableTypeLabel(cable: CableSpec, options?: FormatWireLabelOptions): string {
   if ((cable.kind as string) === 'VOB_in_conduit') return 'VOB'
   if (cable.kind === 'other') {
     const custom = cable.customKind?.trim()
@@ -187,10 +180,7 @@ export function formatCableTypeLabel(
   return cable.kind
 }
 
-export function formatWireLabel(
-  wire: WireSegment,
-  options?: FormatWireLabelOptions,
-): string {
+export function formatWireLabel(wire: WireSegment, options?: FormatWireLabelOptions): string {
   const cable = wire.cable
   const type = formatCableTypeLabel(cable, options)
   const conductors = cable.conductors
@@ -209,11 +199,7 @@ export function getWireFireClassLabel(cable: CableSpec): string | undefined {
 
 let measureCanvas: HTMLCanvasElement | null = null
 
-export function measureTextWidth(
-  text: string,
-  fontFamily: string,
-  fontSize: number,
-): number {
+export function measureTextWidth(text: string, fontFamily: string, fontSize: number): number {
   if (typeof document === 'undefined') {
     return text.length * fontSize * 0.6
   }
@@ -232,7 +218,7 @@ export function truncateTextToWidth(
   text: string,
   maxWidth: number,
   fontFamily: string,
-  fontSize: number,
+  fontSize: number
 ): string {
   if (maxWidth <= 0) return ''
   if (measureTextWidth(text, fontFamily, fontSize) <= maxWidth) return text
@@ -279,21 +265,11 @@ export function computeVerticalWireLabelLayout({
   const centerY = (startPoint.y + endPoint.y) / 2
   const segmentLength = Math.abs(endPoint.y - startPoint.y)
   const maxVerticalTextLength = Math.max(0, segmentLength - 2)
-  const renderedText = truncateTextToWidth(
-    text,
-    maxVerticalTextLength,
-    fontFamily,
-    fontSize,
-  )
+  const renderedText = truncateTextToWidth(text, maxVerticalTextLength, fontFamily, fontSize)
   const textWidth = measureTextWidth(renderedText, fontFamily, fontSize)
   const textHeight = fontSize
 
-  const anchorYBase =
-    align === 'center'
-      ? centerY
-      : align === 'bottom'
-        ? maxY
-        : startPoint.y
+  const anchorYBase = align === 'center' ? centerY : align === 'bottom' ? maxY : startPoint.y
   /** Konva Group position: for `center`, the wire midpoint (label rotates around its own center). */
   const anchorY = anchorYBase + offsetAlongWire
   const anchorX = startPoint.x + distanceFromWire
@@ -329,27 +305,18 @@ export function computeVerticalWireLabelStackLayout({
   const segmentLength = Math.abs(endPoint.y - startPoint.y)
   const maxVerticalTextLength = Math.max(0, segmentLength - 2)
 
-  const mainRendered = truncateTextToWidth(
-    mainText,
-    maxVerticalTextLength,
-    fontFamily,
-    fontSize,
-  )
+  const mainRendered = truncateTextToWidth(mainText, maxVerticalTextLength, fontFamily, fontSize)
   if (!mainRendered) return null
 
   const mainWidth = measureTextWidth(mainRendered, fontFamily, fontSize)
   const fireRendered = fireClassText?.trim()
     ? truncateTextToWidth(fireClassText.trim(), maxVerticalTextLength, fontFamily, fontSize)
     : ''
-  const fireWidth = fireRendered
-    ? measureTextWidth(fireRendered, fontFamily, fontSize)
-    : 0
+  const fireWidth = fireRendered ? measureTextWidth(fireRendered, fontFamily, fontSize) : 0
   const lengthRendered = wireLengthText?.trim()
     ? truncateTextToWidth(wireLengthText.trim(), maxVerticalTextLength, fontFamily, fontSize)
     : ''
-  const lengthWidth = lengthRendered
-    ? measureTextWidth(lengthRendered, fontFamily, fontSize)
-    : 0
+  const lengthWidth = lengthRendered ? measureTextWidth(lengthRendered, fontFamily, fontSize) : 0
 
   const lineStep = fontSize + WIRE_LABEL_LINE_GAP
 
@@ -380,12 +347,7 @@ export function computeVerticalWireLabelStackLayout({
   const stackHeight = fontSize + extraLines * lineStep
   const stackTop = mainY
 
-  const anchorYBase =
-    align === 'center'
-      ? centerY
-      : align === 'bottom'
-        ? maxY
-        : startPoint.y
+  const anchorYBase = align === 'center' ? centerY : align === 'bottom' ? maxY : startPoint.y
   const anchorY = anchorYBase + offsetAlongWire
   const anchorX = startPoint.x + distanceFromWire + stackClearanceFromWire
 

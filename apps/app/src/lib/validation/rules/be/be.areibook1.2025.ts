@@ -17,6 +17,46 @@ export const beAreiBook1_2025: RulePack = {
   },
   rules: [
     {
+      id: 'be.areibook1.2025.supply-mode-paths',
+      title: 'Grid and backup supply paths',
+      severity: 'error',
+      appliesTo: ['subgraph'],
+      checks: [{ name: 'supplyModePaths' }],
+      message: 'validation.rules.be.areibook1.2025.supply-mode-paths.message',
+      details: 'validation.rules.be.areibook1.2025.supply-mode-paths.details',
+      remediation: 'validation.rules.be.areibook1.2025.supply-mode-paths.remediation',
+      citations: [
+        {
+          code: 'AREI',
+          title: 'Algemeen Reglement op de Elektrische Installaties',
+          section: '§ 4.2.3.1, § 5.3.3.1',
+        },
+      ],
+      tags: ['supply', 'backup', 'topology', 'phase'],
+    },
+    {
+      id: 'be.areibook1.2025.supply-conductor-protection-coordination',
+      title: 'Supply conductor and overcurrent protection coordination',
+      severity: 'error',
+      appliesTo: ['subgraph'],
+      checks: [{ name: 'supplyConductorProtectionCoordination' }],
+      message:
+        'validation.rules.be.areibook1.2025.supply-conductor-protection-coordination.message',
+      details:
+        'validation.rules.be.areibook1.2025.supply-conductor-protection-coordination.details',
+      remediation:
+        'validation.rules.be.areibook1.2025.supply-conductor-protection-coordination.remediation',
+      citations: [
+        {
+          code: 'AREI',
+          title: 'Algemeen Reglement op de Elektrische Installaties',
+          section: '§ 4.4.1.4, § 4.4.3.2',
+          page: '121-122',
+        },
+      ],
+      tags: ['supply', 'cable', 'overcurrent', 'protection'],
+    },
+    {
       id: 'be.areibook1.2025.diagram-sitplan-consistency',
       title: 'Diagram/sitplan consistency - circuit point ID',
       severity: 'error',
@@ -202,28 +242,6 @@ export const beAreiBook1_2025: RulePack = {
         },
       ],
       tags: ['isolation', 'board', 'best-practice'],
-    },
-    {
-      id: 'be.areibook1.2025.eendraad-orphans',
-      title: 'One-line diagram consistency (orphans)',
-      severity: 'error',
-      appliesTo: ['board'],
-      checks: [
-        {
-          name: 'checkEendraadOrphans',
-        },
-      ],
-      message: 'validation.rules.be.areibook1.2025.eendraad-orphans.message',
-      details: 'validation.rules.be.areibook1.2025.eendraad-orphans.details',
-      remediation: 'validation.rules.be.areibook1.2025.eendraad-orphans.remediation',
-      citations: [
-        {
-          code: 'Condui',
-          title: 'One-line diagram consistency',
-          section: 'Structural integrity',
-        },
-      ],
-      tags: ['orphan', 'eendraad', 'consistency'],
     },
     {
       id: 'be.areibook1.2025.duplicate-panel-protection-label',
@@ -620,29 +638,6 @@ export const beAreiBook1_2025: RulePack = {
       tags: ['switch', 'control'],
     },
     {
-      id: 'be.areibook1.2025.switch-sequence',
-      title: 'Two-way / cross switch sequence',
-      severity: 'info',
-      appliesTo: ['circuit'],
-      checks: [
-        {
-          name: 'branchSwitchSequenceValid',
-          params: { ruleId: 'be.areibook1.2025.switch-sequence' },
-        },
-      ],
-      message: 'validation.rules.be.areibook1.2025.switch-sequence.message',
-      details: 'validation.rules.be.areibook1.2025.switch-sequence.details',
-      remediation: 'validation.rules.be.areibook1.2025.switch-sequence.remediation',
-      citations: [
-        {
-          code: 'Condui',
-          title: 'Staircase switching topology',
-          section: 'Two-way and cross switches',
-        },
-      ],
-      tags: ['switch', 'staircase', 'two-way', 'cross'],
-    },
-    {
       id: 'be.areibook1.2025.electrical-domain',
       title: 'Electrical domain consistency (AC/DC)',
       severity: 'warning',
@@ -664,24 +659,6 @@ export const beAreiBook1_2025: RulePack = {
         },
       ],
       tags: ['domain', 'AC', 'DC', 'conversion'],
-    },
-    {
-      id: 'be.areibook1.2025.dc-cross-section-heuristic',
-      title: 'DC wire sizing heuristic (warning)',
-      severity: 'info',
-      appliesTo: ['circuit'],
-      checks: [{ name: 'dcCrossSectionHeuristic' }],
-      message: 'validation.rules.be.areibook1.2025.dc-cross-section-heuristic.message',
-      details: 'validation.rules.be.areibook1.2025.dc-cross-section-heuristic.details',
-      remediation: 'validation.rules.be.areibook1.2025.dc-cross-section-heuristic.remediation',
-      citations: [
-        {
-          code: 'Condui',
-          title: 'DC sizing heuristic',
-          section: 'I ~= P/U estimate',
-        },
-      ],
-      tags: ['domain', 'DC', 'cable', 'heuristic'],
     },
     {
       id: 'be.areibook1.2025.post-main-bus-pe-conductor',

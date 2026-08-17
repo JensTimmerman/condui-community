@@ -17,7 +17,6 @@ import {
 } from '@/lib/plan/planGraphicColors'
 import { getThemeColor } from '@/lib/theme/colors'
 import { isPrimaryPlanActivationEvent } from '@/lib/canvas/planPointerEvent'
-import { useBlinkingCaret, withDimensionCaret } from '@/hooks/useBlinkingCaret'
 import {
   DRAW_TOOL_STROKE_PX,
   DRAW_TOOL_STROKE_PX_MAX,
@@ -30,6 +29,10 @@ import {
   HOVER_OUTLINE_STROKE_PX_MIN,
   screenPxToCanvasUnits,
 } from '@/constants/canvasConstants'
+import {
+  clearFloorPlanDrawDimensionEditor,
+  setFloorPlanDrawDimensionEditor,
+} from './floorPlanDrawDimensionEditorStore'
 
 const PLAN_GRAPHIC_HOVER_COLOR = '#eab308'
 
@@ -317,7 +320,6 @@ function GraphicElementNode({
   const [draftText, setDraftText] = useState('')
   const [interactionDraft, setInteractionDraft] = useState<PlanGraphicElement | null>(null)
   const [isHovered, setIsHovered] = useState(false)
-  const caretVisible = useBlinkingCaret(editingField != null)
   const interactionDraftRef = useRef<PlanGraphicElement | null>(null)
   const resizeBaseRef = useRef<PlanGraphicElement | null>(null)
   const rotationBaseRef = useRef<PlanGraphicElement | null>(null)
@@ -538,7 +540,7 @@ function GraphicElementNode({
     const valueCm = canvasPxPerMeter > 0 ? (valuePx / canvasPxPerMeter) * 100 : 0
     const activeField = editingField === field
     const value = activeField && draftText ? draftText : `${Math.round(valueCm)}`
-    const text = withDimensionCaret(value, ' cm', activeField, true)
+    const text = `${value} cm`
     return Math.max(44 / zoom, text.length * fontSize * 0.62 + paddingX * 2)
   }
 
@@ -547,6 +549,92 @@ function GraphicElementNode({
   const dimensionLabelGap = moveHandleRadius * 1.35
   const rightHandleX =
     heightLabelCenterX + heightLabelBoxWidth / 2 + dimensionLabelGap + moveHandleRadius
+
+  const dimensionEditorOwnerId = `graphic:${element.id}`
+  useEffect(() => {
+    if (!editingField || locked || !selected || !active) {
+      clearFloorPlanDrawDimensionEditor(dimensionEditorOwnerId)
+      return
+    }
+
+    const widthField = editingField === 'width'
+    const localAnchor = widthField
+      ? {
+          x: 0,
+          y: -renderElement.height / 2 - handleOffset - moveHandleRadius * 2.7,
+        }
+      : { x: heightLabelCenterX, y: 0 }
+    const rotatedAnchor = rotatePoint2(localAnchor, renderElement.rotationDeg ?? 0)
+    const valuePx = widthField ? renderElement.width : renderElement.height
+    const valueCm = canvasPxPerMeter > 0 ? (valuePx / canvasPxPerMeter) * 100 : 0
+
+    setFloorPlanDrawDimensionEditor({
+      ownerId: dimensionEditorOwnerId,
+      fields: [
+        {
+          id: editingField,
+          anchor: {
+            x: renderElement.pos.x + rotatedAnchor.x,
+            y: renderElement.pos.y + rotatedAnchor.y,
+          },
+          placement: 'center',
+          value: draftText || `${Math.round(valueCm)}`,
+          active: true,
+          rotationDeg: renderElement.rotationDeg ?? 0,
+        },
+      ],
+      onActivate: () => undefined,
+      onChange: (_id, value) => setDraftText(value),
+      onEnter: () => {
+        const nextValueCm = Number.parseFloat(draftText.replace(',', '.'))
+        if (Number.isFinite(nextValueCm) && nextValueCm > 0 && canvasPxPerMeter > 0) {
+          const nextPx = (nextValueCm / 100) * canvasPxPerMeter
+          onResize(
+            element.id,
+            editingField === 'width'
+              ? { width: nextPx, height: element.height }
+              : { width: element.width, height: nextPx }
+          )
+        }
+        setEditingField(null)
+        setDraftText('')
+      },
+      onTab: () => {
+        setEditingField((field) => (field === 'width' ? 'height' : 'width'))
+        setDraftText('')
+      },
+      onEscape: () => {
+        setEditingField(null)
+        setDraftText('')
+      },
+    })
+
+  }, [
+    active,
+    canvasPxPerMeter,
+    dimensionEditorOwnerId,
+    draftText,
+    editingField,
+    element.height,
+    element.id,
+    element.width,
+    handleOffset,
+    heightLabelCenterX,
+    locked,
+    moveHandleRadius,
+    onResize,
+    renderElement.height,
+    renderElement.pos.x,
+    renderElement.pos.y,
+    renderElement.rotationDeg,
+    renderElement.width,
+    selected,
+  ])
+
+  useEffect(
+    () => () => clearFloorPlanDrawDimensionEditor(dimensionEditorOwnerId),
+    [dimensionEditorOwnerId]
+  )
 
   const renderDimensionBox = (
     field: DimensionField,
@@ -557,9 +645,10 @@ function GraphicElementNode({
     const valueCm = canvasPxPerMeter > 0 ? (valuePx / canvasPxPerMeter) * 100 : 0
     const activeField = editingField === field
     const value = activeField && draftText ? draftText : `${Math.round(valueCm)}`
-    const text = withDimensionCaret(value, ' cm', activeField, caretVisible)
+    const text = `${value} cm`
     const boxWidth = estimateDimensionLabelBoxWidth(valuePx, field)
     const boxHeight = fontSize + paddingY * 2
+    if (activeField) return null
     return (
       <Group
         x={x - boxWidth / 2}

@@ -12,9 +12,13 @@
  * placement need not sit exactly on top of a wall.
  */
 
-import type { Placement, Rotation, Wall } from '@/types/schema'
+import type { Placement, Rotation, SituationPlanRotation, Wall } from '@/types/schema'
 import { clamp } from '@/lib/geometry'
-import { getWallPathPoints } from '@/lib/plan/wallCurve'
+import {
+  getClosestPointOnCurvedWall,
+  getWallPathPoints,
+  isCurvedWall,
+} from '@/lib/plan/wallCurve'
 
 const SYMBOL_BASE_SIZE = 40
 const OPACITY_THRESHOLD = 128
@@ -29,6 +33,77 @@ const MIN_QUADRANT_SCORE_IMAGE = 0.14
 const MIN_IMAGE_SCORE_MARGIN = 0.07
 /** How far to look for vector walls, in symbol-radius multiples (larger = more margin). */
 const WALL_SEARCH_RADIUS_FACTOR = 4.5
+
+type NearestDrawnWall = {
+  wall: Wall
+  distance: number
+}
+
+function nearestDrawnWall(placement: Placement, walls: Wall[]): NearestDrawnWall | null {
+  let nearest: NearestDrawnWall | null = null
+  for (const wall of walls) {
+    if (isCurvedWall(wall)) {
+      const closest = getClosestPointOnCurvedWall(wall, placement.pos)
+      if (closest && (!nearest || closest.distance < nearest.distance)) {
+        nearest = { wall, distance: closest.distance }
+      }
+      continue
+    }
+
+    const points = wall.points
+    for (let index = 0; index < points.length - 1; index++) {
+      const start = points[index]!
+      const end = points[index + 1]!
+      const vx = end.x - start.x
+      const vy = end.y - start.y
+      const lengthSquared = vx * vx + vy * vy
+      if (lengthSquared < 1e-6) continue
+      const t = clamp(
+        ((placement.pos.x - start.x) * vx + (placement.pos.y - start.y) * vy) / lengthSquared,
+        0,
+        1
+      )
+      const distance = Math.hypot(
+        start.x + t * vx - placement.pos.x,
+        start.y + t * vy - placement.pos.y
+      )
+      if (!nearest || distance < nearest.distance) nearest = { wall, distance }
+    }
+  }
+  return nearest
+}
+
+function rotationFromCurvedWall(
+  placement: Placement,
+  wall: Wall,
+  wallFacingSide: WallFacingSide,
+  symbolBaseSizePx: number
+): SituationPlanRotation | null {
+  const closest = getClosestPointOnCurvedWall(wall, placement.pos)
+  const symbolRadius = (symbolBaseSizePx / 2) * placement.scale
+  if (!closest || closest.distance > 2 * symbolRadius || closest.distance < 1e-3) return null
+
+  const tangentLength = Math.hypot(closest.tangent.x, closest.tangent.y)
+  if (tangentLength < 1e-6) return null
+  const tangent = {
+    x: closest.tangent.x / tangentLength,
+    y: closest.tangent.y / tangentLength,
+  }
+  const normalA = { x: -tangent.y, y: tangent.x }
+  const towardWall = {
+    x: closest.point.x - placement.pos.x,
+    y: closest.point.y - placement.pos.y,
+  }
+  const normal = normalA.x * towardWall.x + normalA.y * towardWall.y >= 0
+    ? normalA
+    : { x: -normalA.x, y: -normalA.y }
+
+  // At rotation 0, sockets face left and distribution panels face down.
+  const baseFacingAngle = wallFacingSide === 'left' ? 180 : 90
+  const normalAngle = Math.atan2(normal.y, normal.x) * 180 / Math.PI
+  const normalized = ((normalAngle - baseFacingAngle) % 360 + 360) % 360
+  return Math.round(normalized * 1e6) / 1e6
+}
 
 /** Context for image-based wall detection (legacy plan image). */
 export interface PlanImageContext {
@@ -364,12 +439,22 @@ export function suggestRotationForPlacement(
     symbolBaseSizePx?: number
   },
   wallFacingSide: WallFacingSide = 'left'
-): Rotation | null {
+): SituationPlanRotation | null {
   const walls = ctx.walls ?? []
   const base = ctx.symbolBaseSizePx ?? SYMBOL_BASE_SIZE
 
   // 1) Prefer vector walls when present
   if (walls.length > 0) {
+    const nearest = nearestDrawnWall(placement, walls)
+    if (nearest && isCurvedWall(nearest.wall)) {
+      const curvedRotation = rotationFromCurvedWall(
+        placement,
+        nearest.wall,
+        wallFacingSide,
+        base
+      )
+      if (curvedRotation != null) return curvedRotation
+    }
     const wallScores = getQuadrantWallScoresFromWalls(placement, walls, base)
     if (wallScores) {
       const rotation = rotationFromScores(wallScores, wallFacingSide)

@@ -19,6 +19,7 @@ import { computeAreiCircuitEndpointLimitCount } from '@/lib/validation/areiCircu
 import { listLightingFeedCircuits } from '@/lib/validation/areiLightingCircuitCount'
 import {
   MAX_BREAKER_BY_SECTION,
+  getMaxProtectionRatingForSection,
   getCircuitMinSectionForCableProtectedByDevice,
   getCircuitSegmentsForValidation,
 } from '@/lib/validation/circuitCableSection'
@@ -74,6 +75,7 @@ export {
   computeAreiCircuitEndpointLimitCount,
   listLightingFeedCircuits,
   MAX_BREAKER_BY_SECTION,
+  getMaxProtectionRatingForSection,
   getCircuitMinSectionForCableProtectedByDevice,
   getCircuitSegmentsForValidation,
   buildLayoutTree,

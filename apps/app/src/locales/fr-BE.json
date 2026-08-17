@@ -334,7 +334,7 @@
     },
     "debug": {
       "title": "Debug",
-      "eendraadHitboxDebug": "Afficher les hitboxes du schéma unifilaire (1draad)",
+      "eendraadHitboxDebug": "Afficher les zones de détection du schéma unifilaire",
       "eendraadHitboxDebugHint": "Visualise les zones de détection utilisées pour le drop sur le schéma unifilaire. Uniquement dans l’interface, pas dans l’export.",
       "planPlacementDebug": "Afficher le débogage du plan de situation (sitplan)",
       "planPlacementDebugHint": "Visualise les centres de symboles, les cadres de sélection, les positions d’étiquettes et les aides d’orientation basées sur les murs sur le sitplan. Uniquement dans l’interface, pas dans l’export.",
@@ -1193,8 +1193,6 @@
   },
   "validation": {
     "title": "Validation RGIE",
-    "disclaimer": "Contrôles automatiques pour vous aider à vérifier votre installation.",
-    "disclaimerTooltip": "Les contrôles reposent sur les données disponibles du projet et ne couvrent pas toutes les exigences du RGIE.",
     "errors": "Erreurs",
     "warnings": "Avertissements",
     "info": "Info",
@@ -1205,6 +1203,14 @@
     "warningsFound": "{{count}} avertissement(s) trouvé(s)",
     "moreInfo": "Plus d'infos",
     "lessInfo": "Moins d'infos",
+    "scopeLabels": {
+      "circuit": "Circuit",
+      "board": "Tableau",
+      "device": "Appareil",
+      "placement": "Symbole du plan",
+      "segment": "Conducteur",
+      "subgraph": "Alimentation"
+    },
     "linkedIssuesTooltip": "Ces problèmes sont liés. En corriger un peut résoudre l'autre.",
     "noFilteredIssues": "Aucun problème ne correspond aux filtres actuels.",
     "rules": {
@@ -1416,6 +1422,16 @@
       "branchMultiplierEndpointsSplit": "Circuit {{circuitCode}} : la dérivation « {{branchLabel}} » contient {{absorbCount}} symbole(s) multiplicateur(s) en trop comme points séparés ; fusionnez en un seul point avec plusieurs placements. Utilisez Réparer dans l’inspecteur d’orphelins."
     },
     "primitives": {
+      "supplyModePaths": {
+        "message": "Aucun chemin réseau/secours valide pour {{phases}}",
+        "details": "La topologie unifilaire ne fournit pas un chemin réseau et secours complet et coordonné pour {{phases}}.",
+        "remediation": "Reconnectez les côtés réseau, secours et charge afin que chaque phase représentée dispose d’un chemin complet via l’inverseur de source prévu."
+      },
+      "supplyConductorProtectionCoordination": {
+        "message": "{{protectionLabel}} : le conducteur de {{section}} mm² est trop petit pour une protection de {{ratingA}} A",
+        "details": "Le conducteur d’alimentation représenté de {{section}} mm² peut être protégé par ce dispositif à {{maxRatingA}} A au maximum, mais le calibre indiqué est de {{ratingA}} A.",
+        "remediation": "Augmentez la section du conducteur ou réduisez le calibre du dispositif de protection en amont."
+      },
       "duplicatePanelProtectionLabels": {
         "message": "Le nom de protection « {{label}} » est utilisé {{count}} fois sur ce tableau",
         "details": "Des noms de protection en double sur le même tableau (bus principal, bus secondaire ou alimentation) rendent les circuits difficiles à identifier. Renommez une protection ou activez le nommage automatique."
@@ -1432,6 +1448,10 @@
       },
       "protectionPhaseCompatibility": {
         "deviceLabel": "Protection",
+        "group": {
+          "message": "{{count}} protections ne correspondent peut-être pas à cette alimentation à {{availablePoleCount}} pôles",
+          "details": "Protections concernées : {{deviceLabels}}. Vérifiez leurs réglages de phase et de pôles à cette transition d’alimentation."
+        },
         "neutralUnavailable": {
           "message": "{{deviceLabel}} utilise le neutre, mais ce réseau n’en a pas",
           "details": "Cette combinaison n’est peut-être pas logique. Vérifiez la phase ou les pôles."
@@ -1602,12 +1622,6 @@
       "AREI": {
         "code": "RGIE",
         "title": "Règlement Général sur les Installations Électriques"
-      },
-      "Condui": {
-        "code": "Condui"
-      },
-      "INTERNAL": {
-        "code": "Interne"
       }
     }
   },
@@ -1630,8 +1644,8 @@
     "dialog": {
       "title": "Exporter en PDF",
       "selectCanvases": "Sélectionner les canevas à exporter",
-      "eendraad": "1draad (Schéma unifilaire)",
-      "eendraadShort": "Eendraad",
+      "eendraad": "Schéma unifilaire",
+      "eendraadShort": "Schéma unifilaire",
       "panel": "Tableau (Vue tableau)",
       "panelShort": "Tableau",
       "sitplan": "Sitplan (Plan d'étage)",
@@ -1641,7 +1655,7 @@
       "themeLight": "Clair",
       "themeDark": "Sombre",
       "pageCount": "Nombre de pages",
-      "pagesForEendraad": "{{count}} pages pour 1draad",
+      "pagesForEendraad": "{{count}} pages pour le schéma unifilaire",
       "pagesForPanel": "{{count}} pages pour tableau",
       "pagesForSitplan": "{{count}} pages pour sitplan",
       "totalPages": "Total : {{count}} pages",

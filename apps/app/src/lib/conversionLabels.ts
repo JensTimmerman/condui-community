@@ -1,17 +1,22 @@
 import type { Endpoint, EnergyConversionDeviceProps, TrunkDevice } from '@/types/schema'
+import { formatCompactDiagramField } from '@/lib/certificationLabels'
 
 type ConversionSource =
   | Pick<
       Endpoint,
       'symbolLabelDisplay' | 'energyConversionProps' | 'solarPanelProps' | 'batteryProps' | 'symbol'
     >
-  | Pick<TrunkDevice, 'symbolLabelDisplay' | 'conversionProps' | 'solarPanelProps' | 'symbol'>
+  | Pick<
+      TrunkDevice,
+      'symbolLabelDisplay' | 'conversionProps' | 'solarPanelProps' | 'batteryProps' | 'symbol'
+    >
 
 export type ConversionLabelKey =
   | 'conversionTransformerLabel'
   | 'conversionPmaxPrimary'
   | 'conversionPmaxSecondary'
   | 'solarPower'
+  | 'solarVoltage'
   | 'batteryVoltage'
   | 'batteryCapacity'
 
@@ -25,6 +30,7 @@ const DEFAULT_VISIBILITY: Record<ConversionLabelKey, boolean> = {
   conversionPmaxPrimary: true,
   conversionPmaxSecondary: true,
   solarPower: true,
+  solarVoltage: true,
   batteryVoltage: true,
   batteryCapacity: true,
 }
@@ -61,6 +67,10 @@ export function getVisibleConversionLabelParts(source: ConversionSource): Conver
     'solarPanelProps' in source && source.solarPanelProps?.wattageW != null
       ? `${source.solarPanelProps.wattageW}W`
       : ''
+  const solarVoltage =
+    'solarPanelProps' in source && source.solarPanelProps?.voltageV != null
+      ? `${source.solarPanelProps.voltageV}V`
+      : ''
   const batteryVoltage =
     'batteryProps' in source && source.batteryProps?.voltageV != null
       ? `${source.batteryProps.voltageV}V`
@@ -80,8 +90,11 @@ export function getVisibleConversionLabelParts(source: ConversionSource): Conver
   if (pMaxSecondary && isConversionLabelVisible(source, 'conversionPmaxSecondary')) {
     parts.push({ key: 'conversionPmaxSecondary', text: `Usec: ${pMaxSecondary}` })
   }
-  if (solarPower && isConversionLabelVisible(source, 'solarPower')) {
-    parts.push({ key: 'solarPower', text: `P: ${solarPower}` })
+  if (source.symbol === 'solar_panel' && isConversionLabelVisible(source, 'solarPower')) {
+    parts.push({ key: 'solarPower', text: formatCompactDiagramField('P', solarPower) })
+  }
+  if (solarVoltage && isConversionLabelVisible(source, 'solarVoltage')) {
+    parts.push({ key: 'solarVoltage', text: `U: ${solarVoltage}` })
   }
   if (batteryVoltage && isConversionLabelVisible(source, 'batteryVoltage')) {
     parts.push({ key: 'batteryVoltage', text: `U: ${batteryVoltage}` })

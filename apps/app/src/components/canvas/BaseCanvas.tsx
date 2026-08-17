@@ -22,7 +22,10 @@ import type { CanvasType } from '@/types/ui'
 import { selectMultiple } from '@/utils/selection'
 import { useCommitClearSelection, useCommitSelection } from '@/editions/community/communityHooks'
 import { dismissCanvasOverlays } from '@/lib/ui/canvasOverlayDismiss'
-import { blurFocusStealingActiveElement } from '@/lib/ui/blurFocusStealingActiveElement'
+import {
+  blurActiveElementForCanvasPointerDown,
+  blurFocusStealingActiveElement,
+} from '@/lib/ui/blurFocusStealingActiveElement'
 import { isAppDialogOpen } from '@/lib/ui/appModalInteraction'
 import { selectIsAppDialogOpen, useDialogStore } from '@/stores/dialogStore'
 import ContextMenuPortal from './ContextMenuPortal'
@@ -103,6 +106,8 @@ const CAMERA_SYNC_TRAIL_MS = 120
 const EMPTY_PREVIEW_ELEMENTS: PreviewElement[] = []
 const CAMERA_MOVE_THRESHOLD_PX = 4
 const CAMERA_ZOOM_THRESHOLD = 0.01
+/** Ignore tiny focus/trackpad pointer jitter before treating a right-click as a pan. */
+const DEFERRED_MOUSE_PAN_THRESHOLD_PX = 6
 /** Hide grid entirely when zoomed out past this (reduces Line count + overdraw). */
 const GRID_HIDE_ZOOM_BELOW = 0.06
 /** When a grid cell is smaller than this in screen px, skip drawing (too dense). */
@@ -388,8 +393,8 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
   const [touchFingerPanForUI, setTouchFingerPanForUI] = useState(false)
   const lastPanPointRef = useRef<Point>({ x: 0, y: 0 })
   const [isDragOver, setIsDragOver] = useState(false)
-  // Track if right-click drag occurred (to prevent context menu)
-  const [rightClickDragOccurred, setRightClickDragOccurred] = useState(false)
+  // Immediate ref avoids a stale React state value swallowing the first context-menu event.
+  const rightClickDragOccurredRef = useRef(false)
   // Track if any drag occurred (to prevent selection after drag)
   const [dragOccurred, setDragOccurred] = useState(false)
   const [pointerFollowerPosition, setPointerFollowerPosition] = useState<Point | null>(null)
@@ -1784,7 +1789,7 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
     (clientX: number, clientY: number) => {
       isPanningRef.current = true
       lastPanPointRef.current = { x: clientX, y: clientY }
-      setRightClickDragOccurred(false)
+      rightClickDragOccurredRef.current = false
       setDragOccurred(false)
 
       if (panUiRafRef.current != null) {
@@ -1823,7 +1828,12 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
         if (pending) {
           const dx = evt.clientX - pending.startX
           const dy = evt.clientY - pending.startY
-          if (Math.abs(dx) <= 3 && Math.abs(dy) <= 3) return
+          if (
+            Math.abs(dx) <= DEFERRED_MOUSE_PAN_THRESHOLD_PX &&
+            Math.abs(dy) <= DEFERRED_MOUSE_PAN_THRESHOLD_PX
+          ) {
+            return
+          }
           pendingMouseButtonPanRef.current = null
           activateMouseButtonPan(pending.startX, pending.startY)
         }
@@ -1834,7 +1844,7 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
 
         if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
           if (!dragOccurredRef.current) {
-            setRightClickDragOccurred(true)
+            rightClickDragOccurredRef.current = true
             setDragOccurred(true)
           }
           dragOccurredRef.current = true
@@ -4004,6 +4014,9 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
         canvasHoverRef.current = true
         blurFocusStealingActiveElement()
       }}
+      onPointerDown={(event) => {
+        blurActiveElementForCanvasPointerDown(event.target)
+      }}
       onPointerMove={(event) => {
         if (pointerFollower) {
           setPointerFollowerPosition({ x: event.clientX, y: event.clientY })
@@ -4063,8 +4076,8 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
           })
 
           // Don't show context menu if right-click drag occurred (panning)
-          if (rightClickDragOccurred) {
-            setRightClickDragOccurred(false)
+          if (rightClickDragOccurredRef.current) {
+            rightClickDragOccurredRef.current = false
             return
           }
 

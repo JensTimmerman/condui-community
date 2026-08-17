@@ -83,7 +83,8 @@ function collectDebugNodes(layoutTree: LayoutTree): DebugNodeInfo[] {
 }
 
 export function HitZoneDebugOverlay({ layoutTree, dragPreview }: HitZoneDebugOverlayProps) {
-  const enabled = useSettingsStore((s) => s.eendraadHitboxDebug)
+  const debugSettingEnabled = useSettingsStore((s) => s.eendraadHitboxDebug)
+  const enabled = import.meta.env.DEV && debugSettingEnabled
 
   const debugNodes = useMemo(() => {
     if (!layoutTree || !enabled) return []
@@ -101,7 +102,7 @@ export function HitZoneDebugOverlay({ layoutTree, dragPreview }: HitZoneDebugOve
     return matched?.nodeId ?? null
   }, [layoutTree, dragPreview, enabled])
 
-  if (process.env.NODE_ENV === 'production' || !enabled || !layoutTree || debugNodes.length === 0) {
+  if (!import.meta.env.DEV || !enabled || !layoutTree || debugNodes.length === 0) {
     return null
   }
 

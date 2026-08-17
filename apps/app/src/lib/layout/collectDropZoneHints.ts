@@ -11,7 +11,7 @@ import type { SymbolMetadata } from '@/lib/symbols'
 import type { DropTarget } from '@/lib/layout/findDropTarget'
 import { getHitZoneBounds } from '@/lib/layout/findDropTarget'
 import type { LayoutNode, LayoutTree } from '@/lib/layout/layoutTree'
-import type { Circuit, Endpoint, Panel, ProtectionDevice } from '@/types/schema'
+import type { Circuit, Endpoint, Panel, ProtectionDevice, TrunkDevice } from '@/types/schema'
 import type { Point } from '@/types/ui'
 import {
   getElectricalInstallationFromProject,
@@ -26,13 +26,17 @@ import {
 } from '@/lib/supplyAssembly/directConverterBackupUpgrade'
 import { getPanelFeedOrganization } from '@/lib/panel/panelFeedOrganization'
 import { canCreateSupplyTopologyFromDrop } from '@/lib/supplyTopologyFeature'
+import { findSameSymbolAddMoreLayoutTargets } from '@/lib/eendraad/sameSymbolAddMore'
 
 export interface DropZoneHintMatch {
   panelId?: string
   supplyFeedScope?: 'shared' | 'root'
   supplyDeviceInsertIndex?: number
   supplyConverterDcBranch?: 'right' | 'top'
+  converterGridPlacement?: 'inline' | 'input-leg'
   circuitId?: string
+  mainBusInsertIndex?: number
+  secondaryBusInsertIndex?: number
   /** Vertical trunk insertion slot (aligns with DropTarget.circuitTrunkSegmentIndex). */
   circuitTrunkSegmentIndex?: number
 }
@@ -43,6 +47,10 @@ export interface DropZoneHint {
   y: number
   targetType: NonNullable<DropTarget['type']>
   match?: DropZoneHintMatch
+  /** Domain element represented by a same-symbol multiplier target. */
+  sameSymbolTargetId?: string
+  /** Exact Y coordinate where a secondary bus would be created by this drop. */
+  secondaryBusPreviewY?: number
   outline?: {
     x: number
     y: number
@@ -50,6 +58,107 @@ export interface DropZoneHint {
     height: number
     cornerRadius: number
   }
+}
+
+export interface DropZoneHintRelocation {
+  elementId: string
+  supply?: {
+    panelId?: string
+    feedScope: 'shared' | 'root'
+    index: number
+    supplyPath?: TrunkDevice['supplyPath']
+    converterGridPlacement?: TrunkDevice['converterGridPlacement']
+  }
+  circuitTrunk?: {
+    circuitId: string
+    index: number
+  }
+  protectionBus?:
+    | { kind: 'main'; panelId: string; index: number }
+    | { kind: 'secondary'; panelId: string; parentCircuitId: string; index: number }
+}
+
+function supplyHintMatchesSourceLane(
+  hint: DropZoneHint,
+  supply: NonNullable<DropZoneHintRelocation['supply']>
+): boolean {
+  const path = supply.supplyPath
+  if (path === 'converter-dc' || path === 'converter-dc-top') {
+    return (
+      hint.targetType === 'supplyConverterDcWire' &&
+      hint.match?.supplyConverterDcBranch === (path === 'converter-dc-top' ? 'top' : 'right')
+    )
+  }
+  if (path === 'converter-grid') {
+    return (
+      hint.targetType === 'supplyConverterGridWire' &&
+      (hint.match?.converterGridPlacement ?? 'inline') ===
+        (supply.converterGridPlacement ?? 'inline')
+    )
+  }
+  if (path === 'backup-output') {
+    return (
+      hint.targetType === 'supplyBackupWire' || hint.targetType === 'supplyBackupOutputWire'
+    )
+  }
+  if (path === 'changeover-grid') return hint.targetType === 'supplyChangeoverGridWire'
+  return hint.targetType === 'supplyWire'
+}
+
+/** Hide relocation targets that cannot change the existing topology. */
+export function isRelocationNoOpDropZoneHint(
+  hint: DropZoneHint,
+  relocation: DropZoneHintRelocation | null | undefined
+): boolean {
+  if (!relocation) return false
+  if (hint.sameSymbolTargetId === relocation.elementId) return true
+
+  const supply = relocation.supply
+  if (supply && supplyHintMatchesSourceLane(hint, supply)) {
+    const samePanel = !supply.panelId || hint.match?.panelId === supply.panelId
+    const sameScope = (hint.match?.supplyFeedScope ?? 'shared') === supply.feedScope
+    const insertIndex = hint.match?.supplyDeviceInsertIndex
+    if (
+      samePanel &&
+      sameScope &&
+      typeof insertIndex === 'number' &&
+      (insertIndex === supply.index || insertIndex === supply.index + 1)
+    ) {
+      return true
+    }
+  }
+
+  const circuitTrunk = relocation.circuitTrunk
+  if (
+    circuitTrunk &&
+    hint.targetType === 'circuit' &&
+    hint.match?.circuitId === circuitTrunk.circuitId &&
+    typeof hint.match.circuitTrunkSegmentIndex === 'number' &&
+    (hint.match.circuitTrunkSegmentIndex === circuitTrunk.index ||
+      hint.match.circuitTrunkSegmentIndex === circuitTrunk.index + 1)
+  ) {
+    return true
+  }
+
+  const protectionBus = relocation.protectionBus
+  if (!protectionBus) return false
+  if (protectionBus.kind === 'main') {
+    return Boolean(
+      hint.targetType === 'mainBus' &&
+        hint.match?.panelId === protectionBus.panelId &&
+        typeof hint.match.mainBusInsertIndex === 'number' &&
+        (hint.match.mainBusInsertIndex === protectionBus.index ||
+          hint.match.mainBusInsertIndex === protectionBus.index + 1)
+    )
+  }
+  return Boolean(
+    hint.targetType === 'circuit' &&
+      hint.match?.panelId === protectionBus.panelId &&
+      hint.match.circuitId === protectionBus.parentCircuitId &&
+      typeof hint.match.secondaryBusInsertIndex === 'number' &&
+      (hint.match.secondaryBusInsertIndex === protectionBus.index ||
+        hint.match.secondaryBusInsertIndex === protectionBus.index + 1)
+  )
 }
 
 interface HintWalkContext {
@@ -96,6 +205,13 @@ function findCircuitInProject(
     }
   }
   return undefined
+}
+
+function circuitWouldGainSecondaryBus(
+  project: ProjectWithOptionalV2Electrical,
+  circuitId: string
+): boolean {
+  return findCircuitInProject(project, circuitId)?.subCircuitIds?.length === 1
 }
 
 function circuitFeedsSubPanel(
@@ -311,6 +427,10 @@ function isSupplyWireSlotSegment(node: LayoutNode, panelNode: LayoutNode): boole
 
   const id = node.id ?? ''
   if (id.startsWith('supply-changeover-load-slot-')) return true
+  // Every segment of the grid source run after a modular changeover remains an ordinary
+  // serial supply insertion slot. This includes the span before an existing protection;
+  // when the inverter grid leg is absent, that span is the otherwise-empty visible slot.
+  if (id.startsWith('supply-changeover-grid-slot-')) return true
   const panelId = panelNode.domainId ?? panelNode.id
   if (id.includes('supply-wire-vertical')) return false
 
@@ -352,10 +472,22 @@ function buildHintMatch(
       supplyFeedScope: node.hitZone?.supplyFeedScope ?? 'shared',
       supplyDeviceInsertIndex: node.hitZone?.supplyInsertIndex,
       supplyConverterDcBranch: node.hitZone?.supplyConverterDcBranch,
+      converterGridPlacement: node.hitZone?.converterGridPlacement,
     }
   }
   if (hitType === 'mainBus' || hitType === 'circuit' || hitType === 'rcd') {
-    return { panelId: ctx.panelId, circuitId: ctx.circuitId }
+    const mainBusMatch = node.id?.match(/^main-bus-segment-.+-(\d+)$/)
+    const secondaryBusMatch = node.id?.match(/^secondary-bus-segment-.+-(\d+)$/)
+    return {
+      panelId: ctx.panelId,
+      circuitId: ctx.circuitId,
+      ...(mainBusMatch
+        ? { mainBusInsertIndex: Number.parseInt(mainBusMatch[1]!, 10) }
+        : {}),
+      ...(secondaryBusMatch
+        ? { secondaryBusInsertIndex: Number.parseInt(secondaryBusMatch[1]!, 10) }
+        : {}),
+    }
   }
   return ctx.panelId ? { panelId: ctx.panelId, circuitId: ctx.circuitId } : undefined
 }
@@ -598,11 +730,20 @@ function visitForHints(
       const { x, y } = hintAnchor(node)
       const trunkParsed = node.id ? parseCircuitTrunkSegmentId(node.id) : null
       const baseMatch = buildHintMatch(node, node.hitZone.type, nextCtx)
+      const previewsSecondaryBus =
+        isProtectionDragSymbol(symbol) &&
+        node.id?.startsWith('circuit-nest-') === true &&
+        !!nextCtx.circuitId &&
+        circuitWouldGainSecondaryBus(project, nextCtx.circuitId)
+      const nodeCoreBounds = previewsSecondaryBus ? getHitZoneBounds(node, 'core') : null
       hints.push({
         nodeId: node.id,
         x,
         y,
         targetType: node.hitZone.type,
+        ...(nodeCoreBounds
+          ? { secondaryBusPreviewY: (nodeCoreBounds.top + nodeCoreBounds.bottom) / 2 }
+          : {}),
         match:
           trunkParsed != null
             ? { ...baseMatch, circuitTrunkSegmentIndex: trunkParsed.segmentIndex }
@@ -745,40 +886,55 @@ export function collectDropZoneHints(
   layoutTree: LayoutTree,
   project: ProjectWithOptionalV2Electrical
 ): DropZoneHint[] {
+  const sameSymbolHints = findSameSymbolAddMoreLayoutTargets(symbol.id, layoutTree).map(
+    (target) => ({
+      nodeId: `same-symbol-add-more-${target.nodeId}`,
+      sameSymbolTargetId: target.target.endpoint?.id ?? target.target.trunkDevice?.id,
+      x: target.badgePosition.x,
+      y: target.badgePosition.y,
+      targetType: 'endpoint' as const,
+      outline: target.outline,
+    })
+  )
   if (symbol.busFeedKind) {
     if (!canCreateSupplyTopologyFromDrop(symbol, 'mainBus')) return []
-    return layoutTree.panels.flatMap((panelNode) => {
-      const panel = panelNode.domainRef as Panel | undefined
-      if (!panel || panel.isMain === false) return []
-      const bus = panelNode.children.find(
-        (node) => node.type === 'busBar' && node.hitZone?.type === 'mainBus'
-      )
-      if (!bus) return []
-      const horizontalPadding = 12
-      const verticalPadding = 14
-      return [{
-        nodeId: `panel-bus-feed-invitation-${panelNode.id}`,
-        x: bus.bounds.x + bus.bounds.width / 2,
-        y: bus.bounds.y + bus.bounds.height / 2,
-        targetType: 'mainBus' as const,
-        match: { panelId: panel.id },
-        outline: {
-          x: bus.bounds.x - horizontalPadding,
-          y: bus.bounds.y - verticalPadding,
-          width: bus.bounds.width + horizontalPadding * 2,
-          height: bus.bounds.height + verticalPadding * 2,
-          cornerRadius: 8,
-        },
-      }]
-    })
+    return [
+      ...sameSymbolHints,
+      ...layoutTree.panels.flatMap((panelNode) => {
+        const panel = panelNode.domainRef as Panel | undefined
+        if (!panel || panel.isMain === false) return []
+        const bus = panelNode.children.find(
+          (node) => node.type === 'busBar' && node.hitZone?.type === 'mainBus'
+        )
+        if (!bus) return []
+        const horizontalPadding = 12
+        const verticalPadding = 14
+        return [
+          {
+            nodeId: `panel-bus-feed-invitation-${panelNode.id}`,
+            x: bus.bounds.x + bus.bounds.width / 2,
+            y: bus.bounds.y + bus.bounds.height / 2,
+            targetType: 'mainBus' as const,
+            match: { panelId: panel.id },
+            outline: {
+              x: bus.bounds.x - horizontalPadding,
+              y: bus.bounds.y - verticalPadding,
+              width: bus.bounds.width + horizontalPadding * 2,
+              height: bus.bounds.height + verticalPadding * 2,
+              cornerRadius: 8,
+            },
+          },
+        ]
+      }),
+    ]
   }
   const behavior = dropBehaviors[symbol.id]
-  if (!behavior) return []
+  if (!behavior) return sameSymbolHints
 
   const validTargets = new Set(
     behavior.validTargets.filter((t): t is NonNullable<DropTarget['type']> => t !== null)
   )
-  if (validTargets.size === 0) return []
+  if (validTargets.size === 0) return sameSymbolHints
 
   const rawHints: HintWithSpan[] = []
   const trunkSegmentCounts = buildTrunkSegmentCountByCircuit(layoutTree)
@@ -799,7 +955,10 @@ export function collectDropZoneHints(
 
   appendTrunkTopSlotHints(symbol, project, layoutTree, trunkSegmentCounts, rawHints)
 
-  return dedupeSupplyWireHints(rawHints).filter((hint) =>
-    canCreateSupplyTopologyFromDrop(symbol, hint.targetType)
-  )
+  return [
+    ...sameSymbolHints,
+    ...dedupeSupplyWireHints(rawHints).filter((hint) =>
+      canCreateSupplyTopologyFromDrop(symbol, hint.targetType)
+    ),
+  ]
 }

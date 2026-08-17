@@ -13,7 +13,7 @@ import type {
   Panel,
   Placement,
   ProtectionDevice,
-  Rotation,
+  SituationPlanRotation,
   TrunkDevice,
   Wall,
 } from '@/types/schema'
@@ -87,7 +87,7 @@ function resolveDragEndRotation(
   placementAtDrop: Placement,
   ctx: PlacementOrientContext,
   wallFacingSide: WallFacingSide,
-): Rotation | null {
+): SituationPlanRotation | null {
   if (hasExplicitSituationPlanRotation(placementAtDrop)) return null
   const previewRotation = usePlanDragVisualStore.getState().rotations.get(placementId)
   if (previewRotation != null) return previewRotation
@@ -431,7 +431,7 @@ export function usePlanDragHandling(
         const currentPos = snapPos({ x: e.target.x(), y: e.target.y() })
         const labelPatch = new Map<string, { x: number; y: number }>()
         labelPatch.set(placement.id, calculateDragLabelPosition(placement.id, currentPos))
-        const rotationPatch = new Map<string, Rotation>()
+        const rotationPatch = new Map<string, SituationPlanRotation>()
         // Konva owns the dragged node position; only patch label + rotation preview in the drag store.
         if (activeFloorId) {
           const floor = getFloorById(activeFloorId)

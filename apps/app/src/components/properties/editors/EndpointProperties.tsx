@@ -1283,7 +1283,44 @@ export function EndpointProperties({
             />
           </div>
           <div>
-            <label className={labelClass}>{t('endpoints.solarPanel.voltage', 'Voltage (V)')}</label>
+            <div className="flex items-center gap-2 mb-1">
+              <label className={labelClass + ' mb-0'}>
+                {t('endpoints.solarPanel.voltage', 'Voltage (V)')}
+              </label>
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdate(endpointId, {
+                    symbolLabelDisplay: {
+                      ...(endpoint.symbolLabelDisplay ?? {}),
+                      visibility: {
+                        ...((endpoint.symbolLabelDisplay?.visibility ?? {}) as Record<
+                          string,
+                          boolean
+                        >),
+                        solarVoltage: !(
+                          endpoint.symbolLabelDisplay?.visibility?.solarVoltage ?? true
+                        ),
+                      },
+                    },
+                  })
+                }
+                className={visibilityToggleClass(
+                  endpoint.symbolLabelDisplay?.visibility?.solarVoltage ?? true
+                )}
+                title={
+                  (endpoint.symbolLabelDisplay?.visibility?.solarVoltage ?? true)
+                    ? t('common.hide', 'Hide')
+                    : t('common.show', 'Show')
+                }
+              >
+                {(endpoint.symbolLabelDisplay?.visibility?.solarVoltage ?? true) ? (
+                  <Eye className="w-4 h-4" />
+                ) : (
+                  <EyeOff className="w-4 h-4" />
+                )}
+              </button>
+            </div>
             <input
               type="number"
               min={0}

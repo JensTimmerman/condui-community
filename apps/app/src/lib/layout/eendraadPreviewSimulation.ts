@@ -721,7 +721,10 @@ function simulateProtectionDrop(
     label: circuitCode,
     circuits: [] as Circuit[],
     ...(target.type === 'mainBus'
-      ? { busSectionId: getMainBusInsertionSectionId(panel, target.mainBusInsertIndex) }
+      ? {
+          busSectionId:
+            target.busSectionId ?? getMainBusInsertionSectionId(panel, target.mainBusInsertIndex),
+        }
       : {}),
     ...defaults,
   }
@@ -1145,7 +1148,10 @@ function simulateSupplyTrunkDevice(
         : null
       directConverter.supplyPath = 'backup'
       converterOutputChain.forEach((device) => {
-        device.supplyPath = 'backup-output'
+        device.supplyPath =
+          mainTargetPanel && getPanelFeedOrganization(project, mainTargetPanel) === 'split-backup'
+            ? 'changeover-grid'
+            : 'backup-output'
       })
       if (directBackup) {
         const owningPanel = findPanelById(projectPanels(project), target.panelId!)
@@ -1225,7 +1231,12 @@ function simulateSupplyTrunkDevice(
           : target.type === 'supplyChangeoverGridWire'
             ? { supplyPath: 'changeover-grid' as const }
             : target.type === 'supplyConverterGridWire'
-              ? { supplyPath: 'converter-grid' as const }
+              ? {
+                  supplyPath: 'converter-grid' as const,
+                  ...(target.converterGridPlacement
+                    ? { converterGridPlacement: target.converterGridPlacement }
+                    : {}),
+                }
               : target.type === 'supplyConverterDcWire'
                 ? {
                     supplyPath:
@@ -1666,7 +1677,7 @@ export function simulateDropOnProject(
     ) {
       return null
     }
-    if (target.type === 'supplyConverterBackupWire') {
+    if (target.type === 'supplyConverterBackupWire' && symbol.id !== 'source_changeover') {
       simulateProtectionDrop(cloned, target, symbol, changeSet)
     } else {
       simulateSupplyTrunkDevice(cloned, target, symbol, changeSet)
@@ -1927,10 +1938,9 @@ export function simulateDropOnProject(
       subPanelId: newPanelId,
       ...(target.type === 'mainBus'
         ? {
-            busSectionId: getMainBusInsertionSectionId(
-              parentPanel,
-              target.mainBusInsertIndex
-            ),
+            busSectionId:
+              target.busSectionId ??
+              getMainBusInsertionSectionId(parentPanel, target.mainBusInsertIndex),
           }
         : {}),
       ...mcbDefaults,

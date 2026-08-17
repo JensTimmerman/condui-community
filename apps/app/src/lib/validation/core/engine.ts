@@ -11,6 +11,7 @@ import { logOrphanReport } from '@/lib/validation/orphanDetection'
 import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
+  getSupplyAssembliesFromProject,
 } from '@/lib/projectV2/electrical'
 import i18n from '@/i18n'
 
@@ -134,6 +135,10 @@ function mergeIssuesByMergeBucket(issues: Issue[]): Issue[] {
  */
 function enumerateScopes(project: ValidationProject): Scope[] {
   const scopes: Scope[] = []
+
+  for (const assembly of getSupplyAssembliesFromProject(project)) {
+    scopes.push({ type: 'subgraph', id: assembly.id })
+  }
 
   const collectScopes = (panels: Panel[]) => {
     for (const panel of panels) {

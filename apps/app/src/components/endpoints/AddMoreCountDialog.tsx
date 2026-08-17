@@ -5,24 +5,23 @@ import { useTranslation } from 'react-i18next'
 import { useDialogStore } from '@/stores/dialogStore'
 import { useProjectStore } from '@/stores/projectStore'
 import CustomDropdown from '@/components/common/CustomDropdown'
-import {
-  MULTI_SOCKET_OFFSET,
-  SYMBOL_SIZE,
-} from '@/components/canvas/eendraad/canvasSymbols'
+import { MULTI_SOCKET_OFFSET, SYMBOL_SIZE } from '@/components/canvas/eendraad/canvasSymbols'
 import { getSymbolById } from '@/lib/symbols'
 import { getEndpointMultiplier } from '@/utils/endpointMultipliers'
-import { createSyncEndpointMultiplierDeps, syncEndpointMultiplierCount } from '@/lib/eendraad/syncEndpointMultiplierCount'
+import {
+  createSyncEndpointMultiplierDeps,
+  syncEndpointMultiplierCount,
+} from '@/lib/eendraad/syncEndpointMultiplierCount'
 import type { Endpoint, TrunkDevice } from '@/types/schema'
 import type { SymbolKey } from '@/types/schema'
 import {
   createSyncSupplyInverterMultiplierDeps,
-  getSupplyInverterMultiplier,
-  syncSupplyInverterMultiplierCount,
+  getSupplyDeviceMultiplier,
+  syncSupplyDeviceMultiplierCount,
 } from '@/lib/eendraad/syncSupplyInverterMultiplier'
 
 const SOCKET_PREVIEW_SYMBOL_PX = 40
-const SOCKET_PREVIEW_OFFSET_PX =
-  (MULTI_SOCKET_OFFSET / SYMBOL_SIZE) * SOCKET_PREVIEW_SYMBOL_PX
+const SOCKET_PREVIEW_OFFSET_PX = (MULTI_SOCKET_OFFSET / SYMBOL_SIZE) * SOCKET_PREVIEW_SYMBOL_PX
 
 const dropdownClassName =
   'w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white px-3 py-2 text-sm focus:ring-2 focus:ring-sky-500 focus:border-sky-500'
@@ -261,9 +260,7 @@ function AddMoreCountDialogBody({
           }}
           onBlur={() => setError(validate(value))}
           className={`w-full rounded-md border bg-white px-4 py-2 text-gray-900 focus:border-transparent focus:ring-2 focus:ring-sky-500 dark:bg-gray-700 dark:text-white ${
-            error
-              ? 'border-red-500 dark:border-red-500'
-              : 'border-gray-300 dark:border-gray-600'
+            error ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'
           }`}
         />
         {error && <p className="mt-1 text-sm text-red-600 dark:text-red-400">{error}</p>}
@@ -349,8 +346,13 @@ export function openSocketAddMoreDialog(endpoint: Endpoint, t: TFunction) {
 }
 
 export function openSupplyInverterAddMoreDialog(device: TrunkDevice, t: TFunction) {
+  openSupplyDeviceAddMoreDialog(device, t)
+}
+
+export function openSupplyDeviceAddMoreDialog(device: TrunkDevice, t: TFunction) {
   const { openDialog, closeDialog } = useDialogStore.getState()
-  const previewSrc = getSymbolById('inverter')?.svgPath ?? '/symbols/energy/inverter.svg'
+  const previewSrc = getSymbolById(device.symbol)?.svgPath ?? '/symbols/energy/inverter.svg'
+  const isInverter = device.symbol === 'inverter'
 
   openDialog({
     type: 'custom',
@@ -361,12 +363,12 @@ export function openSupplyInverterAddMoreDialog(device: TrunkDevice, t: TFunctio
         previewSrc={previewSrc}
         message={t('multiplier.setTotalCount', 'Set total number of symbols in sitplan')}
         inputLabel={t('multiplier.totalCount', 'Total count')}
-        currentValue={getSupplyInverterMultiplier(device)}
+        currentValue={getSupplyDeviceMultiplier(device)}
         min={1}
-        max={3}
-        allowedValues={[1, 2, 3]}
+        max={isInverter ? 3 : 99}
+        allowedValues={isInverter ? [1, 2, 3] : undefined}
         onConfirm={(target) => {
-          syncSupplyInverterMultiplierCount(
+          syncSupplyDeviceMultiplierCount(
             createSyncSupplyInverterMultiplierDeps(),
             device.id,
             target

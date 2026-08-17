@@ -256,7 +256,10 @@ export function moveSupplyTrunkDeviceAtDropTarget(
   if (
     sameContainer &&
     insertIndex === sourceIndex &&
-    (device.supplyPath ?? 'serial') === (targetSupplyPath ?? 'serial')
+    (device.supplyPath ?? 'serial') === (targetSupplyPath ?? 'serial') &&
+    (targetSupplyPath !== 'converter-grid' ||
+      (device.converterGridPlacement ?? 'inline') ===
+        (target.converterGridPlacement ?? 'inline'))
   ) {
     if (
       targetMounting &&
@@ -274,6 +277,11 @@ export function moveSupplyTrunkDeviceAtDropTarget(
 
   source.devices.splice(sourceIndex, 1)
   device.supplyPath = targetSupplyPath
+  if (targetSupplyPath === 'converter-grid') {
+    device.converterGridPlacement = target.converterGridPlacement ?? 'inline'
+  } else {
+    delete device.converterGridPlacement
+  }
 
   const safeInsertIndex = clamp(insertIndex, 0, targetDevices.length)
   targetDevices.splice(safeInsertIndex, 0, device)

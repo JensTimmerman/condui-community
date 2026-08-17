@@ -334,7 +334,7 @@
     },
     "debug": {
       "title": "Debug",
-      "eendraadHitboxDebug": "Toon hitboxen eendraadsschema (1draad)",
+      "eendraadHitboxDebug": "Toon hitboxen van het eendraadschema",
       "eendraadHitboxDebugHint": "Visualiseer de hittzones die gebruikt worden voor drop-detectie op het eendraadsschema. Enkel in de UI, niet in export.",
       "planPlacementDebug": "Toon situatietekening-debug (sitplan)",
       "planPlacementDebugHint": "Visualiseer symboolcentra, selectiekaders, labelposities en muur-gebaseerde oriëntatiehulpen op het sitplan. Enkel in de UI, niet in export.",
@@ -1199,8 +1199,6 @@
   },
   "validation": {
     "title": "AREI Validatie",
-    "disclaimer": "Automatische controles om je installatie te helpen nakijken.",
-    "disclaimerTooltip": "De controles zijn gebaseerd op de beschikbare projectgegevens en omvatten niet alle AREI-vereisten.",
     "errors": "Fouten",
     "warnings": "Waarschuwingen",
     "info": "Info",
@@ -1214,6 +1212,14 @@
     "goToIssue": "Ga naar probleem",
     "moreInfo": "Meer info",
     "lessInfo": "Minder info",
+    "scopeLabels": {
+      "circuit": "Stroombaan",
+      "board": "Bord",
+      "device": "Toestel",
+      "placement": "Plansymbool",
+      "segment": "Leiding",
+      "subgraph": "Voeding"
+    },
     "linkedIssuesTooltip": "Deze problemen zijn gelinkt. Als je er een oplost, kan de andere ook verdwijnen.",
     "noFilteredIssues": "Geen problemen met deze filters.",
     "rules": {
@@ -1428,6 +1434,16 @@
       "branchMultiplierEndpointsSplit": "Stroombaan {{circuitCode}}: aftakking \"{{branchLabel}}\" heeft {{absorbCount}} extra vermenigvuldigingssymbool(len) als aparte eindpunten; horen één eindpunt met meerdere plaatsingen te zijn. Gebruik Repareren in de weesinspectie."
     },
     "primitives": {
+      "supplyModePaths": {
+        "message": "Geen geldig net-/backuppad voor {{phases}}",
+        "details": "De getekende topologie bevat geen volledig en gecoördineerd net- en backuppad voor {{phases}}.",
+        "remediation": "Verbind de net-, backup- en lastzijde opnieuw zodat elke getekende fase een volledig pad door de bedoelde omschakelaar heeft."
+      },
+      "supplyConductorProtectionCoordination": {
+        "message": "{{protectionLabel}}: geleider van {{section}} mm² is te klein voor een beveiliging van {{ratingA}} A",
+        "details": "De getekende voedingsgeleider van {{section}} mm² mag door dit beveiligingstoestel met maximaal {{maxRatingA}} A worden beveiligd, maar het getekende kaliber is {{ratingA}} A.",
+        "remediation": "Vergroot de geleiderdoorsnede of verlaag het kaliber van de stroomopwaartse beveiliging."
+      },
       "duplicatePanelProtectionLabels": {
         "message": "Beveiligingsnaam \"{{label}}\" wordt {{count}} keer gebruikt op dit bord",
         "details": "Dubbele beveiligingsnamen op hetzelfde bord (hoofdbus, secundaire bus of voeding) maken stroombanen moeilijk herkenbaar. Hernoem één beveiliging of schakel automatische naamgeving in."
@@ -1444,6 +1460,10 @@
       },
       "protectionPhaseCompatibility": {
         "deviceLabel": "Beveiliging",
+        "group": {
+          "message": "{{count}} beveiligingen passen mogelijk niet bij deze {{availablePoleCount}}-polige voeding",
+          "details": "Betrokken beveiligingen: {{deviceLabels}}. Controleer hun fase- en poolinstelling bij deze voedingsovergang."
+        },
         "neutralUnavailable": {
           "message": "{{deviceLabel}} gebruikt een nulleider, maar dit net heeft er geen",
           "details": "Deze combinatie klopt misschien niet. Controleer de fase- of poolinstelling."
@@ -1622,12 +1642,6 @@
       "AREI": {
         "code": "AREI",
         "title": "Algemeen Reglement op de Elektrische Installaties"
-      },
-      "Condui": {
-        "code": "Condui"
-      },
-      "INTERNAL": {
-        "code": "Intern"
       }
     }
   },
@@ -1650,8 +1664,8 @@
     "dialog": {
       "title": "Exporteren naar PDF",
       "selectCanvases": "Selecteer canvas om te exporteren",
-      "eendraad": "1draad (Enkellijndiagram)",
-      "eendraadShort": "Eendraad",
+      "eendraad": "Eendraadschema",
+      "eendraadShort": "Eendraadschema",
       "panel": "Bord (Bordweergave)",
       "panelShort": "Bord",
       "sitplan": "Sitplan (Plattegrond)",
@@ -1661,7 +1675,7 @@
       "themeLight": "Licht",
       "themeDark": "Donker",
       "pageCount": "Aantal pagina's",
-      "pagesForEendraad": "{{count}} pagina's voor 1draad",
+      "pagesForEendraad": "{{count}} pagina's voor het eendraadschema",
       "pagesForPanel": "{{count}} pagina's voor bord",
       "pagesForSitplan": "{{count}} pagina's voor sitplan",
       "totalPages": "Totaal: {{count}} pagina's",
@@ -1928,7 +1942,7 @@
   },
   "installDates": {
     "tool": "Installatiedatum",
-    "toolDescription": "Markeer geselecteerde 1draad-items per datum",
+    "toolDescription": "Markeer geselecteerde items in het eendraadschema per datum",
     "installDate": "Installatiedatum",
     "installDateHint": "Laat leeg om het bouwjaar van het project te gebruiken.",
     "color": "Kleur installatiedatum",

@@ -17,7 +17,12 @@ import {
   disableDirectInverterPanelBackup,
   enableDirectInverterPanelBackup,
 } from '@/lib/supplyAssembly/directInverterPanelBackup'
-import { buildDirectConverterSupplyAssembly } from '@/lib/supplyAssembly/editorIntegration'
+import {
+  buildDirectConverterSupplyAssembly,
+  reconcileChangeoverSupplyAssembly,
+  reconcileInverterUnitMultiplier,
+  reconcileSupplyAssemblyAcConductorFlow,
+} from '@/lib/supplyAssembly/editorIntegration'
 import { getDefaultSupplyConverterAcPhaseAssignment } from '@/lib/supplyAssembly/supplyConverterPhases'
 import { generateId } from '@/utils'
 import {
@@ -102,6 +107,20 @@ export function panelHasBackupOutput(
   )
 }
 
+/** A direct grid-isolated inverter needs separate grid and backup panel buses. */
+export function panelRequiresSplitFeed(
+  project: ProjectWithOptionalV2Electrical,
+  panelId: string
+): boolean {
+  return Boolean(
+    !panelHasModularChangeover(project, panelId) &&
+      findPanelSupplyAssembly(project, panelId)?.nodes.some(
+        (node) =>
+          node.kind === 'inverter-unit' && node.properties.gridInputConnected === false
+      )
+  )
+}
+
 /** True when split mode already works or a direct inverter can gain a panel backup handoff. */
 export function panelCanConfigureBackupOutput(
   project: ProjectWithOptionalV2Electrical,
@@ -169,6 +188,35 @@ export function reconcileInvalidPanelFeedOrganizationsInProject(
           phase === 'L1' || phase === 'L2' || phase === 'L3'
       )
     : []
+  const multiplierChangedPanels = new Set<string>()
+  if (installation) {
+    const topology = ensureInstallationFeedTopology(
+      installation,
+      getElectricalPanelsFromProject(project)
+    )
+    for (const feed of topology.rootFeeds) {
+      for (const device of feed.trunkDevices ?? []) {
+        if (
+          device.symbol === 'inverter' &&
+          reconcileInverterUnitMultiplier(project, device)
+        ) {
+          multiplierChangedPanels.add(feed.panelId)
+          changed = true
+        }
+      }
+      if (reconcileSupplyAssemblyAcConductorFlow(project, feed.panelId)) changed = true
+    }
+    for (const feed of topology.rootFeeds) {
+      for (const device of feed.trunkDevices ?? []) {
+        if (
+          device.symbol === 'source_changeover' &&
+          reconcileChangeoverSupplyAssembly(project, device)
+        ) {
+          changed = true
+        }
+      }
+    }
+  }
   for (const panel of getElectricalPanelsFromProject(project)) {
     let repairedPanelHandoff = false
     if (panel.isMain !== false && hasExplicitPanelBusSections(panel)) {
@@ -209,7 +257,11 @@ export function reconcileInvalidPanelFeedOrganizationsInProject(
     ) {
       changed = setPanelFeedOrganizationInProject(project, panel.id, 'single') || changed
     }
-    if (repairedPanelHandoff && panel.isMain !== false && hasExplicitPanelBusSections(panel)) {
+    if (
+      (repairedPanelHandoff || multiplierChangedPanels.has(panel.id)) &&
+      panel.isMain !== false &&
+      hasExplicitPanelBusSections(panel)
+    ) {
       syncPanelBackupBusPhaseOrderInProject(project, panel.id)
     }
   }
@@ -328,6 +380,7 @@ export function setPanelFeedOrganizationInProject(
   const assemblies = getMutableSupplyAssembliesForProject(project)
 
   if (organization === 'single') {
+    if (panelRequiresSplitFeed(project, panelId)) return false
     const primaryId = getPrimaryPanelBusSectionId(panel)
     for (const protection of panel.protections) delete protection.busSectionId
     for (const circuit of panel.circuits) delete circuit.busSectionId

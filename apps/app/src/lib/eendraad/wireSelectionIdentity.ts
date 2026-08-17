@@ -3,6 +3,64 @@ import type { Selection } from '@/types/ui'
 
 type WireSelectionMetadata = NonNullable<Selection['wireMetadata']>[number]
 
+/** Resolve a regenerated supply wire using its physical persisted section first. */
+export function resolveSupplyWireSegmentByMetadata(
+  wireSegments: WireSegment[],
+  metadata: WireSelectionMetadata
+): WireSegment | null {
+  if (metadata.supplySectionKey) {
+    const exactSection = wireSegments.find(
+      (segment) =>
+        segment.panelId === metadata.panelId &&
+        segment.supplySectionKey === metadata.supplySectionKey
+    )
+    if (exactSection) return exactSection
+  }
+
+  if (metadata.supplyAssemblyId && metadata.supplyConnectionId) {
+    const exactConnection = wireSegments.find(
+      (segment) =>
+        segment.panelId === metadata.panelId &&
+        segment.supplyAssemblyId === metadata.supplyAssemblyId &&
+        segment.supplyConnectionId === metadata.supplyConnectionId
+    )
+    if (exactConnection) return exactConnection
+  }
+
+  if (!metadata.isSupply) return null
+  if (metadata.supplyWireRole) {
+    const sameRole = wireSegments.find(
+      (segment) =>
+        segment.panelId === metadata.panelId &&
+        (segment.supplyWireRole === metadata.supplyWireRole ||
+          (metadata.supplyWireRole === 'downstream' &&
+            segment.type === 'vertical' &&
+            !segment.circuitId &&
+            !segment.fromElementType)) &&
+        (metadata.supplyWireRole !== 'crossing' || segment.isSupplyTrunk === true)
+    )
+    if (sameRole) return sameRole
+  }
+  if (metadata.supplySegmentIndex !== undefined) {
+    const sameIndex = wireSegments.find(
+      (segment) =>
+        segment.isSupplyTrunk === true &&
+        segment.panelId === metadata.panelId &&
+        segment.supplySegmentIndex === metadata.supplySegmentIndex
+    )
+    if (sameIndex) return sameIndex
+  }
+  return (
+    wireSegments.find(
+      (segment) =>
+        segment.type === 'vertical' &&
+        !segment.circuitId &&
+        !segment.fromElementType &&
+        segment.panelId === metadata.panelId
+    ) ?? null
+  )
+}
+
 /** Resolve a regenerated circuit wire from stable electrical identity rather than its transient ID. */
 export function resolveCircuitWireSegmentByMetadata(
   wireSegments: WireSegment[],

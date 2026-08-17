@@ -1,25 +1,25 @@
 import { create } from 'zustand'
 import { useStoreWithEqualityFn } from 'zustand/traditional'
 import type { Point } from '@/types/ui'
-import type { Rotation } from '@/types/schema'
+import type { SituationPlanRotation } from '@/types/schema'
 
 type LabelPoint = { x: number; y: number }
 
 type PlanDragVisualState = {
   positions: Map<string, Point>
   labels: Map<string, LabelPoint>
-  rotations: Map<string, Rotation>
+  rotations: Map<string, SituationPlanRotation>
   patch: (update: {
     positions?: Map<string, Point>
     labels?: Map<string, LabelPoint>
-    rotations?: Map<string, Rotation>
+    rotations?: Map<string, SituationPlanRotation>
   }) => void
   clear: () => void
 }
 
 const emptyPositions = () => new Map<string, Point>()
 const emptyLabels = () => new Map<string, LabelPoint>()
-const emptyRotations = () => new Map<string, Rotation>()
+const emptyRotations = () => new Map<string, SituationPlanRotation>()
 
 export const usePlanDragVisualStore = create<PlanDragVisualState>((set) => ({
   positions: emptyPositions(),
@@ -45,7 +45,7 @@ const pointEqual = (a: Point | null, b: Point | null) =>
 const labelEqual = (a: LabelPoint | null, b: LabelPoint | null) =>
   a === b || (a != null && b != null && a.x === b.x && a.y === b.y)
 
-const rotationEqual = (a: Rotation | null | undefined, b: Rotation | null | undefined) => a === b
+const rotationEqual = (a: SituationPlanRotation | null | undefined, b: SituationPlanRotation | null | undefined) => a === b
 
 /** Per-placement drag position — only re-renders when this symbol moves. */
 export function usePlanDragPosition(placementId: string): Point | null {
@@ -64,7 +64,7 @@ export function usePlanDragLabel(placementId: string): LabelPoint | null {
   )
 }
 
-export function usePlanDragRotation(placementId: string): Rotation | null {
+export function usePlanDragRotation(placementId: string): SituationPlanRotation | null {
   return useStoreWithEqualityFn(
     usePlanDragVisualStore,
     (s) => s.rotations.get(placementId) ?? null,

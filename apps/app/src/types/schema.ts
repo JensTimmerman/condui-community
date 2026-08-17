@@ -522,6 +522,13 @@ export interface TrunkDevice {
     | 'converter-branch'
     | 'converter-dc'
     | 'converter-dc-top'
+  /** Geometry on the converter grid-input path. Missing means inline on the horizontal run. */
+  converterGridPlacement?: 'inline' | 'input-leg'
+  /**
+   * Supply inverter only. False intentionally disconnects the inverter's grid AC input.
+   * Missing remains backward-compatible and means connected.
+   */
+  converterGridInputConnected?: boolean
   /** ISO installation date. Preferred over the legacy year override. */
   installationDate?: string
   /** Explicitly keeps automatic/version-derived installation dates off this entity. */
@@ -725,6 +732,8 @@ export interface EquipmentCertificationProps {
   brand?: string
   model?: string
   serialNumber?: string
+  /** Ordered physical-unit serials for a multiplied supply device. */
+  serialNumbers?: string[]
   synergrid?: SynergridCertification
 }
 
@@ -1034,12 +1043,15 @@ export interface Floor {
 
 export type Rotation = 0 | 90 | 180 | 270
 
+/** Clockwise situation-plan angle. Auto-oriented symbols beside curved walls may use any degree value. */
+export type SituationPlanRotation = number
+
 export interface Placement {
   id: string
   floorId: string
   layer: string
   pos: Point2
-  rotationDeg: Rotation
+  rotationDeg: SituationPlanRotation
   /** Set after a user rotates the situation-plan symbol with R. Missing means auto-rotation may apply. */
   rotationMode?: 'explicit'
   scale: number
@@ -1098,7 +1110,7 @@ export interface JunctionPanelPlacement {
   label: string
   floorId: string
   pos: Point2
-  rotationDeg?: Rotation
+  rotationDeg?: SituationPlanRotation
   rotationMode?: 'explicit'
   scale?: number
   layer?: string
@@ -1109,7 +1121,7 @@ export interface EarthingPlacement {
   id: string
   floorId: string
   pos: Point2
-  rotationDeg?: Rotation
+  rotationDeg?: SituationPlanRotation
   rotationMode?: 'explicit'
   scale?: number
   layer?: string
@@ -1230,6 +1242,18 @@ export interface FeedSegmentCableOverride {
   cable: CableSpec
 }
 
+/** Independently editable physical wire run between two supply devices or terminals. */
+export interface FeedWireSectionProperties {
+  cable: CableSpec
+  wireRoute?: 'wall' | 'ground' | 'air'
+  inTube?: boolean
+  inWall?: boolean
+  hideWireLabel?: boolean
+  showFireClassLabel?: boolean
+  wireLengthM?: number
+  showWireLengthLabel?: boolean
+}
+
 export interface SharedFeedPath {
   id: string
   kind: 'shared'
@@ -1261,6 +1285,8 @@ export interface RootPanelFeedPath {
   showWireLengthLabel?: boolean
   trunkDevices?: TrunkDevice[]
   segmentCables?: FeedSegmentCableOverride[]
+  /** Stable per-run overrides for supply-frame wires that are not assembly connections. */
+  wireSections?: Record<string, FeedWireSectionProperties>
 }
 
 export interface FeedTopology {
@@ -1348,6 +1374,8 @@ export interface WireSegment {
   /** Canonical supply-assembly connection represented by this drawable segment. */
   supplyAssemblyId?: string
   supplyConnectionId?: string
+  /** Stable physical run between supply devices/terminals; orthogonal pieces share one key. */
+  supplySectionKey?: string
   /** When this segment is a domotica module output wire, group indicates 'endpoint' or 'control'. */
   domoticaOutputGroup?: 'endpoint' | 'control'
   /** When this segment is a domotica module output wire, index is the absolute output index within that group. */

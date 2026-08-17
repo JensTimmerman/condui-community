@@ -9,6 +9,7 @@ import type { Point } from '@/types/ui'
 import type { ElectricalEnclosureRef } from '@/types/supplyAssembly'
 import { normalizeProtectionPlacementDropTarget } from '@/lib/eendraad/protectionPlacementDropTarget'
 import { canCreateSupplyTopologyFromDrop } from '@/lib/supplyTopologyFeature'
+import type { SameSymbolAddMoreLayoutTarget } from '@/lib/eendraad/sameSymbolAddMore'
 
 const SUPPLY_ASSEMBLY_DROP_TARGETS = new Set<NonNullable<DropTarget['type']>>([
   'supplyWire',
@@ -37,6 +38,8 @@ export interface DragPreviewState {
     endpointIds: string[]
   }
   movingPanelAttachment?: { panelId: string }
+  /** Existing matching symbol that will be incremented instead of inserting a new entity. */
+  sameSymbolAddMore?: SameSymbolAddMoreLayoutTarget
 }
 
 export function shouldPreferMainBusOverSupplyWire(
@@ -57,9 +60,16 @@ export function useEendraadDragPreview(
   options?: {
     draggingProtectionIdRef?: MutableRefObject<string | null>
     getProtectionById?: (id: string) => ProtectionDevice | null | undefined
+    resolveSameSymbolAddMore?: (
+      position: Point,
+      symbol: SymbolMetadata
+    ) => SameSymbolAddMoreLayoutTarget | null
+    isBlockedDropPosition?: (position: Point) => boolean
   }
 ) {
   const [dragPreview, setDragPreview] = useState<DragPreviewState | null>(null)
+  const resolveSameSymbolAddMore = options?.resolveSameSymbolAddMore
+  const isBlockedDropPosition = options?.isBlockedDropPosition
 
   const handleDragOver = useCallback(
     (position: Point, symbolData: unknown | null) => {
@@ -73,21 +83,39 @@ export function useEendraadDragPreview(
         setDragPreview(null)
         return
       }
+      if (isBlockedDropPosition?.(position)) {
+        setDragPreview(null)
+        return
+      }
+      const sameSymbolAddMore = resolveSameSymbolAddMore?.(position, symbol)
+      if (sameSymbolAddMore) {
+        setDragPreview({
+          position: sameSymbolAddMore.center,
+          symbolData: symbol,
+          dropTarget: null,
+          sameSymbolAddMore,
+        })
+        return
+      }
       if (!canCreateSupplyTopologyFromDrop(symbol, null)) {
         setDragPreview(null)
         return
       }
 
       const draggingProtectionId = options?.draggingProtectionIdRef?.current
-      // Existing protections need the main-bus preference at the supply/bus crossing
-      // for reorder drags. Panels must keep the actual wire target: a converter-backed
-      // circuit can run close enough to the main bus for the padded hit zones to overlap.
-      const prefersMainBus =
-        shouldPreferMainBusOverSupplyWire(draggingProtectionId) || Boolean(symbol.busFeedKind)
       const protectionIds = [...PROTECTION_SYMBOL_IDS]
       const isProtectionPlacement = protectionIds.includes(
         symbol.id as (typeof PROTECTION_SYMBOL_IDS)[number]
       )
+      // Existing protections need the main-bus preference at the supply/bus crossing
+      // for reorder drags. New protections need the same preference on compact empty
+      // split rails, whose incoming supply stubs necessarily cross the short bars.
+      // Panels must keep the actual wire target: a converter-backed circuit can run
+      // close enough to the main bus for the padded hit zones to overlap.
+      const prefersMainBus =
+        shouldPreferMainBusOverSupplyWire(draggingProtectionId) ||
+        Boolean(symbol.busFeedKind) ||
+        isProtectionPlacement
       const rawDropTarget = detectDropTarget(
         position,
         symbol.id === 'earthing_separator'
@@ -207,7 +235,13 @@ export function useEendraadDragPreview(
         }
       }
     },
-    [detectDropTarget, options?.draggingProtectionIdRef, options?.getProtectionById]
+    [
+      detectDropTarget,
+      options?.draggingProtectionIdRef,
+      options?.getProtectionById,
+      resolveSameSymbolAddMore,
+      isBlockedDropPosition,
+    ]
   )
 
   return {

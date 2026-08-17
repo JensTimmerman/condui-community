@@ -12,7 +12,7 @@ const LANGUAGES = [
 ] as const
 
 export function SettingsPanel({
-  showDebug = process.env.NODE_ENV !== 'production',
+  showDebug = import.meta.env.DEV,
 }: {
   showDebug?: boolean
 }) {
@@ -86,7 +86,7 @@ export function SettingsPanel({
         </div>
       </section>
 
-      {showDebug && (
+      {import.meta.env.DEV && showDebug && (
         <section>
           <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mb-3">
             {t('settings.debug.title', 'Debug')}
@@ -100,7 +100,7 @@ export function SettingsPanel({
                   checked={eendraadHitboxDebug}
                   onChange={(e) => setEendraadHitboxDebug(e.target.checked)}
                 />
-                {t('settings.debug.eendraadHitboxDebug', 'Show 1-line hitboxes (1draad)')}
+                {t('settings.debug.eendraadHitboxDebug', 'Show one-wire diagram hitboxes')}
               </label>
               <p className="text-xs text-gray-500 dark:text-gray-400">
                 {t(

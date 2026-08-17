@@ -74,6 +74,7 @@ import {
   PlanOpeningWidthEditor,
 } from './plan'
 import { PlanDebugOverlay } from './plan/PlanDebugOverlay'
+import { FloorPlanDrawDimensionInput } from './plan/FloorPlanDrawDimensionInput'
 import { CanvasOverlayScaleProvider } from '@/contexts/CanvasOverlayScaleContext'
 import CanvasFloatingControlRail from './CanvasFloatingControlRail'
 import { suggestRotationForPlacement } from '@/utils/planAutoOrient'
@@ -8144,6 +8145,8 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
             </Group>
           </>
         </BaseCanvas>
+
+        <FloorPlanDrawDimensionInput pan={planView.pan} zoom={planView.zoom} />
 
         {quickPlacerVisible && quickPlacerMode === 'fast' && currentQuickPlacerFastItem && (
           <div

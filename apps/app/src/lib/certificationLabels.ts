@@ -30,7 +30,10 @@ export type CertificationLabelSource =
       | 'batteryProps'
       | 'solarPanelProps'
     >
-  | Pick<TrunkDevice, 'symbol' | 'symbolLabelDisplay' | 'conversionProps' | 'solarPanelProps'>
+  | Pick<
+      TrunkDevice,
+      'symbol' | 'symbolLabelDisplay' | 'conversionProps' | 'solarPanelProps' | 'batteryProps'
+    >
 
 const CERT_FIELD_LABEL_KEYS = {
   brand: 'endpoints.certification.brand',
@@ -38,6 +41,14 @@ const CERT_FIELD_LABEL_KEYS = {
 } as const
 
 const DIAGRAM_POWER_PREFIX = 'P'
+const COMPACT_VALUE_THRESHOLD = 5
+
+/** Keep an empty/short field identifiable, but drop its redundant prefix for long values. */
+export function formatCompactDiagramField(prefix: string, value: string | undefined): string {
+  const text = (value ?? '').trim()
+  if (!text) return `${prefix}:`
+  return text.length > COMPACT_VALUE_THRESHOLD ? text : `${prefix}: ${text}`
+}
 
 function conversionPropsFromSource(
   source: CertificationLabelSource
@@ -58,29 +69,38 @@ export function isCertificationListingVisible(
 function certificationLine(
   key: CertificationLabelKey,
   labelKey: string,
-  value: string | number | undefined
+  value: string | number | undefined,
+  compactLongValue = false
 ): CertificationLabelPart {
   const label = i18n.t(labelKey)
   if (value === undefined || value === null) {
     return { key, text: `${label}:` }
   }
   const text = typeof value === 'number' ? String(value) : value.trim()
-  return { key, text: text ? `${label}: ${text}` : `${label}:` }
+  return {
+    key,
+    text: compactLongValue
+      ? formatCompactDiagramField(label, text)
+      : text
+        ? `${label}: ${text}`
+        : `${label}:`,
+  }
 }
 
-/** Serial number: value only (no long localized prefix on the one-wire). Omitted when empty. */
-function serialNumberLine(value: string | undefined): CertificationLabelPart | null {
-  const text = (value ?? '').trim()
-  if (!text) return null
-  return { key: 'certificationSerial', text }
+/** Serial numbers: values only, one line per physical unit. Omitted when empty. */
+function serialNumberLine(value: string | string[] | undefined): CertificationLabelPart | null {
+  const values = (Array.isArray(value) ? value : [value])
+    .map((candidate) => (candidate ?? '').trim())
+    .filter(Boolean)
+  if (values.length === 0) return null
+  return { key: 'certificationSerial', text: values.join('\n') }
 }
 
 /** Power: short `P:` prefix on the one-wire (all languages). */
 function powerLine(value: string | undefined): CertificationLabelPart {
-  const text = (value ?? '').trim()
   return {
     key: 'certificationPower',
-    text: text ? `${DIAGRAM_POWER_PREFIX}: ${text}` : `${DIAGRAM_POWER_PREFIX}:`,
+    text: formatCompactDiagramField(DIAGRAM_POWER_PREFIX, value),
   }
 }
 
@@ -88,9 +108,13 @@ function inverterRectifierParts(
   props: Endpoint['energyConversionProps'] | TrunkDevice['conversionProps'] | undefined
 ): CertificationLabelPart[] {
   return [
-    certificationLine('certificationBrand', CERT_FIELD_LABEL_KEYS.brand, props?.brand),
-    certificationLine('certificationModel', CERT_FIELD_LABEL_KEYS.model, props?.model),
-    serialNumberLine(props?.serialNumber),
+    certificationLine('certificationBrand', CERT_FIELD_LABEL_KEYS.brand, props?.brand, true),
+    certificationLine('certificationModel', CERT_FIELD_LABEL_KEYS.model, props?.model, true),
+    serialNumberLine(
+      props?.serialNumbers?.some((serialNumber) => serialNumber.trim().length > 0)
+        ? props.serialNumbers
+        : props?.serialNumber
+    ),
     powerLine(props?.power),
   ].filter((part): part is CertificationLabelPart => part != null)
 }
@@ -103,13 +127,19 @@ function evChargerParts(props: Endpoint['evChargerProps'] | undefined): Certific
   ].filter((part): part is CertificationLabelPart => part != null)
 }
 
-function batteryParts(props: Endpoint['batteryProps'] | undefined): CertificationLabelPart[] {
+function batteryParts(
+  props: Endpoint['batteryProps'] | TrunkDevice['batteryProps'] | undefined
+): CertificationLabelPart[] {
   const powerValue =
     props?.powerKw != null && Number.isFinite(props.powerKw) ? `${props.powerKw}kW` : undefined
   return [
-    certificationLine('certificationBrand', CERT_FIELD_LABEL_KEYS.brand, props?.brand),
-    certificationLine('certificationModel', CERT_FIELD_LABEL_KEYS.model, props?.model),
-    serialNumberLine(props?.serialNumber),
+    certificationLine('certificationBrand', CERT_FIELD_LABEL_KEYS.brand, props?.brand, true),
+    certificationLine('certificationModel', CERT_FIELD_LABEL_KEYS.model, props?.model, true),
+    serialNumberLine(
+      props?.serialNumbers?.some((serialNumber) => serialNumber.trim().length > 0)
+        ? props.serialNumbers
+        : props?.serialNumber
+    ),
     powerLine(powerValue),
   ].filter((part): part is CertificationLabelPart => part != null)
 }
@@ -118,9 +148,13 @@ function solarPanelParts(
   props: Endpoint['solarPanelProps'] | TrunkDevice['solarPanelProps'] | undefined
 ): CertificationLabelPart[] {
   return [
-    certificationLine('certificationBrand', CERT_FIELD_LABEL_KEYS.brand, props?.brand),
-    certificationLine('certificationModel', CERT_FIELD_LABEL_KEYS.model, props?.model),
-    serialNumberLine(props?.serialNumber),
+    certificationLine('certificationBrand', CERT_FIELD_LABEL_KEYS.brand, props?.brand, true),
+    certificationLine('certificationModel', CERT_FIELD_LABEL_KEYS.model, props?.model, true),
+    serialNumberLine(
+      props?.serialNumbers?.some((serialNumber) => serialNumber.trim().length > 0)
+        ? props.serialNumbers
+        : props?.serialNumber
+    ),
   ].filter((part): part is CertificationLabelPart => part != null)
 }
 

@@ -14,6 +14,7 @@ import {
   MIN_AUXILIARY_COLUMNS,
 } from '@/lib/panel/auxiliarySupplyEnclosures'
 import { reconcileInvalidPanelFeedOrganizationsInProject } from '@/lib/panel/panelFeedOrganization'
+import { disconnectSupplyInverterGridInputInProject } from '@/lib/supplyAssembly/disconnectInverterGridInput'
 
 function markProjectChanged(state: { currentProject: ProjectV2 | null; isDirty: boolean }): void {
   if (!state.currentProject) return
@@ -165,6 +166,20 @@ export const createSupplyAssemblySlice: ProjectSliceCreator = (set, get) => ({
       reconcileInvalidPanelFeedOrganizationsInProject(state.currentProject)
       markProjectChanged(state)
     }),
+
+  disconnectSupplyInverterGridInput: (assemblyId, panelId) => {
+    let changed = false
+    set((state) => {
+      if (!state.currentProject) return
+      changed = disconnectSupplyInverterGridInputInProject(
+        state.currentProject,
+        assemblyId,
+        panelId
+      )
+      if (changed) markProjectChanged(state)
+    })
+    return changed
+  },
 
   addAuxiliaryElectricalEnclosure: (enclosure) =>
     set((state) => {

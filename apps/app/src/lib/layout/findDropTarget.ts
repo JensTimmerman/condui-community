@@ -86,6 +86,8 @@ export interface DropTarget {
   supplyFeedScope?: 'shared' | 'root'
   /** Which physical DC branch of a hybrid supply converter is targeted. */
   supplyConverterDcBranch?: 'right' | 'top'
+  /** Geometry selected on the converter grid-input path. */
+  converterGridPlacement?: 'inline' | 'input-leg'
   /** True only on the direct converter's load-side junction slot. */
   supplyConverterChangeoverSlot?: boolean
   /** Insert index for ground trunk devices (used when type === 'groundWire') */
@@ -96,6 +98,8 @@ export interface DropTarget {
   mainBusInsertIndex?: number
   /** Number of main bus items before the drop (used to derive final position after insertion) */
   mainBusItemCount?: number
+  /** Explicit destination rail when the split main bus has no items to infer it from. */
+  busSectionId?: string
   /** True when a generic panel-frame hit was normalized into a main-bus drop target for protections. */
   normalizedFromPanelFrame?: boolean
   /** Insert index for nested circuits on a secondary bus when dropping on that bus */
@@ -274,6 +278,36 @@ function findCircuitNestDropInPanel(
   }
 }
 
+/** Horizontal reach of the dashed invitation for creating a secondary bus. */
+export const SECONDARY_BUS_PREVIEW_STUB_LENGTH = 32
+const SECONDARY_BUS_PREVIEW_HIT_PADDING = 12
+const SECONDARY_BUS_PREVIEW_DOT_RADIUS = 8
+
+function findDirectConverterChangeoverSlotInPanel(
+  panelNode: LayoutNode,
+  position: Point,
+  ctx: WalkContext
+): DropTarget | null {
+  const visit = (node: LayoutNode): DropTarget | null => {
+    if (node.hitZone?.supplyConverterChangeoverSlot && isPointInCore(node, position)) {
+      return {
+        type: 'supplyWire',
+        panelId: node.hitZone.supplyPanelId ?? ctx.panelId,
+        diagramId: ctx.diagramId,
+        supplyFeedScope: node.hitZone.supplyFeedScope ?? 'root',
+        supplyDeviceInsertIndex: node.hitZone.supplyInsertIndex,
+        supplyConverterChangeoverSlot: true,
+      }
+    }
+    for (const child of node.children) {
+      const result = visit(child)
+      if (result) return result
+    }
+    return null
+  }
+  return visit(panelNode)
+}
+
 /**
  * Last-resort hit test for segmented secondary bus wires (nested circuits under a parent MCB).
  */
@@ -365,6 +399,55 @@ function findNestedCircuitSecondaryBusDropInPanel(
   return visit(panelNode, ctx)
 }
 
+/**
+ * Resolve the dashed pending-bus invitation before ordinary nest-wire targeting.
+ * A parent with one nested protection has no real bus segment yet, so this gives
+ * the preview stub a forgiving hit area and inserts a sibling instead of placing
+ * the new protection above the existing child.
+ */
+function findPendingSecondaryBusDropInPanel(
+  panelNode: LayoutNode,
+  position: Point,
+  ctx: WalkContext
+): { target: DropTarget; node: LayoutNode } | null {
+  const visit = (node: LayoutNode): { target: DropTarget; node: LayoutNode } | null => {
+    if (node.type === 'mcb') {
+      const nestedProtections = node.children.filter(
+        (child) => child.type === 'mcb' && !!child.circuitIdForWires
+      )
+      const nestNode = node.children.find((child) =>
+        child.id?.startsWith('circuit-nest-')
+      )
+      if (nestedProtections.length === 1 && nestNode) {
+        const bounds = getHitZoneBounds(nestNode, 'core')
+        const anchorX = (bounds.left + bounds.right) / 2
+        const busY = (bounds.top + bounds.bottom) / 2
+        const inX =
+          position.x >= anchorX - SECONDARY_BUS_PREVIEW_DOT_RADIUS &&
+          position.x <=
+            anchorX + SECONDARY_BUS_PREVIEW_STUB_LENGTH + SECONDARY_BUS_PREVIEW_HIT_PADDING
+        const inY = Math.abs(position.y - busY) <= SECONDARY_BUS_PREVIEW_HIT_PADDING
+        if (inX && inY) {
+          const nestedCircuitId = nestedProtections[0]!.circuitIdForWires!
+          const target = findNestedCircuitSecondaryBusDropInPanel(
+            panelNode,
+            (candidate) => candidate.circuitIdForWires === nestedCircuitId,
+            ctx
+          )
+          if (target) return { target, node: nestNode }
+        }
+      }
+    }
+    for (const child of node.children) {
+      const result = visit(child)
+      if (result) return result
+    }
+    return null
+  }
+
+  return visit(panelNode)
+}
+
 // ─── Main entry point ────────────────────────────────────────────────────────
 
 /**
@@ -382,6 +465,17 @@ export function findDropTarget(
   }
 
   const ctx: WalkContext = { panelId: panelNode.domainId, diagramId: panelNode.diagramId }
+  const directChangeoverSlot = findDirectConverterChangeoverSlotInPanel(
+    panelNode,
+    position,
+    ctx
+  )
+  if (directChangeoverSlot) return directChangeoverSlot
+
+  if (options?.preferSecondaryBusForNestedProtection) {
+    const pendingSecondaryBus = findPendingSecondaryBusDropInPanel(panelNode, position, ctx)
+    if (pendingSecondaryBus) return pendingSecondaryBus.target
+  }
 
   // Pass 1: core bounds only (highest priority — cursor is directly ON the element)
   const coreResult = findTarget(panelNode, position, ctx, 'core', options)
@@ -492,6 +586,31 @@ export function findDropTargetWithDebug(
   }
 
   const ctx: WalkContext = { panelId: panelNode.domainId, diagramId: panelNode.diagramId }
+  if (options?.preferSecondaryBusForNestedProtection) {
+    const pendingSecondaryBus = findPendingSecondaryBusDropInPanel(panelNode, position, ctx)
+    if (pendingSecondaryBus) {
+      debugPath.push({
+        nodeId: pendingSecondaryBus.node.id,
+        nodeType: pendingSecondaryBus.node.type,
+        domainId: pendingSecondaryBus.node.domainId,
+        hitZoneType: pendingSecondaryBus.node.hitZone?.type ?? undefined,
+        inBounds: true,
+        matched: true,
+      })
+      return {
+        target: pendingSecondaryBus.target,
+        debug: { panelId: panelNode.domainId, path: debugPath },
+      }
+    }
+  }
+  const directChangeoverSlot = findDirectConverterChangeoverSlotInPanel(
+    panelNode,
+    position,
+    ctx
+  )
+  if (directChangeoverSlot) {
+    return { target: directChangeoverSlot, debug: { panelId: panelNode.domainId, path: debugPath } }
+  }
 
   // Pass 1: core bounds only (highest priority — cursor is directly ON the element)
   const coreResult = findTargetWithDebug(panelNode, position, ctx, 'core', debugPath, options)
@@ -1233,6 +1352,7 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
       // use the segment index from the node id so the insert position matches the segment the user
       // actually dropped on (e.g. last segment = insert at end). Fall back to position-based if no id.
       if (target.type === 'mainBus' && ctx.mainBusNode && typeof ctx.panelId === 'string') {
+        target.busSectionId = node.hitZone?.busSectionId
         const segPrefix = `main-bus-segment-${ctx.panelId}-`
         const segRest = node.id?.startsWith(segPrefix) ? node.id.slice(segPrefix.length) : undefined
         const segIndex =
@@ -1302,10 +1422,12 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
   ) {
     target.supplyFeedScope = node.hitZone?.supplyFeedScope
     target.supplyConverterDcBranch = node.hitZone?.supplyConverterDcBranch
+    target.converterGridPlacement = node.hitZone?.converterGridPlacement
     target.supplyConverterChangeoverSlot = node.hitZone?.supplyConverterChangeoverSlot
     if (node.type === 'trunkDevice' && typeof node.hitZone?.supplyInsertIndex === 'number') {
       target.supplyDeviceInsertIndex =
-        target.type === 'supplyConverterGridWire'
+        target.type === 'supplyConverterGridWire' &&
+          target.converterGridPlacement === 'input-leg'
           ? position.y < node.bounds.y
             ? node.hitZone.supplyInsertIndex + 1
             : node.hitZone.supplyInsertIndex

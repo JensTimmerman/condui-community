@@ -1,5 +1,8 @@
 import { normalizeNominalVoltageSystem } from '@/constants/nominalVoltage'
-import { getFullInstallationPhaseAssignment, getInstallationPhases } from '@/lib/wires/phaseAssignment'
+import {
+  getFullInstallationPhaseAssignment,
+  getInstallationPhases,
+} from '@/lib/wires/phaseAssignment'
 import type { AcPhase, CircuitPhaseAssignment, Installation, TrunkDevice } from '@/types/schema'
 import { getSupplyInverterMultiplier } from '@/utils/inverterMultipliers'
 
@@ -43,13 +46,15 @@ export function getSupplyConverterAcPhaseAssignment(
     if (count >= 3) return getDefaultSupplyConverterAcPhaseAssignment(system)
     if (count === 2) {
       const phaseOrder: AcPhase[] = ['L1', 'L2', 'L3', 'N', 'PE']
-      const phases = (Array.from(
-        new Set(
-          getSupplyInverterUnitPhaseAssignments(device, system, count).flatMap(
-            (item) => item.phases
+      const phases = (
+        Array.from(
+          new Set(
+            getSupplyInverterUnitPhaseAssignments(device, system, count).flatMap(
+              (item) => item.phases
+            )
           )
-        )
-      ) as AcPhase[]).sort((left, right) => phaseOrder.indexOf(left) - phaseOrder.indexOf(right))
+        ) as AcPhase[]
+      ).sort((left, right) => phaseOrder.indexOf(left) - phaseOrder.indexOf(right))
       const linePhaseCount = phases.filter((phase) => phase !== 'N' && phase !== 'PE').length
       return {
         kind: linePhaseCount >= 3 ? 'three_phase' : 'phase_to_phase',
@@ -59,7 +64,9 @@ export function getSupplyConverterAcPhaseAssignment(
       }
     }
   }
-  return device.conversionProps?.acPhaseAssignment ?? getDefaultSupplyConverterAcPhaseAssignment(system)
+  return (
+    device.conversionProps?.acPhaseAssignment ?? getDefaultSupplyConverterAcPhaseAssignment(system)
+  )
 }
 
 export function getDefaultSupplyInverterUnitPhaseAssignments(
@@ -104,12 +111,15 @@ export function getSupplyInverterUnitPhaseAssignments(
   const defaults = getDefaultSupplyInverterUnitPhaseAssignments(system, count)
   const stored = device.conversionProps?.acPhaseAssignments ?? []
   const shared = device.conversionProps?.acPhaseAssignment
+  // A single native multiphase inverter is one source and may legitimately widen a
+  // reduced grid input back to its configured three-phase backup output. Shared
+  // multiphase assignments must only be split into per-phase defaults for an actual
+  // multiplied inverter group.
+  if (count === 1) return [stored[0] ?? shared ?? defaults[0]!]
   const reducedShared =
     shared?.kind === 'single_phase' || shared?.kind === 'phase_to_phase' ? shared : undefined
   return defaults.map((fallback, index) =>
-    index === 0
-      ? stored[index] ?? reducedShared ?? fallback
-      : stored[index] ?? fallback
+    index === 0 ? (stored[index] ?? reducedShared ?? fallback) : (stored[index] ?? fallback)
   )
 }
 

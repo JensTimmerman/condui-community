@@ -334,7 +334,7 @@
     },
     "debug": {
       "title": "Debug",
-      "eendraadHitboxDebug": "Show one-line hitboxes (1draad)",
+      "eendraadHitboxDebug": "Show one-wire diagram hitboxes",
       "eendraadHitboxDebugHint": "Visualize the hit zones used for drop detection on the one-line diagram. UI-only, not exported.",
       "planPlacementDebug": "Show plan placement debug (sitplan)",
       "planPlacementDebugHint": "Visualize symbol centers, selection bounds, label positions and wall-based orientation helpers on the sitplan. UI-only, not exported.",
@@ -1196,8 +1196,6 @@
   },
   "validation": {
     "title": "AREI Validation",
-    "disclaimer": "Automated checks to help review your installation.",
-    "disclaimerTooltip": "Checks are based on the available project information and do not cover every AREI requirement.",
     "errors": "Errors",
     "warnings": "Warnings",
     "info": "Info",
@@ -1211,6 +1209,14 @@
     "goToIssue": "Go to issue",
     "moreInfo": "More info",
     "lessInfo": "Less info",
+    "scopeLabels": {
+      "circuit": "Circuit",
+      "board": "Panel",
+      "device": "Device",
+      "placement": "Plan symbol",
+      "segment": "Wire",
+      "subgraph": "Supply"
+    },
     "linkedIssuesTooltip": "These issues are linked. Fixing one may resolve the other.",
     "noFilteredIssues": "No issues match the current filters.",
     "rules": {
@@ -1425,6 +1431,16 @@
       "branchMultiplierEndpointsSplit": "Circuit {{circuitCode}}: branch \"{{branchLabel}}\" lists {{absorbCount}} extra multiplier symbol(s) (e.g. lights) as separate endpoints; they should be one endpoint with multiple plan placements. Use Repair in the Orphan Inspector."
     },
     "primitives": {
+      "supplyModePaths": {
+        "message": "No valid grid/backup path for {{phases}}",
+        "details": "The one-line topology does not provide a complete, coordinated grid and backup path for {{phases}}.",
+        "remediation": "Reconnect the grid, backup and load sides so every shown phase has a complete path through the intended changeover."
+      },
+      "supplyConductorProtectionCoordination": {
+        "message": "{{protectionLabel}}: {{section}} mm² conductor is too small for {{ratingA}} A protection",
+        "details": "The drawn {{section}} mm² supply conductor may be protected at no more than {{maxRatingA}} A by this protective device, but the shown rating is {{ratingA}} A.",
+        "remediation": "Increase the conductor cross-section or reduce the upstream protective-device rating."
+      },
       "duplicatePanelProtectionLabels": {
         "message": "Protection label \"{{label}}\" is used {{count}} times on this panel",
         "details": "Duplicate protection names on the same panel (main bus, secondary bus, or supply) make circuits hard to identify. Rename one protection or enable automatic naming."
@@ -1441,6 +1457,10 @@
       },
       "protectionPhaseCompatibility": {
         "deviceLabel": "Protection",
+        "group": {
+          "message": "{{count}} protections may not match this {{availablePoleCount}}-pole supply",
+          "details": "Affected protections: {{deviceLabels}}. Check their phase and pole settings at this supply transition."
+        },
         "neutralUnavailable": {
           "message": "{{deviceLabel}} uses neutral, but this network has none",
           "details": "This combination may not make sense. Check the phase or pole setting."
@@ -1619,12 +1639,6 @@
       "AREI": {
         "code": "AREI",
         "title": "General Regulation on Electrical Installations"
-      },
-      "Condui": {
-        "code": "Condui"
-      },
-      "INTERNAL": {
-        "code": "Internal"
       }
     }
   },
@@ -1647,8 +1661,8 @@
     "dialog": {
       "title": "Export to PDF",
       "selectCanvases": "Select canvases to export",
-      "eendraad": "1draad (Single-line diagram)",
-      "eendraadShort": "Eendraad",
+      "eendraad": "One-wire diagram",
+      "eendraadShort": "One-wire",
       "panel": "Distribution board (cabinet view)",
       "panelShort": "Panel",
       "sitplan": "Sitplan (Floor plan)",
@@ -1658,7 +1672,7 @@
       "themeLight": "Light",
       "themeDark": "Dark",
       "pageCount": "Page count",
-      "pagesForEendraad": "{{count}} pages for 1draad",
+      "pagesForEendraad": "{{count}} pages for the one-wire diagram",
       "pagesForPanel": "{{count}} pages for distribution board",
       "pagesForSitplan": "{{count}} pages for sitplan",
       "totalPages": "Total: {{count}} pages",
