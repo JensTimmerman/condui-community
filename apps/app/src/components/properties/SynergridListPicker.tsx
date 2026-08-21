@@ -21,6 +21,7 @@ interface SynergridListPickerProps {
 const INITIAL_VISIBLE_ROWS = 80
 const ROW_INCREMENT = 80
 const SCROLL_LOAD_THRESHOLD_PX = 120
+const SEARCH_DEBOUNCE_MS = 200
 
 function searchableFields(entry: SynergridCatalogEntry): string[] {
   return [
@@ -55,6 +56,7 @@ export function SynergridListPicker({
   const [entries, setEntries] = useState<SynergridCatalogEntry[]>([])
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
   const [visibleLimit, setVisibleLimit] = useState(INITIAL_VISIBLE_ROWS)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -62,11 +64,19 @@ export function SynergridListPicker({
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (!open) setQuery('')
+    if (!open) {
+      setQuery('')
+      setDebouncedQuery('')
+    }
   }, [open])
 
   useEffect(() => {
-    if (!open || query.trim().length >= 2) return
+    const timer = window.setTimeout(() => setDebouncedQuery(query), SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(timer)
+  }, [query])
+
+  useEffect(() => {
+    if (!open || debouncedQuery.trim().length >= 2) return
     let cancelled = false
     setLoading(true)
     setError(null)
@@ -86,10 +96,10 @@ export function SynergridListPicker({
     return () => {
       cancelled = true
     }
-  }, [focus, open, plugAndPlayOnly, query])
+  }, [debouncedQuery, focus, open, plugAndPlayOnly])
 
   useEffect(() => {
-    if (!open || plugAndPlayOnly || query.trim().length < 2) return
+    if (!open || plugAndPlayOnly || debouncedQuery.trim().length < 2) return
     let cancelled = false
     loadSynergridCatalog({ plugAndPlayOnly: false, includePeripheral: true })
       .then((rows) => {
@@ -101,7 +111,7 @@ export function SynergridListPicker({
     return () => {
       cancelled = true
     }
-  }, [open, plugAndPlayOnly, query])
+  }, [debouncedQuery, open, plugAndPlayOnly])
 
   useEffect(() => {
     if (!open) return
@@ -113,19 +123,19 @@ export function SynergridListPicker({
   }, [onClose, open])
 
   const filteredEntries = useMemo(() => {
-    const needle = query.trim()
+    const needle = debouncedQuery.trim()
     if (!needle) return entries
     return entries
       .map((entry) => ({ entry, score: fuzzyEntryScore(entry, needle) }))
       .filter((result): result is { entry: SynergridCatalogEntry; score: number } => result.score != null)
       .sort((a, b) => a.score - b.score)
       .map((result) => result.entry)
-  }, [entries, query])
+  }, [debouncedQuery, entries])
 
   useEffect(() => {
     setVisibleLimit(INITIAL_VISIBLE_ROWS)
     scrollRef.current?.scrollTo({ top: 0 })
-  }, [focus, open, query, plugAndPlayOnly])
+  }, [debouncedQuery, focus, open, plugAndPlayOnly])
 
   useEffect(() => {
     if (!open) return

@@ -1341,7 +1341,13 @@ export interface WireSegment {
   busFeedKind?: 'grid' | 'backup'
   showBusFeedMarker?: boolean
   /** Optional side placement used by compact detached-supply rail markers. */
-  busFeedMarkerSide?: 'left' | 'right' | 'below' | 'below-left' | 'below-right'
+  busFeedMarkerSide?:
+    | 'left'
+    | 'right'
+    | 'below'
+    | 'below-left'
+    | 'below-right'
+    | 'stub-center'
   /** Ephemeral one-wire frame identity when one panel renders in multiple frames. */
   diagramId?: string
   /** True for horizontal supply trunk segments (between supply symbol and main bus). */

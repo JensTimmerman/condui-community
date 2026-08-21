@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type Konva from 'konva'
 import { ZOOM_100 } from '@/constants/canvasConstants'
 import { Group, Rect, Text, Image, Line } from 'react-konva'
 import { useTranslation } from 'react-i18next'
@@ -98,6 +99,8 @@ export function InfoBlock({
 
   const [logoImage, setLogoImage] = useState<HTMLImageElement | null>(null)
   const [signatureImage, setSignatureImage] = useState<HTMLImageElement | null>(null)
+  const installerNameRef = useRef<Konva.Text>(null)
+  const [installerNameHeight, setInstallerNameHeight] = useState(INFO_BLOCK_BODY_LINE_HEIGHT)
 
   const fitImageInBox = useCallback(
     (image: HTMLImageElement | null, boxWidth: number, boxHeight: number, boxX: number, boxY: number) => {
@@ -215,11 +218,29 @@ export function InfoBlock({
   const signatureY = logoY + halfImageHeight
   const mediaBoxWidth = 50
   const mediaBoxX = installerBoxX + INFO_BLOCK_BOX_WIDTHS.installer - INFO_BLOCK_PADDING - mediaBoxWidth
+  const installerTextWidth =
+    INFO_BLOCK_BOX_WIDTHS.installer -
+    INFO_BLOCK_PADDING * 2 -
+    (logoImage || signatureImage ? mediaBoxWidth + INFO_BLOCK_PADDING : 0)
   const logoRect = fitImageInBox(logoImage, mediaBoxWidth, halfImageHeight, mediaBoxX, logoY)
   const signatureRect = fitImageInBox(signatureImage, mediaBoxWidth, halfImageHeight, mediaBoxX, signatureY)
   const headerLetterSpacing = 0.5
   const installeradressLineHeight = 1.5
   const adressLineHeight = 1.5
+  const installerAddressText = profile
+    ? formatInstallerAddress(profile.address, countryLabel, {
+        phone: profile.phone,
+        mobile: profile.mobile,
+        email: profile.email,
+      })
+    : ''
+  const installerAddressY = bodyStartY + installerNameHeight
+
+  useLayoutEffect(() => {
+    const height = installerNameRef.current?.height()
+    if (!height || height === installerNameHeight) return
+    setInstallerNameHeight(height)
+  }, [fontFamily, installerNameHeight, installerTextWidth, profile?.name])
 
   return (
     <Group name="export-info-block" x={x} y={y} listening={interactive}>
@@ -302,6 +323,7 @@ export function InfoBlock({
 
         {/* Installer name + address */}
         <Text
+          ref={installerNameRef}
           x={installerBoxX + INFO_BLOCK_PADDING}
           y={bodyStartY}
           text={profile?.name ?? ''}
@@ -310,26 +332,20 @@ export function InfoBlock({
           fontStyle="bold"
           fill={textColor}
           listening={false}
-          width={INFO_BLOCK_BOX_WIDTHS.installer - INFO_BLOCK_PADDING * 2 - 40}
+          width={installerTextWidth}
+          wrap="word"
+          lineHeight={installeradressLineHeight}
           letterSpacing= {headerLetterSpacing}
         />
         <Text
           x={installerBoxX + INFO_BLOCK_PADDING}
-          y={bodyStartY + INFO_BLOCK_BODY_LINE_HEIGHT}
-          text={
-            profile
-              ? formatInstallerAddress(profile.address, countryLabel, {
-                  phone: profile.phone,
-                  mobile: profile.mobile,
-                  email: profile.email,
-                })
-              : ''
-          }
+          y={installerAddressY}
+          text={installerAddressText}
           fontSize={INFO_BLOCK_FONT_SIZE_BODY}
           fontFamily={fontFamily}
           fill={secondaryColor}
           listening={false}
-          width={INFO_BLOCK_BOX_WIDTHS.installer - INFO_BLOCK_PADDING * 2 - 60}
+          width={installerTextWidth}
           wrap="word"
           lineHeight= {installeradressLineHeight}
         />

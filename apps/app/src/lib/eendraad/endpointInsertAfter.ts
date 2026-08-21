@@ -1,4 +1,3 @@
-import { initializeBranchesIfNeeded } from '@/lib/layout/endpointChains'
 import type { SymbolMetadata } from '@/lib/symbols'
 import type { Circuit, Endpoint } from '@/types/schema'
 import type { DropTarget } from '@/lib/layout/findDropTarget'
@@ -74,11 +73,14 @@ export function computeEndpointInsertAfter(
         return ep && (ep.type === 'socket' || ep.type === 'light_point')
       })
       if (hasTerminalAlready) {
-        const branches = circuit.branches?.length
-          ? circuit.branches
-          : initializeBranchesIfNeeded(circuit).map((b) => ({ id: b.id, endpointIds: b.endpointIds }))
-        const lastBranch = branches[branches.length - 1]
-        const lastId = lastBranch?.endpointIds[lastBranch.endpointIds.length - 1]
+        // Unchainable endpoint drop on an already terminal branch:
+        // keep the cursor intent for ordering between branches.
+        // - null means before the hovered branch (drop on lead-in wire)
+        // - string/undefined means after the hovered branch
+        if (target.insertAfterEndpointId === null) {
+          return { insertAfterEndpointId: null, createNewBranch: true }
+        }
+        const lastId = branchIds[branchIds.length - 1]
         return { insertAfterEndpointId: lastId, createNewBranch: true }
       }
       const lastId = branchIds[branchIds.length - 1]

@@ -1,4 +1,4 @@
-import type { EarthingSystemType, Panel } from '@/types/schema'
+import type { EarthingSystemType, Installation, Panel } from '@/types/schema'
 import { findMainPanel } from '@/lib/panel/panelTree'
 
 export function normalizeEarthingSystem(
@@ -52,6 +52,18 @@ export function cascadeMainEarthingToPanels(
     }
   }
   visit(panels)
+}
+
+/** Apply the panel-label defaults used when an installation becomes non-domestic. */
+export function applyNonHouseholdPanelDefaults(installation: Installation, panels: Panel[]): void {
+  installation.panelNumberingEnabled = true
+  installation.panelNetTypeLabelsEnabled = true
+
+  const mainPanel = findMainPanel(panels)
+  if (!mainPanel || mainPanel.earthingSystem !== undefined) return
+
+  mainPanel.earthingSystem = 'TT'
+  cascadeMainEarthingToPanels(panels, mainPanel, 'TT', undefined)
 }
 
 /** Earthing shown on diagrams and in properties when a panel follows the main board. */

@@ -383,9 +383,12 @@ function appendTrunkTopSlotHints(
 function hintAnchor(node: LayoutNode): { x: number; y: number } {
   const bounds = getHitZoneBounds(node, 'core')
   if (node.id?.startsWith('circuit-nest-') || node.id?.startsWith('circuit-trunk-')) {
+    // For the topmost trunk segment (index 0) used as an endpoint "add branch" hint,
+    // float the dot above the trunk wire so it's visually distinct.
+    const isTopSegment = node.id?.match(/circuit-trunk-.+-segment-0$/)
     return {
       x: (bounds.left + bounds.right) / 2,
-      y: bounds.top + 8,
+      y: isTopSegment ? bounds.top - 20 : bounds.top + 8,
     }
   }
   if (node.type === 'branch') {
@@ -614,10 +617,19 @@ function shouldIncludeHintNode(
     if (node.id?.startsWith('secondary-bus-segment-')) return false
     if (node.id?.startsWith('circuit-nest-')) return false
     if (node.type === 'trunkDevice') return false
+
     if (node.id?.startsWith('circuit-trunk-')) {
       if (TRUNK_CAPABLE_ENDPOINT_SYMBOLS.has(symbol.id)) return true
       const circuit = ctx.circuitId ? findCircuitInProject(project, ctx.circuitId) : undefined
-      if ((circuit?.subCircuitIds?.length ?? 0) === 0) return false
+      // Show the topmost trunk segment (index 0, just below the MCB) as an
+      // "add new branch here" hint for endpoints on circuits that already have branches.
+      if ((circuit?.subCircuitIds?.length ?? 0) === 0) {
+        if ((circuit?.endpoints?.length ?? 0) > 0) {
+          const parsed = node.id ? parseCircuitTrunkSegmentId(node.id) : null
+          return parsed !== null && parsed.segmentIndex === 0
+        }
+        return false
+      }
       return isLastCircuitTrunkSegment(node.id, trunkSegmentCounts)
     }
     if (hitType === 'circuit' && node.type !== 'branch') return false

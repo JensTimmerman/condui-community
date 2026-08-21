@@ -4,13 +4,21 @@ export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
 type LogSink = (level: LogLevel, args: unknown[]) => void
 
+function isDebugEnabled(): boolean {
+  try {
+    return localStorage.getItem('condui_debug') !== null
+  } catch {
+    return false
+  }
+}
+
 const consoleSink: LogSink = (level, args) => {
   if (level === 'error') {
     console.error(...args)
     return
   }
 
-  if (!IS_DEV) return
+  if (!IS_DEV && !isDebugEnabled()) return
 
   if (level === 'debug') {
     console.debug(...args)

@@ -213,6 +213,8 @@ export function FloorPlanMode({
   const suppressNextClickRef = useRef(false)
   const isShiftPressedRef = useRef(false)
   const penPointerDownRef = useRef<Point2 | null>(null)
+  const penPointerCaptureTargetRef = useRef<HTMLElement | null>(null)
+  const penPointerCaptureIdRef = useRef<number | null>(null)
   const penDidDragRef = useRef(false)
   const penCurveGestureRef = useRef(false)
   const penLastPointerDownTimeRef = useRef(0)
@@ -582,6 +584,39 @@ export function FloorPlanMode({
   const rememberStageContainer = useCallback((e: FloorPlanInputEvent) => {
     const container = e.target?.getStage?.()?.container?.()
     if (container) stageContainerRef.current = container
+  }, [])
+
+  const capturePenPointer = useCallback((e: FloorPlanInputEvent) => {
+    const nativeEvent = e.evt as PointerEvent
+    const target = nativeEvent.target
+    if (
+      typeof nativeEvent.pointerId !== 'number' ||
+      !(target instanceof HTMLElement) ||
+      typeof target.setPointerCapture !== 'function'
+    ) {
+      return
+    }
+
+    try {
+      target.setPointerCapture(nativeEvent.pointerId)
+      penPointerCaptureTargetRef.current = target
+      penPointerCaptureIdRef.current = nativeEvent.pointerId
+    } catch {
+      // Pointer capture is a best-effort guard for HTML overlays crossing the canvas.
+    }
+  }, [])
+
+  const releasePenPointer = useCallback(() => {
+    const target = penPointerCaptureTargetRef.current
+    const pointerId = penPointerCaptureIdRef.current
+    penPointerCaptureTargetRef.current = null
+    penPointerCaptureIdRef.current = null
+    if (!target || pointerId == null || !target.hasPointerCapture(pointerId)) return
+    try {
+      target.releasePointerCapture(pointerId)
+    } catch {
+      // The browser may already have released capture after a cancelled gesture.
+    }
   }, [])
 
   const clientCoordsToCanvasPoint = useCallback(
@@ -2356,6 +2391,7 @@ export function FloorPlanMode({
 
       if (activeTool === 'drawWall') {
         e.cancelBubble = true
+        capturePenPointer(e)
         const now = Date.now()
         const isDoubleDown =
           now - penLastPointerDownTimeRef.current < FLOOR_PLAN_DRAW_DOUBLE_CLICK_MS
@@ -2409,6 +2445,7 @@ export function FloorPlanMode({
       activeFloorId,
       isFloorPlanHitTarget,
       getCanvasPointFromEvent,
+      capturePenPointer,
       appendPenPoint,
       findClosestWallForOpening,
       getWallsByFloor,
@@ -2461,6 +2498,7 @@ export function FloorPlanMode({
       }
 
       if (activeTool === 'drawWall') {
+        releasePenPointer()
         if (penPointerDownRef.current && penDidDragRef.current) {
           appendPenPoint(canvasPoint, {
             snapTo45Degrees: !!e?.evt?.shiftKey || isShiftPressedRef.current,
@@ -2525,6 +2563,7 @@ export function FloorPlanMode({
       activeFloorId,
       getCanvasPointFromEvent,
       updateDraftPoint,
+      releasePenPointer,
       appendPenPoint,
       gridSize,
       planView.snapToGrid,
@@ -2748,6 +2787,7 @@ export function FloorPlanMode({
           listening={true}
           onPointerDown={handleFloorPlanPointerDown}
           onPointerUp={handleFloorPlanPointerUp}
+          onPointerCancel={handleFloorPlanPointerUp}
           onPointerMove={handleFloorPlanMouseMove}
           onTouchStart={handleFloorPlanPointerDown}
           onTouchMove={handleFloorPlanMouseMove}

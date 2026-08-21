@@ -17,6 +17,7 @@ import {
   upsertSectionWireOverride,
 } from '@/lib/wires/sectionWireOverrides'
 import {
+  ensurePanelBusCableMinimum,
   resolveShowFireClassLabel,
   resolveShowWireLengthLabel,
 } from '@/lib/wires/circuitWireDefaults'
@@ -861,6 +862,9 @@ function WireProperties({
     wireSegment.fromElementType === 'protection' || wireSegment.toElementType === 'protection'
 
   const resolvedCircuitCable = sectionOverride?.cable ?? domainOverride?.cable ?? circuit.cable
+  const effectiveCircuitCable = isBusBarProtectionStub
+    ? ensurePanelBusCableMinimum(resolvedCircuitCable)
+    : resolvedCircuitCable
   const circuitWireFormState: WireRouteFormState = {
     inTube: sectionOverride?.inTube ?? domainOverride?.inTube ?? circuit.inTube,
     wireRoute: effectiveWireRoute,
@@ -905,7 +909,7 @@ function WireProperties({
     cable:
       wireDomain === 'DC' && !sectionOverride?.cable && !domainOverride?.cable
         ? { ...resolvedCircuitCable, conductors: 2, hasPE: false }
-        : resolvedCircuitCable,
+      : effectiveCircuitCable,
   }
 
   const onCircuitWireFormChange = (u: Partial<WireRouteFormState>) => {

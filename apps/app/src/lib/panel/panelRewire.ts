@@ -91,6 +91,28 @@ export function isSharedSupplyTailRef(
   return topology.sharedFeed.trunkDevices?.at(-1)?.id === ref.id
 }
 
+/** True when a supply-strip device is the terminal device of any root-panel feed. */
+export function isRootSupplyTailRef(
+  project: ProjectWithOptionalV2Electrical,
+  ref: PanelGridModuleRef
+): ref is SupplyTrunkModuleRef {
+  if (!isSupplyTrunkRef(ref)) return false
+  const installation = getElectricalInstallationFromProject(project)
+  if (!installation) return false
+  const topology = ensureInstallationFeedTopology(
+    installation,
+    getElectricalPanelsFromProject(project)
+  )
+  return topology.rootFeeds.some((feed) => feed.trunkDevices?.at(-1)?.id === ref.id)
+}
+
+export function isRootSupplyTailOrSharedSupplyTailRef(
+  project: ProjectWithOptionalV2Electrical,
+  ref: PanelGridModuleRef
+): ref is SupplyTrunkModuleRef {
+  return isSharedSupplyTailRef(project, ref) || isRootSupplyTailRef(project, ref)
+}
+
 export function isModuleRefOnSupplyStrip(panel: Panel | null, ref: PanelGridModuleRef): boolean | null {
   if (!panel?.gridView) return null
   const key = panelGridModuleRefKey(ref)
@@ -237,7 +259,7 @@ function getPanelRootPromotionOperation(
   origin: PanelGridModuleRef,
   target: PanelGridModuleRef | null
 ): PanelRewireOperation | null {
-  if (panel.isMain === true || !isSharedSupplyTailRef(currentProject, origin)) return null
+  if (panel.isMain === true || !isRootSupplyTailOrSharedSupplyTailRef(currentProject, origin)) return null
 
   const canonicalTarget = getPanelRootPromotionTargetRef(panel)
   if (canonicalTarget === null) {

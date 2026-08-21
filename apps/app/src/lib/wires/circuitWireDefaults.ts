@@ -23,6 +23,19 @@ export function createDefaultAcCircuitCable(
   }
 }
 
+/**
+ * Internal panel-bus links are distribution conductors, not final circuit wiring.
+ * Keep their rendered cable at least 6 mm² while preserving the selected cable
+ * type, conductor count, PE flag, and any larger section already present.
+ */
+export function ensurePanelBusCableMinimum(cable?: CableSpec): CableSpec {
+  const base = cable ?? createDefaultAcCircuitCable({ sectionMm2: 6 })
+  return {
+    ...base,
+    sectionMm2: Math.max(base.sectionMm2 ?? 0, 6),
+  }
+}
+
 /** Default one-wire label flags for a new AC circuit. */
 export const DEFAULT_AC_CIRCUIT_WIRE_LABEL_FLAGS: Pick<Circuit, 'showFireClassLabel'> = {
   showFireClassLabel: true,

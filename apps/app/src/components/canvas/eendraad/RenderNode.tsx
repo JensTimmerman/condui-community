@@ -426,6 +426,7 @@ const RenderNode = memo(function RenderNode({
           key={node.id}
           device={trunkDevice}
           position={{ x: node.bounds.x, y: node.bounds.y }}
+          supplyDevicePositions={panelLayout?.supplyDevices}
           isHorizontal={isSupplyTrunkDevice && !isVerticalSupplyBranchDevice}
           protectionLabelPosition={isVerticalSupplyBranchDevice ? 'right' : undefined}
           showDeviceLabelLeft={isSubPanelSupplyTrunkDevice}

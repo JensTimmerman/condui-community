@@ -442,6 +442,28 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   const suppressDateFrameSelectionRef = useRef(false)
   const clearDateFrameSelectionSuppressionRef = useRef<number | null>(null)
 
+  const exitDateMarkingMode = useCallback(() => {
+    setEendraadDateMarkingMode(false)
+    setDateToolCalendarOpen(false)
+    setDateToolFrameSelection(null)
+    setClosedDateToolSelectionKey(null)
+  }, [setEendraadDateMarkingMode])
+
+  useEffect(() => {
+    if (!eendraadDateMarkingMode) return
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      exitDateMarkingMode()
+    }
+
+    window.addEventListener('keydown', handleEscape, true)
+    return () => window.removeEventListener('keydown', handleEscape, true)
+  }, [eendraadDateMarkingMode, exitDateMarkingMode])
+
   const handleViewportPanStateChange = useCallback((isPanning: boolean) => {
     if (clearDateFrameSelectionSuppressionRef.current != null) {
       window.clearTimeout(clearDateFrameSelectionSuppressionRef.current)
@@ -1685,10 +1707,27 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   const fitTrigger = useUIStore((s) => s.fitToViewTrigger.eendraad)
   useEffect(() => {
     if (fitTrigger === 0) return
-    const id = requestAnimationFrame(() => {
-      canvasRef.current?.fitToView()
+    let canceled = false
+    let raf = 0
+    const attempt = (remaining: number) => {
+      raf = requestAnimationFrame(() => {
+        if (canceled) return
+        const ok = canvasRef.current?.fitToView()
+        if (!ok && remaining > 0) {
+          attempt(remaining - 1)
+        }
+      })
+    }
+    // First rAF lets react-konva reconcile the scene graph; up to 4 retries
+    // cover cases where the Konva stage is still empty right after mount.
+    raf = requestAnimationFrame(() => {
+      if (canceled) return
+      attempt(4)
     })
-    return () => cancelAnimationFrame(id)
+    return () => {
+      canceled = true
+      cancelAnimationFrame(raf)
+    }
   }, [fitTrigger])
 
   // Find elements that intersect with selection rectangle
@@ -1790,8 +1829,14 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
         })
         return
       }
-      if (sameSymbolAddMoreResult.current === 'blocked') return
-      if (!canCreateSupplyTopologyFromDrop(symbol, null)) return
+      if (sameSymbolAddMoreResult.current === 'blocked') {
+        logger.warn(`[drop-diag] Add-more blocked for symbol=${symbol.id}`)
+        return
+      }
+      if (!canCreateSupplyTopologyFromDrop(symbol, null)) {
+        logger.warn(`[drop-diag] Supply topology gate (null target) blocked symbol=${symbol.id}`)
+        return
+      }
 
       // Augment drop target with wire-domain information from the actual wire segments under the cursor.
       let dropTarget = rawTarget
@@ -1911,12 +1956,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
 
       dropTarget = normalizeProtectionPlacementDropTarget(symbol, dropTarget)
 
-      if (symbol.id === 'panel_distribution' && dropTarget.type === null && dropTarget.panelId) {
-        return
-      }
-
-      // Detailed drop report logging (previously here) was removed because it generated huge logs.
-      // If needed for future debugging, consider reintroducing it behind an explicit debug flag.
+      logger.info(`[drop-diag] Executing drop: symbol=${symbol.id}, target=${JSON.stringify({ type: dropTarget.type, panelId: dropTarget.panelId, circuitId: dropTarget.circuitId, protectionId: dropTarget.protectionId })}`)
       // Execute drop behavior
       const { openDialog } = useDialogStore.getState()
       const runDropBehavior = () =>
@@ -5015,6 +5055,17 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
     contextMenuItemsResolverRef.current = handleGetContextMenuItems
   }, [handleGetContextMenuItems])
 
+  const handleEendraadContextMenu = useCallback(
+    (position: Point, elementId: string | null) => {
+      if (eendraadDateMarkingMode) {
+        exitDateMarkingMode()
+        return []
+      }
+      return handleGetContextMenuItems(position, elementId)
+    },
+    [eendraadDateMarkingMode, exitDateMarkingMode, handleGetContextMenuItems]
+  )
+
   const handleAddElementSelect = useCallback(
     (symbol: import('@/lib/symbols').SymbolMetadata, position: Point) => {
       handleDrop(position, symbol)
@@ -5227,7 +5278,9 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
           onDragOver={canPlaceSymbols ? handleDragOver : undefined}
           onFindElementsInRectangle={handleFindElementsInRectangle}
           onGetContextMenuItems={
-            canDeleteItems || canPlaceSymbols ? handleGetContextMenuItems : undefined
+            canDeleteItems || canPlaceSymbols || eendraadDateMarkingMode
+              ? handleEendraadContextMenu
+              : undefined
           }
           onGetSelectionBounds={handleGetSelectionBounds}
           selectionFitMaxZoom={ZOOM_100}

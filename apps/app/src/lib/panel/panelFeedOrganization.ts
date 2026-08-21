@@ -43,20 +43,52 @@ export function backupBusSectionId(panelId: string): string {
   return `bus-backup-${panelId}`
 }
 
-function assemblyTargetsPanel(assembly: OffGridSupplyAssembly, panelId: string): boolean {
+function assemblyRootFeedTargetsPanel(
+  project: ProjectWithOptionalV2Electrical,
+  rootFeedId: string,
+  panelId: string,
+): boolean {
+  const installation = getElectricalInstallationFromProject(project)
+  if (!installation) return false
+  return ensureInstallationFeedTopology(
+    installation,
+    getElectricalPanelsFromProject(project),
+  ).rootFeeds.some((feed) => feed.id === rootFeedId && feed.panelId === panelId)
+}
+
+function assemblyAttachmentTargetsPanel(
+  project: ProjectWithOptionalV2Electrical,
+  attachment:
+    | OffGridSupplyAssembly['incomingAttachment']
+    | OffGridSupplyAssembly['loadHandoffs'][number]['target'],
+  panelId: string,
+): boolean {
   if (
-    (assembly.incomingAttachment.kind === 'panel-input' ||
-      assembly.incomingAttachment.kind === 'panel-bus-input') &&
-    assembly.incomingAttachment.panelId === panelId
+    (attachment.kind === 'panel-input' ||
+      attachment.kind === 'panel-bus-input' ||
+      attachment.kind === 'circuit-input') &&
+    attachment.panelId === panelId
+  ) {
+    return true
+  }
+  return (
+    attachment.kind === 'root-feed' &&
+    assemblyRootFeedTargetsPanel(project, attachment.rootFeedId, panelId)
+  )
+}
+
+function assemblyTargetsPanel(
+  project: ProjectWithOptionalV2Electrical,
+  assembly: OffGridSupplyAssembly,
+  panelId: string,
+): boolean {
+  if (
+    assemblyAttachmentTargetsPanel(project, assembly.incomingAttachment, panelId)
   ) {
     return true
   }
   return assembly.loadHandoffs.some(
-    (handoff) =>
-      (handoff.target.kind === 'panel-input' ||
-        handoff.target.kind === 'panel-bus-input' ||
-        handoff.target.kind === 'circuit-input') &&
-      handoff.target.panelId === panelId
+    (handoff) => assemblyAttachmentTargetsPanel(project, handoff.target, panelId)
   )
 }
 
@@ -65,7 +97,7 @@ export function findPanelSupplyAssembly(
   panelId: string
 ): OffGridSupplyAssembly | undefined {
   return getSupplyAssembliesFromProject(project).find((assembly) =>
-    assemblyTargetsPanel(assembly, panelId)
+    assemblyTargetsPanel(project, assembly, panelId)
   )
 }
 
@@ -89,11 +121,8 @@ export function panelHasBackupOutput(
   if (!installation || !assembly) return false
   const panelHandoffIds = new Set(
     assembly.loadHandoffs
-      .filter(
-        (handoff) =>
-          (handoff.target.kind === 'panel-input' ||
-            handoff.target.kind === 'panel-bus-input') &&
-          handoff.target.panelId === panelId
+      .filter((handoff) =>
+        assemblyAttachmentTargetsPanel(project, handoff.target, panelId),
       )
       .map((handoff) => handoff.id)
   )
@@ -306,19 +335,15 @@ function assignAllTopLevelItems(panel: Panel, busSectionId: string): void {
 }
 
 function retargetPanelAssemblyHandoffs(
+  project: ProjectWithOptionalV2Electrical,
   assemblies: OffGridSupplyAssembly[],
   panelId: string,
   busSectionId: string | undefined
 ): void {
   for (const assembly of assemblies) {
-    if (!assemblyTargetsPanel(assembly, panelId)) continue
+    if (!assemblyTargetsPanel(project, assembly, panelId)) continue
     assembly.loadHandoffs = assembly.loadHandoffs.map((handoff) => {
-      if (
-        (handoff.target.kind !== 'panel-input' &&
-          handoff.target.kind !== 'panel-bus-input' &&
-          handoff.target.kind !== 'circuit-input') ||
-        handoff.target.panelId !== panelId
-      ) {
+      if (!assemblyAttachmentTargetsPanel(project, handoff.target, panelId)) {
         return handoff
       }
       return {
@@ -393,7 +418,7 @@ export function setPanelFeedOrganizationInProject(
     topology.rootFeeds = topology.rootFeeds.filter(
       (feed) => feed.panelId !== panelId || feed === keep
     )
-    retargetPanelAssemblyHandoffs(assemblies, panelId, undefined)
+    retargetPanelAssemblyHandoffs(project, assemblies, panelId, undefined)
     disableDirectInverterPanelBackup(assemblies, panelId)
     return true
   }
@@ -428,7 +453,7 @@ export function setPanelFeedOrganizationInProject(
   const panelFeeds = topology.rootFeeds.filter((feed) => feed.panelId === panelId)
   const gridFeed = panelFeeds[0]
   if (gridFeed) gridFeed.busSectionId = grid.id
-  retargetPanelAssemblyHandoffs(assemblies, panelId, backup.id)
+  retargetPanelAssemblyHandoffs(project, assemblies, panelId, backup.id)
   syncPanelBackupBusPhaseOrderInProject(project, panelId)
   return true
 }

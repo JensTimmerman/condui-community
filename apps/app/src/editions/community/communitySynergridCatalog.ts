@@ -32,6 +32,7 @@ export function synergridPowerKw(valueW: number | null | undefined): number | un
 }
 
 export function findMatchingSynergridEntry(): undefined { return undefined }
+export function formatSynergridModel(): string | undefined { return undefined }
 export function parseSynergridPowerToW(value: string | undefined): number | undefined {
   const match = value?.trim().toLowerCase().replace(',', '.').match(/(-?\d+(?:\.\d+)?)\s*(kw|w)?/)
   if (!match?.[1]) return undefined

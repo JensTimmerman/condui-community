@@ -38,12 +38,20 @@ export function normalizeExportOptions(
   options: Partial<ExportOptions> &
     Pick<ExportOptions, 'includeEendraad' | 'includePanel' | 'includeSitplan' | 'theme'>
 ): ExportOptions {
+  // Export selections are persisted in UI state and may come from older or
+  // partially migrated documents. Treat only the explicit boolean `true` as
+  // enabled so a stale truthy value such as the string "false" can never add
+  // an unintended one-wire page to a panel-only export.
+  const includeEendraad = options.includeEendraad === true
+  const includePanel = options.includePanel === true
+  const includeSitplan = options.includeSitplan === true
+
   
 
   return {
-    includeEendraad: options.includeEendraad,
-    includePanel: options.includePanel,
-    includeSitplan: options.includeSitplan,
+    includeEendraad,
+    includePanel,
+    includeSitplan,
     includeInstallDates: options.includeInstallDates ?? false,
     includeSignature: options.includeSignature ?? true,
     theme: options.theme,

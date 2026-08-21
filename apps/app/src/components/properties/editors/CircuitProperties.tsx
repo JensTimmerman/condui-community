@@ -19,7 +19,7 @@ import {
 } from '@/lib/installDatePropagation'
 import { isProtectionOnSupplyPanel } from '@/components/canvas/panel/panelGridLayout'
 import { InstallDateField } from '../shared/propertiesShared'
-import { ensureInstallDateTargetColors } from '../shared/propertiesSharedUtils'
+import { ensureInstallDateTargetColors, visibilityToggleClass } from '../shared/propertiesSharedUtils'
 import { AutomaticNamingLockedField } from '../shared/AutomaticNamingLockedField'
 import { installationDateUpdateFromYear } from '@/lib/installDates'
 import {
@@ -293,7 +293,7 @@ export function CircuitProperties({
                 eendraadLetterVisible: circuit.eendraadLetterVisible !== false ? false : true,
               })
             }
-            className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-400 shrink-0"
+            className={visibilityToggleClass(circuit.eendraadLetterVisible !== false) + ' shrink-0'}
             title={t('canvas.eendraadNaming.toggleLetterOnOneWire')}
           >
             {circuit.eendraadLetterVisible !== false ? (
@@ -348,7 +348,7 @@ export function CircuitProperties({
             onClick={() =>
               onUpdate(circuitId, { notesVisible: circuit.notesVisible !== false ? false : true })
             }
-            className="one-wire-visibility-toggle p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-400"
+            className={visibilityToggleClass(circuit.notesVisible !== false)}
             title={
               circuit.notesVisible !== false
                 ? t('circuits.notesHide', 'Hide on diagram')

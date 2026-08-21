@@ -23,6 +23,7 @@ import { TRANSFORMER_OVERLAY_PATHS, SWITCH_SYMBOLS_WITH_VERKLIKKERLAMP } from '@
 import {
   findMatchingSynergridEntry,
   formatSynergridPower,
+  formatSynergridModel,
   loadSynergridCatalog,
   parseSynergridPowerToW,
   synergridCertificationFromEntry,
@@ -105,7 +106,7 @@ export function EndpointProperties({
       if (!endpoint) return
       const synergrid = synergridCertificationFromEntry(entry)
       const brand = entry.brandName ?? undefined
-      const model = entry.modelReference ?? entry.productSeries ?? undefined
+      const model = formatSynergridModel(entry.productSeries, entry.modelReference)
 
       if (endpointSymbol === 'solar_panel') {
         onUpdate(endpointId, {

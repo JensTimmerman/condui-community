@@ -82,6 +82,13 @@ export function PanelProperties({
     [t]
   )
 
+  const handlePanelNetTypeLabelsChange = (enabled: boolean) => {
+    updateInstallation({ panelNetTypeLabelsEnabled: enabled })
+    if (enabled && !earthingValue) {
+      onUpdate(panelId, { earthingSystem: 'TT' })
+    }
+  }
+
   if (!panel) {
     return (
       <div className="p-4 text-center text-gray-500">{t('panels.notFound', 'Panel not found')}</div>
@@ -239,7 +246,7 @@ export function PanelProperties({
             <input
               type="checkbox"
               checked={panelNetTypeLabelsEnabled}
-              onChange={(e) => updateInstallation({ panelNetTypeLabelsEnabled: e.target.checked })}
+              onChange={(e) => handlePanelNetTypeLabelsChange(e.target.checked)}
             />
             {t('panels.panelNetTypeLabels', 'Net type on diagram')}
           </label>

@@ -52,12 +52,12 @@ export function calculatePageCounts(
   let sitplan = 0
 
   // Calculate sitplan pages (1 per floor)
-  if (options.includeSitplan) {
+  if (options.includeSitplan === true) {
     sitplan = buildSitplanExportTargets(project).length
   }
 
   // Calculate panel pages (1 per panel)
-  if (options.includePanel) {
+  if (options.includePanel === true) {
     const projectPanels = getElectricalPanelsFromProject(project)
     panel = buildPanelExportTargets(project).length
     if (projectPanels.length > 0) {
@@ -66,7 +66,7 @@ export function calculatePageCounts(
   }
 
   // Calculate 1draad pages (sliced frames)
-  if (options.includeEendraad) {
+  if (options.includeEendraad === true) {
     if (layout) {
       eendraad = estimateEendraadPageCount(layout.panels)
     } else {

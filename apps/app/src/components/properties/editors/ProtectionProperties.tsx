@@ -276,7 +276,7 @@ export function ProtectionProperties({
                   notesVisible: firstCircuit.notesVisible !== false ? false : true,
                 })
               }
-              className="one-wire-visibility-toggle p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-400"
+              className={visibilityToggleClass(firstCircuit.notesVisible !== false)}
               title={
                 firstCircuit.notesVisible !== false
                   ? t('circuits.notesHide', 'Hide on diagram')

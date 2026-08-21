@@ -22,6 +22,7 @@ import type {
 import { resolveSymbolPortsForWire, DEFAULT_ELECTRICAL_DOMAIN } from '@/lib/symbols'
 import {
   createDefaultAcCircuitCable,
+  ensurePanelBusCableMinimum,
   resolveShowFireClassLabel,
   resolveShowWireLengthLabel,
 } from '@/lib/wires/circuitWireDefaults'
@@ -75,6 +76,7 @@ import {
   hasExplicitPanelBusSections,
 } from '@/lib/panel/panelBusSections'
 import { getLeftBiasedBusFeedStubX, PANEL_BUS_FEED_GAP } from '@/lib/panel/panelBusFeedPreview'
+import { getSecondaryBusSectionBoundaryX } from './mainBusSectionBoundary'
 import {
   panelGridModuleIsVisibleByDefault,
   trunkDeviceCanAppearInPanelGrid,
@@ -770,12 +772,7 @@ function derivePanelWires(
   }
 
   // 2. Main bus wire (horizontal), split into sections between each protection/circuit
-  const defaultCable = panel.protections[0]?.circuits?.[0]?.cable || {
-    kind: 'XVB',
-    conductors: 3,
-    sectionMm2: 6,
-    hasPE: true,
-  }
+  const defaultCable = ensurePanelBusCableMinimum(panel.protections[0]?.circuits?.[0]?.cable)
 
   // Collect X positions of all RCDs/MCBs attached to the main bus.
   const connectionEntries = mainBusNode.children
@@ -796,6 +793,23 @@ function derivePanelWires(
     .sort((a, b) => a.x - b.x)
   const connectionXs = connectionEntries.map((entry) => entry.x)
 
+  // A grouped secondary bus is the visual source of truth for where a section
+  // transition is cut. The protection midpoint is only a fallback: it drifts
+  // when one section contains a wider RCD trunk than the other.
+  const secondaryBusSectionRanges = mainBusNode.children.flatMap((node) => {
+    if (node.type !== 'rcd' && node.type !== 'mcb') return []
+    const protection = node.domainRef as ProtectionDevice | undefined
+    if (!protection) return []
+    const sectionId = getProtectionBusSectionId(panel, protection)
+    return node.children
+      .filter((child) => child.type === 'secondaryBus' && child.bounds.width > 0)
+      .map((secondaryBus) => ({
+        sectionId,
+        startX: secondaryBus.bounds.x,
+        endX: secondaryBus.bounds.x + secondaryBus.bounds.width,
+      }))
+  })
+
   const busStartX = mainBusX
   const busEndX = mainBusX + mainBusWidth
   const busSegmentStartIndex = segments.length
@@ -807,8 +821,24 @@ function derivePanelWires(
       const next = connectionEntries[index + 1]
       let startX = previous ? (previous.x + entry.x) / 2 : busStartX
       let endX = next ? (entry.x + next.x) / 2 : busEndX
-      if (previous && previous.busSectionId !== entry.busSectionId) startX += splitGap / 2
-      if (next && next.busSectionId !== entry.busSectionId) endX -= splitGap / 2
+      if (previous && previous.busSectionId !== entry.busSectionId) {
+        const sectionBoundaryX = getSecondaryBusSectionBoundaryX(
+          secondaryBusSectionRanges,
+          previous.busSectionId,
+          entry.busSectionId,
+          startX
+        )
+        startX = sectionBoundaryX + splitGap / 2
+      }
+      if (next && next.busSectionId !== entry.busSectionId) {
+        const sectionBoundaryX = getSecondaryBusSectionBoundaryX(
+          secondaryBusSectionRanges,
+          entry.busSectionId,
+          next.busSectionId,
+          endX
+        )
+        endX = sectionBoundaryX - splitGap / 2
+      }
       if (endX <= startX) continue
       const sectionPhaseState = getPanelIncomingPhaseState(
         installation,
@@ -831,9 +861,9 @@ function derivePanelWires(
             ? 'backup'
             : 'grid'
           : undefined,
-        showBusFeedMarker: isSupplyDiagram || usesInlineEmptySplitAssembly,
+        showBusFeedMarker: isSupplyDiagram,
         busFeedMarkerSide:
-          isSupplyDiagram || usesInlineEmptySplitAssembly
+          isSupplyDiagram
             ? panel.busSections?.find((section) => section.id === entry.busSectionId)?.role ===
               'backup'
               ? 'below-right'
@@ -881,9 +911,9 @@ function derivePanelWires(
               ? 'backup'
               : 'grid'
             : undefined,
-        showBusFeedMarker: isSupplyDiagram || usesInlineEmptySplitAssembly,
+        showBusFeedMarker: isSupplyDiagram,
         busFeedMarkerSide:
-          isSupplyDiagram || usesInlineEmptySplitAssembly
+          isSupplyDiagram
             ? section.role === 'backup'
               ? 'below-right'
               : 'below-left'
@@ -956,7 +986,9 @@ function derivePanelWires(
   if (hasExplicitPanelBusSections(panel) && !isSupplyDiagram) {
     for (const [index, run] of busRuns.entries()) {
       const section = panel.busSections?.find((candidate) => candidate.id === run.busSectionId)
-      const stubX = getLeftBiasedBusFeedStubX(run.startPoint.x, run.endPoint.x)
+      const stubX = usesInlineEmptySplitAssembly
+        ? (run.startPoint.x + run.endPoint.x) / 2
+        : getLeftBiasedBusFeedStubX(run.startPoint.x, run.endPoint.x)
       const forceStubPhaseLabel = isPhaseAssignmentLabelVisible(
         run.phaseAssignment,
         installation?.nominalVoltage.system
@@ -970,7 +1002,10 @@ function derivePanelWires(
         panelId: panel.id,
         busSectionId: run.busSectionId,
         busFeedKind: section?.role === 'backup' ? 'backup' : 'grid',
-        showBusFeedMarker: !usesInlineEmptySplitAssembly,
+        showBusFeedMarker: true,
+        busFeedMarkerSide: usesInlineEmptySplitAssembly
+          ? 'stub-center'
+          : undefined,
         domain: DEFAULT_ELECTRICAL_DOMAIN,
         phaseAssignment: run.phaseAssignment,
         forcePhaseLabel: forceStubPhaseLabel,
@@ -1454,9 +1489,19 @@ function derivePanelWires(
     const utilityAssemblyNodeId = supplyAssembly?.nodes.find(
       (node) => node.kind === 'utility-source'
     )?.id
-    const handoffAssemblyNodeId = supplyAssembly?.nodes.find(
-      (node) => node.kind === 'panel-handoff'
-    )?.id
+    // Assemblies may fan out to multiple main panels. Select the handoff that
+    // targets the panel currently being rendered; using the first handoff made
+    // every additional main panel inherit the original panel's wire path.
+    const handoffAssemblyNodeId = supplyAssembly?.loadHandoffs.find(
+      (handoff) =>
+        (handoff.target.kind === 'panel-input' ||
+          handoff.target.kind === 'panel-bus-input' ||
+          handoff.target.kind === 'circuit-input') &&
+        handoff.target.panelId === panel.id
+    )?.handoffNodeId ?? supplyAssembly?.nodes.find((node) => node.kind === 'panel-handoff')?.id
+    const currentPanelHandoffConnection = supplyAssembly?.connections.find((connection) =>
+      connection.endpoints.some(({ nodeId }) => nodeId === handoffAssemblyNodeId)
+    )
 
     if (sourceChangeoverNode) {
       const changeoverX = sourceChangeoverNode.bounds.x
@@ -2093,6 +2138,11 @@ function derivePanelWires(
         handoffAssemblyNodeId,
         'load-ac'
       )
+      const gridHandoffConnection = findAssemblyConnection(
+        utilityAssemblyNodeId,
+        handoffAssemblyNodeId,
+        'grid-only-bypass-ac'
+      )
       const utilityConnection = findAssemblyConnection(
         directConverterNode.domainId,
         utilityAssemblyNodeId,
@@ -2118,7 +2168,7 @@ function derivePanelWires(
             : usesDirectSplitFeed
               ? utilityConnection
               : (start.x + end.x) / 2 < converterX
-                ? handoffConnection
+                ? (handoffConnection ?? gridHandoffConnection)
                 : utilityConnection)
         pushSupplyHorizontal(
           bendX,
@@ -2436,7 +2486,8 @@ function derivePanelWires(
             separatorX,
             'bend',
             'supply',
-            mergeCrossingWithBusDrop
+            mergeCrossingWithBusDrop,
+            currentPanelHandoffConnection
           )
         }
         applySupplyLabelVisibility(vertical, mergeCrossingWithBusDrop)
@@ -2927,12 +2978,7 @@ function deriveRcdWires(
   const phaseAssignment = protection
     ? getMainBusProtectionPhaseAssignment(panel, protection, phaseSystem)
     : undefined
-  const cable = protection?.circuits?.[0]?.cable || {
-    kind: 'XVB',
-    conductors: 3,
-    sectionMm2: 6,
-    hasPE: true,
-  }
+  const cable = ensurePanelBusCableMinimum(protection?.circuits?.[0]?.cable)
 
   // Vertical from main bus to RCD
   const busToRcd = { x: rcdX, y: mainBusY }
@@ -3056,6 +3102,7 @@ function deriveMcbWires(
     protectionConnectionSectionRef
   )
   const cable = defaultWireProps.cable || createDefaultAcCircuitCable()
+  const panelBusCable = ensurePanelBusCableMinimum(cable)
 
   const mcbY = mcbNode.bounds.y
   // bounds.x IS the center of the MCB symbol (from bottomUpLayout position.x = cl.x + baseWidth/2)
@@ -3121,7 +3168,7 @@ function deriveMcbWires(
       type: converterSource ? 'branch' : 'vertical',
       startPoint: sourcePoint,
       endPoint: targetPoint,
-      cable,
+      cable: converterSource ? cable : panelBusCable,
       panelId: panel.id,
       domain: DEFAULT_ELECTRICAL_DOMAIN,
       fromElementType: converterSource ? undefined : connectFromType,
@@ -3548,7 +3595,7 @@ function deriveMcbWires(
           mcbNode
         ),
         endPoint: { x: mcbX, y: secondaryBusY },
-        cable: parentToBusWireProps.cable,
+        cable: panelBusCable,
         panelId: panel.id,
         domain: DEFAULT_ELECTRICAL_DOMAIN,
         fromElementType: 'protection',
@@ -3585,7 +3632,7 @@ function deriveMcbWires(
           type: 'mainBus',
           startPoint: { x: startX, y: secondaryBusY },
           endPoint: { x: endX, y: secondaryBusY },
-          cable,
+          cable: panelBusCable,
           panelId: panel.id,
           domain: DEFAULT_ELECTRICAL_DOMAIN,
           fromElementType: 'secondaryBus',

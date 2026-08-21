@@ -48,6 +48,7 @@ import { normalizeSwitchSymbol } from './endpointControlsUtils'
 import {
   findMatchingSynergridEntry,
   formatSynergridPower,
+  formatSynergridModel,
   loadSynergridCatalog,
   parseSynergridPowerToW,
   synergridCertificationFromEntry,
@@ -566,7 +567,7 @@ export function TrunkDeviceProperties({
       conversionProps: {
         ...conv,
         brand: entry.brandName ?? undefined,
-        model: entry.modelReference ?? entry.productSeries ?? undefined,
+        model: formatSynergridModel(entry.productSeries, entry.modelReference),
         power: formatSynergridPower(entry.ratedActivePowerW),
         synergrid,
       },

@@ -290,6 +290,11 @@ function getWireDomainAtDropTarget(
     return domain
   }
 
+  // The right/top lanes leaving a supply converter are explicit DC branches.
+  // They are not represented by the ordinary supply-wire trunk, so there is no
+  // serial device list to infer the domain from at the drop point.
+  if (target.type === 'supplyConverterDcWire') return 'DC'
+
   if (target.type === 'protection' && target.protectionId) {
     const protection = findProtectionInProject(projectPanels(project), target.protectionId)
     const circuitId = protection?.circuits?.[0]?.id
@@ -1286,10 +1291,43 @@ const endpointBehavior: DropBehavior = {
       // Domotica output insertion is fully handled above by insertDomoticaChildEndpoint.
       // Do not run generic branch bookkeeping with stale branch data.
     } else if (createNewBranch) {
-      // Create a new branch with this endpoint — labels synced by updateCircuit.
-      callbacks.updateCircuit(circuitId, {
-        branches: [...branches, { id: generateId(), label: '', endpointIds: [endpointId] }],
+      // Create a new branch with this endpoint at the hovered branch position.
+      // `addEndpoint()` may already have inserted endpointId into an existing branch,
+      // so strip it first and then insert a dedicated branch at the intended slot.
+      const circuitAfterAdd = callbacks.getCircuitById(circuitId)
+      const branchSource = circuitAfterAdd?.branches?.length ? circuitAfterAdd.branches : branches
+      const branchesSansNewEndpoint = branchSource
+        .map((b: Branch) => ({
+          ...b,
+          endpointIds: (b.endpointIds ?? []).filter((id: string) => id !== endpointId),
+        }))
+        .filter((b: Branch) => (b.endpointIds ?? []).length > 0)
+
+      const branchIndexFromLayout = resolveLayoutBranchIndex(target.branchId, circuitId)
+      const branchIndexFromEndpoints =
+        target.branchEndpoints && target.branchEndpoints.length > 0
+          ? branchesSansNewEndpoint.findIndex((b: Branch) =>
+              b.endpointIds.some((id: string) => target.branchEndpoints!.includes(id))
+            )
+          : -1
+      const anchorBranchIndex =
+        branchIndexFromLayout !== null
+          ? branchIndexFromLayout
+          : branchIndexFromEndpoints >= 0
+            ? branchIndexFromEndpoints
+            : branchesSansNewEndpoint.length - 1
+      const insertionIndex =
+        target.insertAfterEndpointId === null
+          ? Math.max(0, anchorBranchIndex)
+          : Math.max(0, anchorBranchIndex + 1)
+
+      const nextBranches = [...branchesSansNewEndpoint]
+      nextBranches.splice(clamp(insertionIndex, 0, nextBranches.length), 0, {
+        id: generateId(),
+        label: '',
+        endpointIds: [endpointId],
       })
+      callbacks.updateCircuit(circuitId, { branches: nextBranches })
     } else if (
       target.branchEndpoints !== undefined &&
       target.branchEndpoints.length === 0 &&
@@ -1564,9 +1602,19 @@ function buildVisibleTrunkSitplanPlacement(
   })
 }
 
-/** Energy conversion drop behavior — circuit trunk, or the empty backup lane of a source changeover. */
+/**
+ * Energy conversion drop behavior — circuit trunk, source-changeover backup
+ * lane, or a direct converter's DC branch.
+ */
 const energyConversionBehavior: DropBehavior = {
-  validTargets: ['endpoint', 'circuit', 'protection', 'supplyWire', 'supplyBackupWire'],
+  validTargets: [
+    'endpoint',
+    'circuit',
+    'protection',
+    'supplyWire',
+    'supplyBackupWire',
+    'supplyConverterDcWire',
+  ],
   execute: (target, project, symbol, t, callbacks) => {
     if (
       target.type === 'supplyWire' &&
@@ -1625,6 +1673,17 @@ const energyConversionBehavior: DropBehavior = {
       if (existing) callbacks.replaceSupplyAssembly(existing.id, assembly)
       else callbacks.addSupplyAssembly(assembly)
       callbacks.setSelection({ type: 'trunkDevice', ids: [converter.id] })
+      return
+    }
+
+    // A converter's right/top DC lane is a real serial branch.  Keep the
+    // dropped device on that lane so the supply-assembly reconciler can wire
+    // it after the existing battery/PV devices instead of treating it as a
+    // new AC supply entry point.
+    if (target.type === 'supplyConverterDcWire' && target.panelId) {
+      if (!checkDomainForConversion(target, project, symbol, t, callbacks)) return
+      const device = addConverterDcBranchDevice(symbol, target, project, callbacks)
+      if (device) callbacks.setSelection({ type: 'trunkDevice', ids: [device.id] })
       return
     }
 
@@ -1893,9 +1952,16 @@ const panelBehavior: DropBehavior = {
       return
     }
 
-    // A near miss inside a panel frame is not an implicit main-bus drop. Panels
-    // must hit the bus or an explicit feeder/circuit target.
-    if (target.type === null && target.panelId) return
+    // An empty area inside an existing panel frame is still an explicit place
+    // to add another parallel/main panel.  Do not silently turn this into a
+    // nested secondary panel (or discard the drop); nesting remains reserved
+    // for the main-bus/circuit targets below.
+    if (target.type === null && target.panelId) {
+      const newRootPanel = createPanel(true)
+      callbacks.addPanel(newRootPanel)
+      callbacks.setSelection({ type: 'panel', ids: [newRootPanel.id] })
+      return
+    }
 
     // Determine which panel to nest the new secondary board under, then add feeder MCB/circuit.
     // Use the target panel if available, otherwise fall back to main panel
@@ -2697,16 +2763,19 @@ export function executeDropBehavior(
         placementMethod: SymbolPlacementMethod
       } = { canvas: 'eendraad', placementMethod: 'library_drop' }
 ): void {
-  if (!canCreateSupplyTopologyFromDrop(symbol, target.type)) return
+  if (!canCreateSupplyTopologyFromDrop(symbol, target.type)) {
+    logger.warn(`[drop-diag] Blocked by supply topology gate: symbol=${symbol.id}, targetType=${target.type}`)
+    return
+  }
 
   const behavior = dropBehaviors[symbol.id]
   if (!behavior) {
-    logger.warn(`No drop behavior for symbol: ${symbol.id}`)
+    logger.warn(`[drop-diag] No drop behavior registered for symbol: ${symbol.id}`)
     return
   }
 
   if (!behavior.validTargets.includes(target.type)) {
-    logger.warn(`Invalid drop target ${target.type} for symbol ${symbol.id}`)
+    logger.warn(`[drop-diag] Invalid drop target "${target.type}" for symbol "${symbol.id}". Valid: ${behavior.validTargets.join(', ')}`)
     return
   }
 

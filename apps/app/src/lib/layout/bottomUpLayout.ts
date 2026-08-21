@@ -38,7 +38,12 @@ import { getVisibleCertificationLabelParts } from '@/lib/certificationLabels'
 import { getVisibleConversionLabelParts } from '@/lib/conversionLabels'
 import { isSymbolLabelVisible } from '@/lib/symbolLabels'
 import { countSymbolLabelVisualLines } from '@/lib/symbolLabelMetrics'
-import { shouldUseSupplyMetadataCallout } from '@/lib/supplyMetadataCallout'
+import {
+  getSupplyMetadataCalloutGroupPlacements,
+  getSupplyMetadataCalloutPlacementKind,
+  shouldUseSupplyMetadataCallout,
+  SUPPLY_METADATA_CALLOUT_MIN_WIDTH,
+} from '@/lib/supplyMetadataCallout'
 import { getSupplyDeviceMultiplier } from '@/utils/inverterMultipliers'
 import { getPanelFrameTitlePadding } from '@/lib/panel/panelDiagramLabels'
 import { hasExplicitPanelBusSections } from '@/lib/panel/panelBusSections'
@@ -47,8 +52,10 @@ import { clamp } from '@/lib/geometry'
 import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
+  getSupplyAssembliesFromProject,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
+import type { OffGridSupplyAssembly } from '@/types/supplyAssembly'
 import {
   calculateBranchLayoutPass,
   getBranchProtectionAnchorOffset,
@@ -203,27 +210,70 @@ function getSupplyMetadataCalloutLines(device: TrunkDevice): string[] {
     (device.notes ?? '').trim().length > 0 &&
     isSymbolLabelVisible(device.symbolLabelDisplay, 'trunkDeviceNotes', true)
   return [
-    ...certificationParts.map((part) => part.text),
+    ...certificationParts.map((part) =>
+      part.key === 'certificationModel' && getSupplyDeviceMultiplier(device) > 1
+        ? `${getSupplyDeviceMultiplier(device)}× ${part.text}`
+        : part.text
+    ),
     ...conversionParts.map((part) => part.text),
     ...(showNotes ? [(device.notes ?? '').trim()] : []),
   ]
 }
 
-function getSupplyMetadataCalloutTopExtra(device: TrunkDevice): number {
+function estimateSupplyMetadataCalloutSize(lines: string[]): { width: number; height: number } {
+  const visualLineCount = lines.reduce(
+    (total, line) => total + countSymbolLabelVisualLines(line),
+    0
+  )
+  const longestLineWidth = Math.max(
+    0,
+    ...lines.flatMap((line) => line.split(/\r?\n/).map((visualLine) => visualLine.length * 5))
+  )
+  return {
+    width: Math.min(260, Math.max(SUPPLY_METADATA_CALLOUT_MIN_WIDTH, longestLineWidth) + 10),
+    height: visualLineCount * 10 + 10,
+  }
+}
+
+function isSupplyMetadataCalloutDevice(device: TrunkDevice): boolean {
+  return (
+    device.symbol === 'inverter' ||
+    device.symbol === 'dc_dc_converter' ||
+    device.symbol === 'solar_panel' ||
+    device.symbol === 'battery'
+  )
+}
+
+function getSupplyMetadataCalloutTopExtra(device: TrunkDevice, peers: TrunkDevice[] = []): number {
   const lines = getSupplyMetadataCalloutLines(device)
-  const usesMetadataCallout =
-    (device.symbol === 'inverter' ||
-      device.symbol === 'solar_panel' ||
-      device.symbol === 'battery') &&
-    shouldUseSupplyMetadataCallout(lines, getSupplyDeviceMultiplier(device))
-  if (!usesMetadataCallout) return 0
-  return device.symbol === 'inverter'
-    ? SUPPLY_METADATA_CALLOUT_INVERTER_TOP_EXTRA
-    : SUPPLY_METADATA_CALLOUT_DEVICE_TOP_EXTRA
+  if (!isSupplyMetadataCalloutDevice(device) || lines.length === 0) return 0
+  if (shouldUseSupplyMetadataCallout(lines, getSupplyDeviceMultiplier(device))) {
+    return device.symbol === 'inverter'
+      ? SUPPLY_METADATA_CALLOUT_INVERTER_TOP_EXTRA
+      : SUPPLY_METADATA_CALLOUT_DEVICE_TOP_EXTRA
+  }
+  // A short stack becomes a card only because a neighboring device needs one.
+  // Reserve the shared device amount so grouping does not shift the established
+  // supply row just to accommodate the inverter's upper-left leader.
+  return peers.some(
+    (peer) =>
+      peer.id !== device.id &&
+      isSupplyMetadataCalloutDevice(peer) &&
+      shouldUseSupplyMetadataCallout(
+        getSupplyMetadataCalloutLines(peer),
+        getSupplyDeviceMultiplier(peer)
+      )
+  )
+    ? SUPPLY_METADATA_CALLOUT_DEVICE_TOP_EXTRA
+    : 0
 }
 
 /** Top edge of labels that TrunkDeviceSymbol stacks above a horizontal supply device. */
-function getSupplyDeviceTopExtent(device: TrunkDevice, y: number): number {
+function getSupplyDeviceTopExtent(
+  device: TrunkDevice,
+  y: number,
+  peers: TrunkDevice[] = []
+): number {
   let top = y - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
   const certificationParts = getVisibleCertificationLabelParts(device)
   const conversionParts =
@@ -246,14 +296,14 @@ function getSupplyDeviceTopExtent(device: TrunkDevice, y: number): number {
   if (topLineCount > 0) {
     const labelHeight = topLineCount * (SUPPLY_TOP_LABEL_FONT_SIZE + SUPPLY_TOP_LABEL_LINE_SPACING)
     top -= SUPPLY_TOP_LABEL_OFFSET_FROM_SYMBOL + labelHeight
-    if (getSupplyMetadataCalloutTopExtra(device) > 0) {
+    if (getSupplyMetadataCalloutTopExtra(device, peers) > 0) {
       // The callout frame and its leader sit a little farther above the symbol than
       // the old unframed label stack.
       // Inverter callouts use the upper-left placement (40px leader offset), while
       // solar and battery callouts use the centered top placement (28px offset).
       // Reserve the latter too; otherwise a detached supply frame can cut through
       // the new solar/battery metadata card at its top edge.
-      top -= getSupplyMetadataCalloutTopExtra(device)
+      top -= getSupplyMetadataCalloutTopExtra(device, peers)
     }
   }
   return top
@@ -279,8 +329,7 @@ export function supplyContentCollidesWithInfoBlock(params: {
     supplySourceY,
     supplyDevices,
   } = params
-  const overlapsHorizontally =
-    supplyRightExtent + 16 > infoBlockLeftX
+  const overlapsHorizontally = supplyRightExtent + 16 > infoBlockLeftX
   if (!overlapsHorizontally) return false
 
   const contentBottomInInfoRegion = Math.max(
@@ -297,9 +346,7 @@ export function supplyContentCollidesWithInfoBlock(params: {
             )
           : 0
         const protectionLabelHeight =
-          protectionLabelLineCount > 0
-            ? 5 + protectionLabelLineCount * (10 + 2) - 2
-            : 0
+          protectionLabelLineCount > 0 ? 5 + protectionLabelLineCount * (10 + 2) - 2 : 0
         return (
           y +
           LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 +
@@ -1815,7 +1862,9 @@ function calculateBottomUpPanelLayout(
     const provisionalTopDeviceY =
       supplyY - topConverterLaneOffset - LAYOUT_CONSTANTS.SUPPLY_CONVERTER_DC_SLOT_LENGTH
     const provisionalTopExtent = Math.min(
-      ...topDcDevices.map((device) => getSupplyDeviceTopExtent(device, provisionalTopDeviceY))
+      ...topDcDevices.map((device) =>
+        getSupplyDeviceTopExtent(device, provisionalTopDeviceY, supplyTrunkDevices)
+      )
     )
     const INLINE_TOP_DC_BUS_CLEARANCE =
       provisionalTopDeviceY - provisionalTopExtent + SUPPLY_FRAME_TOP_CONTENT_GAP
@@ -2217,6 +2266,12 @@ function calculateBottomUpPanelLayout(
   )
   const usesInlineEmptySplitRails =
     !options.feedOutput && hasExplicitPanelBusSections(panel) && !panelHasMainBusProtection(panel)
+  const usesCompactPanelMainBus =
+    !options.feedOutput &&
+    options.frameRole === 'panel' &&
+    options.includeSupplyTopology === false &&
+    options.includeGroundDevices === false &&
+    !panelHasMainBusProtection(panel)
   const renderedMainBusY =
     mainBusY + (usesInlineEmptySplitRails ? LAYOUT_CONSTANTS.INLINE_EMPTY_SPLIT_RAIL_DROP : 0)
   const usesSplitSupplyGround =
@@ -2257,10 +2312,70 @@ function calculateBottomUpPanelLayout(
           Number.NEGATIVE_INFINITY
         )
       : Number.NEGATIVE_INFINITY
+  // Metadata cards are rendered by TrunkDeviceSymbol, but their bounds must
+  // also participate in the frame calculation. Use the same deterministic
+  // group solver as the canvas with a conservative text-width estimate; the
+  // small extra breathing room covers font-metric differences between layout
+  // and the canvas renderer.
+  const supplyMetadataPeers = supplyDevicePositions.filter(({ device }) => {
+    return (
+      isSupplyMetadataCalloutDevice(device) &&
+      !(device.supplyPath === 'converter-grid' && device.converterGridPlacement === 'input-leg')
+    )
+  })
+  const supplyMetadataHasLongPeer = supplyMetadataPeers.some(({ device }) => {
+    const lines = getSupplyMetadataCalloutLines(device)
+    return (
+      lines.length > 0 && shouldUseSupplyMetadataCallout(lines, getSupplyDeviceMultiplier(device))
+    )
+  })
+  const supplyMetadataCalloutPlacements = supplyMetadataHasLongPeer
+    ? getSupplyMetadataCalloutGroupPlacements({
+        items: supplyMetadataPeers.flatMap(({ device, x, y }) => {
+          const lines = getSupplyMetadataCalloutLines(device)
+          if (lines.length === 0) return []
+          const { width, height } = estimateSupplyMetadataCalloutSize(lines)
+          return [
+            {
+              id: device.id,
+              symbolPosition: { x, y },
+              width,
+              height,
+              placement: getSupplyMetadataCalloutPlacementKind({
+                symbol: device.symbol,
+                peerCount: supplyMetadataPeers.length,
+              }),
+            },
+          ]
+        }),
+        segments: [],
+        symbolRects: supplyMetadataPeers.map(({ x, y }) => ({
+          left: x - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 - 4,
+          top: y - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 - 4,
+          right: x + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 + 4,
+          bottom: y + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 + 4,
+        })),
+      })
+    : new Map()
+  const supplyMetadataCalloutRects = [...supplyMetadataCalloutPlacements.values()].map(
+    ({ rect }) => rect
+  )
+  // Detached supply frames already reserve their top card space through
+  // `getSupplyMetadataCalloutTopExtra` below. Including the card in min/maxY
+  // here would move the whole detached row instead of just growing its frame.
+  if (supplyMetadataCalloutRects.length > 0 && !options.feedOutput) {
+    minY = Math.min(...supplyMetadataCalloutRects.map(({ top }) => top - 12), minY)
+    maxY = Math.max(...supplyMetadataCalloutRects.map(({ bottom }) => bottom + 12), maxY)
+  }
+  const supplyMetadataRightExtent =
+    supplyMetadataCalloutRects.length > 0
+      ? Math.max(...supplyMetadataCalloutRects.map(({ right }) => right + 8))
+      : Number.NEGATIVE_INFINITY
   const supplyRightExtent = Math.max(
     supplyX + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2,
     changeoverSlotEndX ?? Number.NEGATIVE_INFINITY,
-    converterRightExtent
+    converterRightExtent,
+    supplyMetadataRightExtent
   )
 
   // maxY must account for the supply/ground position
@@ -2345,7 +2460,10 @@ function calculateBottomUpPanelLayout(
       type: 'supply',
       position: { x: supplyX, y: supplySourceY }, // LOCAL coordinates
     })
-    if (options.supplyEndpointKind === 'continuation') {
+    // Compact panel-only handoff frames use the bus stubs themselves as the
+    // supply indicator. Repeating the generic "Voeding" label there makes the
+    // two stub markers look like a third feed and collides with their labels.
+    if (options.supplyEndpointKind === 'continuation' && !usesCompactPanelMainBus) {
       elements.push({
         id: 'supply-continuation-label',
         type: 'label',
@@ -2399,7 +2517,7 @@ function calculateBottomUpPanelLayout(
   )
   const compactSupplyRailWidth = Math.max(groundX, supplyBendX) - mainBusX + 15
   const renderedMainBusWidth =
-    options.feedOutput || usesInlineEmptySplitRails
+    options.feedOutput || usesInlineEmptySplitRails || usesCompactPanelMainBus
       ? compactSupplyRailWidth
       : mainBusWidthWithSupply
   elements.push({
@@ -3403,8 +3521,7 @@ function calculateBottomUpPanelLayout(
   // Do not reserve a complete extra info-block row for that harmless overlap. Only
   // stack the block below the drawing when content in the same horizontal region
   // also reaches the compact block position vertically.
-  const COMPACT_INFO_BLOCK_TOP =
-    frameBottomY + FRAME_TOP_MARGIN + FRAME_PADDING - INFO_BLOCK_HEIGHT
+  const COMPACT_INFO_BLOCK_TOP = frameBottomY + FRAME_TOP_MARGIN + FRAME_PADDING - INFO_BLOCK_HEIGHT
   const supplyActuallyCollidesWithCompactInfoBlock = supplyContentCollidesWithInfoBlock({
     infoBlockLeftX,
     compactInfoBlockTop: COMPACT_INFO_BLOCK_TOP,
@@ -3438,7 +3555,13 @@ function calculateBottomUpPanelLayout(
     frameY -= SUPPLY_FRAME_EXTRA_TOP_GAP
     frameHeight += SUPPLY_FRAME_EXTRA_TOP_GAP
     const supplyTopContentY = Math.min(
-      ...supplyDevicePositions.map(({ device, y }) => getSupplyDeviceTopExtent(device, y)),
+      ...supplyDevicePositions.map(({ device, y }) =>
+        getSupplyDeviceTopExtent(
+          device,
+          y,
+          supplyDevicePositions.map(({ device: peer }) => peer)
+        )
+      ),
       ...supplyDevicePositions
         .filter(
           ({ device }) => device.supplyPath === 'backup' || device.supplyPath === 'converter-branch'
@@ -3668,16 +3791,93 @@ function panelHasComplexSupplyTopology(
   )
 }
 
+type SupplyAssemblyPanelRole = {
+  linked: boolean
+  ownsAssembly: boolean
+  ownsVisualTopology: boolean
+}
+
+function supplyAttachmentTargetsPanel(
+  installation: Installation,
+  rootPanels: Panel[],
+  attachment:
+    | OffGridSupplyAssembly['incomingAttachment']
+    | OffGridSupplyAssembly['loadHandoffs'][number]['target'],
+  panelId: string
+): boolean {
+  if (
+    (attachment.kind === 'panel-input' ||
+      attachment.kind === 'panel-bus-input' ||
+      attachment.kind === 'circuit-input') &&
+    attachment.panelId === panelId
+  ) {
+    return true
+  }
+  return (
+    attachment.kind === 'root-feed' &&
+    ensureInstallationFeedTopology(installation, rootPanels).rootFeeds.some(
+      (feed) => feed.id === attachment.rootFeedId && feed.panelId === panelId
+    ) === true
+  )
+}
+
+/**
+ * Identify whether a root panel is part of a supply assembly and whether it is
+ * the source-side owner of that assembly. A load handoff makes a second root
+ * panel part of the same assembly, but it must not cause a second copy of the
+ * source-side supply frame to be rendered.
+ */
+function getSupplyAssemblyPanelRole(
+  project: ProjectWithOptionalV2Electrical,
+  installation: Installation,
+  rootPanels: Panel[],
+  panelId: string
+): SupplyAssemblyPanelRole {
+  let linked = false
+  let ownsAssembly = false
+  let ownsVisualTopology = false
+  for (const assembly of getSupplyAssembliesFromProject(project)) {
+    const incomingTargetsPanel = supplyAttachmentTargetsPanel(
+      installation,
+      rootPanels,
+      assembly.incomingAttachment,
+      panelId
+    )
+    const handoffTargetsPanel = assembly.loadHandoffs.some((handoff) =>
+      supplyAttachmentTargetsPanel(installation, rootPanels, handoff.target, panelId)
+    )
+    if (!incomingTargetsPanel && !handoffTargetsPanel) continue
+    linked = true
+    if (!incomingTargetsPanel) continue
+    ownsAssembly = true
+    // Utility and panel-handoff nodes are topology bookkeeping. Any other
+    // source-side node represents an actual supply assembly that belongs in a
+    // detached supply frame when multiple root panels are present.
+    if (
+      assembly.nodes.some(
+        (node) => node.kind !== 'utility-source' && node.kind !== 'panel-handoff'
+      )
+    ) {
+      ownsVisualTopology = true
+    }
+  }
+  return { linked, ownsAssembly, ownsVisualTopology }
+}
+
 function shouldDetachSupplyFrame(
   panel: Panel,
   installation: Installation,
   rootPanels: Panel[],
-  isSubPanel: boolean
+  isSubPanel: boolean,
+  rootPanelCount: number,
+  ownsVisualSupplyAssembly: boolean
 ): boolean {
+  const hasComplexSupply =
+    panelHasComplexSupplyTopology(panel, installation, rootPanels) || ownsVisualSupplyAssembly
   return (
     !isSubPanel &&
-    panelHasMainBusProtection(panel) &&
-    panelHasComplexSupplyTopology(panel, installation, rootPanels)
+    hasComplexSupply &&
+    (panelHasMainBusProtection(panel) || rootPanelCount > 1)
   )
 }
 
@@ -3734,7 +3934,25 @@ export function calculateBottomUpLayout(
       }
     }
 
-    const detachSupply = shouldDetachSupplyFrame(flatPanel.panel, installation, panels, isSubPanel)
+    const rootPanelCount = panels.length
+    const supplyAssemblyRole = !isSubPanel
+      ? getSupplyAssemblyPanelRole(project, installation, panels, flatPanel.panel.id)
+      : { linked: false, ownsAssembly: false, ownsVisualTopology: false }
+    const detachSupply = shouldDetachSupplyFrame(
+      flatPanel.panel,
+      installation,
+      panels,
+      isSubPanel,
+      rootPanelCount,
+      supplyAssemblyRole.ownsVisualTopology
+    )
+    // A root panel that is only a load handoff of an existing assembly still
+    // needs its own short, selectable panel frame. It must not render the
+    // source-side feed rail or earthing, and it must not create a duplicate
+    // detached supply frame of its own.
+    const renderPanelOnly =
+      !isSubPanel && rootPanelCount > 1 && supplyAssemblyRole.linked && !detachSupply
+    const suppressInlineSupplyTopology = detachSupply || renderPanelOnly
     const panelForMainDiagram = detachSupply
       ? clonePanelForDiagramRole(flatPanel.panel, 'panel')
       : flatPanel.panel
@@ -3745,7 +3963,7 @@ export function calculateBottomUpLayout(
       parentMcbInfo,
       installation,
       panels,
-      detachSupply
+      suppressInlineSupplyTopology
         ? {
             includeSupplyTopology: false,
             includeGroundDevices: false,
@@ -3904,7 +4122,10 @@ export function calculateBottomUpLayout(
     const topMetadataCalloutExpansion = Math.max(
       0,
       ...(supplyLayout.supplyDevices ?? []).map(({ device }) =>
-        getSupplyMetadataCalloutTopExtra(device)
+        getSupplyMetadataCalloutTopExtra(
+          device,
+          (supplyLayout.supplyDevices ?? []).map(({ device: peer }) => peer)
+        )
       )
     )
     targetFrameY -= topMetadataCalloutExpansion

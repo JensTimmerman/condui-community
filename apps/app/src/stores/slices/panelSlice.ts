@@ -23,7 +23,11 @@ import {
 import { ensureInstallationFeedTopology } from '@/lib/feedTopology'
 import { ejectSupplyTrunkFromMainGridSlot, healSupplyTrunkMisplacedOnMainGridForPanel } from '@/lib/panel/healSupplyTrunkGrid'
 import { setSupplyDeviceMounting } from '@/lib/panel/auxiliarySupplyEnclosures'
-import { cascadeMainEarthingToPanels, inheritEarthingFromMainForNewPanel } from '@/lib/panel/panelEarthingSync'
+import {
+  applyNonHouseholdPanelDefaults,
+  cascadeMainEarthingToPanels,
+  inheritEarthingFromMainForNewPanel,
+} from '@/lib/panel/panelEarthingSync'
 import { findPanelById } from '@/lib/panel/panelTree'
 import { applyPanelRowChange } from '@/components/canvas/panel/panelRowChange'
 import { getViewportCenterPlanSpaceIfApplicable } from '@/lib/plan/autoSitplanPlacement'
@@ -40,7 +44,7 @@ import type { Circuit } from '@/types/schema'
 import { ensurePanelPlacement } from '@/utils/panelPlacement'
 import { ensureDefaultEarthingSeparators, generateId } from '@/utils/project'
 import { supportsExtendedInstallationProfiles } from '@/lib/editionInstallationProfileCapabilities'
-import { DEFAULT_INSTALLATION_PROFILE } from '@/lib/installationProfile'
+import { DEFAULT_INSTALLATION_PROFILE, resolveInstallationProfile } from '@/lib/installationProfile'
 import { promotePanelToRootSupply } from '@/lib/panel/panelSupplyMove'
 import { isLastMainPanel } from '@/utils/eendraad'
 import {
@@ -51,6 +55,7 @@ import {
   applyPanelBusFeedBoundaryInProject,
   setPanelFeedOrganizationInProject,
 } from '@/lib/panel/panelFeedOrganization'
+import { attachRootPanelToExistingSupplyAssembly } from '@/lib/supplyAssembly/panelHandoff'
 
 export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
     // Panel actions
@@ -59,11 +64,23 @@ export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
         if (state.currentProject) {
           const installation = getMutableElectricalInstallationForProject(state.currentProject)
           if (!installation) return
+          const profileWillBecomeNonHousehold =
+            updates.installationProfile === 'non_household' &&
+            resolveInstallationProfile(installation) !== 'non_household'
           const permittedUpdates =
     supportsExtendedInstallationProfiles(state.currentProjectStorageMode)
               ? updates
               : { ...updates, installationProfile: DEFAULT_INSTALLATION_PROFILE }
           Object.assign(installation, permittedUpdates)
+          if (
+            profileWillBecomeNonHousehold &&
+            permittedUpdates.installationProfile === 'non_household'
+          ) {
+            applyNonHouseholdPanelDefaults(
+              installation,
+              getMutableElectricalPanelsForProject(state.currentProject)
+            )
+          }
           // Keep feed topology in sync with installation supply edits (cable/devices),
           // otherwise supply-wire UI can read stale shared/root feed cable values.
           ensureInstallationFeedTopology(
@@ -173,6 +190,9 @@ export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
             installation,
             getMutableElectricalPanelsForProject(state.currentProject)
           )
+          if (!parentPanelId && panel.isMain !== false) {
+            attachRootPanelToExistingSupplyAssembly(state.currentProject, panel.id)
+          }
 
           state.isDirty = true
         }
@@ -307,7 +327,10 @@ export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
             mutableInstallation,
             panelId,
           )
-          if (result) state.isDirty = true
+          if (result) {
+            attachRootPanelToExistingSupplyAssembly(project, panelId)
+            state.isDirty = true
+          }
           return
         }
 

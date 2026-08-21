@@ -316,6 +316,10 @@ function getWireDomainAtDropTargetSim(
     return domain
   }
 
+  // Direct-converter right/top insertion slots are explicit DC lanes; there
+  // is no ordinary serial supply prefix to walk for domain inference here.
+  if (target.type === 'supplyConverterDcWire') return 'DC'
+
   if (target.type === 'circuit' && target.circuitId && !target.branchEndpoints?.length) {
     const circuit = findCircuitInProject(project, target.circuitId)
     if (!circuit) return AC
@@ -547,15 +551,12 @@ function simulateEndpointDrop(
           return ep && (ep.type === 'socket' || ep.type === 'light_point')
         })
         if (hasTerminalAlready) {
-          const inferredBranches = circuit.branches?.length
-            ? circuit.branches
-            : initializeBranchesIfNeeded(circuit).map((b) => ({
-                id: b.id,
-                endpointIds: b.endpointIds,
-              }))
-          const lastBranch = inferredBranches[inferredBranches.length - 1]
-          const lastId = lastBranch?.endpointIds[lastBranch.endpointIds.length - 1]
-          insertAfterEndpointId = lastId
+          // Keep hovered-position intent for unchainable endpoint drops:
+          // before lead-in wire => before hovered branch, otherwise after.
+          if (insertAfterEndpointId !== null) {
+            const lastId = branchEndpointIds[branchEndpointIds.length - 1]
+            insertAfterEndpointId = lastId
+          }
           createNewBranch = true
         } else {
           const lastId = branchEndpointIds[branchEndpointIds.length - 1]
@@ -628,7 +629,33 @@ function simulateEndpointDrop(
     const branch = branches[0] ?? { id: generateId(), label: '', endpointIds: [] }
     circuit.branches = [{ ...branch, endpointIds: circuit.endpoints.map((item) => item.id) }]
   } else if (createNewBranch) {
-    circuit.branches = [...branches, { id: generateId(), label: '', endpointIds: [endpointId] }]
+    const branchesSansNewEndpoint = branches
+      .map((b) => ({
+        ...b,
+        endpointIds: (b.endpointIds ?? []).filter((id) => id !== endpointId),
+      }))
+      .filter((b) => (b.endpointIds ?? []).length > 0)
+    const branchIndexFromEndpoints =
+      branchEndpointIds && branchEndpointIds.length > 0
+        ? branchesSansNewEndpoint.findIndex((b) =>
+            b.endpointIds.some((id) => branchEndpointIds.includes(id))
+          )
+        : -1
+    const anchorBranchIndex =
+      branchIndexFromEndpoints >= 0
+        ? branchIndexFromEndpoints
+        : branchesSansNewEndpoint.length - 1
+    const insertionIndex =
+      insertAfterEndpointId === null
+        ? Math.max(0, anchorBranchIndex)
+        : Math.max(0, anchorBranchIndex + 1)
+    const nextBranches = [...branchesSansNewEndpoint]
+    nextBranches.splice(clamp(insertionIndex, 0, nextBranches.length), 0, {
+      id: generateId(),
+      label: '',
+      endpointIds: [endpointId],
+    })
+    circuit.branches = nextBranches
   } else if (branchEndpointIds?.length) {
     const targetBranch = branches.find((b) =>
       b.endpointIds.some((id) => branchEndpointIds.includes(id))

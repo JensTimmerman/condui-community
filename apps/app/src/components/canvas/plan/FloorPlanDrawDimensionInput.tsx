@@ -39,7 +39,10 @@ function FloorPlanDrawDimensionFieldInput({
 
   return (
     <label
-      className={`pointer-events-auto absolute z-30 flex h-7 items-center overflow-hidden rounded-md border bg-gray-100 shadow-sm dark:bg-gray-900 ${
+      // The field is focused programmatically for keyboard entry. It must never
+      // become a pointer target because it sits directly on top of the canvas
+      // gesture being measured.
+      className={`pointer-events-none absolute z-30 flex h-7 items-center overflow-hidden rounded-md border bg-gray-100 shadow-sm dark:bg-gray-900 ${
         field.active
           ? 'border-sky-600 ring-1 ring-sky-600/30'
           : 'border-gray-900 dark:border-gray-200'
@@ -49,8 +52,6 @@ function FloorPlanDrawDimensionFieldInput({
         top: pan.y + field.anchor.y * zoom,
         transform,
       }}
-      onPointerDown={(event) => event.stopPropagation()}
-      onClick={(event) => event.stopPropagation()}
     >
       <input
         ref={inputRef}

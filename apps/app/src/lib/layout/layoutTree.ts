@@ -31,9 +31,21 @@ import {
   DOMOTICA_MIN_ENDPOINT_OUTPUTS,
   DOMOTICA_OUTPUT_SPACING,
 } from '@/lib/domoticaLayout'
-import { hasExplicitPanelBusSections } from '@/lib/panel/panelBusSections'
+import {
+  getPrimaryPanelBusSectionId,
+  getProtectionBusSectionId,
+  hasExplicitPanelBusSections,
+} from '@/lib/panel/panelBusSections'
 import { PANEL_BUS_FEED_GAP } from '@/lib/panel/panelBusFeedPreview'
 import { getDirectConverterChangeoverInsertIndex } from '@/lib/supplyAssembly/directConverterBackupUpgrade'
+import { getSecondaryBusSectionBoundaryX } from './mainBusSectionBoundary'
+
+function getProtectionBusSectionIdForLayoutNode(panel: Panel, node: LayoutNode): string {
+  const protection = node.domainRef as ProtectionDevice | undefined
+  return protection
+    ? getProtectionBusSectionId(panel, protection)
+    : getPrimaryPanelBusSectionId(panel)
+}
 
 /**
  * Node types in the layout tree
@@ -1526,7 +1538,7 @@ function buildMainBusNode(
     const busStartX = mainBusElement.position.x
     const busEndX = busStartX + (mainBusElement.width || 0)
 
-    const connectionXs: number[] = children
+    const connectionEntries = children
       .filter((child) => {
         if (child.type !== 'rcd' && child.type !== 'mcb') return false
         const circuit = panelLayout.circuits.find(
@@ -1534,8 +1546,24 @@ function buildMainBusNode(
         )?.circuit
         return circuit?.supplySource?.kind !== 'converter-backup'
       })
-      .map((child) => child.bounds.x)
-      .sort((a, b) => a - b)
+      .map((child) => ({
+        x: child.bounds.x,
+        busSectionId: getProtectionBusSectionIdForLayoutNode(panelLayout.panel, child),
+      }))
+      .sort((a, b) => a.x - b.x)
+    const connectionXs = connectionEntries.map((entry) => entry.x)
+    const secondaryBusSectionRanges = children.flatMap((node) => {
+      if (node.type !== 'rcd' && node.type !== 'mcb') return []
+      const sectionId = getProtectionBusSectionIdForLayoutNode(panelLayout.panel, node)
+      if (!sectionId) return []
+      return node.children
+        .filter((child) => child.type === 'secondaryBus' && child.bounds.width > 0)
+        .map((secondaryBus) => ({
+          sectionId,
+          startX: secondaryBus.bounds.x,
+          endX: secondaryBus.bounds.x + secondaryBus.bounds.width,
+        }))
+    })
 
     const explicitEmptySections =
       connectionXs.length === 0 && hasExplicitPanelBusSections(panelLayout.panel)
@@ -1561,6 +1589,45 @@ function buildMainBusNode(
             type: 'mainBus',
             padding: panelLayout.frameRole === 'supply' ? 10 : 0,
             busSectionId: section.id,
+          },
+          children: [],
+        })
+      })
+    } else if (hasExplicitPanelBusSections(panelLayout.panel) && connectionEntries.length > 0) {
+      const splitGap = PANEL_BUS_FEED_GAP
+      connectionEntries.forEach((entry, index) => {
+        const previous = connectionEntries[index - 1]
+        const next = connectionEntries[index + 1]
+        let startX = previous ? (previous.x + entry.x) / 2 : busStartX
+        let endX = next ? (entry.x + next.x) / 2 : busEndX
+        if (previous && previous.busSectionId !== entry.busSectionId) {
+          const sectionBoundaryX = getSecondaryBusSectionBoundaryX(
+            secondaryBusSectionRanges,
+            previous.busSectionId,
+            entry.busSectionId,
+            startX
+          )
+          startX = sectionBoundaryX + splitGap / 2
+        }
+        if (next && next.busSectionId !== entry.busSectionId) {
+          const sectionBoundaryX = getSecondaryBusSectionBoundaryX(
+            secondaryBusSectionRanges,
+            entry.busSectionId,
+            next.busSectionId,
+            endX
+          )
+          endX = sectionBoundaryX - splitGap / 2
+        }
+        if (endX <= startX) return
+        children.push({
+          id: `main-bus-segment-${panelLayout.panel.id}-${index}`,
+          type: 'wire',
+          bounds: { x: startX, y: busYTop, width: endX - startX, height: busThickness },
+          visual: { type: 'busBar', thickness: LAYOUT_CONSTANTS.BUS_THICKNESS },
+          hitZone: {
+            type: panelLayout.frameRole === 'supply' ? null : 'mainBus',
+            padding: 0,
+            busSectionId: entry.busSectionId,
           },
           children: [],
         })

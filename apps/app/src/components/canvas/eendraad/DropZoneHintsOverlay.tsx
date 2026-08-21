@@ -54,15 +54,30 @@ export function DropZoneHintsOverlay({
     [hints, activeDropTarget, activeDropTargetNodeId, activePosition]
   )
 
-  const visibleHints = useMemo(
-    () =>
-      hints.filter(
-        (hint) =>
-          !isRelocationNoOpDropZoneHint(hint, relocation) &&
-          (hint.nodeId !== activeHintNodeId || hint.nodeId.startsWith('same-symbol-add-more-'))
-      ),
-    [hints, activeHintNodeId, relocation]
-  )
+  const visibleHints = useMemo(() => {
+    const sameSymbolHints = hints.filter((h) =>
+      h.nodeId.startsWith('same-symbol-add-more-')
+    )
+    return hints.filter((hint) => {
+      if (isRelocationNoOpDropZoneHint(hint, relocation)) return false
+      if (hint.nodeId !== activeHintNodeId || hint.nodeId.startsWith('same-symbol-add-more-')) {
+        // Hide regular circle hints that overlap with a same-symbol-add-more square,
+        // but keep trunk-top hints (they sit in a different visual zone).
+        if (
+          !hint.nodeId.startsWith('same-symbol-add-more-') &&
+          !hint.nodeId.includes('circuit-trunk-') &&
+          sameSymbolHints.length > 0
+        ) {
+          const tooClose = sameSymbolHints.some(
+            (s) => Math.abs(s.x - hint.x) < 30 && Math.abs(s.y - hint.y) < 30
+          )
+          if (tooClose) return false
+        }
+        return true
+      }
+      return false
+    })
+  }, [hints, activeHintNodeId, relocation])
 
   if (visibleHints.length === 0) return null
 

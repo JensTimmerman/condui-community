@@ -54,8 +54,12 @@ import { getSupplyConverterAcPhaseAssignment } from '@/lib/supplyAssembly/supply
 import { countSymbolLabelVisualLines } from '@/lib/symbolLabelMetrics'
 import { measureSymbolLabelTextWidth } from '@/lib/symbolLabelTextWidth'
 import {
+  getSupplyMetadataCalloutGroupPlacements,
+  getSupplyMetadataCalloutLeaderPoints,
   getSupplyMetadataCalloutPlacement,
+  getSupplyMetadataCalloutPlacementKind,
   shouldUseSupplyMetadataCallout,
+  SUPPLY_METADATA_CALLOUT_MIN_WIDTH,
 } from '@/lib/supplyMetadataCallout'
 
 type EendraadPointerEvent = {
@@ -73,6 +77,8 @@ type WindowWithEendraTapSuppression = Window & { __eendraSuppressNextElementTap?
 interface TrunkDeviceSymbolProps {
   device: TrunkDevice
   position: Point
+  /** Other devices on this supply lane, used to keep metadata cards apart. */
+  supplyDevicePositions?: Array<{ device: TrunkDevice; x: number; y: number }>
   /** If true, symbol is on a horizontal wire (supply trunk). Default: vertical trunk. */
   isHorizontal?: boolean
   /** Show the device's own label on the left for special vertical feeder contexts. */
@@ -91,6 +97,68 @@ interface TrunkDeviceSymbolProps {
   draggableCircuitTrunk?: boolean
 }
 
+const SUPPLY_METADATA_FONT_SIZE = 8
+
+function isSupplyMetadataDevice(device: TrunkDevice): boolean {
+  // DC-DC devices can carry long model/charger notes even when they do not have
+  // certification fields. Treat them like the other supply equipment so those
+  // notes use the same collision-aware callout instead of floating over the inverter.
+  return (
+    device.symbol === 'inverter' ||
+    device.symbol === 'dc_dc_converter' ||
+    device.symbol === 'solar_panel' ||
+    device.symbol === 'battery'
+  )
+}
+
+function getSupplyMetadataLinesForDevice(device: TrunkDevice): string[] {
+  const multiplier = getSupplyDeviceMultiplier(device)
+  const certificationParts = getVisibleCertificationLabelParts(device)
+  const conversionParts =
+    device.type === 'conversion' || device.symbol === 'solar_panel' || device.symbol === 'battery'
+      ? getVisibleConversionLabelParts(device)
+      : []
+  const notesText = (device.notes ?? '').trim()
+  const showNotes =
+    device.type !== 'protection' &&
+    notesText.length > 0 &&
+    isSymbolLabelVisible(device.symbolLabelDisplay, 'trunkDeviceNotes', true)
+
+  return [
+    ...certificationParts.map((part) => ({
+      key: part.key,
+      text:
+        part.key === 'certificationModel' && multiplier > 1
+          ? `${multiplier}× ${part.text}`
+          : part.text,
+    })),
+    ...conversionParts,
+    ...(showNotes ? [{ key: 'trunkDeviceNotes', text: notesText }] : []),
+  ].map((item) => item.text)
+}
+
+function getSupplyMetadataCardSize(
+  lines: string[],
+  fontFamily: string
+): { width: number; height: number } {
+  const visualLineCount = lines.reduce(
+    (total, line) => total + countSymbolLabelVisualLines(line),
+    0
+  )
+  return {
+    width: Math.min(
+      260,
+      Math.max(
+        SUPPLY_METADATA_CALLOUT_MIN_WIDTH,
+        ...lines.map((line) =>
+          measureSymbolLabelTextWidth(line, fontFamily, SUPPLY_METADATA_FONT_SIZE)
+        )
+      ) + 10
+    ),
+    height: visualLineCount * 10 + 10,
+  }
+}
+
 /**
  * Renders a trunk device symbol (e.g. energy meter) on a wire.
  * Works for both vertical circuit trunks and horizontal supply wires.
@@ -98,6 +166,7 @@ interface TrunkDeviceSymbolProps {
 export function TrunkDeviceSymbol({
   device,
   position,
+  supplyDevicePositions,
   isHorizontal,
   showDeviceLabelLeft = false,
   splitProtectionResidualLine = false,
@@ -255,13 +324,67 @@ export function TrunkDeviceSymbol({
     () => metadataCalloutItems.map((item) => item.text),
     [metadataCalloutItems]
   )
-  const isMetadataCalloutSymbol =
-    device.symbol === 'inverter' || device.symbol === 'solar_panel' || device.symbol === 'battery'
-  const metadataCalloutPlacementKind = device.symbol === 'inverter' ? 'upper-left' : 'top'
+  const metadataCalloutPeerCount = (
+    supplyDevicePositions?.length
+      ? supplyDevicePositions
+      : [{ device, x: position.x, y: position.y }]
+  ).filter(
+    ({ device: peer }) =>
+      isSupplyMetadataDevice(peer) &&
+      !(peer.supplyPath === 'converter-grid' && peer.converterGridPlacement === 'input-leg')
+  ).length
+  const metadataCalloutPlacementKind = getSupplyMetadataCalloutPlacementKind({
+    symbol: device.symbol,
+    peerCount: metadataCalloutPeerCount,
+  })
+  const metadataCalloutGroup = useMemo(() => {
+    const peerPositions = supplyDevicePositions?.length
+      ? supplyDevicePositions
+      : [{ device, x: position.x, y: position.y }]
+    const peers = peerPositions.filter(
+      ({ device: peer }) =>
+        isSupplyMetadataDevice(peer) &&
+        !(peer.supplyPath === 'converter-grid' && peer.converterGridPlacement === 'input-leg')
+    )
+    const hasLongPeer = peers.some(({ device: peer }) => {
+      const lines = getSupplyMetadataLinesForDevice(peer)
+      return (
+        lines.length > 0 && shouldUseSupplyMetadataCallout(lines, getSupplyDeviceMultiplier(peer))
+      )
+    })
+    if (!hasLongPeer) return new Map()
+
+    const symbolRects = peers.map(({ x, y }) => ({
+      left: x - SYMBOL_SIZE / 2 - 4,
+      top: y - SYMBOL_SIZE / 2 - 4,
+      right: x + SYMBOL_SIZE / 2 + 4,
+      bottom: y + SYMBOL_SIZE / 2 + 4,
+    }))
+    const items = peers.flatMap(({ device: peer, x, y }) => {
+      const lines = getSupplyMetadataLinesForDevice(peer)
+      if (lines.length === 0) return []
+      const { width, height } = getSupplyMetadataCardSize(lines, fontFamily)
+      return [
+        {
+          id: peer.id,
+          symbolPosition: { x, y },
+          width,
+          height,
+          placement: getSupplyMetadataCalloutPlacementKind({
+            symbol: peer.symbol,
+            peerCount: peers.length,
+          }),
+        },
+      ]
+    })
+    return getSupplyMetadataCalloutGroupPlacements({
+      items,
+      segments: wireSegments,
+      symbolRects,
+    })
+  }, [device, fontFamily, position.x, position.y, supplyDevicePositions, wireSegments])
   const useMetadataCallout =
-    isMetadataCalloutSymbol &&
-    isHorizontal === true &&
-    shouldUseSupplyMetadataCallout(metadataCalloutLines, supplyDeviceMultiplier)
+    isSupplyMetadataDevice(device) && isHorizontal === true && metadataCalloutGroup.has(device.id)
   const metadataCalloutVisualLineCount = useMemo(
     () =>
       metadataCalloutLines.reduce((total, line) => total + countSymbolLabelVisualLines(line), 0),
@@ -272,30 +395,32 @@ export function TrunkDeviceSymbol({
       Math.min(
         260,
         Math.max(
-          96,
+          SUPPLY_METADATA_CALLOUT_MIN_WIDTH,
           ...metadataCalloutLines.map((line) => measureSymbolLabelTextWidth(line, fontFamily, 8))
-        ) + 12
+        ) + 10
       ),
     [fontFamily, metadataCalloutLines]
   )
-  const metadataCalloutHeight = metadataCalloutVisualLineCount * 10 + 12
-  const metadataCalloutPlacement = useMemo(
-    () =>
-      getSupplyMetadataCalloutPlacement({
-        symbolPosition: position,
-        width: metadataCalloutWidth,
-        height: metadataCalloutHeight,
-        segments: wireSegments,
-        placement: metadataCalloutPlacementKind,
-      }),
-    [
-      metadataCalloutHeight,
-      metadataCalloutPlacementKind,
-      metadataCalloutWidth,
-      position,
-      wireSegments,
-    ]
-  )
+  const metadataCalloutHeight = metadataCalloutVisualLineCount * 10 + 10
+  const metadataCalloutPlacement = useMemo(() => {
+    const groupPlacement = metadataCalloutGroup.get(device.id)
+    if (groupPlacement) return { x: groupPlacement.x, y: groupPlacement.y }
+    return getSupplyMetadataCalloutPlacement({
+      symbolPosition: position,
+      width: metadataCalloutWidth,
+      height: metadataCalloutHeight,
+      segments: wireSegments,
+      placement: metadataCalloutPlacementKind,
+    })
+  }, [
+    device.id,
+    metadataCalloutHeight,
+    metadataCalloutGroup,
+    metadataCalloutPlacementKind,
+    metadataCalloutWidth,
+    position,
+    wireSegments,
+  ])
   const renderedSymbolSize = useMemo(() => {
     if (!processedImage || !isDomoticaDevice) {
       return { width: SYMBOL_SIZE, height: SYMBOL_SIZE }
@@ -316,20 +441,14 @@ export function TrunkDeviceSymbol({
       height: SYMBOL_SIZE,
     }
   }, [isDomoticaDevice, processedImage])
-  const metadataCalloutLeaderPoints =
-    metadataCalloutPlacementKind === 'top'
-      ? [
-          metadataCalloutPlacement.x + metadataCalloutWidth / 2,
-          metadataCalloutPlacement.y + metadataCalloutHeight,
-          0,
-          -renderedSymbolSize.height / 2 - 2,
-        ]
-      : [
-          metadataCalloutPlacement.x + metadataCalloutWidth,
-          metadataCalloutPlacement.y + metadataCalloutHeight,
-          -renderedSymbolSize.width / 2 - 2,
-          -renderedSymbolSize.height / 2 - 2,
-        ]
+  const metadataCalloutLeaderPoints = getSupplyMetadataCalloutLeaderPoints({
+    placement: metadataCalloutPlacement,
+    width: metadataCalloutWidth,
+    height: metadataCalloutHeight,
+    symbolWidth: renderedSymbolSize.width,
+    symbolHeight: renderedSymbolSize.height,
+    placementKind: metadataCalloutPlacementKind,
+  })
 
   const certificationSideLabelExtraOffset = useMemo(
     () =>
@@ -630,8 +749,8 @@ export function TrunkDeviceSymbol({
       {supplyDeviceMultiplier > 1 && (
         <MultiplierBadge
           count={supplyDeviceMultiplier}
-          x={renderedSymbolSize.width / 2 + 11}
-          y={-renderedSymbolSize.height / 2 - 18}
+          x={renderedSymbolSize.width / 2 + 7}
+          y={-renderedSymbolSize.height / 2 - 11}
           fontFamily={fontFamily}
           fill={getSymbolColor(theme?.mode === 'dark')}
           onActivate={() => openSupplyDeviceAddMoreDialog(device, t)}
@@ -665,10 +784,10 @@ export function TrunkDeviceSymbol({
               fill="transparent"
             />
             <Text
-              x={6}
-              y={6}
-              width={metadataCalloutWidth - 12}
-              height={metadataCalloutHeight - 12}
+              x={5}
+              y={5}
+              width={metadataCalloutWidth - 10}
+              height={metadataCalloutHeight - 10}
               text={metadataCalloutLines.join('\n')}
               fontFamily={fontFamily}
               fontSize={8}

@@ -93,7 +93,7 @@ function buildExportPlan(options: ExportOptions, context: ExportContext): Export
   const pages: ExportPage[] = []
   const { project, eendraadLayout } = context
 
-  if (options.includeEendraad && eendraadLayout) {
+  if (options.includeEendraad === true && eendraadLayout) {
     // For each panel, we'll calculate slices during scene preparation
     // For now, create placeholder pages - actual slicing happens in prepareSceneForPage
     const orderedLayouts = orderEendraadLayoutsForExport(eendraadLayout.panels)
@@ -116,7 +116,7 @@ function buildExportPlan(options: ExportOptions, context: ExportContext): Export
     }
   }
 
-  if (options.includeSitplan) {
+  if (options.includeSitplan === true) {
     for (const target of buildSitplanExportTargets(project)) {
       pages.push({
         id: target.id,
@@ -137,7 +137,7 @@ function buildExportPlan(options: ExportOptions, context: ExportContext): Export
     }
   }
 
-  if (options.includePanel) {
+  if (options.includePanel === true) {
     for (const target of buildPanelExportTargets(project)) {
       pages.push({
         id: target.id,

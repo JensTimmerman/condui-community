@@ -176,7 +176,9 @@ export function buildChangeoverSupplyAssembly(
       ports: [
         port('grid', 'source-grid-ac', conductors, 'sink'),
         port('backup', 'source-backup-ac', conductors, 'sink'),
-        port('load', 'load-ac', conductors, 'source'),
+        // A supply assembly can feed more than one parallel main panel. Each
+        // panel gets its own handoff from this common switched load output.
+        port('load', 'load-ac', conductors, 'source', 'many'),
       ],
     },
     {
@@ -557,6 +559,8 @@ export function reconcileChangeoverSupplyAssembly(
     port1Label: changeover.changeoverProps?.port1Label ?? node.properties.port1Label,
     port2Label: changeover.changeoverProps?.port2Label ?? node.properties.port2Label,
   }
+  const loadPort = node.ports.find((candidate) => candidate.id === 'load')
+  if (loadPort) loadPort.maxConnections = 'many'
   for (const candidate of node.ports) candidate.conductors = [...switched]
   for (const handoff of assembly.loadHandoffs) {
     handoff.conductors = [...switched]

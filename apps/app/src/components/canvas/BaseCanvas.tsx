@@ -300,7 +300,7 @@ interface BaseCanvasProps {
 }
 
 export interface BaseCanvasHandle {
-  fitToView: () => void
+  fitToView: () => boolean
   getStage: () => Konva.Stage | null
   /** Start a selection rectangle at the given pointer position (stage/screen coords). Used when shift/alt+click on content so rect-select works inside the canvas. */
   startSelectionRect: (pointer: { x: number; y: number }) => void
@@ -2600,19 +2600,16 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
     return { minX, minY, maxX, maxY }
   }, [gridInTransformedLayer, getNodeBounds])
 
-  // Handle fit to view
-  const handleFitToView = useCallback(() => {
+  // Handle fit to view — returns true when content bounds were found and applied.
+  const handleFitToView = useCallback((): boolean => {
     const stage = stageRef.current
-    if (!stage) return
+    if (!stage) return false
     const liveRect = containerRef.current?.getBoundingClientRect()
     const viewportWidth = Math.max(1, Math.round(liveRect?.width ?? size.width))
     const viewportHeight = Math.max(1, Math.round(liveRect?.height ?? size.height))
     const viewportCenterX = viewportWidth / 2
     const viewportCenterY = viewportHeight / 2
 
-    // When gridInTransformedLayer is true, the background grid layer is not
-    // rendered as a separate layer, so the content layer is at index 0.
-    // Otherwise, the background grid layer is at index 0 and content at index 1.
     const contentLayerIndex = gridInTransformedLayer ? 0 : 1
     const contentLayer = stage.children?.[contentLayerIndex]
     if (!contentLayer) {
@@ -2620,13 +2617,9 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
         zoom: fin(1, safeZoom),
         pan: { x: fin(viewportCenterX, 0), y: fin(viewportCenterY, 0) },
       })
-      return
+      return false
     }
 
-    // If there is an active selection, try to fit that selection first.
-    // Prefer canvas-specific selection bounds callback when provided so
-    // tool-specific selections (e.g. floor plan) can control what "selection"
-    // means; fall back to Konva node-based bounds otherwise.
     let boundsForFit: { minX: number; minY: number; maxX: number; maxY: number } | null = null
     const selection = useUIStore.getState().selection
 
@@ -2645,7 +2638,6 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
       }
     }
 
-    // If no selection or no valid selection bounds, fall back to fitting all content.
     if (!boundsForFit) {
       const children = contentLayer.getChildren()
       if (children.length === 0) {
@@ -2653,7 +2645,7 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
           zoom: fin(1, safeZoom),
           pan: { x: fin(viewportCenterX, 0), y: fin(viewportCenterY, 0) },
         })
-        return
+        return false
       }
 
       let minX = Infinity
@@ -2679,7 +2671,7 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
           zoom: fin(1, safeZoom),
           pan: { x: fin(viewportCenterX, 0), y: fin(viewportCenterY, 0) },
         })
-        return
+        return false
       }
 
       boundsForFit = { minX, minY, maxX, maxY }
@@ -2699,15 +2691,11 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
         zoom: fin(1, safeZoom),
         pan: { x: fin(viewportCenterX, 0), y: fin(viewportCenterY, 0) },
       })
-      return
+      return false
     }
 
-    // Add padding (10% of stage size)
     const padding = Math.min(viewportWidth, viewportHeight) * 0.1
 
-    // Calculate scale to fit content with padding.
-    // When fitting an active selection, callers can cap max zoom to avoid
-    // over-zooming tiny selections (e.g. single symbol in plan view).
     const scaleX = (viewportWidth - padding * 2) / contentWidth
     const scaleY = (viewportHeight - padding * 2) / contentHeight
     const fitMaxZoom =
@@ -2716,15 +2704,11 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
         : ZOOM_MAX
     const newScale = Math.min(scaleX, scaleY, fitMaxZoom)
 
-    // Clamp to minimum zoom
     const clampedScale = Math.max(ZOOM_MIN, newScale)
 
-    // Calculate center of content in canvas coordinates
     const contentCenterX = boundsForFit.minX + contentWidth / 2
     const contentCenterY = boundsForFit.minY + contentHeight / 2
 
-    // Calculate pan to center content in the middle of the viewport
-    // The formula: screen_center - (content_center * scale)
     const newPan = {
       x: viewportCenterX - contentCenterX * clampedScale,
       y: viewportCenterY - contentCenterY * clampedScale,
@@ -2734,6 +2718,7 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
       zoom: Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, fin(clampedScale, safeZoom))),
       pan: { x: fin(newPan.x, safePan.x), y: fin(newPan.y, safePan.y) },
     })
+    return true
   }, [
     size,
     onPrepareFitToView,

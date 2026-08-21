@@ -307,6 +307,8 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
         return { x: busFeedStubX - busFeedMarkerDistance, y: wireSegment.startPoint.y + 20 }
       case 'below-right':
         return { x: busFeedStubX + busFeedMarkerDistance, y: wireSegment.startPoint.y + 20 }
+      case 'stub-center':
+        return { x: wireSegment.startPoint.x, y: wireSegment.endPoint.y + 11 }
       case 'below':
         return {
           x: (wireSegment.startPoint.x + wireSegment.endPoint.x) / 2 - 10,

@@ -64,7 +64,7 @@ import {
 } from '@/lib/projectV2/electrical'
 import {
   getPanelRewireOperation,
-  isSharedSupplyTailRef,
+  isRootSupplyTailOrSharedSupplyTailRef,
   validatePanelRewireOperation,
 } from '@/lib/panel/panelRewire'
 import {
@@ -843,7 +843,7 @@ export function HierarchyPanelCanvas({
       return (
         currentProject != null &&
         rewireOriginRef != null &&
-        isSharedSupplyTailRef(currentProject, rewireOriginRef) &&
+        isRootSupplyTailOrSharedSupplyTailRef(currentProject, rewireOriginRef) &&
         candidate.kind === 'panel' &&
         candidate.panel?.isMain !== true
       )
@@ -870,7 +870,7 @@ export function HierarchyPanelCanvas({
         !(
           currentProject != null &&
           rewireOriginRef != null &&
-          isSharedSupplyTailRef(currentProject, rewireOriginRef) &&
+          isRootSupplyTailOrSharedSupplyTailRef(currentProject, rewireOriginRef) &&
           surface.panel.isMain !== true
         )
       ) {
