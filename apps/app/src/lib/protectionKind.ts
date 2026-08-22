@@ -57,6 +57,13 @@ export function isFunctionalProtectionType(type: ProtectionType | undefined): bo
   return type != null && type !== 'ROTATING_SWITCH'
 }
 
+/** True for protection symbols that are add-ons on an existing circuit trunk. */
+export function isCircuitTrunkAddOnProtectionType(
+  type: ProtectionType | undefined
+): boolean {
+  return type === 'SPD' || type === 'ROTATING_SWITCH'
+}
+
 export function trunkDeviceCountsAsProtection(
   td: Pick<TrunkDevice, 'type' | 'protectionType'>,
 ): boolean {

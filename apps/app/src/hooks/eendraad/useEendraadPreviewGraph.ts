@@ -7,6 +7,7 @@ import { deriveWires } from '@/lib/layout/deriveWires'
 import { resolveSupplyDeviceMounting } from '@/lib/panel/auxiliarySupplyEnclosures'
 import {
   simulatePanelAttachmentMoveOnProject,
+  simulateProtectionRelocationOnProject,
   simulateDropOnProject,
   simulateEndpointSelectionMoveOnProject,
   simulateSupplyTrunkDeviceRelocationOnProject,
@@ -69,6 +70,15 @@ export function useEendraadPreviewGraph(
         currentProject,
         dragPreview.movingEndpointSelection,
         dragPreview.dropTarget ?? { type: null },
+      )
+    } else if (
+      dragPreview.movingProtection &&
+      dragPreview.dropTarget?.type === 'circuit'
+    ) {
+      sim = simulateProtectionRelocationOnProject(
+        currentProject,
+        dragPreview.movingProtection,
+        dragPreview.dropTarget
       )
     } else if (dragPreview.relocatingSupplyTrunkDevice) {
       sim = simulateSupplyTrunkDeviceRelocationOnProject(

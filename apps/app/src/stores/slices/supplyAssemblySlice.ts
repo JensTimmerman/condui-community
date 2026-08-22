@@ -1,9 +1,12 @@
+import { current } from 'immer'
+import { trackSupplyAssemblyMutation } from '@/lib/analytics/supplyAssemblyAnalytics'
 import {
   getMutableAuxiliaryElectricalEnclosuresForProject,
   getMutableSupplyAssembliesForProject,
 } from '@/lib/projectV2/electrical'
 import type { ProjectSliceCreator } from './projectStoreTypes'
 import type { ProjectV2 } from '@/types/projectV2'
+import type { OffGridSupplyAssembly } from '@/types/supplyAssembly'
 import { generateId } from '@/utils'
 import {
   createAuxiliarySupplyEnclosure as createAuxiliarySupplyEnclosureInProject,
@@ -23,16 +26,26 @@ function markProjectChanged(state: { currentProject: ProjectV2 | null; isDirty: 
 }
 
 export const createSupplyAssemblySlice: ProjectSliceCreator = (set, get) => ({
-  addSupplyAssembly: (assembly) =>
+  addSupplyAssembly: (assembly) => {
+    let created = false
     set((state) => {
       if (!state.currentProject) return
       const assemblies = getMutableSupplyAssembliesForProject(state.currentProject)
       if (assemblies.some(({ id }) => id === assembly.id)) return
       assemblies.push(assembly)
       markProjectChanged(state)
-    }),
+      created = true
+    })
+    if (created) {
+      trackSupplyAssemblyMutation('create', assembly, {
+        source: 'project_store',
+        storageMode: get().currentProjectStorageMode,
+      })
+    }
+  },
 
-  replaceSupplyAssembly: (id, assembly) =>
+  replaceSupplyAssembly: (id, assembly) => {
+    let replaced = false
     set((state) => {
       if (!state.currentProject) return
       const assemblies = getMutableSupplyAssembliesForProject(state.currentProject)
@@ -41,18 +54,37 @@ export const createSupplyAssemblySlice: ProjectSliceCreator = (set, get) => ({
       if (assembly.id !== id && assemblies.some((candidate) => candidate.id === assembly.id)) return
       assemblies[index] = assembly
       markProjectChanged(state)
-    }),
+      replaced = true
+    })
+    if (replaced) {
+      trackSupplyAssemblyMutation('replace', assembly, {
+        source: 'project_store',
+        storageMode: get().currentProjectStorageMode,
+      })
+    }
+  },
 
-  deleteSupplyAssembly: (id) =>
+  deleteSupplyAssembly: (id) => {
+    let deletedAssemblyForAnalytics: OffGridSupplyAssembly | null = null
     set((state) => {
       if (!state.currentProject) return
       const assemblies = getMutableSupplyAssembliesForProject(state.currentProject)
       const index = assemblies.findIndex((assembly) => assembly.id === id)
       if (index < 0) return
+      const deleted = assemblies[index]
+      if (!deleted) return
+      deletedAssemblyForAnalytics = current(deleted)
       assemblies.splice(index, 1)
       reconcileInvalidPanelFeedOrganizationsInProject(state.currentProject)
       markProjectChanged(state)
-    }),
+    })
+    if (deletedAssemblyForAnalytics) {
+      trackSupplyAssemblyMutation('delete', deletedAssemblyForAnalytics, {
+        source: 'project_store',
+        storageMode: get().currentProjectStorageMode,
+      })
+    }
+  },
 
   addSupplyAssemblyNode: (assemblyId, node, oneWirePosition) =>
     set((state) => {

@@ -2329,6 +2329,7 @@ export default function PanelCanvas({ onMultiFingerSwipe, capabilities }: PanelC
           offsetPx={12}
           topOffsetPx={12}
           zIndex={30}
+          menuOpen={panelOptionsMenuOpen || panelVisibilityMenuOpen}
           dataCanvasOverlayAnchor="right"
         >
           <FloatingControl

@@ -78,3 +78,17 @@ export function getChangedPreviewWireSegments(
       )
   )
 }
+
+/**
+ * A protection relocation changes both its source and destination buses in the
+ * simulated layout. The source removal must influence layout, but it is not a
+ * drop preview; only the destination topology should be highlighted.
+ */
+export function filterProtectionRelocationPreviewWires(
+  segments: WireSegment[],
+  sourceParentCircuitId: string | undefined,
+  targetCircuitId: string | undefined
+): WireSegment[] {
+  if (!sourceParentCircuitId || sourceParentCircuitId === targetCircuitId) return segments
+  return segments.filter((segment) => segment.circuitId !== sourceParentCircuitId)
+}

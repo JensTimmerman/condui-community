@@ -221,6 +221,9 @@ export function protectionDropTargetHitsSource(
     target.circuitId &&
     (source.circuits ?? []).some((circuit) => circuit.id === target.circuitId)
   ) {
+    // The upper self-target is a supported topology rotation: local endpoint
+    // content moves above this protection while the circuit remains nested.
+    if (target.type === 'circuit' && target.insertAfterCircuitContent === true) return false
     return true
   }
   return false

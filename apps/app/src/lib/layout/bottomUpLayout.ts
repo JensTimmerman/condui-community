@@ -8,7 +8,6 @@ import { logger } from '@/lib/logger'
 
 import type { Circuit, ProtectionDevice, Panel, Installation, TrunkDevice } from '@/types/schema'
 import type { Point } from '@/types/ui'
-import { getCircuitBranches } from './endpointChains'
 import type { TrunkLayout, BranchLayout } from './wireSegments'
 import {
   DOMOTICA_BASE_HEIGHT,
@@ -30,10 +29,7 @@ import {
   resolvePanelSupplyLinkForPanel,
   resolvePanelSupplyLinksForSourcePanel,
 } from '@/lib/eendraad/panelSupplyLink'
-import {
-  getProtectionOneWireLabelLines,
-  getVisibleProtectionLabelLines,
-} from '@/lib/protectionLabels'
+import { getProtectionOneWireLabelLines } from '@/lib/protectionLabels'
 import { getVisibleCertificationLabelParts } from '@/lib/certificationLabels'
 import { getVisibleConversionLabelParts } from '@/lib/conversionLabels'
 import { isSymbolLabelVisible } from '@/lib/symbolLabels'
@@ -45,10 +41,11 @@ import {
   SUPPLY_METADATA_CALLOUT_MIN_WIDTH,
 } from '@/lib/supplyMetadataCallout'
 import { getSupplyDeviceMultiplier } from '@/utils/inverterMultipliers'
+import { getVoltageSummaryLabel } from '@/utils/voltageLabel'
 import { getPanelFrameTitlePadding } from '@/lib/panel/panelDiagramLabels'
 import { hasExplicitPanelBusSections } from '@/lib/panel/panelBusSections'
+import { getSubPanelMainBusFeedDevice } from '@/lib/panel/subPanelFeed'
 import { collectCircuits } from '@/lib/panel/panelTree'
-import { clamp } from '@/lib/geometry'
 import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
@@ -61,11 +58,24 @@ import {
   getBranchProtectionAnchorOffset,
   type BranchPassConstants,
 } from './bottomUpBranchPass'
+import { getDomoticaRowChainIndex, getEndpointXOffsets } from './bottomUpBranchWidths'
 import {
-  calculateBranchWidth,
-  getDomoticaRowChainIndex,
-  getEndpointXOffsets,
-} from './bottomUpBranchWidths'
+  measureCircuitLayoutEnvelope,
+  type CircuitEnvelopeConfig,
+  type CircuitLayoutEnvelope,
+} from './circuitLayoutEnvelope'
+import {
+  CIRCUIT_NOTES_LINE_HEIGHT,
+  estimateCircuitNotesBlockHeight,
+  getCircuitNotesPaintBounds,
+  normalizeCircuitNotesText,
+} from './circuitNoteMetrics'
+import {
+  arrangeBottomRightBlock,
+  layoutRectsOverlap,
+  type OneWireLayoutBlock,
+} from './oneWireBlockLayout'
+export { estimateCircuitNotesWidth } from './circuitNoteMetrics'
 
 // Layout constants (bottom-up, but Y increases DOWNWARD on screen)
 // Supply is at bottom (high Y), everything grows UP (lower Y values)
@@ -81,33 +91,13 @@ export const LAYOUT_CONSTANTS = {
   BRANCH_START_OFFSET: 80, // Vertical spacing from MCB to first endpoint branch (going UP = subtract) - DOUBLED
   ENDPOINT_BRANCH_SPACING: 50, // Vertical spacing between endpoint horizontal branches (going UP = subtract)
 
-  // Horizontal spacing — main bus cheat sheet (top-level circuits in a row):
-  //
-  //   nextCircuit.x = previousCircuit.x + previousCircuit.width + gap
-  //
-  //   width ≈ max(CIRCUIT_MIN_WIDTH, PROTECTION_WIDTH + maxBranchWidth + CIRCUIT_PADDING)
-  //   (nested circuits on a secondary bus use + CIRCUIT_PADDING * 2; parents with several nested
-  //   children use a wider formula — see calculateBottomUpPanelLayout.)
-  //
-  //   maxBranchWidth = widest single endpoint branch (stacked branches do not add horizontally).
-  //   Tune with BRANCH_LEAD_IN, ENDPOINT_HORIZONTAL_SPACING, APPLIANCE_AFTER_SOCKET_GAP, MULTI_SOCKET_OFFSET.
-  //
-  //   gap = CIRCUIT_SPACING if the circuit has any endpoints (incl. fixed_appliance), else
-  //   CIRCUIT_SPACING_NO_ENDPOINTS. Parent with multiple nested subcircuits: GAP_AFTER_SECONDARY_BUS.
-  //
-  // CIRCUIT_SPACING only changes the narrow gap between columns; most whitespace is usually padding
-  // + branch + protection labels.
+  // Horizontal circuit spacing is derived from painted envelopes relative to
+  // each circuit's trunk anchor. The same packer recursively lays out secondary
+  // bus children. Their envelopes already include painted-ink safety margins,
+  // so adjacent boxes can touch without an additional outer gutter.
   LEFT_MARGIN: 30,
-  /** Gap between [end of top-level circuit N] and [start of top-level circuit N+1] on the main bus. */
-  CIRCUIT_SPACING: 0,
-  /** Same as CIRCUIT_SPACING but when the circuit has no endpoints (slightly tighter). */
-  CIRCUIT_SPACING_NO_ENDPOINTS: 0,
-  /** Margin: (1) left/right inside a circuit, (2) between nested circuits on secondary bus (A→B), (3) after last nested (B→parent right edge). */
-  CIRCUIT_PADDING: 40,
-  /** Same as CIRCUIT_PADDING but when the relevant circuit has no endpoints (tighter). */
-  CIRCUIT_PADDING_NO_ENDPOINTS: 7,
-  /** Extra gap between [parent's right edge] and [next main-bus circuit C]. Parent width already includes lastGap; use 0 to avoid double padding. */
-  GAP_AFTER_SECONDARY_BUS: 0,
+  /** Extra gap between already padded circuit envelopes. */
+  CIRCUIT_ENVELOPE_GUTTER: 0,
   /**
    * Floor for top-level main-bus circuit column width (applied before advancing `currentX`).
    * Nested secondary-bus columns do not use this floor.
@@ -118,7 +108,7 @@ export const LAYOUT_CONSTANTS = {
   ENDPOINT_HORIZONTAL_SPACING: 30, // Between endpoints on same branch
   /** Extra gap between socket and fixed appliance (0 = same spacing as between switch and socket) */
   APPLIANCE_AFTER_SOCKET_GAP: 0,
-  HORIZONTAL_BRANCH_LENGTH: 20, // Fallback / min width for empty circuits (kept for layout width)
+  SUPPLY_RIGHT_FRAME_PADDING: 40,
   SUPPLY_LEFT_OFFSET: 30, // Offset from left edge of main bus for supply symbol
   // Empty inline grid/backup rails need enough title clearance that their
   // selectable padding does not compete with the panel heading.
@@ -310,68 +300,10 @@ function getSupplyDeviceTopExtent(
 }
 
 const SUPPLY_INFO_DEVICE_HORIZONTAL_REACH = 42
-const SUPPLY_INFO_VERTICAL_CLEARANCE = 10
-
-/** Whether right-side supply content truly intersects a compact bottom info block. */
-export function supplyContentCollidesWithInfoBlock(params: {
-  infoBlockLeftX: number
-  compactInfoBlockTop: number
-  supplyRightExtent: number
-  supplyX: number
-  supplySourceY: number
-  supplyDevices: Array<{ device: TrunkDevice; x: number; y: number }>
-}): boolean {
-  const {
-    infoBlockLeftX,
-    compactInfoBlockTop,
-    supplyRightExtent,
-    supplyX,
-    supplySourceY,
-    supplyDevices,
-  } = params
-  const overlapsHorizontally = supplyRightExtent + 16 > infoBlockLeftX
-  if (!overlapsHorizontally) return false
-
-  const contentBottomInInfoRegion = Math.max(
-    ...supplyDevices
-      .filter(({ x }) => x + SUPPLY_INFO_DEVICE_HORIZONTAL_REACH > infoBlockLeftX)
-      .map(({ device, y }) => {
-        const hasBottomProtectionLabels =
-          device.type === 'protection' &&
-          (device.symbolLabelDisplay?.position ?? 'bottom') === 'bottom'
-        const protectionLabelLineCount = hasBottomProtectionLabels
-          ? getProtectionOneWireLabelLines(device).reduce(
-              (count, line) => count + countSymbolLabelVisualLines(line.text),
-              0
-            )
-          : 0
-        const protectionLabelHeight =
-          protectionLabelLineCount > 0 ? 5 + protectionLabelLineCount * (10 + 2) - 2 : 0
-        return (
-          y +
-          LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 +
-          (hasBottomProtectionLabels ? protectionLabelHeight : 18)
-        )
-      }),
-    supplyX + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 > infoBlockLeftX
-      ? supplySourceY + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 + 18
-      : Number.NEGATIVE_INFINITY
-  )
-
-  return contentBottomInInfoRegion + SUPPLY_INFO_VERTICAL_CLEARANCE > compactInfoBlockTop
-}
-
-// Shared sizing helpers for circuit-notes labels so layout, canvas rendering,
-// debug overlays, and export all agree on the same estimated text box.
-export const CIRCUIT_NOTES_CHAR_WIDTH = 6
-export const CIRCUIT_NOTES_MIN_WIDTH = 60
-export const CIRCUIT_NOTES_MAX_WIDTH = 200
-
-export function estimateCircuitNotesWidth(label: string | undefined | null): number {
-  const length = (label?.length ?? 0) || 1
-  const raw = length * CIRCUIT_NOTES_CHAR_WIDTH
-  return clamp(raw, CIRCUIT_NOTES_MIN_WIDTH, CIRCUIT_NOTES_MAX_WIDTH)
-}
+const SUPPLY_VOLTAGE_LABEL_X_OFFSET = LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 + 6
+const SUPPLY_VOLTAGE_LABEL_FONT_SIZE = 12
+// Keep vertically rotated circuit notes just clear of the circuit multiplier.
+export const CIRCUIT_NOTES_VERTICAL_OFFSET = 26
 
 // Shared sizing for protection name labels rendered by CircuitLabel. This is an
 // estimate (layout is not font-aware), but it keeps automatic spacing in sync
@@ -381,16 +313,11 @@ export const PROTECTION_LABEL_CHAR_WIDTH = 6.4
 export const PROTECTION_LABEL_MIN_WIDTH = 16
 export const PROTECTION_LABEL_MAX_WIDTH = 220
 export const PROTECTION_LABEL_DEFAULT_BOX_WIDTH = 80
-export const PROTECTION_LABEL_FREE_OVERFLOW_WIDTH = 15
 export const PROTECTION_LABEL_X_OFFSET_FROM_MCB = -20
 // Right-align the label just outside the SPD body, whose left edge sits about
 // 29px left of the trunk at the standard 30px symbol size.
 export const SPD_PROTECTION_LABEL_X_OFFSET_FROM_TRUNK = -32
 export const SPD_PROTECTION_LABEL_Y_OFFSET = 2
-// Keep the established circuit-column reserve when tightening the visual label
-// offset, otherwise the trunk shifts left and cancels out the visible move.
-const SPD_PROTECTION_LABEL_LEFT_RESERVE_EXTRA = 32
-export const PROTECTION_LABEL_CLEARANCE = 8
 export const PROTECTION_TECHNICAL_LABEL_OFFSET_FROM_SYMBOL = 5
 
 function estimateTextLineWidth(text: string, charWidth: number): number {
@@ -402,13 +329,6 @@ export function estimateProtectionNameLabelWidth(label: string | undefined | nul
   if (!trimmed) return 0
   const raw = estimateTextLineWidth(trimmed, PROTECTION_LABEL_CHAR_WIDTH) + 4
   return Math.min(PROTECTION_LABEL_MAX_WIDTH, Math.max(PROTECTION_LABEL_MIN_WIDTH, raw))
-}
-
-function estimateProtectionTechnicalLabelWidth(protection: ProtectionDevice | undefined): number {
-  if (!protection) return 0
-  const lines = getVisibleProtectionLabelLines(protection)
-  if (lines.length === 0) return 0
-  return Math.max(...lines.map((line) => estimateTextLineWidth(line, 6)))
 }
 
 function getTopmostCircuitBranch(circuitBranches: BranchLayout[]): BranchLayout | null {
@@ -584,6 +504,8 @@ export interface BottomUpPanelLayout {
     width: number
     height: number
   }
+  /** Measured non-circuit blocks used by collision layout and the dev debug overlay. */
+  layoutBlocks?: OneWireLayoutBlock[]
   // Sub-panel information
   isSubPanel?: boolean
   parentMcb?: {
@@ -793,6 +715,10 @@ function applyShiftToPanelLayout(panelLayout: BottomUpPanelLayout, dx: number, d
     note.x += dx
     note.y += dy
   })
+  panelLayout.layoutBlocks?.forEach((block) => {
+    block.x += dx
+    block.y += dy
+  })
   if (panelLayout.parentMcb) {
     panelLayout.parentMcb.position.x += dx
     panelLayout.parentMcb.position.y += dy
@@ -827,7 +753,26 @@ function applyPanelFrameBottomAlignmentByRow(
 
     const rowBottom = Math.max(extents.min, extents.max - INFO_BLOCK_HEIGHT * 1.75)
     const targetHeight = rowBottom - panelLayout.frame.y
-    if (targetHeight > 0) panelLayout.frame.height = targetHeight
+    // A panel's collision solver may have added a right-hand or lower row for
+    // its info block. Row alignment may grow a shorter frame, but must never
+    // shrink that collision-safe result.
+    if (targetHeight > panelLayout.frame.height) {
+      panelLayout.frame.height = targetHeight
+      const infoBlock = panelLayout.layoutBlocks?.find((block) => block.kind === 'info-block')
+      if (!infoBlock) return
+      const bottomAlignedInfoBlock = {
+        ...infoBlock,
+        y:
+          panelLayout.frame.y +
+          panelLayout.frame.height -
+          infoBlock.height -
+          INFO_BLOCK_FRAME_MARGIN,
+      }
+      const collides = panelLayout.layoutBlocks?.some(
+        (block) => block !== infoBlock && layoutRectsOverlap(bottomAlignedInfoBlock, block, 10)
+      )
+      if (!collides) infoBlock.y = bottomAlignedInfoBlock.y
+    }
   })
 }
 
@@ -928,13 +873,6 @@ function buildCircuitMap(panel: Panel): Map<string, Circuit> {
 /**
  * Resolve subCircuitIds to actual Circuit objects using a lookup map.
  */
-function resolveSubCircuits(circuit: Circuit, circuitMap: Map<string, Circuit>): Circuit[] {
-  if (!circuit.subCircuitIds || circuit.subCircuitIds.length === 0) return []
-  return circuit.subCircuitIds
-    .map((id) => circuitMap.get(id))
-    .filter((c): c is Circuit => c !== undefined)
-}
-
 /**
  * Find protection for a circuit
  */
@@ -1223,72 +1161,6 @@ function createElementsWithFrameOffset(
  * All positions are calculated in LOCAL coordinates (relative to panel origin)
  * frameOffset is applied automatically at the end
  */
-/** True if circuit or any nested circuit has at least one endpoint (excluding panel_distribution). */
-function circuitHasEndpoints(circuit: Circuit, circuitMap: Map<string, Circuit>): boolean {
-  const own = circuit.endpoints.some((e) => e.symbol !== 'panel_distribution')
-  if (own) return true
-  const nested = resolveSubCircuits(circuit, circuitMap)
-  return nested.some((n) => circuitHasEndpoints(n, circuitMap))
-}
-
-/**
- * Maximum horizontal branch span for a circuit, including all nested
- * subcircuits recursively. Single source of truth for how much space
- * a circuit needs to the right of its MCB on any bus.
- */
-function getCircuitMaxBranchWidth(circuit: Circuit, circuitMap: Map<string, Circuit>): number {
-  let maxBranchWidth: number = LAYOUT_CONSTANTS.HORIZONTAL_BRANCH_LENGTH
-
-  // Same branch decomposition as calculateBranches (getCircuitBranches), so width
-  // is the max horizontal span of any one branch — not summed over stacked branches.
-  const endpoints = circuit.endpoints.filter((e) => e.symbol !== 'panel_distribution')
-  if (endpoints.length > 0) {
-    const endpointBranches = getCircuitBranches(circuit)
-    endpointBranches.forEach((branchEndpoints) => {
-      maxBranchWidth = Math.max(
-        maxBranchWidth,
-        calculateBranchWidth(
-          branchEndpoints,
-          LAYOUT_CONSTANTS.BRANCH_LEAD_IN,
-          LAYOUT_CONSTANTS.ENDPOINT_HORIZONTAL_SPACING,
-          LAYOUT_CONSTANTS.APPLIANCE_AFTER_SOCKET_GAP
-        )
-      )
-    })
-  }
-
-  const nestedCircuits = resolveSubCircuits(circuit, circuitMap)
-  if (nestedCircuits.length > 0) {
-    nestedCircuits.forEach((nested) => {
-      maxBranchWidth = Math.max(maxBranchWidth, getCircuitMaxBranchWidth(nested, circuitMap))
-    })
-  }
-
-  return maxBranchWidth
-}
-
-function getProtectionForCircuitId(
-  circuitId: string,
-  protectionByCircuitId: Map<string, ProtectionDevice>
-): ProtectionDevice | undefined {
-  return protectionByCircuitId.get(circuitId)
-}
-
-function getProtectionLabelLeftReserve(protection: ProtectionDevice | undefined): number {
-  if (!protection) return 0
-  const estimatedLabelWidth = estimateProtectionNameLabelWidth(protection.label)
-  if (estimatedLabelWidth === 0) return 0
-
-  const renderedLabelWidth = Math.max(PROTECTION_LABEL_DEFAULT_BOX_WIDTH, estimatedLabelWidth)
-  const labelReserve = Math.max(
-    0,
-    renderedLabelWidth - PROTECTION_LABEL_DEFAULT_BOX_WIDTH + PROTECTION_LABEL_FREE_OVERFLOW_WIDTH
-  )
-  return protection.type === 'SPD'
-    ? labelReserve + SPD_PROTECTION_LABEL_LEFT_RESERVE_EXTRA
-    : labelReserve
-}
-
 export function getProtectionLabelXOffset(protection: ProtectionDevice): number {
   return protection.type === 'SPD'
     ? SPD_PROTECTION_LABEL_X_OFFSET_FROM_TRUNK
@@ -1299,58 +1171,31 @@ export function getProtectionLabelYOffset(protection: ProtectionDevice): number 
   return protection.type === 'SPD' ? SPD_PROTECTION_LABEL_Y_OFFSET : 0
 }
 
-function getProtectionLabelRightReach(protection: ProtectionDevice | undefined): number {
-  if (!protection) return 0
-
-  const symbolRight = LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
-  const technicalRightReach =
-    symbolRight +
-    PROTECTION_TECHNICAL_LABEL_OFFSET_FROM_SYMBOL +
-    estimateProtectionTechnicalLabelWidth(protection)
-  return Math.max(0, technicalRightReach) + PROTECTION_LABEL_CLEARANCE
-}
-
 function getProtectionAnchorOffset(leftReserve: number): number {
   return getBranchProtectionAnchorOffset(leftReserve, LAYOUT_CONSTANTS)
 }
 
-function getCircuitColumnSpan(
+function getCircuitColumnEnvelope(
   circuit: Circuit,
   circuitMap: Map<string, Circuit>,
-  protectionByCircuitId: Map<string, ProtectionDevice>
-): number {
-  const baseWidth = Math.max(LAYOUT_CONSTANTS.PROTECTION_WIDTH, LAYOUT_CONSTANTS.SYMBOL_SIZE)
-  const maxBranchWidth = getCircuitMaxBranchWidth(circuit, circuitMap)
-  const padding = circuitHasEndpoints(circuit, circuitMap)
-    ? LAYOUT_CONSTANTS.CIRCUIT_PADDING
-    : LAYOUT_CONSTANTS.CIRCUIT_PADDING_NO_ENDPOINTS
-
-  const protection = getProtectionForCircuitId(circuit.id, protectionByCircuitId)
-  const leftReserve = getProtectionLabelLeftReserve(protection)
-  const rightReserve = Math.max(
-    baseWidth / 2 + maxBranchWidth,
-    getProtectionLabelRightReach(protection)
+  protectionByCircuitId: Map<string, ProtectionDevice>,
+  config: CircuitEnvelopeConfig,
+  memo: Map<string, CircuitLayoutEnvelope>
+): CircuitLayoutEnvelope {
+  return measureCircuitLayoutEnvelope(
+    circuit,
+    circuitMap,
+    protectionByCircuitId,
+    config,
+    hasPanelAttachmentOnSecondaryBus,
+    memo
   )
-  const ownSpan = leftReserve + baseWidth / 2 + rightReserve + padding
-  const nestedCircuits = resolveSubCircuits(circuit, circuitMap)
-  const ownVisualSpan = ownSpan
-  if (nestedCircuits.length === 0) return ownVisualSpan
-  if (nestedCircuits.length === 1) {
-    return Math.max(
-      ownVisualSpan,
-      getCircuitColumnSpan(nestedCircuits[0]!, circuitMap, protectionByCircuitId)
-    )
-  }
+}
 
-  const nestedBusSpan = nestedCircuits.reduce(
-    (sum, nestedCircuit) =>
-      sum + getCircuitColumnSpan(nestedCircuit, circuitMap, protectionByCircuitId),
-    0
-  )
-  const panelColumnSpan = hasPanelAttachmentOnSecondaryBus(protection, circuit)
-    ? LAYOUT_CONSTANTS.SECONDARY_BUS_PANEL_COLUMN_WIDTH
-    : 0
-  return Math.max(ownVisualSpan, panelColumnSpan + nestedBusSpan)
+function getCircuitLeftReserve(envelope: CircuitLayoutEnvelope): number {
+  const baseHalfWidth =
+    Math.max(LAYOUT_CONSTANTS.PROTECTION_WIDTH, LAYOUT_CONSTANTS.SYMBOL_SIZE) / 2
+  return Math.max(0, -envelope.left - baseHalfWidth)
 }
 
 /**
@@ -1362,6 +1207,8 @@ function pushNestedCircuitLayout(
   panelCircuits: Circuit[],
   circuitMap: Map<string, Circuit>,
   protectionByCircuitId: Map<string, ProtectionDevice>,
+  envelopeConfig: CircuitEnvelopeConfig,
+  envelopeMemo: Map<string, CircuitLayoutEnvelope>,
   circuitLayouts: BottomUpCircuitLayout[],
   nested: Circuit,
   parentCircuit: Circuit
@@ -1377,8 +1224,15 @@ function pushNestedCircuitLayout(
 
   const nestedProtection = findProtectionForCircuit(panel, nested)
   const nestedParentRcd = findParentRcd(panel, nested)
-  const nestedLeftReserve = getProtectionLabelLeftReserve(nestedProtection ?? undefined)
-  const nestedCircuitWidth = getCircuitColumnSpan(nested, circuitMap, protectionByCircuitId)
+  const nestedEnvelope = getCircuitColumnEnvelope(
+    nested,
+    circuitMap,
+    protectionByCircuitId,
+    envelopeConfig,
+    envelopeMemo
+  )
+  const nestedLeftReserve = getCircuitLeftReserve(nestedEnvelope)
+  const nestedCircuitWidth = nestedEnvelope.right - nestedEnvelope.left
   const allNestedCircuits = (parentCircuit.subCircuitIds || [])
     .map((id) => panelCircuits.find((c) => c.id === id))
     .filter((c): c is Circuit => c !== undefined)
@@ -1390,20 +1244,16 @@ function pushNestedCircuitLayout(
       getProtectionAnchorOffset(parentLayout.leftReserve) -
       getProtectionAnchorOffset(nestedLeftReserve)
   } else {
-    const parentProtection = findProtectionForCircuit(panel, parentCircuit)
-    let currentNestedX =
-      parentLayout.x +
-      (hasPanelAttachmentOnSecondaryBus(parentProtection, parentCircuit)
-        ? LAYOUT_CONSTANTS.SECONDARY_BUS_PANEL_COLUMN_WIDTH
-        : 0)
-    nestedX = currentNestedX
-    for (const nestedCandidate of allNestedCircuits) {
-      if (nestedCandidate.id === nested.id) {
-        nestedX = currentNestedX
-        break
-      }
-      currentNestedX += getCircuitColumnSpan(nestedCandidate, circuitMap, protectionByCircuitId)
-    }
+    const parentEnvelope = getCircuitColumnEnvelope(
+      parentCircuit,
+      circuitMap,
+      protectionByCircuitId,
+      envelopeConfig,
+      envelopeMemo
+    )
+    const parentAnchorX = parentLayout.x + getProtectionAnchorOffset(parentLayout.leftReserve)
+    const nestedAnchorOffset = parentEnvelope.nestedAnchorOffsets.get(nested.id) ?? 0
+    nestedX = parentAnchorX + nestedAnchorOffset - getProtectionAnchorOffset(nestedLeftReserve)
   }
 
   circuitLayouts.push({
@@ -1432,6 +1282,8 @@ function ensureDescendantNestedCircuitLayouts(
   panelCircuits: Circuit[],
   circuitMap: Map<string, Circuit>,
   protectionByCircuitId: Map<string, ProtectionDevice>,
+  envelopeConfig: CircuitEnvelopeConfig,
+  envelopeMemo: Map<string, CircuitLayoutEnvelope>,
   circuitLayouts: BottomUpCircuitLayout[]
 ): void {
   let changed = true
@@ -1446,6 +1298,8 @@ function ensureDescendantNestedCircuitLayouts(
           panelCircuits,
           circuitMap,
           protectionByCircuitId,
+          envelopeConfig,
+          envelopeMemo,
           circuitLayouts,
           nested,
           parentCircuit
@@ -1474,6 +1328,20 @@ function calculateBottomUpPanelLayout(
       protectionByCircuitId.set(circuit.id, protection)
     }
   }
+  const envelopeConfig: CircuitEnvelopeConfig = {
+    symbolSize: LAYOUT_CONSTANTS.SYMBOL_SIZE,
+    protectionWidth: LAYOUT_CONSTANTS.PROTECTION_WIDTH,
+    branchLeadIn: LAYOUT_CONSTANTS.BRANCH_LEAD_IN,
+    endpointSpacing: LAYOUT_CONSTANTS.ENDPOINT_HORIZONTAL_SPACING,
+    applianceAfterSocketGap: LAYOUT_CONSTANTS.APPLIANCE_AFTER_SOCKET_GAP,
+    protectionLabelOffset: PROTECTION_LABEL_X_OFFSET_FROM_MCB,
+    spdProtectionLabelOffset: SPD_PROTECTION_LABEL_X_OFFSET_FROM_TRUNK,
+    protectionTechnicalLabelOffset: PROTECTION_TECHNICAL_LABEL_OFFSET_FROM_SYMBOL,
+    secondaryBusPanelColumnWidth: LAYOUT_CONSTANTS.SECONDARY_BUS_PANEL_COLUMN_WIDTH,
+    nestedGutter: LAYOUT_CONSTANTS.CIRCUIT_ENVELOPE_GUTTER,
+    circuitNotesOrientation: installation?.circuitNotesOrientation ?? 'horizontal',
+  }
+  const envelopeMemo = new Map<string, CircuitLayoutEnvelope>()
 
   // Build circuit layouts
   const circuitLayouts: BottomUpCircuitLayout[] = []
@@ -1492,8 +1360,15 @@ function calculateBottomUpPanelLayout(
       const parentLayout = circuitLayouts.find((cl) => cl.circuit.id === parentCircuit.id)
       // Nested circuits may already have been inserted while laying out their parent (recovery loop).
       if (parentLayout && !circuitLayouts.some((cl) => cl.circuit.id === circuit.id)) {
-        const circuitWidth = getCircuitColumnSpan(circuit, circuitMap, protectionByCircuitId)
-        const circuitLeftReserve = getProtectionLabelLeftReserve(protection ?? undefined)
+        const circuitEnvelope = getCircuitColumnEnvelope(
+          circuit,
+          circuitMap,
+          protectionByCircuitId,
+          envelopeConfig,
+          envelopeMemo
+        )
+        const circuitWidth = circuitEnvelope.right - circuitEnvelope.left
+        const circuitLeftReserve = getCircuitLeftReserve(circuitEnvelope)
 
         // Find all nested circuits for this parent to calculate their X positions.
         // IMPORTANT: Use the order from subCircuitIds, not the order in panelCircuits.
@@ -1514,30 +1389,19 @@ function calculateBottomUpPanelLayout(
             getProtectionAnchorOffset(parentLayout.leftReserve) -
             getProtectionAnchorOffset(circuitLeftReserve)
         } else {
-          // MULTIPLE nested circuits: lay them out like a mini main bus
-          // starting from the parent's vertical wire X. The parent circuit's
-          // recursive width reserves the subtree, so siblings are pushed right
-          // without moving this child busbar away from its parent.
-          const parentProtection = findProtectionForCircuit(panel, parentCircuit)
-          let currentNestedX =
-            parentLayout.x +
-            (hasPanelAttachmentOnSecondaryBus(parentProtection, parentCircuit)
-              ? LAYOUT_CONSTANTS.SECONDARY_BUS_PANEL_COLUMN_WIDTH
-              : 0)
-          nestedX = currentNestedX
-          for (const nestedCandidate of allNestedCircuits) {
-            if (nestedCandidate.id === circuit.id) {
-              // This is the circuit we're currently creating a layout for.
-              nestedX = currentNestedX
-              break
-            }
-
-            currentNestedX += getCircuitColumnSpan(
-              nestedCandidate,
-              circuitMap,
-              protectionByCircuitId
-            )
-          }
+          // MULTIPLE nested circuits: pack their painted envelopes along the
+          // secondary bus, keeping every child anchor relative to the parent trunk.
+          const parentEnvelope = getCircuitColumnEnvelope(
+            parentCircuit,
+            circuitMap,
+            protectionByCircuitId,
+            envelopeConfig,
+            envelopeMemo
+          )
+          const parentAnchorX = parentLayout.x + getProtectionAnchorOffset(parentLayout.leftReserve)
+          const nestedAnchorOffset = parentEnvelope.nestedAnchorOffsets.get(circuit.id) ?? 0
+          nestedX =
+            parentAnchorX + nestedAnchorOffset - getProtectionAnchorOffset(circuitLeftReserve)
         }
 
         circuitLayouts.push({
@@ -1561,9 +1425,14 @@ function calculateBottomUpPanelLayout(
     // Top-level circuits get their own X position.
     // Use the same recursive max-branch-span helper as nested circuits so
     // every circuit width is derived the same way.
-    const widthNestedCircuits = resolveSubCircuits(circuit, circuitMap)
-
-    let circuitWidth = getCircuitColumnSpan(circuit, circuitMap, protectionByCircuitId)
+    const circuitEnvelope = getCircuitColumnEnvelope(
+      circuit,
+      circuitMap,
+      protectionByCircuitId,
+      envelopeConfig,
+      envelopeMemo
+    )
+    let circuitWidth = circuitEnvelope.right - circuitEnvelope.left
 
     circuitWidth = Math.max(circuitWidth, LAYOUT_CONSTANTS.CIRCUIT_MIN_WIDTH)
 
@@ -1578,7 +1447,7 @@ function calculateBottomUpPanelLayout(
       parentCircuit,
       x,
       width: circuitWidth,
-      leftReserve: getProtectionLabelLeftReserve(protection ?? undefined),
+      leftReserve: getCircuitLeftReserve(circuitEnvelope),
       protectionY: LAYOUT_CONSTANTS.PROTECTION_Y,
       trunkY: undefined, // Will be calculated from trunk if parentRcd exists
       branch: null, // Will be calculated later
@@ -1602,6 +1471,8 @@ function calculateBottomUpPanelLayout(
         panelCircuits,
         circuitMap,
         protectionByCircuitId,
+        envelopeConfig,
+        envelopeMemo,
         circuitLayouts,
         nested,
         circuit
@@ -1609,14 +1480,7 @@ function calculateBottomUpPanelLayout(
     }
 
     if (!override) {
-      const hasMultipleNested = widthNestedCircuits.length > 1
-      const hasEndpoints = circuitHasEndpoints(circuit, circuitMap)
-      const gap = hasMultipleNested
-        ? LAYOUT_CONSTANTS.GAP_AFTER_SECONDARY_BUS
-        : hasEndpoints
-          ? LAYOUT_CONSTANTS.CIRCUIT_SPACING
-          : LAYOUT_CONSTANTS.CIRCUIT_SPACING_NO_ENDPOINTS
-      currentX += circuitWidth + gap
+      currentX += circuitWidth + LAYOUT_CONSTANTS.CIRCUIT_ENVELOPE_GUTTER
     }
   }
 
@@ -1625,6 +1489,8 @@ function calculateBottomUpPanelLayout(
     panelCircuits,
     circuitMap,
     protectionByCircuitId,
+    envelopeConfig,
+    envelopeMemo,
     circuitLayouts
   )
 
@@ -2428,8 +2294,6 @@ function calculateBottomUpPanelLayout(
     mainBusY + LAYOUT_CONSTANTS.SUPPLY_VERTICAL_DROP + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
   const frameBottomY = Math.max(FRAME_BASELINE_Y, maxY)
 
-  const FRAME_TOP_MARGIN = 40
-
   // Build layout elements
   const elements: BottomUpLayoutElement[] = []
 
@@ -2513,7 +2377,7 @@ function calculateBottomUpPanelLayout(
   // Main bus — account for supply wire extent in width
   const mainBusWidthWithSupply = Math.max(
     mainBusWidth,
-    supplyRightExtent - mainBusX + LAYOUT_CONSTANTS.CIRCUIT_PADDING
+    supplyRightExtent - mainBusX + LAYOUT_CONSTANTS.SUPPLY_RIGHT_FRAME_PADDING
   )
   const compactSupplyRailWidth = Math.max(groundX, supplyBendX) - mainBusX + 15
   const renderedMainBusWidth =
@@ -2544,12 +2408,8 @@ function calculateBottomUpPanelLayout(
   // Precompute circuit notes positions: reserve a slot for every circuit with notes (ignore notesVisible so layout is stable)
   // Notes are stacked per vertical trunk and must sit above the *entire* circuit tree:
   // parent circuit + all nested sub‑circuits that hang from the same trunk / secondary bus.
-  // Horizontal notes are rendered as a single text line (~14px). Use a tight slot height
-  // so stacked notes behave like a normal line break (small gap, no huge whitespace).
-  // Vertical/rotated behavior is a render/export concern, but we still pass through
-  // the global orientation flag so the view layer can decide how to draw. We keep
-  // a single slot height so positioning stays stable regardless of orientation.
-  const NOTES_ROW_HEIGHT = 8
+  // Note blocks use the same explicit-line and word-wrap metrics as the renderer.
+  const NOTES_BLOCK_GAP = 4
   const notesPositionMap = new Map<
     string,
     {
@@ -2606,10 +2466,10 @@ function calculateBottomUpPanelLayout(
         if (trunk) {
           return trunk.x + trunk.width / 2
         }
-        return cl.x + cl.width / 2
+        return cl.x + getProtectionAnchorOffset(cl.leftReserve)
       }
 
-      return cl.x + cl.width / 2
+      return cl.x + getProtectionAnchorOffset(cl.leftReserve)
     }
 
     for (const cl of circuitLayouts) {
@@ -2682,9 +2542,8 @@ function calculateBottomUpPanelLayout(
         circuitId: cl.circuit.id,
         trunkX,
         topY,
-        label: cl.circuit.notes.trim(),
-        // Pass through global orientation so render/export can choose horizontal vs vertical.
-        // Positioning uses a single NOTES_ROW_HEIGHT, independent of this flag.
+        label: normalizeCircuitNotesText(cl.circuit.notes),
+        // Pass through global orientation so render/export and envelope layout agree.
         notesOrientation: globalOrientation,
         notesVisible: cl.circuit.notesVisible !== false,
       })
@@ -2702,19 +2561,21 @@ function calculateBottomUpPanelLayout(
       // vertical space; sort by their subtree top and then stack upwards.
       group.sort((a, b) => a.topY - b.topY)
 
-      // When notes are horizontal we stack them vertically (different Y, same X).
-      // When notes are vertical we keep Y fixed for the whole group and space them
-      // out horizontally along X instead, using the same slot height as spacing.
+      // Horizontal notes stack by their complete wrapped block height. Rotated notes
+      // pack along X by that same height, because it becomes their painted width.
       const groupOrientation = group[0]?.notesOrientation ?? 'horizontal'
-      const slotHeight = NOTES_ROW_HEIGHT
 
       if (groupOrientation === 'vertical') {
-        let nextX = Infinity
-        for (const n of group) {
-          const desiredY = n.topY - 20
-          const desiredX = n.trunkX + ((group.length - 1) * slotHeight) / 2
-          const notesX = Math.min(desiredX, nextX - slotHeight)
-          nextX = notesX
+        const blockWidths = group.map((note) => estimateCircuitNotesBlockHeight(note.label))
+        const totalWidth =
+          blockWidths.reduce((sum, width) => sum + width, 0) +
+          NOTES_BLOCK_GAP * Math.max(0, group.length - 1)
+        let cursorX = group[0]!.trunkX + totalWidth / 2
+        for (const [index, n] of group.entries()) {
+          const blockWidth = blockWidths[index] ?? CIRCUIT_NOTES_LINE_HEIGHT
+          const desiredY = n.topY - CIRCUIT_NOTES_VERTICAL_OFFSET
+          const notesX = cursorX - blockWidth / 2
+          cursorX -= blockWidth + NOTES_BLOCK_GAP
           notesPositionMap.set(n.circuitId, {
             x: notesX,
             y: desiredY,
@@ -2724,11 +2585,12 @@ function calculateBottomUpPanelLayout(
           })
         }
       } else {
-        let nextY = Infinity
+        let nextAnchorY = Infinity
         for (const n of group) {
           const desiredY = n.topY - 25
-          const notesY = Math.min(desiredY, nextY - slotHeight)
-          nextY = notesY
+          const blockHeight = estimateCircuitNotesBlockHeight(n.label)
+          const notesY = Math.min(desiredY + 4, nextAnchorY)
+          nextAnchorY = notesY - blockHeight - NOTES_BLOCK_GAP
           notesPositionMap.set(n.circuitId, {
             x: n.trunkX,
             y: notesY,
@@ -2741,16 +2603,11 @@ function calculateBottomUpPanelLayout(
     }
 
     // Materialize once so consumers don't depend on elements array shape/order.
-    // notesPositionMap.y stores the TOP of the reserved slot; convert to visual
-    // center here so both horizontal and vertical renderers can rotate around
-    // the true box center.
     circuitNotesLocal = Array.from(notesPositionMap.entries()).map(([circuitId, pos]) => {
-      const slotHeight = NOTES_ROW_HEIGHT
-      const centerY = pos.y + slotHeight / 2
       return {
         circuitId,
         x: pos.x,
-        y: centerY,
+        y: pos.y,
         label: pos.label,
         notesOrientation: pos.notesOrientation,
         notesVisible: pos.notesVisible,
@@ -2763,23 +2620,10 @@ function calculateBottomUpPanelLayout(
     const NOTES_FRAME_MARGIN = 8
     for (const note of circuitNotesLocal) {
       if (!note.notesVisible) continue
-      // Keep this in sync with CircuitNotesLabel sizing assumptions:
-      // - horizontal: text height ~14 (lineHeight), center-based layout
-      // - vertical: rotated text height ~estimated width of the line
-      const estWidth = estimateCircuitNotesWidth(note.label)
-      const lineHeight = 14
-
-      let boxTopY: number
-      if (note.notesOrientation === 'vertical') {
-        // In vertical mode we shift the group up by estWidth / 2 and the rotated
-        // height is ~estWidth. Give extra safety margin so export slices never
-        // clip the label at the top.
-        const extraMargin = 20
-        boxTopY = note.y - estWidth - extraMargin
-      } else {
-        const boxHalfHeight = lineHeight / 2
-        boxTopY = note.y - boxHalfHeight
-      }
+      const paintBounds = getCircuitNotesPaintBounds(note.label, note.notesOrientation)
+      // Rotated labels keep the established extra export-slice clearance.
+      const extraMargin = note.notesOrientation === 'vertical' ? 20 : 0
+      const boxTopY = note.y + paintBounds.top - extraMargin
 
       minY = Math.min(minY, boxTopY - NOTES_FRAME_MARGIN)
     }
@@ -3494,57 +3338,381 @@ function calculateBottomUpPanelLayout(
   let frameY = minY - frameTopTitlePadding
   let frameWidth = totalWidthWithSupply + FRAME_PADDING * 2
   const { minWidth: minFrameWidth, minHeight: minFrameHeight } = getInfoBlockMinFrameSize()
-  // Ensure the frame is wide enough for:
-  // - the info block itself (minFrameWidth), and
-  // - a clear horizontal gap between the supply wire and the info block so they never overlap,
-  //   even for very small panels with short main bus bars.
-  //
-  // Geometry (local coordinates, before frameOffset):
-  // - frame left X = frameOffset.x - FRAME_PADDING
-  // - supply X     = supplyX
-  // - info block left X = frame left + frameWidth - INFO_BLOCK_TOTAL_WIDTH - INFO_BLOCK_FRAME_MARGIN
-  //
-  // We require: infoBlockLeft >= supplyX + MIN_SUPPLY_INFO_GAP.
-  const MIN_SUPPLY_INFO_GAP = 80
-  const minWidthForSupplyClearance =
-    supplyX + MIN_SUPPLY_INFO_GAP + FRAME_PADDING + INFO_BLOCK_TOTAL_WIDTH + INFO_BLOCK_FRAME_MARGIN
-  frameWidth = options.feedOutput
-    ? Math.max(frameWidth, minFrameWidth) + 36
-    : Math.max(frameWidth, minFrameWidth, minWidthForSupplyClearance)
+  frameWidth = Math.max(frameWidth, minFrameWidth) + (options.feedOutput ? 36 : 0)
 
-  // Reserve vertical space for the info block only when the supply wire actually reaches
-  // underneath it. When supply stays on the left (typical), the info block can share the
-  // bottom band and we only need a small frame inset.
-  const infoBlockLeftX =
-    frameOffset.x - FRAME_PADDING + frameWidth - INFO_BLOCK_TOTAL_WIDTH - INFO_BLOCK_FRAME_MARGIN
-  // A long DC branch can reach the info block's X range while remaining far above it.
-  // Do not reserve a complete extra info-block row for that harmless overlap. Only
-  // stack the block below the drawing when content in the same horizontal region
-  // also reaches the compact block position vertically.
-  const COMPACT_INFO_BLOCK_TOP = frameBottomY + FRAME_TOP_MARGIN + FRAME_PADDING - INFO_BLOCK_HEIGHT
-  const supplyActuallyCollidesWithCompactInfoBlock = supplyContentCollidesWithInfoBlock({
-    infoBlockLeftX,
-    compactInfoBlockTop: COMPACT_INFO_BLOCK_TOP,
+  const supplyDeviceBottomExtent = ({
+    device,
+    y,
+  }: Pick<SupplyDevicePosition, 'device' | 'y'>): number => {
+    const lineCount =
+      device.type === 'protection' && (device.symbolLabelDisplay?.position ?? 'bottom') === 'bottom'
+        ? getProtectionOneWireLabelLines(device).reduce(
+            (count, line) => count + countSymbolLabelVisualLines(line.text),
+            0
+          )
+        : 0
+    // ProtectionOneWireLabels can carry a dense residual-current stack. Keep
+    // the historical 65 px center-to-bottom reserve as a floor, then grow for
+    // unusually long descriptions instead of letting the generic symbol box
+    // under-measure them.
+    return lineCount > 0
+      ? y + Math.max(65, LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 + 5 + lineCount * 12)
+      : y + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 + 18
+  }
+  const supplyTop = Math.min(
+    supplySourceY - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2,
+    ...supplyDevicePositions.map(({ device, y }) =>
+      getSupplyDeviceTopExtent(device, y, supplyTrunkDevices)
+    ),
+    ...supplyMetadataCalloutRects.map(({ top }) => top),
+    Number.POSITIVE_INFINITY
+  )
+  const supplyBottom = Math.max(
+    supplySourceY + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 + 18,
+    ...supplyDevicePositions.map(supplyDeviceBottomExtent),
+    ...supplyMetadataCalloutRects.map(({ bottom }) => bottom),
+    usesSplitSupplyGround ? renderedGroundY + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 : 0
+  )
+  const voltageLabel = installation?.nominalVoltage
+    ? getVoltageSummaryLabel(installation.nominalVoltage)
+    : ''
+  const voltageLabelRight = voltageLabel
+    ? supplyX +
+      SUPPLY_VOLTAGE_LABEL_X_OFFSET +
+      estimateTextLineWidth(voltageLabel, SUPPLY_VOLTAGE_LABEL_FONT_SIZE * 0.58) +
+      2
+    : Number.NEGATIVE_INFINITY
+  const supplyLeft = Math.min(
+    supplyBendX,
+    supplyX - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2,
+    ...supplyDevicePositions.map(({ x }) => x - SUPPLY_INFO_DEVICE_HORIZONTAL_REACH),
+    ...(hasGround ? [groundX - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2] : []),
+    ...renderedGroundDevicePositions.map(({ x }) => x - SUPPLY_INFO_DEVICE_HORIZONTAL_REACH)
+  )
+  const fullSupplyTop = Math.min(
+    supplyTop,
+    renderedMainBusY - LAYOUT_CONSTANTS.BUS_THICKNESS / 2,
+    ...renderedGroundDevicePositions.map(({ y }) => y - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2)
+  )
+  const fullSupplyBottom = Math.max(
+    supplyBottom,
+    ...(hasGround ? [renderedGroundY + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2] : []),
+    ...renderedGroundDevicePositions.map(({ y }) => y + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2)
+  )
+  const fullSupplyRight = Math.max(
     supplyRightExtent,
-    supplyX,
-    supplySourceY,
-    supplyDevices: supplyDevicePositions,
+    voltageLabelRight,
+    ...(hasGround ? [groundX + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2] : []),
+    ...renderedGroundDevicePositions.map(({ x }) => x + SUPPLY_INFO_DEVICE_HORIZONTAL_REACH)
+  )
+  const layoutObstacles: OneWireLayoutBlock[] = []
+  layoutObstacles.push({
+    id: `${options.diagramId ?? panel.id}-main-bus`,
+    kind: 'main-bus',
+    label: 'main bus',
+    x: mainBusX,
+    y: renderedMainBusY - LAYOUT_CONSTANTS.BUS_THICKNESS / 2,
+    width: renderedMainBusWidth,
+    height: LAYOUT_CONSTANTS.BUS_THICKNESS,
   })
-  const DETACHED_SUPPLY_INFO_CLEARANCE = 24
-  const SPLIT_MAIN_INFO_CLEARANCE = 24
-  const usesDetachedSplitMain =
-    options.supplyEndpointKind === 'continuation' && (panel.busSections?.length ?? 0) > 1
-  const frameBottomMargin = options.feedOutput
-    ? usesSplitSupplyGround
-      ? INFO_BLOCK_FRAME_MARGIN + DETACHED_SUPPLY_INFO_CLEARANCE
-      : INFO_BLOCK_HEIGHT + INFO_BLOCK_FRAME_MARGIN + 8
-    : usesDetachedSplitMain
-      ? INFO_BLOCK_FRAME_MARGIN + SPLIT_MAIN_INFO_CLEARANCE
-      : supplyActuallyCollidesWithCompactInfoBlock
-        ? INFO_BLOCK_HEIGHT + INFO_BLOCK_FRAME_MARGIN + 8
-        : INFO_BLOCK_FRAME_MARGIN
-  const totalHeight = frameBottomY - minY + FRAME_TOP_MARGIN + frameBottomMargin
-  const baseFrameHeight = totalHeight + frameTopTitlePadding + FRAME_PADDING
+  // A continuation endpoint in the panel-only frame is an invisible handoff,
+  // not the detached supply assembly. The real assembly has its own layout.
+  if (
+    !isSubPanel &&
+    (options.supplyEndpointKind == null || options.supplyEndpointKind === 'mains')
+  ) {
+    const supplyBlockId = options.diagramId ?? panel.id
+    const pushSupplyBlock = (
+      suffix: string,
+      label: string,
+      left: number,
+      top: number,
+      right: number,
+      bottom: number
+    ) => {
+      layoutObstacles.push({
+        id: `${supplyBlockId}-supply-${suffix}`,
+        kind: 'supply-assembly',
+        label,
+        x: left,
+        y: top,
+        width: Math.max(1, right - left),
+        height: Math.max(1, bottom - top),
+      })
+    }
+
+    if (!options.feedOutput) {
+      pushSupplyBlock(
+        'assembly',
+        'supply assembly',
+        supplyLeft,
+        fullSupplyTop,
+        fullSupplyRight,
+        fullSupplyBottom
+      )
+    } else {
+      // A detached supply drawing is a sparse 2D assembly, not one solid
+      // rectangle. Keep its actual rails, risers, symbols, and text separate so
+      // the info block and frame can use the empty pockets between them.
+      const WIRE_TEXT_RESERVE = 10
+      const VERTICAL_WIRE_TEXT_RESERVE = 12
+      const devicePaintRect = (
+        position: Pick<SupplyDevicePosition, 'device' | 'x' | 'y'>,
+        peers: TrunkDevice[]
+      ) => {
+        const metadataPlacement = supplyMetadataCalloutPlacements.get(position.device.id)
+        const labelLines = [
+          position.device.label ?? '',
+          ...getSupplyMetadataCalloutLines(position.device),
+          ...(position.device.type === 'protection'
+            ? getProtectionOneWireLabelLines(position.device).map((line) => line.text)
+            : []),
+        ].filter((line) => line.trim().length > 0)
+        const labelWidth = Math.max(
+          0,
+          ...labelLines.flatMap((line) =>
+            line
+              .split(/\r?\n/)
+              .map((visualLine) => estimateTextLineWidth(visualLine, PROTECTION_LABEL_CHAR_WIDTH))
+          )
+        )
+        const halfWidth = Math.max(SUPPLY_INFO_DEVICE_HORIZONTAL_REACH, labelWidth / 2 + 5)
+        return {
+          left: position.x - halfWidth,
+          top: metadataPlacement
+            ? position.y - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 - 4
+            : getSupplyDeviceTopExtent(position.device, position.y, peers),
+          right: position.x + halfWidth,
+          bottom: supplyDeviceBottomExtent(position),
+        }
+      }
+
+      pushSupplyBlock(
+        'bus-riser',
+        'supply bus riser',
+        supplyBendX - VERTICAL_WIRE_TEXT_RESERVE,
+        Math.min(renderedMainBusY, supplyY),
+        supplyBendX + VERTICAL_WIRE_TEXT_RESERVE,
+        Math.max(renderedMainBusY, supplyY)
+      )
+
+      if (hasGround) {
+        pushSupplyBlock(
+          'earthing',
+          'earthing riser and symbol',
+          groundX - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2,
+          Math.min(renderedMainBusY, renderedGroundY),
+          groundX + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2,
+          Math.max(renderedMainBusY, renderedGroundY) + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
+        )
+      }
+
+      const railPoints = new Map<number, number[]>()
+      const addRailPoint = (y: number, x: number) => {
+        const points = railPoints.get(y) ?? []
+        points.push(x)
+        railPoints.set(y, points)
+      }
+      addRailPoint(supplyY, supplyBendX)
+      addRailPoint(supplySourceY, supplyX)
+      for (const { x, y } of supplyDevicePositions) addRailPoint(y, x)
+      for (const [y, xs] of railPoints) {
+        const left = Math.min(...xs, supplyBendX)
+        const right = Math.max(...xs, y === supplySourceY ? supplyX : supplyBendX)
+        pushSupplyBlock(
+          `rail-${Math.round(y)}`,
+          'supply horizontal rail and wire text',
+          left,
+          y - WIRE_TEXT_RESERVE,
+          right,
+          y + WIRE_TEXT_RESERVE
+        )
+      }
+
+      for (const position of supplyDevicePositions) {
+        const rect = devicePaintRect(position, supplyTrunkDevices)
+        pushSupplyBlock(
+          `device-${position.device.id}`,
+          `supply device ${position.device.symbol} and text`,
+          rect.left,
+          rect.top,
+          rect.right,
+          rect.bottom
+        )
+      }
+      for (const position of renderedGroundDevicePositions) {
+        const rect = devicePaintRect(position, groundTrunkDevices)
+        pushSupplyBlock(
+          `ground-device-${position.device.id}`,
+          `ground device ${position.device.symbol} and text`,
+          rect.left,
+          rect.top,
+          rect.right,
+          rect.bottom
+        )
+      }
+
+      for (const [deviceId, { rect }] of supplyMetadataCalloutPlacements) {
+        pushSupplyBlock(
+          `metadata-${deviceId}`,
+          'supply metadata text',
+          rect.left,
+          rect.top,
+          rect.right,
+          rect.bottom
+        )
+      }
+
+      const changeover = supplyDevicePositions.find(
+        ({ device }) => device.symbol === 'source_changeover'
+      )
+      if (changeover) {
+        const elbowX =
+          changeover.x +
+          LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_RENDER_SIZE / 2 +
+          LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_ELBOW_LEAD
+        pushSupplyBlock(
+          'changeover-riser',
+          'modular switch branch riser',
+          elbowX - VERTICAL_WIRE_TEXT_RESERVE,
+          changeover.y - changeoverLaneOffset,
+          elbowX + VERTICAL_WIRE_TEXT_RESERVE,
+          changeover.y + changeoverLaneOffset
+        )
+      }
+
+      const converter = supplyDevicePositions.find(
+        ({ device }) => device.supplyPath === 'converter-branch' || device.supplyPath === 'backup'
+      )
+      if (converter) {
+        const connectedYs = supplyDevicePositions
+          .filter(
+            ({ device }) =>
+              device.supplyPath === 'converter-grid' || device.supplyPath === 'converter-dc-top'
+          )
+          .map(({ y }) => y)
+        if (hasDirectConverter && supplySourceY !== converter.y) {
+          connectedYs.push(supplySourceY)
+        }
+        if (connectedYs.length > 0) {
+          pushSupplyBlock(
+            'converter-riser',
+            'inverter vertical connection and wire text',
+            converter.x - VERTICAL_WIRE_TEXT_RESERVE,
+            Math.min(converter.y, ...connectedYs),
+            converter.x + VERTICAL_WIRE_TEXT_RESERVE,
+            Math.max(converter.y, ...connectedYs)
+          )
+        }
+      }
+
+      pushSupplyBlock(
+        'source',
+        'supply source symbol and voltage text',
+        supplyX - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2,
+        supplySourceY - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 - 4,
+        Math.max(supplyX + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2, voltageLabelRight),
+        supplySourceY + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 + 18
+      )
+    }
+  }
+  const drawsPopulatedPanelFeedStubs =
+    !options.feedOutput &&
+    options.supplyEndpointKind === 'continuation' &&
+    panel.protections.some((protection) => (protection.circuits?.length ?? 0) > 0)
+  if (
+    usesInlineEmptySplitRails ||
+    drawsPopulatedPanelFeedStubs ||
+    (options.feedOutput && hasExplicitPanelBusSections(panel))
+  ) {
+    // The exact rendered stubs are produced later from bus runs. Reserve their
+    // shared marker band for collision placement, but debug the generated wires
+    // themselves so guessed section positions can never appear as ghost boxes.
+    layoutObstacles.push({
+      id: `${options.diagramId ?? panel.id}-stub-clearance`,
+      kind: 'supply-stub',
+      label: 'feed stub clearance',
+      x: mainBusX - 30,
+      y: renderedMainBusY - 8,
+      width: renderedMainBusWidth + 60,
+      height: 64,
+      debugVisible: false,
+    })
+  }
+  if (isSubPanel && parentMcbInfo) {
+    const parentMcbAnchorY = Math.max(supplyY, mainBusY + 60 * 2)
+    const localFeedDevice = getSubPanelMainBusFeedDevice(panel)?.device
+    const localFeedLabelWidth = localFeedDevice
+      ? Math.max(
+          estimateProtectionNameLabelWidth(localFeedDevice.label),
+          ...getProtectionOneWireLabelLines(localFeedDevice).map((line) =>
+            estimateTextLineWidth(line.text, PROTECTION_LABEL_CHAR_WIDTH)
+          )
+        )
+      : 0
+    const labelWidth = Math.max(
+      60,
+      estimateProtectionNameLabelWidth(parentMcbInfo.protection.label) + 20,
+      localFeedLabelWidth + 20
+    )
+    layoutObstacles.push({
+      id: `${options.diagramId ?? panel.id}-secondary-feed`,
+      kind: 'secondary-feed',
+      label: 'secondary panel feed',
+      x: supplyX - labelWidth / 2,
+      y: mainBusY,
+      width: labelWidth,
+      height: parentMcbAnchorY - mainBusY + 48,
+    })
+  }
+
+  // Circuit labels and protection ink occupy a shallow band around the bus.
+  // Keep it collision-only because the cyan circuit envelopes already expose
+  // the exact horizontal layout in the debug overlay.
+  for (const circuitLayout of circuitLayouts.filter((layout) => !layout.parentCircuit)) {
+    layoutObstacles.push({
+      id: `${options.diagramId ?? panel.id}-circuit-band-${circuitLayout.circuit.id}`,
+      kind: 'main-bus',
+      label: 'circuit lower band',
+      x: circuitLayout.x,
+      y: renderedMainBusY - LAYOUT_CONSTANTS.SYMBOL_SIZE,
+      width: circuitLayout.width,
+      height: LAYOUT_CONSTANTS.SYMBOL_SIZE * 1.5,
+      debugVisible: false,
+    })
+  }
+
+  const measuredLayoutRight = Math.max(
+    frameX + frameWidth - FRAME_PADDING,
+    ...layoutObstacles.map((block) => block.x + block.width)
+  )
+  frameWidth = Math.max(frameWidth, measuredLayoutRight + FRAME_PADDING - frameX)
+
+  const collisionClearance = 10
+  const compactInfoTop = renderedMainBusY + LAYOUT_CONSTANTS.BUS_THICKNESS / 2 + collisionClearance
+  const compactFrameBottom = compactInfoTop + INFO_BLOCK_HEIGHT + INFO_BLOCK_FRAME_MARGIN
+  const infoArrangement = arrangeBottomRightBlock({
+    frameLeft: frameX,
+    frameTop: frameY,
+    initialFrameRight: frameX + frameWidth,
+    initialFrameBottom: compactFrameBottom,
+    frameMargin: INFO_BLOCK_FRAME_MARGIN,
+    blockWidth: INFO_BLOCK_TOTAL_WIDTH,
+    blockHeight: INFO_BLOCK_HEIGHT,
+    obstacles: layoutObstacles,
+    clearance: collisionClearance,
+    preferBelow: layoutObstacles.some((block) => block.kind === 'supply-stub'),
+  })
+  frameWidth = infoArrangement.frameRight - frameX
+  // The frame contains every measured primitive, but content elsewhere in the
+  // drawing must not drag the independently placed info block downward.
+  const measuredLayoutBottom = Math.max(
+    frameBottomY,
+    ...layoutObstacles.map((block) => block.y + block.height)
+  )
+  const contentFrameBottom = measuredLayoutBottom + FRAME_PADDING
+  const baseFrameBottom = Math.max(infoArrangement.frameBottom, contentFrameBottom)
+  const baseFrameHeight = baseFrameBottom - frameY
 
   // Respect minimum frame height required by the info block, but keep all panel
   // bottoms aligned: when we increase the height, shift the frame upward so the
@@ -3588,15 +3756,32 @@ function calculateBottomUpPanelLayout(
     frameY = baseBottom - frameHeight
   }
 
-  // A detached split supply with no horizontal protection labels can otherwise collapse
-  // until the earthing symbol touches the info block. Preserve a small, geometry-based
-  // minimum gap without making populated supply frames taller than their content requires.
-  if (options.feedOutput && usesSplitSupplyGround && hasGround) {
-    const MIN_GROUND_INFO_BLOCK_GAP = 12
-    const groundBottom = renderedGroundY + frameOffset.y + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
-    const infoBlockTop = frameY + frameHeight - INFO_BLOCK_HEIGHT - INFO_BLOCK_FRAME_MARGIN
-    frameHeight += Math.max(0, groundBottom + MIN_GROUND_INFO_BLOCK_GAP - infoBlockTop)
+  const bottomAlignedInfoBlock = {
+    ...infoArrangement.block,
+    y: frameY + frameHeight - INFO_BLOCK_HEIGHT - INFO_BLOCK_FRAME_MARGIN,
   }
+  const finalInfoBlock = layoutObstacles.some((block) =>
+    layoutRectsOverlap(bottomAlignedInfoBlock, block, collisionClearance)
+  )
+    ? infoArrangement.block
+    : bottomAlignedInfoBlock
+  const infoBlockBounds: OneWireLayoutBlock = {
+    id: `${options.diagramId ?? panel.id}-info`,
+    kind: 'info-block',
+    label: `info block (${infoArrangement.placement})`,
+    x: finalInfoBlock.x,
+    y: finalInfoBlock.y,
+    width: INFO_BLOCK_TOTAL_WIDTH,
+    height: INFO_BLOCK_HEIGHT,
+  }
+  const layoutBlocks = [
+    ...layoutObstacles.map((block) => ({
+      ...block,
+      x: block.x + frameOffset.x,
+      y: block.y + frameOffset.y,
+    })),
+    infoBlockBounds,
+  ]
 
   // Apply frameOffset to all elements automatically (invisible transformation)
   const offsetElements = createElementsWithFrameOffset(elements, frameOffset)
@@ -3744,6 +3929,7 @@ function calculateBottomUpPanelLayout(
       width: frameWidth,
       height: frameHeight,
     },
+    layoutBlocks,
     isSubPanel: isSubPanel,
     parentMcb: parentMcbPosition,
   }
@@ -3854,9 +4040,7 @@ function getSupplyAssemblyPanelRole(
     // source-side node represents an actual supply assembly that belongs in a
     // detached supply frame when multiple root panels are present.
     if (
-      assembly.nodes.some(
-        (node) => node.kind !== 'utility-source' && node.kind !== 'panel-handoff'
-      )
+      assembly.nodes.some((node) => node.kind !== 'utility-source' && node.kind !== 'panel-handoff')
     ) {
       ownsVisualTopology = true
     }
@@ -3874,11 +4058,7 @@ function shouldDetachSupplyFrame(
 ): boolean {
   const hasComplexSupply =
     panelHasComplexSupplyTopology(panel, installation, rootPanels) || ownsVisualSupplyAssembly
-  return (
-    !isSubPanel &&
-    hasComplexSupply &&
-    (panelHasMainBusProtection(panel) || rootPanelCount > 1)
-  )
+  return !isSubPanel && hasComplexSupply && (panelHasMainBusProtection(panel) || rootPanelCount > 1)
 }
 
 /**

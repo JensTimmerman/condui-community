@@ -49,6 +49,7 @@ export function getSymbolCategory(symbolKey: SymbolKey): SitplanSymbolCategory |
     symbolKey === 'switch_impulse' ||
     symbolKey === 'switch_cross' ||
     symbolKey === 'motion_detector' ||
+    symbolKey === 'smoke_detector' ||
     symbolKey === 'relay' ||
     symbolKey === 'switch_single' ||
     symbolKey === 'switch_double'

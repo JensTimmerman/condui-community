@@ -11,6 +11,12 @@ export interface OpeningDragPlacementOptions {
   /** Snap opening width to whole centimeters (parallel drag distance and default width). */
   snapWidthToCm?: boolean
   canvasPxPerMeter?: number
+  /** Optional drag distance threshold before width scaling starts. */
+  dragActivationThresholdPx?: number
+  /** Force drag sizing during current gesture even near the anchor. */
+  forceDragSizing?: boolean
+  /** Optional minimum opening width for drag-created openings. */
+  minimumWidthPx?: number
 }
 
 /** Convert canvas width to whole centimeters and back to canvas units. */
@@ -78,7 +84,18 @@ export function computeOpeningDragPlacement(
   const pxPerMeter = options?.canvasPxPerMeter ?? 1
   const snapWidth = (widthPx: number) =>
     snapToCm ? snapOpeningWidthToWholeCentimeters(widthPx, pxPerMeter) : widthPx
-  const minWidthPx = snapToCm ? pxPerMeter / 100 : 10
+  const configuredMinWidthPx = options?.minimumWidthPx
+  const fallbackMinWidthPx = snapToCm ? pxPerMeter / 100 : 10
+  const minWidthPx =
+    Number.isFinite(configuredMinWidthPx) && (configuredMinWidthPx ?? 0) > 0
+      ? (configuredMinWidthPx as number)
+      : fallbackMinWidthPx
+  const configuredDragActivationThresholdPx = options?.dragActivationThresholdPx
+  const dragActivationThresholdPx =
+    Number.isFinite(configuredDragActivationThresholdPx) &&
+    (configuredDragActivationThresholdPx ?? 0) >= 0
+      ? (configuredDragActivationThresholdPx as number)
+      : minDragAlongPx
   const points = wall.points
   const totalLength = getWallTotalLength(points)
   if (totalLength < 1e-10) {
@@ -111,7 +128,7 @@ export function computeOpeningDragPlacement(
     return Math.min(snapped, maxWidth)
   }
 
-  if (Math.abs(along) <= minDragAlongPx) {
+  if (!options?.forceDragSizing && Math.abs(along) <= dragActivationThresholdPx) {
     return {
       width: clampWidth(defaultWidth),
       centerPoint: defaultCenter,

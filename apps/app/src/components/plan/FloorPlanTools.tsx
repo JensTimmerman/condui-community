@@ -166,8 +166,7 @@ function FloorPlanTools({
     <CanvasFloatingControlRail
       side="left"
       verticalAlign="center"
-      topSafeZonePx={110}
-      bottomSafeZonePx={80}
+      topOverlayInsetPx={68}
       zIndex={45}
       dataCanvasOverlayAnchor="left"
     >

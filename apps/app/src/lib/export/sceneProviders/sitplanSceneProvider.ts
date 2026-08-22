@@ -33,6 +33,8 @@ import { adjustSymbolImagesForExport } from './symbolImageExport'
 const SITPLAN_EXPORT_BOUNDS_PADDING = 80
 const PANEL_SYMBOL_CROP_PADDING = 180
 const MIN_PANEL_SYMBOL_CROP_AREA_REDUCTION = 0.12
+const PLAN_CONTENT_ALPHA_THRESHOLD = 16
+const PLAN_CONTENT_WHITE_THRESHOLD = 245
 
 /**
  * Walk up the tree and check if a node is inside an endpoint group.
@@ -135,6 +137,176 @@ function calculatePanelSymbolCropBounds(
   }
 
   return crop
+}
+
+function boundsUnion(
+  a: ReturnType<typeof calculateSceneBounds>,
+  b: ReturnType<typeof calculateSceneBounds>,
+): ReturnType<typeof calculateSceneBounds> {
+  const minX = Math.min(a.x, b.x)
+  const minY = Math.min(a.y, b.y)
+  const maxX = Math.max(a.x + a.width, b.x + b.width)
+  const maxY = Math.max(a.y + a.height, b.y + b.height)
+  return {
+    x: minX,
+    y: minY,
+    width: Math.max(1, maxX - minX),
+    height: Math.max(1, maxY - minY),
+    space: 'scene',
+  }
+}
+
+function cornerBounds(points: Array<{ x: number; y: number }>): ReturnType<typeof calculateSceneBounds> | null {
+  if (points.length === 0) return null
+  const xs = points.map((point) => point.x)
+  const ys = points.map((point) => point.y)
+  const minX = Math.min(...xs)
+  const minY = Math.min(...ys)
+  const maxX = Math.max(...xs)
+  const maxY = Math.max(...ys)
+  if (![minX, minY, maxX, maxY].every(Number.isFinite)) return null
+  return {
+    x: minX,
+    y: minY,
+    width: Math.max(1, maxX - minX),
+    height: Math.max(1, maxY - minY),
+    space: 'scene',
+  }
+}
+
+function imageSourceSize(source: CanvasImageSource): { width: number; height: number } | null {
+  if (source instanceof HTMLImageElement) {
+    const width = source.naturalWidth || source.width
+    const height = source.naturalHeight || source.height
+    return width > 0 && height > 0 ? { width, height } : null
+  }
+  if (source instanceof HTMLCanvasElement || source instanceof OffscreenCanvas) {
+    return source.width > 0 && source.height > 0
+      ? { width: source.width, height: source.height }
+      : null
+  }
+  if (source instanceof ImageBitmap) {
+    return source.width > 0 && source.height > 0 ? { width: source.width, height: source.height } : null
+  }
+  if (typeof HTMLVideoElement !== 'undefined' && source instanceof HTMLVideoElement) {
+    const width = source.videoWidth || source.width
+    const height = source.videoHeight || source.height
+    return width > 0 && height > 0 ? { width, height } : null
+  }
+  return null
+}
+
+function detectNonEmptyLocalImageBounds(
+  source: CanvasImageSource,
+): { x: number; y: number; width: number; height: number } | null {
+  const size = imageSourceSize(source)
+  if (!size) return null
+
+  const canvas = document.createElement('canvas')
+  canvas.width = size.width
+  canvas.height = size.height
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  if (!context) return null
+
+  try {
+    context.drawImage(source, 0, 0, size.width, size.height)
+    const imageData = context.getImageData(0, 0, size.width, size.height).data
+
+    let minX = Number.POSITIVE_INFINITY
+    let minY = Number.POSITIVE_INFINITY
+    let maxX = Number.NEGATIVE_INFINITY
+    let maxY = Number.NEGATIVE_INFINITY
+
+    for (let y = 0; y < size.height; y++) {
+      for (let x = 0; x < size.width; x++) {
+        const index = (y * size.width + x) * 4
+        const r = imageData[index] ?? 255
+        const g = imageData[index + 1] ?? 255
+        const b = imageData[index + 2] ?? 255
+        const a = imageData[index + 3] ?? 0
+        const visible = a >= PLAN_CONTENT_ALPHA_THRESHOLD
+        const notMostlyWhite =
+          r < PLAN_CONTENT_WHITE_THRESHOLD ||
+          g < PLAN_CONTENT_WHITE_THRESHOLD ||
+          b < PLAN_CONTENT_WHITE_THRESHOLD
+        if (!visible || !notMostlyWhite) continue
+        minX = Math.min(minX, x)
+        minY = Math.min(minY, y)
+        maxX = Math.max(maxX, x)
+        maxY = Math.max(maxY, y)
+      }
+    }
+
+    if (![minX, minY, maxX, maxY].every(Number.isFinite)) return null
+    return {
+      x: minX,
+      y: minY,
+      width: Math.max(1, maxX - minX + 1),
+      height: Math.max(1, maxY - minY + 1),
+    }
+  } catch {
+    return null
+  }
+}
+
+function transformLocalRectToSceneBounds(
+  root: Konva.Group,
+  imageNode: Konva.Image,
+  localRect: { x: number; y: number; width: number; height: number },
+  sourceSize: { width: number; height: number },
+): ReturnType<typeof calculateSceneBounds> | null {
+  const rootInverse = root.getAbsoluteTransform().copy().invert()
+  const relative = rootInverse.multiply(imageNode.getAbsoluteTransform())
+  const nodeWidth = imageNode.width()
+  const nodeHeight = imageNode.height()
+  if (!Number.isFinite(nodeWidth) || !Number.isFinite(nodeHeight) || nodeWidth <= 0 || nodeHeight <= 0) {
+    return null
+  }
+
+  if (
+    !Number.isFinite(sourceSize.width) ||
+    !Number.isFinite(sourceSize.height) ||
+    sourceSize.width <= 0 ||
+    sourceSize.height <= 0
+  ) {
+    return null
+  }
+
+  const x0 = (localRect.x / sourceSize.width) * nodeWidth
+  const y0 = (localRect.y / sourceSize.height) * nodeHeight
+  const x1 = ((localRect.x + localRect.width) / sourceSize.width) * nodeWidth
+  const y1 = ((localRect.y + localRect.height) / sourceSize.height) * nodeHeight
+
+  const corners = [
+    relative.point({ x: x0, y: y0 }),
+    relative.point({ x: x1, y: y0 }),
+    relative.point({ x: x1, y: y1 }),
+    relative.point({ x: x0, y: y1 }),
+  ]
+
+  return cornerBounds(corners)
+}
+
+async function collectPlanImageContentBounds(root: Konva.Group): Promise<ReturnType<typeof calculateSceneBounds> | null> {
+  const imageNodes = root.find((node: Konva.Node) => {
+    if (!(node instanceof Konva.Image)) return false
+    return !isSitplanSymbolImageForExport(node)
+  }) as Konva.Image[]
+
+  let mergedBounds: ReturnType<typeof calculateSceneBounds> | null = null
+  for (const imageNode of imageNodes) {
+    const source = imageNode.image()
+    if (!source) continue
+    const sourceSize = imageSourceSize(source)
+    if (!sourceSize) continue
+    const localBounds = detectNonEmptyLocalImageBounds(source)
+    if (!localBounds) continue
+    const sceneBounds = transformLocalRectToSceneBounds(root, imageNode, localBounds, sourceSize)
+    if (!sceneBounds) continue
+    mergedBounds = mergedBounds ? boundsUnion(mergedBounds, sceneBounds) : sceneBounds
+  }
+
+  return mergedBounds
 }
 
 function expandSceneBounds(
@@ -297,14 +469,20 @@ export async function prepareSitplanScene(
   )
   const panelCropBounds =
     panelId != null ? calculatePanelSymbolCropBounds(fullBounds, symbolExports) : null
-  const bounds = panelCropBounds ?? fullBounds
-  if (panelCropBounds) {
+  const planImageContentBounds = panelCropBounds ? await collectPlanImageContentBounds(clonedGroup) : null
+  const protectedPanelCropBounds =
+    panelCropBounds && planImageContentBounds
+      ? boundsUnion(panelCropBounds, expandSceneBounds(planImageContentBounds, SITPLAN_EXPORT_BOUNDS_PADDING))
+      : panelCropBounds
+  const bounds = protectedPanelCropBounds ?? fullBounds
+  if (protectedPanelCropBounds) {
     exportLog('[Export] Cropped sitplan panel page to symbol frame', {
       floorId,
       panelId,
       fullBounds,
-      bounds: panelCropBounds,
+      bounds: protectedPanelCropBounds,
       symbolCount: symbolExports.length,
+      hasPlanContentProtection: !!planImageContentBounds,
     })
   }
 

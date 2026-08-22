@@ -11,16 +11,14 @@ const LANGUAGES = [
   { code: 'en', label: 'EN' },
 ] as const
 
-export function SettingsPanel({
-  showDebug = import.meta.env.DEV,
-}: {
-  showDebug?: boolean
-}) {
+export function SettingsPanel({ showDebug = import.meta.env.DEV }: { showDebug?: boolean }) {
   const { t } = useTranslation()
   const language = useSettingsStore((state) => state.language)
   const setLanguage = useSettingsStore((state) => state.setLanguage)
   const eendraadHitboxDebug = useSettingsStore((state) => state.eendraadHitboxDebug)
   const setEendraadHitboxDebug = useSettingsStore((state) => state.setEendraadHitboxDebug)
+  const eendraadTrunkLayoutDebug = useSettingsStore((state) => state.eendraadTrunkLayoutDebug)
+  const setEendraadTrunkLayoutDebug = useSettingsStore((state) => state.setEendraadTrunkLayoutDebug)
   const planPlacementDebug = useSettingsStore((state) => state.planPlacementDebug)
   const setPlanPlacementDebug = useSettingsStore((state) => state.setPlanPlacementDebug)
   const panelRelationDebug = useSettingsStore((state) => state.panelRelationDebug)
@@ -106,6 +104,24 @@ export function SettingsPanel({
                 {t(
                   'settings.debug.eendraadHitboxDebugHint',
                   'Visualize the hit zones used for drop detection on the one-line diagram. UI-only, not exported.'
+                )}
+              </p>
+            </div>
+
+            <div className="space-y-1">
+              <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                <input
+                  type="checkbox"
+                  className="rounded"
+                  checked={eendraadTrunkLayoutDebug}
+                  onChange={(e) => setEendraadTrunkLayoutDebug(e.target.checked)}
+                />
+                {t('settings.debug.eendraadTrunkLayoutDebug', 'Show one-wire trunk layout boxes')}
+              </label>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                {t(
+                  'settings.debug.eendraadTrunkLayoutDebugHint',
+                  'Show the painted envelopes used to space circuit trunks and secondary busbars. UI-only, not exported.'
                 )}
               </p>
             </div>

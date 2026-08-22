@@ -21,6 +21,8 @@ interface Settings {
   autoSaveInterval: number // in seconds
   /** Debug: visualize 1draad hit zones used for drop detection */
   eendraadHitboxDebug: boolean
+  /** Debug: visualize packed circuit and secondary-bus subtree envelopes */
+  eendraadTrunkLayoutDebug: boolean
   /** Debug: visualize sitplan placement centers, bounds, label positions and wall orientation helpers */
   planPlacementDebug: boolean
   /** Debug: color-code panel relation routing and module role overlays */
@@ -54,6 +56,7 @@ interface SettingsState extends Settings {
   setAutoSave: (enabled: boolean) => void
   setAutoSaveInterval: (interval: number) => void
   setEendraadHitboxDebug: (enabled: boolean) => void
+  setEendraadTrunkLayoutDebug: (enabled: boolean) => void
   setPlanPlacementDebug: (enabled: boolean) => void
   setPanelRelationDebug: (enabled: boolean) => void
   setLeftDragPansCanvas: (enabled: boolean) => void
@@ -81,6 +84,7 @@ const defaultSettings: Settings = {
   autoSave: true,
   autoSaveInterval: 30,
   eendraadHitboxDebug: false,
+  eendraadTrunkLayoutDebug: false,
   planPlacementDebug: false,
   panelRelationDebug: false,
   leftDragPansCanvas: false,
@@ -107,6 +111,7 @@ export const useSettingsStore = create<SettingsState>()(
       setAutoSave: (enabled) => set({ autoSave: enabled }),
       setAutoSaveInterval: (interval) => set({ autoSaveInterval: interval }),
       setEendraadHitboxDebug: (enabled) => set({ eendraadHitboxDebug: enabled }),
+      setEendraadTrunkLayoutDebug: (enabled) => set({ eendraadTrunkLayoutDebug: enabled }),
       setPlanPlacementDebug: (enabled) => set({ planPlacementDebug: enabled }),
       setPanelRelationDebug: (enabled) => set({ panelRelationDebug: enabled }),
       setLeftDragPansCanvas: (enabled) => set({ leftDragPansCanvas: enabled }),

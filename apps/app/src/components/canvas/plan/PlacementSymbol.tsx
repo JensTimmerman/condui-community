@@ -19,6 +19,7 @@ import {
   HVAC_ENERGY_SOURCE_PATHS,
   HVAC_TYPE_OVERLAY_PATHS,
   RELAY_OVERLAY_PATHS,
+  SMOKE_DETECTOR_OVERLAY_PATHS,
 } from '@/lib/symbols'
 import { loadProcessedSymbol } from '@/lib/symbolImage'
 import {
@@ -332,6 +333,7 @@ function PlacementSymbolInner({
   const [hvacEnergyImage, setHvacEnergyImage] = useState<HTMLImageElement | null>(null)
   const [hvacTypeImage, setHvacTypeImage] = useState<HTMLImageElement | null>(null)
   const [relayOverlayImage, setRelayOverlayImage] = useState<HTMLImageElement | null>(null)
+  const [smokeDetectorOverlayImage, setSmokeDetectorOverlayImage] = useState<HTMLImageElement | null>(null)
   const groupRef = useRef<Konva.Group | null>(null)
   const planAltDuplicatePlacementIdRef = useRef<string | null>(null)
   const planAltDuplicatePointerCleanupRef = useRef<(() => void) | null>(null)
@@ -448,6 +450,12 @@ function PlacementSymbolInner({
   const isHvac = endpoint?.symbol === 'furnace'
   const hvacProps = endpoint?.hvacProps
   const relayProps = endpoint?.relayProps
+  const smokeDetectorProps = endpoint?.smokeDetectorProps
+  const motionDetectorType = endpoint?.motionDetectorProps?.type ?? 'spread'
+  const switchSymbolPathProps =
+    endpoint?.symbol === 'motion_detector'
+      ? { ...switchProps, motionDetectorType }
+      : switchProps
   const isTransformer = endpoint?.symbol === 'transformer'
   const conversionProps = trunkDevice?.conversionProps ?? endpoint?.energyConversionProps
   const transformerLabel = isTransformer ? (conversionProps?.transformerOverlayLabel || '').trim() : ''
@@ -456,14 +464,14 @@ function PlacementSymbolInner({
   const baseSvgPath = isEarthing
     ? symbol?.svgPath
     : isSwitch && endpoint?.symbol
-      ? getSwitchSymbolPaths(endpoint.symbol, switchProps).basePath
+      ? getSwitchSymbolPaths(endpoint.symbol, switchSymbolPathProps).basePath
       : endpoint?.symbol === 'boiler'
         ? (getFixedApplianceSymbolPath('boiler', endpoint?.fixedApplianceProps) ?? symbol?.svgPath)
         : endpoint?.symbol === 'heating'
           ? (getFixedApplianceSymbolPath('heating', endpoint?.fixedApplianceProps) ?? symbol?.svgPath)
           : symbol?.svgPath
   const switchOverlayPath = isSwitch && endpoint?.symbol
-    ? getSwitchSymbolPaths(endpoint.symbol, switchProps).overlayPath
+    ? getSwitchSymbolPaths(endpoint.symbol, switchSymbolPathProps).overlayPath
     : undefined
 
   const hvacEnergyKey = hvacProps?.energySource ?? 'none'
@@ -656,6 +664,24 @@ function PlacementSymbolInner({
     const isDark = theme.mode === 'dark'
     loadProcessedSymbol(path, isDark).then(setRelayOverlayImage).catch(() => setRelayOverlayImage(null))
   }, [endpoint?.symbol, relayProps?.control, theme.mode])
+
+  // Load smoke / fire detector overlay (sitplan)
+  useEffect(() => {
+    if (endpoint?.symbol !== 'smoke_detector') {
+      setSmokeDetectorOverlayImage(null)
+      return
+    }
+    const typeKey = smokeDetectorProps?.type ?? 'smoke'
+    const path = SMOKE_DETECTOR_OVERLAY_PATHS[typeKey as keyof typeof SMOKE_DETECTOR_OVERLAY_PATHS]
+    if (!path) {
+      setSmokeDetectorOverlayImage(null)
+      return
+    }
+    const isDark = theme.mode === 'dark'
+    loadProcessedSymbol(path, isDark)
+      .then(setSmokeDetectorOverlayImage)
+      .catch(() => setSmokeDetectorOverlayImage(null))
+  }, [endpoint?.symbol, smokeDetectorProps?.type, theme.mode])
 
   /** Same selection rules as click; used from onClick and from mouse drag-start when the symbol was not yet selected. */
   const applyPlanSymbolPointerSelection = useCallback(
@@ -1164,6 +1190,16 @@ function PlacementSymbolInner({
           {endpoint?.symbol === 'relay' && relayOverlayImage && (
             <Image
               image={relayOverlayImage}
+              width={outlineWidth}
+              height={outlineHeight}
+              offsetX={outlineWidth / 2}
+              offsetY={outlineHeight / 2}
+              listening={false}
+            />
+          )}
+          {endpoint?.symbol === 'smoke_detector' && smokeDetectorOverlayImage && (
+            <Image
+              image={smokeDetectorOverlayImage}
               width={outlineWidth}
               height={outlineHeight}
               offsetX={outlineWidth / 2}

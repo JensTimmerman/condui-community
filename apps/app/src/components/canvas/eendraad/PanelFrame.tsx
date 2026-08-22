@@ -126,8 +126,11 @@ export function PanelFrame({ panelLayout, children }: PanelFrameProps) {
     HOVER_OUTLINE_DASH_PX_MIN,
     HOVER_OUTLINE_DASH_PX_MAX
   )
-  const infoBlockX = fx + fw - INFO_BLOCK_TOTAL_WIDTH - INFO_BLOCK_FRAME_MARGIN
-  const infoBlockY = fy + fh - INFO_BLOCK_HEIGHT - INFO_BLOCK_FRAME_MARGIN
+  const explicitInfoBlock = panelLayout.layoutBlocks?.find((block) => block.kind === 'info-block')
+  const infoBlockX =
+    explicitInfoBlock?.x ?? fx + fw - INFO_BLOCK_TOTAL_WIDTH - INFO_BLOCK_FRAME_MARGIN
+  const infoBlockY =
+    explicitInfoBlock?.y ?? fy + fh - INFO_BLOCK_HEIGHT - INFO_BLOCK_FRAME_MARGIN
 
   const bottomHitWidth = Math.max(0, infoBlockX - fx)
   const rightHitHeight = Math.max(0, infoBlockY - fy)

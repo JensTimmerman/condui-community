@@ -13,7 +13,7 @@ import { CELL_W, panelGridModuleRefKey } from './panelGridLayout'
 import { findPanelContainingModuleRef, getRelationEdges } from './panelRelationEdges'
 import Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
-import { DOMOTICA_CONTROL_OVERLAY_PATHS, getSwitchSymbolPaths, getSymbolById, getDomainForSymbol } from '@/lib/symbols'
+import { DOMOTICA_CONTROL_OVERLAY_PATHS, getSwitchDisplaySvgPath, getSymbolById, getDomainForSymbol } from '@/lib/symbols'
 import { loadProcessedSymbol } from '@/lib/symbolImage'
 import { getSurgeProtectionSymbolPath } from '@/lib/surgeProtectionSymbol'
 import { logger } from '@/lib/logger'
@@ -622,12 +622,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
     }
     let path: string | null = null
     if (domoticaMainType === 'switch' && domoticaProps.mainSwitchSymbol) {
-      if (domoticaProps.mainSwitchSymbol === 'relay') {
-        const sym = getSymbolById('relay')
-        path = sym?.svgPath ?? null
-      } else {
-        path = getSwitchSymbolPaths(domoticaProps.mainSwitchSymbol, domoticaProps.mainSwitchProps).basePath
-      }
+      path = getSwitchDisplaySvgPath(domoticaProps.mainSwitchSymbol, domoticaProps.mainSwitchProps)
     } else if (domoticaMainType === 'socket' && domoticaProps.mainSocketSymbol) {
       const sym = getSymbolById(domoticaProps.mainSocketSymbol)
       path = sym?.svgPath ?? null

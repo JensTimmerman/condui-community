@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   version="1.1"
+   viewBox="0 0 48 48"
+   width="48"
+   height="48"
+   id="svg1"
+   sodipodi:docname="smoke_detector_overlay_flame.svg"
+   inkscape:version="1.4.2 (f4327f4, 2025-05-13)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="24.3125"
+     inkscape:cx="24.041131"
+     inkscape:cy="24"
+     inkscape:window-width="2560"
+     inkscape:window-height="1369"
+     inkscape:window-x="-8"
+     inkscape:window-y="-8"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg1" />
+  <defs
+     id="defs1">
+    <style
+       id="style1">
+      .cls-1 {
+        fill: none;
+        stroke: #000;
+        stroke-width: 2.5px;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+    </style>
+  </defs>
+  <!-- Angular S / lightning-flame shape -->
+  <path
+     class="cls-1"
+     d="m 25.984028,14.762926 c 0,0 -7.236998,4.074969 -7.253583,6.738714 -0.01658,2.663745 3.923209,3.423262 4.336629,5.784694 0.413418,2.361431 -2.347194,5.909624 -2.347194,5.909624 0,0 7.308098,-2.58185 7.876345,-5.430722 0.568247,-2.848871 -4.319551,-4.638413 -4.542952,-6.935575 -0.223403,-2.297162 1.930755,-6.066735 1.930755,-6.066735 z"
+     id="path1"
+     sodipodi:nodetypes="czzczzc"
+     style="stroke-width:1.64809;stroke-dasharray:none" />
+</svg>

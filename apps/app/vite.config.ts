@@ -35,6 +35,7 @@ const aliases = {
   '@/lib/analytics/googleAnalytics': './src/editions/community/communityAnalytics.ts',
   '@/lib/analytics/validationPanelAnalytics': './src/editions/community/communityAnalytics.ts',
   '@/lib/analytics/editorEventAnalytics': './src/editions/community/communityAnalytics.ts',
+  '@/lib/analytics/supplyAssemblyAnalytics': './src/editions/community/communityAnalytics.ts',
   '@/lib/inspectionAgencyCatalog':
     './src/editions/community/communityInspectionAgencyCatalog.ts',
   '@/lib/synergridCatalog': './src/editions/community/communitySynergridCatalog.ts',

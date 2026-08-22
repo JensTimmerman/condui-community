@@ -103,13 +103,9 @@
     "openOnYoutube": "Watch on YouTube"
   },
   "touchOnboarding": {
-    "title": "Touch controls",
     "close": "Close",
-    "tipPan": "Drag with one finger to pan the canvas.",
-    "tipZoom": "Pinch with two fingers to zoom in or out.",
-    "tipFocus": "Focus on the active selection.",
-    "tipCompactPanels": "Use the compact panels for everything else.",
-    "tipTablet": "On iPad and tablets, the full editor stays available, but touch gestures are prioritized."
+    "pan": "Pan",
+    "zoom": "Zoom"
   },
   "shortcuts": {
     "title": "Shortcuts",
@@ -336,6 +332,8 @@
       "title": "Debug",
       "eendraadHitboxDebug": "Show one-wire diagram hitboxes",
       "eendraadHitboxDebugHint": "Visualize the hit zones used for drop detection on the one-line diagram. UI-only, not exported.",
+      "eendraadTrunkLayoutDebug": "Show one-wire trunk layout boxes",
+      "eendraadTrunkLayoutDebugHint": "Show the painted envelopes used to space circuit trunks and secondary busbars. UI-only, not exported.",
       "planPlacementDebug": "Show plan placement debug (sitplan)",
       "planPlacementDebugHint": "Visualize symbol centers, selection bounds, label positions and wall-based orientation helpers on the sitplan. UI-only, not exported.",
       "panelRelationDebug": "Show panel relation routing debug (panel canvas)",
@@ -550,6 +548,7 @@
   },
   "circuits": {
     "title": "Circuits",
+    "legendTitle": "Circuit legend",
     "add": "Add circuit",
     "code": "Code",
     "kind": "Type",
@@ -677,6 +676,20 @@
       "control_impulse": "Impulse",
       "control_thermostat": "Thermostat",
       "control_dimmer": "Dimmer"
+    },
+    "smokeDetector": {
+      "type": "Detector type",
+      "type_smoke": "Smoke",
+      "type_gas": "Gas",
+      "type_manual": "Manual",
+      "type_beam": "Beam",
+      "type_flame": "Flame",
+      "type_heat": "Heat"
+    },
+    "motionDetector": {
+      "type": "Detector type",
+      "type_spread": "Spread",
+      "type_generic": "Generic"
     },
     "energyMeter": {
       "poles": "Poles"
@@ -935,7 +948,9 @@
     "toolDescription": "Trace wire routes between symbols on the active floor"
   },
   "layout": {
-    "presetLabel": "Layout"
+    "presetLabel": "Layout",
+    "collapseBottomShelf": "Hide panel",
+    "expandBottomShelf": "Show panel"
   },
   "floorPlanTools": {
     "drawMode": "Draw mode",
@@ -1085,6 +1100,7 @@
     "switch_cross": "Cross switch",
     "source_changeover": "Source transfer switch",
     "motion_detector": "Motion detector",
+    "smoke_detector": "Smoke detector",
     "light_point": "Light point",
     "light_spot": "Spot light",
     "light_led": "LED fixture",
@@ -1101,10 +1117,14 @@
     "microwave": "Microwave",
     "motor": "Motor",
     "stove": "Stove",
-    "heating": "Heating",
+    "heating": "Electric heating",
     "ventilation": "Ventilation",
     "door_lock": "Door lock",
     "furnace": "HVAC source",
+    "furnace_heatpump": "Heat pump",
+    "furnace_gas": "Gas heating",
+    "furnace_oil": "Oil boiler",
+    "furnace_pellets": "Pellet heating",
     "buzzer": "Buzzer",
     "bell": "Bell",
     "horn": "Horn",

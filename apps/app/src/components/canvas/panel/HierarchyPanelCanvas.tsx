@@ -94,6 +94,7 @@ import { loadProcessedSymbol } from '@/lib/symbolImage'
 import type { EditorCapabilities } from '@/lib/viewerMode'
 import { polesFromConfig } from '@/constants/poleConfig'
 import { clamp, rectContainsRect } from '@/lib/geometry'
+import { isKeyboardTypingTarget } from '@/lib/ui/keyboardTypingTarget'
 import { upsertPanelGridSlotPosition } from '@/lib/panel/panelSupplySlots'
 import { collectCircuits, getLastAssignableCircuit } from '@/lib/panel/panelTree'
 import {
@@ -889,6 +890,31 @@ export function HierarchyPanelCanvas({
     setRewireTargetSurfaceId(null)
     setRewireTargetValid(true)
   }, [])
+  useEffect(() => {
+    if (!rewireMode) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      if (isKeyboardTypingTarget(event.target)) return
+      event.preventDefault()
+      resetHierarchyRewireState()
+      setRewireMode(false)
+    }
+    const handleContextMenu = (event: MouseEvent) => {
+      const target = event.target
+      const insidePanelCanvas = target instanceof Node && !!containerRef.current?.contains(target)
+      if (!insidePanelCanvas) return
+      event.preventDefault()
+      event.stopPropagation()
+      resetHierarchyRewireState()
+      setRewireMode(false)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('contextmenu', handleContextMenu, true)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('contextmenu', handleContextMenu, true)
+    }
+  }, [resetHierarchyRewireState, rewireMode])
 
   const handleHierarchyRewireDragStart = useCallback(
     (surface: HierarchySurface, ref: PanelGridModuleRef) => {
@@ -3391,8 +3417,7 @@ export function HierarchyPanelCanvas({
         <CanvasFloatingControlRail
           side="left"
           verticalAlign="center"
-          topSafeZonePx={110}
-          bottomSafeZonePx={80}
+          topOverlayInsetPx={68}
           dataCanvasOverlayAnchor="left"
         >
           <>

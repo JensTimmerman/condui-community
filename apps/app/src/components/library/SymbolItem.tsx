@@ -14,6 +14,7 @@ import {
 } from '@/components/canvas/eendraad/canvasSymbols'
 import { useUIStore } from '@/stores/uiStore'
 import { getCenteredTouchDragPreviewStyle } from '@/lib/canvas/touchDragPreview'
+import { setLibrarySymbolDragImage } from '@/lib/ui/libraryDragImage'
 import { clamp } from '@/lib/geometry'
 
 const DRAG_THRESHOLD_PX = 10
@@ -69,6 +70,8 @@ function lockLibraryScroll(container: HTMLDivElement) {
 interface SymbolItemProps {
   symbol: SymbolMetadata
   localizedName: string
+  /** Short description shown on hover; omit to hide the tooltip. */
+  tooltip?: string
   isFavorite: boolean
   onToggleFavorite: () => void
   onDragStart?: (symbol: SymbolMetadata) => void
@@ -78,6 +81,7 @@ interface SymbolItemProps {
 export default function SymbolItem({
   symbol,
   localizedName,
+  tooltip,
   isFavorite,
   onToggleFavorite,
   onDragStart,
@@ -97,13 +101,17 @@ export default function SymbolItem({
   const moveHandlerRef = useRef<((ev: TouchEvent) => void) | null>(null)
   const endHandlerRef = useRef<((ev: TouchEvent) => void) | null>(null)
 
-  const handleMouseEnter = useCallback((e: React.MouseEvent) => {
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    setTooltipPos({ x: rect.right + 8, y: rect.top + rect.height / 2 })
-    tooltipTimerRef.current = setTimeout(() => {
-      setShowTooltip(true)
-    }, 500)
-  }, [])
+  const handleMouseEnter = useCallback(
+    (e: React.MouseEvent) => {
+      if (!tooltip) return
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+      setTooltipPos({ x: rect.right + 8, y: rect.top + rect.height / 2 })
+      tooltipTimerRef.current = setTimeout(() => {
+        setShowTooltip(true)
+      }, 500)
+    },
+    [tooltip],
+  )
 
   const handleMouseLeave = useCallback(() => {
     if (tooltipTimerRef.current) {
@@ -152,22 +160,23 @@ export default function SymbolItem({
   }, [cleanupGesture])
 
   const handleDragStart = (e: React.DragEvent<HTMLDivElement>) => {
-    // Set drag data in multiple formats for compatibility
+    // A drag that starts on the preview <img> can arrive with the browser's
+    // native image payload (blob URL, text/html, etc.). Keep this an app-owned
+    // drag regardless of whether the user grabs the glyph or the label.
+    e.dataTransfer.clearData()
     e.dataTransfer.effectAllowed = 'copy'
     const symbolJson = JSON.stringify(symbol)
     e.dataTransfer.setData('application/json', symbolJson)
     // Also set as text/plain as fallback
     e.dataTransfer.setData('text/plain', symbolJson)
-    
-    // Use only the SVG icon as the drag image, not the full entry
-    if (iconRef.current) {
-      const rect = iconRef.current.getBoundingClientRect()
-      // Use the icon container as the drag image, centered
-      e.dataTransfer.setDragImage(iconRef.current, rect.width / 2, rect.height / 2)
-    } else if (e.currentTarget) {
-      // Fallback to the full element if icon ref not available
-      const rect = e.currentTarget.getBoundingClientRect()
-      e.dataTransfer.setDragImage(e.currentTarget, rect.width / 2, rect.height / 2)
+
+    // Use only the SVG icon as the drag image, not the full entry.
+    // Blob-URL previews must be drawn onto a canvas first — some browsers
+    // (notably Brave on Linux) abort the drag if setDragImage uses blob DOM.
+    const iconEl = iconRef.current
+    if (iconEl) {
+      const dragImageStrategy = setLibrarySymbolDragImage(e.nativeEvent, iconEl)
+      logger.info(`[drop-diag] Drag image strategy for symbol=${symbol.id}: ${dragImageStrategy}`)
     }
 
     logger.info('SymbolItem: Drag started for symbol:', symbol.id)
@@ -178,9 +187,15 @@ export default function SymbolItem({
     }
   }
 
-  const handleDragEnd = useCallback(() => {
-    setLibraryDragSymbol(null)
-  }, [setLibraryDragSymbol])
+  const handleDragEnd = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      logger.info(
+        `[drop-diag] Drag ended for symbol=${symbol.id}, dropEffect=${e.dataTransfer.dropEffect || 'none'}`
+      )
+      setLibraryDragSymbol(null)
+    },
+    [setLibraryDragSymbol, symbol.id]
+  )
 
   const handleFavoriteClick = (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -373,9 +388,9 @@ export default function SymbolItem({
         <Star className="w-4 h-4" fill={isFavorite ? 'currentColor' : 'none'} />
       </button>
 
-      {/* Delayed Tooltip */}
-      {showTooltip && (
-        <Tooltip text={localizedName} x={tooltipPos.x} y={tooltipPos.y} />
+      {/* Delayed descriptive tooltip (not the symbol name) */}
+      {showTooltip && tooltip && (
+        <Tooltip text={tooltip} x={tooltipPos.x} y={tooltipPos.y} />
       )}
     </div>
     
@@ -587,7 +602,12 @@ function ThemedSymbolPreviewImg({ svgPath }: { svgPath: string }) {
 
   return (
     <div className="w-8 h-8 flex items-center justify-center">
-      <img src={src} alt="" className="w-full h-full object-contain" />
+      <img
+        src={src}
+        alt=""
+        draggable={false}
+        className="pointer-events-none h-full w-full object-contain"
+      />
     </div>
   )
 }
@@ -600,12 +620,13 @@ interface TooltipProps {
 
 function Tooltip({ text, x, y }: TooltipProps) {
   // Clamp so the tooltip doesn't overflow the viewport
-  const clampedY = clamp(y, 8, window.innerHeight - 40)
-  const clampedX = Math.min(x, window.innerWidth - 200)
+  const maxWidth = 280
+  const clampedY = clamp(y, 8, window.innerHeight - 48)
+  const clampedX = Math.min(x, window.innerWidth - maxWidth - 12)
 
   return createPortal(
     <div
-      className="fixed z-[9999] pointer-events-none px-3 py-1.5 rounded-md text-xs font-medium shadow-lg whitespace-nowrap
+      className="fixed z-[9999] pointer-events-none max-w-[280px] px-3 py-1.5 rounded-md text-xs font-medium shadow-lg
         bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900
         animate-in fade-in duration-150"
       style={{

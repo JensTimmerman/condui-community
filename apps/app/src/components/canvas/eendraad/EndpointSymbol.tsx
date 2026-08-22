@@ -11,11 +11,13 @@ import {
   getFixedApplianceSymbolPath,
   SOCKET_OVERLAY_PATHS,
   getSwitchSymbolPaths,
+  getSwitchDisplaySvgPath,
   LIGHT_POINT_OVERLAY_PATHS,
   LIGHT_SPOT_OVERLAY_PATHS,
   HVAC_ENERGY_SOURCE_PATHS,
   HVAC_TYPE_OVERLAY_PATHS,
   RELAY_OVERLAY_PATHS,
+  SMOKE_DETECTOR_OVERLAY_PATHS,
   DOMOTICA_CONTROL_OVERLAY_PATHS,
   TRANSFORMER_OVERLAY_PATHS,
 } from '@/lib/symbols'
@@ -138,6 +140,7 @@ export const EndpointSymbol = memo(function EndpointSymbol({
   const [hvacEnergyImage, setHvacEnergyImage] = useState<HTMLImageElement | null>(null)
   const [hvacTypeImage, setHvacTypeImage] = useState<HTMLImageElement | null>(null)
   const [relayOverlayImage, setRelayOverlayImage] = useState<HTMLImageElement | null>(null)
+  const [smokeDetectorOverlayImage, setSmokeDetectorOverlayImage] = useState<HTMLImageElement | null>(null)
   const [domoticaMainImage, setDomoticaMainImage] = useState<HTMLImageElement | null>(null)
   const [domoticaControlImages, setDomoticaControlImages] = useState<
     Partial<Record<DomoticaControlKey, HTMLImageElement | null>>
@@ -150,6 +153,11 @@ export const EndpointSymbol = memo(function EndpointSymbol({
   const isSwitch = endpoint.type === 'switch'
   const socketProps = endpoint.socketProps
   const switchProps = endpoint.switchProps
+  const motionDetectorType = endpoint.motionDetectorProps?.type ?? 'spread'
+  const switchSymbolPathProps =
+    endpoint.symbol === 'motion_detector'
+      ? { ...switchProps, motionDetectorType }
+      : switchProps
   const showSwitchOverlay = isSocket && socketProps?.switchOverlay
   const showSwitchOverlayLock = isSocket && socketProps?.switchOverlayLock
   const showSocketWaterproof = isSocket && socketProps?.waterproof
@@ -168,6 +176,7 @@ export const EndpointSymbol = memo(function EndpointSymbol({
   const isHvac = endpoint.symbol === 'furnace'
   const hvacProps = endpoint.hvacProps
   const relayProps = endpoint.relayProps
+  const smokeDetectorProps = endpoint.smokeDetectorProps
   const domoticaProps = endpoint.domoticaProps
   const isTransformer = endpoint.symbol === 'transformer'
   const conversionProps = endpoint.energyConversionProps
@@ -195,14 +204,14 @@ export const EndpointSymbol = memo(function EndpointSymbol({
   const baseSvgPath = isDomoticaParent
     ? null
     : isSwitch && endpoint.symbol
-      ? getSwitchSymbolPaths(endpoint.symbol, switchProps).basePath
+      ? getSwitchSymbolPaths(endpoint.symbol, switchSymbolPathProps).basePath
       : endpoint.symbol === 'boiler'
         ? getFixedApplianceSymbolPath('boiler', endpoint.fixedApplianceProps) ?? symbol?.svgPath
         : endpoint.symbol === 'heating'
           ? getFixedApplianceSymbolPath('heating', endpoint.fixedApplianceProps) ?? symbol?.svgPath
           : symbol?.svgPath
   const switchOverlayPath = isSwitch && endpoint.symbol
-    ? getSwitchSymbolPaths(endpoint.symbol, switchProps).overlayPath
+    ? getSwitchSymbolPaths(endpoint.symbol, switchSymbolPathProps).overlayPath
     : undefined
 
   const hvacEnergyKey = hvacProps?.energySource ?? 'none'
@@ -392,6 +401,24 @@ export const EndpointSymbol = memo(function EndpointSymbol({
     loadProcessedSymbol(path, isDark).then(setRelayOverlayImage).catch(() => setRelayOverlayImage(null))
   }, [endpoint.symbol, relayProps?.control, theme?.mode])
 
+  // Load smoke / fire detector overlay (based on smokeDetectorProps.type)
+  useEffect(() => {
+    if (endpoint.symbol !== 'smoke_detector') {
+      setSmokeDetectorOverlayImage(null)
+      return
+    }
+    const typeKey = smokeDetectorProps?.type ?? 'smoke'
+    const path = SMOKE_DETECTOR_OVERLAY_PATHS[typeKey as keyof typeof SMOKE_DETECTOR_OVERLAY_PATHS]
+    if (!path) {
+      setSmokeDetectorOverlayImage(null)
+      return
+    }
+    const isDark = theme?.mode === 'dark'
+    loadProcessedSymbol(path, isDark)
+      .then(setSmokeDetectorOverlayImage)
+      .catch(() => setSmokeDetectorOverlayImage(null))
+  }, [endpoint.symbol, smokeDetectorProps?.type, theme?.mode])
+
   // Load domotica control overlay icons (shared SVGs per key)
   useEffect(() => {
     if (!isDomoticaParent) {
@@ -425,12 +452,7 @@ export const EndpointSymbol = memo(function EndpointSymbol({
     }
     let path: string | null = null
     if (domoticaMainType === 'switch' && domoticaMainSwitchSymbol) {
-      if (domoticaMainSwitchSymbol === 'relay') {
-        const sym = getSymbolById('relay')
-        path = sym?.svgPath ?? null
-      } else {
-        path = getSwitchSymbolPaths(domoticaMainSwitchSymbol, domoticaMainSwitchProps).basePath
-      }
+      path = getSwitchDisplaySvgPath(domoticaMainSwitchSymbol, domoticaMainSwitchProps)
     } else if (domoticaMainType === 'socket' && domoticaMainSocketSymbol) {
       const sym = getSymbolById(domoticaMainSocketSymbol)
       path = sym?.svgPath ?? null
@@ -483,6 +505,16 @@ export const EndpointSymbol = memo(function EndpointSymbol({
   // Selected by endpoint id (1‑wire, drag rect, …) or by sitplan placement id (multiplied symbols)
   const isHoveredAny = isHovered || isHoveredFromBreadcrumb
   const multiplier = endpointSupportsMultiplier(endpoint) ? getEndpointMultiplier(endpoint) : 1
+  const multiSocketLabelOffsetX =
+    (mirrorHorizontally ? -1 : 1) * (socketExtraWidth / 2)
+  const bottomLabelMinimumLeftXForGroup =
+    bottomLabelMinimumLeftX == null
+      ? undefined
+      : bottomLabelMinimumLeftX - multiSocketLabelOffsetX
+  const bottomLabelMaximumRightXForGroup =
+    bottomLabelMaximumRightX == null
+      ? undefined
+      : bottomLabelMaximumRightX - multiSocketLabelOffsetX
 
   const standardHitRect = useMemo(() => {
     const base = {
@@ -736,6 +768,18 @@ export const EndpointSymbol = memo(function EndpointSymbol({
               listening={false}
             />
           )}
+          {/* Smoke / fire detector overlay */}
+          {endpoint.symbol === 'smoke_detector' && smokeDetectorOverlayImage && (
+            <Image
+              image={smokeDetectorOverlayImage}
+              width={SYMBOL_SIZE}
+              height={SYMBOL_SIZE}
+              offsetX={SYMBOL_SIZE / 2}
+              offsetY={SYMBOL_SIZE / 2}
+              y={0}
+              listening={false}
+            />
+          )}
           {overlaySwitchImage && (
             <Image
               image={overlaySwitchImage}
@@ -891,29 +935,6 @@ export const EndpointSymbol = memo(function EndpointSymbol({
             />
           )}
 
-          {/* Conversion + endpoint notes (branch-tip solar/battery/EV: right; others: bottom) */}
-          {symbolSideLabelItems.length > 0 && (
-            <SymbolTextLabels
-              items={symbolSideLabelItems.map((part) => ({ key: part.key, text: part.text }))}
-              config={{ position: endpointLabelPosition, layout: 'stack' }}
-              sideLabelBlockAlign={
-                endpointLabelPosition === 'right'
-                  ? 'center'
-                  : 'auto'
-              }
-              textColor={getSecondaryTextColor(theme?.mode === 'dark')}
-              fontFamily={fontFamily}
-              fontSize={8}
-              symbolSize={SYMBOL_SIZE}
-              bottomMinimumLeftX={
-                endpointLabelPosition === 'bottom' ? bottomLabelMinimumLeftX : undefined
-              }
-              bottomMaximumRightX={
-                endpointLabelPosition === 'bottom' ? bottomLabelMaximumRightX : undefined
-              }
-            />
-          )}
-
           {/* HVAC overlays: type (center), energy + function on bottom */}
           {isHvac && (
             <>
@@ -989,6 +1010,30 @@ export const EndpointSymbol = memo(function EndpointSymbol({
           )}
         </Group>
       ))}
+      {/* Conversion + endpoint notes: one label block for the whole multi-socket group. */}
+      {symbolSideLabelItems.length > 0 && (
+        <Group x={multiSocketLabelOffsetX}>
+          <SymbolTextLabels
+            items={symbolSideLabelItems.map((part) => ({ key: part.key, text: part.text }))}
+            config={{ position: endpointLabelPosition, layout: 'stack' }}
+            sideLabelBlockAlign={
+              endpointLabelPosition === 'right'
+                ? 'center'
+                : 'auto'
+            }
+            textColor={getSecondaryTextColor(theme?.mode === 'dark')}
+            fontFamily={fontFamily}
+            fontSize={8}
+            symbolSize={SYMBOL_SIZE}
+            bottomMinimumLeftX={
+              endpointLabelPosition === 'bottom' ? bottomLabelMinimumLeftXForGroup : undefined
+            }
+            bottomMaximumRightX={
+              endpointLabelPosition === 'bottom' ? bottomLabelMaximumRightXForGroup : undefined
+            }
+          />
+        </Group>
+      )}
       {showSocketWaterproof && (
         <Text
           text="h"

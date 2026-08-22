@@ -462,7 +462,7 @@ export const beAreiBook1_2025: RulePack = {
     {
       id: 'be.areibook1.2025.breaker-vs-cross-section',
       title: 'Breaker rating vs cable size',
-      severity: 'warning',
+      severity: 'error',
       appliesTo: ['circuit'],
       checks: [
         {
@@ -507,7 +507,7 @@ export const beAreiBook1_2025: RulePack = {
     {
       id: 'be.areibook1.2025.minimum-cross-section',
       title: 'Minimum cable cross-section per circuit type',
-      severity: 'warning',
+      severity: 'error',
       appliesTo: ['circuit'],
       checks: [
         {

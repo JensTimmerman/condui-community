@@ -44,6 +44,7 @@ import {
   isWireLengthLabelVisibleForSegment,
 } from '@/lib/wireLabelVisibility'
 import { getWireLengthLabel } from '@/lib/wires/wireFingerprint'
+import { getVerticalRouteIndicatorEndY } from '@/lib/wires/wireRouteIndicatorGeometry'
 import { getDomainForSymbol, getSymbolById } from '@/lib/symbols'
 import { DomainMarker } from '@/components/canvas/eendraad/DomainMarker'
 import { CatalogSymbolImage } from '@/components/canvas/eendraad/CatalogSymbolImage'
@@ -61,13 +62,14 @@ import type { WireTranslateFn } from '@/lib/wires/wireFingerprint'
 import { shouldShowDomainChangeMarker } from '@/lib/wires/domainChangeMarker'
 import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
 import { getPhaseAssignmentLabel, isPhaseAssignmentLabelVisible } from '@/lib/wires/phaseAssignment'
-import { getLeftBiasedBusFeedStubX } from '@/lib/panel/panelBusFeedPreview'
+import { getBusFeedMarkerPosition } from '@/lib/layout/busFeedMarkerGeometry'
 import { orderWireSegmentsForRendering } from './wireRenderOrder'
 import { wireSegmentSelectsBusSection } from '@/lib/wires/wireSelectionTarget'
 import {
   getSupplyWireDecorationOwnerIds,
   hasStableSupplyWireDecorationIdentity,
 } from '@/lib/wires/supplyWireDecoration'
+import { getCircuitWireJunctions } from './wireJunctions'
 
 type WireSegmentPointerEvent = KonvaEventObject<MouseEvent | TouchEvent>
 
@@ -295,29 +297,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
       ? 'square'
       : 'butt'
   const lineColor = colors.wireColor
-  const busFeedStubX = getLeftBiasedBusFeedStubX(wireSegment.startPoint.x, wireSegment.endPoint.x)
-  const busFeedMarkerDistance = Math.max(0, wireSegment.endPoint.x - wireSegment.startPoint.x)
-  const busFeedMarkerPosition = (() => {
-    switch (wireSegment.busFeedMarkerSide) {
-      case 'left':
-        return { x: wireSegment.startPoint.x - 24, y: wireSegment.startPoint.y - 10 }
-      case 'right':
-        return { x: wireSegment.endPoint.x + 4, y: wireSegment.startPoint.y - 10 }
-      case 'below-left':
-        return { x: busFeedStubX - busFeedMarkerDistance, y: wireSegment.startPoint.y + 20 }
-      case 'below-right':
-        return { x: busFeedStubX + busFeedMarkerDistance, y: wireSegment.startPoint.y + 20 }
-      case 'stub-center':
-        return { x: wireSegment.startPoint.x, y: wireSegment.endPoint.y + 11 }
-      case 'below':
-        return {
-          x: (wireSegment.startPoint.x + wireSegment.endPoint.x) / 2 - 10,
-          y: wireSegment.startPoint.y + 10,
-        }
-      default:
-        return { x: wireSegment.endPoint.x, y: wireSegment.endPoint.y + 11 }
-    }
-  })()
+  const busFeedMarkerPosition = getBusFeedMarkerPosition(wireSegment)
   const busFeedMarkerLabel =
     wireSegment.busFeedKind === 'backup'
       ? t('feedOrganization.backupMarker', 'Backup')
@@ -554,7 +534,9 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
             ? 'inWall'
             : 'onWall'
           : undefined
-  const centeredIndicatorY = (wireSegment.endPoint.y - wireSegment.startPoint.y) / 2 + 10
+  const routeIndicatorEndY = getVerticalRouteIndicatorEndY(wireSegment)
+  const routeIndicatorDeltaY = routeIndicatorEndY - wireSegment.startPoint.y
+  const centeredIndicatorY = routeIndicatorDeltaY / 2 + 10
   const fromTrunkDevice = wireSegment.fromElementId
     ? getTrunkDeviceById(wireSegment.fromElementId)
     : undefined
@@ -937,17 +919,19 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
                 const wallScale = 0.75
                 const wallSymbolCenterX = 3
                 const wallSymbolCenterY = 0
-                const segmentLength = Math.abs(wireSegment.endPoint.y - wireSegment.startPoint.y)
-                // Position both wall symbols along the actual segment length:
-                // keep comfortable margins on long segments and shrink margins/gap on shorter ones.
+                const segmentLength = Math.abs(routeIndicatorDeltaY)
+                // Keep both wall symbols within the decorated physical run. Tall trunks can
+                // continue beyond the first endpoint branch, but that continuation does not
+                // belong to the cable/route section immediately above the protection.
                 const idealMargin = 10
                 const minMargin = 3
                 const marginFromEnds = Math.max(
                   minMargin,
                   Math.min(idealMargin, segmentLength / 2 - minMargin)
                 )
-                const bottomSymbolY = 10 - marginFromEnds
-                const topSymbolY = 10 - (segmentLength - marginFromEnds)
+                const direction = routeIndicatorDeltaY < 0 ? -1 : 1
+                const firstSymbolY = 10 + direction * marginFromEnds
+                const secondSymbolY = 10 + routeIndicatorDeltaY - direction * marginFromEnds
                 const wallLines = WALL_ROUTE_LINES.map((points, i) => (
                   <Line
                     key={i}
@@ -962,7 +946,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
                   <>
                     <Group
                       x={-8.5 + wallSymbolCenterX}
-                      y={topSymbolY}
+                      y={secondSymbolY}
                       scaleX={wallScale}
                       scaleY={wallScale}
                       offsetX={wallSymbolCenterX}
@@ -973,7 +957,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
                     </Group>
                     <Group
                       x={-8.5 + wallSymbolCenterX}
-                      y={bottomSymbolY}
+                      y={firstSymbolY}
                       scaleX={wallScale}
                       scaleY={wallScale}
                       offsetX={wallSymbolCenterX}
@@ -1030,9 +1014,21 @@ export const WireSegments = memo(function WireSegments({
     () => getSupplyWireDecorationOwnerIds(panelWires),
     [panelWires]
   )
+  const circuitWireJunctions = useMemo(() => getCircuitWireJunctions(panelWires), [panelWires])
+  const colors = useThemeColors()
 
   return (
     <>
+      {circuitWireJunctions.map(({ point, radius }) => (
+        <Circle
+          key={`wire-junction-${point.x}-${point.y}`}
+          x={point.x}
+          y={point.y}
+          radius={radius}
+          fill={colors.wireColor}
+          listening={false}
+        />
+      ))}
       {panelWires.map((wireSegment) => (
         <WireSegmentComponent
           key={wireSegment.id}

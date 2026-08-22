@@ -22,6 +22,7 @@ import {
   type ProtectionLabelKey,
 } from '@/lib/protectionLabels'
 import { isProtectionOnSupplyPanel } from '@/components/canvas/panel/panelGridLayout'
+import { AutomaticNamingLockedField } from '../shared/AutomaticNamingLockedField'
 import {
   ProtectionDeviceElectricalFields,
   getProtectionTypeDropdownOptions,
@@ -220,20 +221,22 @@ export function ProtectionProperties({
             </button>
           ) : null}
         </div>
-        <DebouncedTextInput
-          type="text"
-          value={protection.label}
-          onCommit={(v) => onUpdate(protectionId, { label: v })}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault()
-              e.currentTarget.blur()
-            }
-          }}
-          className={selectClass}
-          placeholder={t('protections.label', 'Label')}
-          disabled={lockMainBusLetterFields}
-        />
+        <AutomaticNamingLockedField locked={lockMainBusLetterFields}>
+          <DebouncedTextInput
+            type="text"
+            value={protection.label}
+            onCommit={(v) => onUpdate(protectionId, { label: v })}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                e.currentTarget.blur()
+              }
+            }}
+            className={selectClass}
+            placeholder={t('protections.label', 'Label')}
+            disabled={lockMainBusLetterFields}
+          />
+        </AutomaticNamingLockedField>
       </div>
       <ProtectionDeviceElectricalFields
         t={t}

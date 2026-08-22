@@ -7,8 +7,10 @@ import type {
   DomoticaOutputWireProps,
   Endpoint,
   LightPointDeviceProps,
+  MotionDetectorType,
   PolesConfig,
   RelayControlMode,
+  SmokeDetectorType,
   SymbolKey,
 } from '@/types/schema'
 import { DebouncedTextarea } from '@/components/forms'
@@ -17,9 +19,12 @@ import {
   DOMOTICA_CONTROL_OVERLAY_PATHS,
   getFixedApplianceSymbolPath,
   getSwitchSymbolPaths,
+  getSwitchDisplaySvgPath,
   LIGHT_POINT_OVERLAY_PATHS,
   LIGHT_SPOT_OVERLAY_PATHS,
+  MOTION_DETECTOR_SVG_PATHS,
   RELAY_OVERLAY_PATHS,
+  SMOKE_DETECTOR_OVERLAY_PATHS,
   getSymbolsByCategory,
   symbols,
 } from '@/lib/symbols'
@@ -132,6 +137,130 @@ export function RelayEndpointFields({
         />
       </div>
     </>
+  )
+}
+
+// Smoke / fire detector overlay type (symbol === 'smoke_detector')
+export function SmokeDetectorEndpointFields({
+  endpointId,
+  endpoint,
+  onUpdate,
+  t,
+}: {
+  endpointId: string
+  endpoint: Endpoint
+  onUpdate: (id: string, updates: Partial<Endpoint>) => void
+  t: (key: string, defaultValue?: string) => string
+}) {
+  const detector = endpoint.smokeDetectorProps || {}
+  const typeOptions: SmokeDetectorType[] = ['smoke', 'gas', 'manual', 'beam', 'flame', 'heat']
+
+  return (
+    <div>
+      <label className={labelClass}>{t('endpoints.smokeDetector.type', 'Detector type')}</label>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {typeOptions.map((type) => {
+          const isActive = (detector.type ?? 'smoke') === type
+          const overlayPath = SMOKE_DETECTOR_OVERLAY_PATHS[type]
+          return (
+            <button
+              key={type}
+              type="button"
+              onClick={() => {
+                if (isActive) return
+                onUpdate(endpointId, {
+                  smokeDetectorProps: { ...detector, type },
+                })
+              }}
+              className={`flex flex-col items-center justify-center gap-1 px-2 py-2 rounded-md border-2 text-xs font-medium transition-colors ${
+                isActive
+                  ? 'border-sky-500 bg-sky-50 dark:bg-sky-900/20 text-sky-700 dark:text-sky-300'
+                  : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 hover:border-sky-300'
+              }`}
+              aria-pressed={isActive}
+            >
+              {overlayPath ? (
+                <div className="w-12 h-12 overflow-hidden flex items-center justify-center relative">
+                  <img
+                    src="/symbols/switches/smoke_detector_base.svg"
+                    alt=""
+                    aria-hidden="true"
+                    className="absolute inset-0 w-12 h-12 opacity-90 dark:invert"
+                  />
+                  <img
+                    src={overlayPath}
+                    alt=""
+                    aria-hidden="true"
+                    className="relative w-12 h-12 opacity-90 dark:invert"
+                  />
+                </div>
+              ) : null}
+              <span className="text-[11px] leading-tight text-center">
+                {t(`endpoints.smokeDetector.type_${type}`)}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// Motion detector artwork type (symbol === 'motion_detector')
+export function MotionDetectorEndpointFields({
+  endpointId,
+  endpoint,
+  onUpdate,
+  t,
+}: {
+  endpointId: string
+  endpoint: Endpoint
+  onUpdate: (id: string, updates: Partial<Endpoint>) => void
+  t: (key: string, defaultValue?: string) => string
+}) {
+  const detector = endpoint.motionDetectorProps || {}
+  const typeOptions: MotionDetectorType[] = ['spread', 'generic']
+
+  return (
+    <div>
+      <label className={labelClass}>{t('endpoints.motionDetector.type', 'Detector type')}</label>
+      <div className="grid grid-cols-2 gap-2">
+        {typeOptions.map((type) => {
+          const isActive = (detector.type ?? 'spread') === type
+          const iconPath = MOTION_DETECTOR_SVG_PATHS[type]
+          return (
+            <button
+              key={type}
+              type="button"
+              onClick={() => {
+                if (isActive) return
+                onUpdate(endpointId, {
+                  motionDetectorProps: { ...detector, type },
+                })
+              }}
+              className={`flex flex-col items-center justify-center gap-1 px-2 py-2 rounded-md border-2 text-xs font-medium transition-colors ${
+                isActive
+                  ? 'border-sky-500 bg-sky-50 dark:bg-sky-900/20 text-sky-700 dark:text-sky-300'
+                  : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 hover:border-sky-300'
+              }`}
+              aria-pressed={isActive}
+            >
+              <div className="w-12 h-12 overflow-hidden flex items-center justify-center">
+                <img
+                  src={iconPath}
+                  alt=""
+                  aria-hidden="true"
+                  className="w-12 h-12 opacity-90 dark:invert"
+                />
+              </div>
+              <span className="text-[11px] leading-tight text-center">
+                {t(`endpoints.motionDetector.type_${type}`)}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
   )
 }
 
@@ -550,7 +679,10 @@ export const SWITCH_TYPE_SYMBOLS: SymbolKey[] = symbols
     (s) =>
       s.category === 'switches' &&
       s.id !== 'relay' &&
-      (s.id === 'switch' || s.id.startsWith('switch_') || s.id === 'motion_detector')
+      (s.id === 'switch' ||
+        s.id.startsWith('switch_') ||
+        s.id === 'motion_detector' ||
+        s.id === 'smoke_detector')
   )
   .map((s) => s.id as SymbolKey)
 
@@ -1060,7 +1192,7 @@ export function SwitchTypeDropdown({ value, onChangeSymbol, options }: SwitchTyp
   const dropdownOptions: SymbolDropdownOption[] = symbolKeys.map((sym) => ({
     value: sym,
     label: t(`symbols.${sym}`, sym),
-    iconSrc: getSwitchSymbolPaths(sym, null).basePath,
+    iconSrc: getSwitchDisplaySvgPath(sym, null),
   }))
 
   return (

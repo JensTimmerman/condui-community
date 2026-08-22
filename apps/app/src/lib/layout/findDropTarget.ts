@@ -108,6 +108,8 @@ export interface DropTarget {
   secondaryBusItemCount?: number
   /** Existing sole child that should be reparented below a new protection inserted on its feeder. */
   insertBeforeNestedCircuitId?: string
+  /** Place a new nested protection after the circuit's existing branches/devices instead of wrapping them. */
+  insertAfterCircuitContent?: boolean
   /** Direct wire domain at this drop target when known (e.g. from wire segment under cursor). */
   wireDomain?: string
   /** Domotica output details when dropping on a domotica output wire hit zone */
@@ -1322,6 +1324,14 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
           .map((child) => child.circuitIdForWires!)
         if (directNestedCircuitIds.length === 1) {
           target.insertBeforeNestedCircuitId = directNestedCircuitIds[0]
+        } else if (
+          directNestedCircuitIds.length === 0 &&
+          node.id?.startsWith('circuit-nest-')
+        ) {
+          // The nest zone is the continuation above the circuit's existing endpoint
+          // branches/trunk devices. A protection dropped here belongs after that
+          // content; drops on the lower trunk wire keep the wrapping behaviour.
+          target.insertAfterCircuitContent = true
         }
       }
 

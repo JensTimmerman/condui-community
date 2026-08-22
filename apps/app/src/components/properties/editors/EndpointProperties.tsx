@@ -60,6 +60,8 @@ import {
   LightTypeDropdown,
   FluorescentPreviewIcon,
   RelayEndpointFields,
+  SmokeDetectorEndpointFields,
+  MotionDetectorEndpointFields,
   SocketTypeGrid,
   SwitchPolesGrid,
   SwitchTypeDropdown,
@@ -401,6 +403,22 @@ export function EndpointProperties({
 
       {symbol === 'relay' && (
         <RelayEndpointFields
+          endpointId={endpointId}
+          endpoint={endpoint}
+          onUpdate={onUpdate}
+          t={panelStringT(t)}
+        />
+      )}
+      {symbol === 'smoke_detector' && (
+        <SmokeDetectorEndpointFields
+          endpointId={endpointId}
+          endpoint={endpoint}
+          onUpdate={onUpdate}
+          t={panelStringT(t)}
+        />
+      )}
+      {symbol === 'motion_detector' && (
+        <MotionDetectorEndpointFields
           endpointId={endpointId}
           endpoint={endpoint}
           onUpdate={onUpdate}

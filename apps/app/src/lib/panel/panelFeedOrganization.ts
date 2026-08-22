@@ -1,3 +1,4 @@
+import { trackSupplyAssemblyMutation } from '@/lib/analytics/supplyAssemblyAnalytics'
 import { ensureInstallationFeedTopology } from '@/lib/feedTopology'
 import { getMainBusOrder } from '@/lib/eendraad/mainBusOrder'
 import {
@@ -202,6 +203,9 @@ function ensureMinimalDirectInverterAssembly(
 
   const assembly = buildDirectConverterSupplyAssembly(project, panelId, inverter)
   getMutableSupplyAssembliesForProject(project).push(assembly)
+  trackSupplyAssemblyMutation('create', assembly, {
+    source: 'panel_feed_organization',
+  })
   return assembly
 }
 

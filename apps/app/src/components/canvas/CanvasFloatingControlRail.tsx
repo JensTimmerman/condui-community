@@ -2,12 +2,9 @@ import {
   Children,
   Fragment,
   isValidElement,
-  useEffect,
-  useState,
   type CSSProperties,
   type ReactNode,
 } from 'react'
-import { CANVAS_OVERLAY_COMPACT_THRESHOLD } from '@/constants/canvasConstants'
 import { useCanvasOverlayScale } from '@/contexts/CanvasOverlayScaleContext'
 import CanvasScaledOverlay from './CanvasScaledOverlay'
 
@@ -20,8 +17,10 @@ interface CanvasFloatingControlRailProps {
   verticalAlign?: 'center' | 'top'
   offsetPx?: number
   topOffsetPx?: number
-  topSafeZonePx?: number
-  bottomSafeZonePx?: number
+  /** Keep the first control clear of a higher-layer overlay without shortening the rail. */
+  topOverlayInsetPx?: number
+  /** Let an open side menu escape the rail's scrollport. */
+  menuOpen?: boolean
   className?: string
   overlayClassName?: string
   zIndex?: number
@@ -44,58 +43,39 @@ export default function CanvasFloatingControlRail({
   verticalAlign = 'center',
   offsetPx = 16,
   topOffsetPx = 12,
-  topSafeZonePx = 0,
-  bottomSafeZonePx = 0,
+  topOverlayInsetPx = 0,
+  menuOpen = false,
   className = '',
   overlayClassName = '',
   zIndex = 10,
   dataCanvasOverlayAnchor,
   dataCanvasOverlayPosition,
 }: CanvasFloatingControlRailProps) {
-  const { height, width, scale, isCompact, minDimension } = useCanvasOverlayScale()
+  const { height, scale } = useCanvasOverlayScale()
   const items = flattenRailChildren(children).filter(Boolean)
-  const [wrappedInCompactMode, setWrappedInCompactMode] = useState(false)
   const availableHeight =
-    verticalAlign === 'center'
-      ? Math.max(0, height - topSafeZonePx - bottomSafeZonePx)
-      : Math.max(0, height - topOffsetPx - bottomSafeZonePx)
+    verticalAlign === 'center' ? height : Math.max(0, height - topOffsetPx)
   const scaledButtonSize = FLOATING_CONTROL_BUTTON_SIZE_PX * scale
   const scaledGap = FLOATING_CONTROL_GAP_PX * scale
   const singleColumnHeight =
     items.length * scaledButtonSize + Math.max(0, items.length - 1) * scaledGap
-  const twoColumnMinWidth = scaledButtonSize * 1.35
-  const wrapStageThreshold = CANVAS_OVERLAY_COMPACT_THRESHOLD * 0.78
-  const compactWrapHeight = availableHeight * 0.82
-  const shouldEnterTwoColumns =
-    isCompact &&
-    minDimension <= wrapStageThreshold &&
-    items.length > 1 &&
-    width >= twoColumnMinWidth &&
-    availableHeight > 0 &&
-    singleColumnHeight > compactWrapHeight
-
-  useEffect(() => {
-    if (!isCompact) {
-      setWrappedInCompactMode(false)
-      return
-    }
-    if (shouldEnterTwoColumns) {
-      setWrappedInCompactMode(true)
-      return
-    }
-    setWrappedInCompactMode(false)
-  }, [isCompact, shouldEnterTwoColumns])
-
-  const shouldUseTwoColumns = shouldEnterTwoColumns || wrappedInCompactMode
+  const railOverflows =
+    availableHeight > 0 && singleColumnHeight + topOverlayInsetPx > availableHeight
+  const unscaledMaxHeight = availableHeight > 0 ? availableHeight / Math.max(scale, 0.01) : 0
+  const unscaledOverflowTopInset = railOverflows
+    ? topOverlayInsetPx / Math.max(scale, 0.01)
+    : 0
+  const centeredTopPx = Math.max(0, (availableHeight - singleColumnHeight) / 2)
+  const pinBelowTopOverlay =
+    verticalAlign === 'center' &&
+    !railOverflows &&
+    topOverlayInsetPx > 0 &&
+    centeredTopPx < topOverlayInsetPx
 
   const sideStyle: CSSProperties = side === 'left' ? { left: offsetPx } : { right: offsetPx }
   const outerStyle: CSSProperties =
     verticalAlign === 'center'
-      ? {
-          ...sideStyle,
-          paddingTop: topSafeZonePx,
-          paddingBottom: bottomSafeZonePx,
-        }
+      ? sideStyle
       : {
           ...sideStyle,
           top: topOffsetPx,
@@ -106,14 +86,16 @@ export default function CanvasFloatingControlRail({
       data-canvas-overlay-anchor={dataCanvasOverlayAnchor}
       data-canvas-overlay-position={dataCanvasOverlayPosition}
       className={`absolute pointer-events-none ${
-        verticalAlign === 'center' ? 'inset-y-0 flex items-center' : ''
+        verticalAlign === 'center'
+          ? `inset-y-0 flex ${pinBelowTopOverlay ? 'items-start' : 'items-center'}`
+          : ''
       } ${className}`.trim()}
       style={{ ...outerStyle, zIndex }}
     >
       <CanvasScaledOverlay
-        className={`grid gap-2 pointer-events-auto transition-all duration-200 ease-out ${overlayClassName}`.trim()}
+        className={`grid touch-pan-y grid-cols-1 gap-2 ${menuOpen ? 'overflow-visible' : 'overflow-y-auto overscroll-y-contain'} pointer-events-auto [-webkit-overflow-scrolling:touch] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${overlayClassName}`.trim()}
         transformOrigin={
-          verticalAlign === 'center'
+          verticalAlign === 'center' && !pinBelowTopOverlay
             ? side === 'left'
               ? 'left center'
               : 'right center'
@@ -122,9 +104,11 @@ export default function CanvasFloatingControlRail({
               : 'top right'
         }
         style={{
-          gridTemplateColumns: `repeat(${shouldUseTwoColumns ? 2 : 1}, minmax(0, max-content))`,
-          maxHeight: availableHeight > 0 ? `${availableHeight}px` : undefined,
-          alignContent: verticalAlign === 'center' ? 'center' : 'start',
+          boxSizing: 'border-box',
+          marginTop: pinBelowTopOverlay ? topOverlayInsetPx : undefined,
+          maxHeight: unscaledMaxHeight > 0 ? `${unscaledMaxHeight}px` : undefined,
+          paddingTop: unscaledOverflowTopInset || undefined,
+          alignContent: verticalAlign === 'center' && !railOverflows ? 'center' : 'start',
           justifyItems: side === 'left' ? 'start' : 'end',
         }}
       >

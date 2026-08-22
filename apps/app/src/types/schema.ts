@@ -373,6 +373,7 @@ export type SymbolKey =
   | 'switch_impulse'
   | 'switch_cross'
   | 'motion_detector'
+  | 'smoke_detector'
   | 'relay'
   | 'light_point'
   | 'light_spot'
@@ -428,11 +429,29 @@ export type SymbolKey =
 
 export type RelayControlMode = 'standard' | 'timer' | 'clock' | 'impulse' | 'thermostat' | 'dimmer'
 
+/** Detector kind when symbol is 'smoke_detector' (default smoke) */
+export type SmokeDetectorType = 'smoke' | 'gas' | 'manual' | 'beam' | 'flame' | 'heat'
+
+/** Motion detector artwork when symbol is 'motion_detector' (default spread) */
+export type MotionDetectorType = 'spread' | 'generic'
+
 /** Device-specific props when symbol is 'relay' */
 export interface RelayDeviceProps {
   maxCurrentRatingA?: number
   poles?: number
   control?: RelayControlMode
+}
+
+/** Device-specific props when symbol is 'smoke_detector' */
+export interface SmokeDetectorDeviceProps {
+  /** Overlay kind; defaults to smoke when unset */
+  type?: SmokeDetectorType
+}
+
+/** Device-specific props when symbol is 'motion_detector' */
+export interface MotionDetectorDeviceProps {
+  /** Artwork kind; defaults to spread when unset */
+  type?: MotionDetectorType
 }
 
 /** Device-specific props when symbol is 'energy_meter' */
@@ -813,6 +832,10 @@ export interface Endpoint {
   placements: Placement[]
   /** When symbol === 'relay' */
   relayProps?: RelayDeviceProps
+  /** When symbol === 'smoke_detector' */
+  smokeDetectorProps?: SmokeDetectorDeviceProps
+  /** When symbol === 'motion_detector' */
+  motionDetectorProps?: MotionDetectorDeviceProps
   /** When symbol === 'energy_meter' */
   energyMeterProps?: EnergyMeterDeviceProps
   /** When symbol === 'domotica' */
@@ -1318,7 +1341,7 @@ export interface WireSegment {
   /** Route: wall, ground, or air. Mutually exclusive. */
   wireRoute?: 'wall' | 'ground' | 'air'
   hideWireLabel?: boolean // Flag: hide wire label on vertical wire
-  /** Optional geometry used only for positioning the wire label when the drawable wire spans past the first branch. */
+  /** Optional end of the first physical run, used for labels and route decorations when the drawable trunk continues higher. */
   wireLabelEndPoint?: Point2
   /** When true, show cable fire class below the wire label on the one-wire diagram. */
   showFireClassLabel?: boolean

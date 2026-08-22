@@ -34,6 +34,7 @@ export function getEndpointTypeFromSymbol(symbol: SymbolMetadata): EndpointType 
     id === 'switch_impulse' ||
     id === 'switch_cross' ||
     id === 'motion_detector' ||
+    id === 'smoke_detector' ||
     id === 'relay' ||
     id === 'switch_single' ||
     id === 'switch_double'
@@ -139,6 +140,7 @@ export function getSymbolKeyFromSymbol(symbol: SymbolMetadata): SymbolKey | unde
     id === 'switch_impulse' ||
     id === 'switch_cross' ||
     id === 'motion_detector' ||
+    id === 'smoke_detector' ||
     id === 'relay'
   ) {
     return id as SymbolKey
@@ -225,6 +227,7 @@ export function isSwitchSymbol(symbol: SymbolMetadata): boolean {
     id === 'switch_impulse' ||
     id === 'switch_cross' ||
     id === 'motion_detector' ||
+    id === 'smoke_detector' ||
     id === 'relay' ||
     id === 'switch_single' ||
     id === 'switch_double'
@@ -266,6 +269,7 @@ export function isInBetweenDevice(symbol: SymbolMetadata): boolean {
     id === 'switch_impulse' ||
     id === 'switch_cross' ||
     id === 'motion_detector' ||
+    id === 'smoke_detector' ||
     id === 'relay' ||
     id === 'domotica' ||
     id === 'energy_meter' ||

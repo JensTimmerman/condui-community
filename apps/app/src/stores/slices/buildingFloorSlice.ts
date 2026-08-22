@@ -233,6 +233,18 @@ export const createBuildingFloorSlice: ProjectSliceCreator = (set, get) => ({
                 masterWallThickness: 20,
               }
             }
+            const DEDUP_THRESHOLD = 1.0
+            const isDuplicate = !wall.curve && floor.floorPlan.walls.some((existing) => {
+              if (isCurvedWall(existing) || existing.points.length !== wall.points.length) return false
+              const n = wall.points.length
+              const allMatch = (forward: boolean) =>
+                wall.points.every((p, i) => {
+                  const q = existing.points[forward ? i : n - 1 - i]!
+                  return Math.abs(p.x - q.x) <= DEDUP_THRESHOLD && Math.abs(p.y - q.y) <= DEDUP_THRESHOLD
+                })
+              return allMatch(true) || allMatch(false)
+            })
+            if (isDuplicate) return
             floor.floorPlan.walls.push({
               ...wall,
               id: generateId(),
@@ -436,6 +448,31 @@ export const createBuildingFloorSlice: ProjectSliceCreator = (set, get) => ({
       const is1First = pointIndex1 === 0
       const is2Last = pointIndex2 === n2 - 1
       const is2First = pointIndex2 === 0
+
+      // Detect fully overlapping walls: all segments of one wall coincide with segments of the other.
+      if (wallId1 !== wallId2 && n1 === n2) {
+        const allMatch = (forward: boolean) =>
+          wall1.points.every((p, i) => {
+            const q = wall2.points[forward ? i : n2 - 1 - i]!
+            return Math.abs(p.x - q.x) <= MERGE_THRESHOLD && Math.abs(p.y - q.y) <= MERGE_THRESHOLD
+          })
+        if (allMatch(true) || allMatch(false)) {
+          // Walls are duplicates — keep the first, transfer openings, delete the second.
+          for (const door of floor.floorPlan.doors) {
+            if (door.wallId === wall2.id) {
+              state.updateDoor(door.id, { wallId: wall1.id })
+            }
+          }
+          for (const window of floor.floorPlan.windows) {
+            if (window.wallId === wall2.id) {
+              state.updateWindow(window.id, { wallId: wall1.id })
+            }
+          }
+          state.deleteWall(wall2.id)
+          return true
+        }
+      }
+
       const endpointMerge = (is1Last && is2First) || (is1First && is2Last)
       if (!endpointMerge) return false
 

@@ -390,10 +390,10 @@ export function DragPreview({
                 // Find the rightmost existing nested MCB
                 const rightmostX = Math.max(...nestedProtectionElements.map(el => el.position.x))
                 // Advance by: half baseWidth + branch length + padding
-                newMcbX = rightmostX + baseWidth / 2 + LAYOUT_CONSTANTS.BRANCH_LEAD_IN + LAYOUT_CONSTANTS.CIRCUIT_PADDING
+                newMcbX = rightmostX + baseWidth / 2 + LAYOUT_CONSTANTS.BRANCH_LEAD_IN + LAYOUT_CONSTANTS.CIRCUIT_ENVELOPE_GUTTER
               } else {
                 // Fallback: place to the right of parent wire
-                newMcbX = wireX + baseWidth / 2 + LAYOUT_CONSTANTS.BRANCH_LEAD_IN + LAYOUT_CONSTANTS.CIRCUIT_PADDING
+                newMcbX = wireX + baseWidth / 2 + LAYOUT_CONSTANTS.BRANCH_LEAD_IN + LAYOUT_CONSTANTS.CIRCUIT_ENVELOPE_GUTTER
               }
 
               // New MCB sits below bus bar (like main bus circuits)

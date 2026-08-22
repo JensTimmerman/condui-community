@@ -134,6 +134,11 @@ function getNodeLightPointProps(node: LayoutNode): Endpoint['lightPointProps'] |
   return (node.domainRef as Endpoint).lightPointProps
 }
 
+function getNodeMotionDetectorProps(node: LayoutNode): Endpoint['motionDetectorProps'] | undefined {
+  if (node.type !== 'endpoint' || !node.domainRef) return undefined
+  return (node.domainRef as Endpoint).motionDetectorProps
+}
+
 function findDescendantNode(
   roots: LayoutNode[],
   predicate: (node: LayoutNode) => boolean
@@ -172,13 +177,10 @@ function applyNodeWireInset(
   otherEnd: { x: number; y: number },
   node: LayoutNode
 ): { x: number; y: number } {
-  return applyWireInset(
-    point,
-    otherEnd,
-    node.type,
-    getNodeSymbolId(node),
-    getNodeLightPointProps(node)
-  )
+  return applyWireInset(point, otherEnd, node.type, getNodeSymbolId(node), {
+    lightPointProps: getNodeLightPointProps(node),
+    motionDetectorProps: getNodeMotionDetectorProps(node),
+  })
 }
 
 // Conversion components that are allowed to change electrical domain along a trunk
@@ -3866,7 +3868,12 @@ function deriveBranchWires(
     }
 
     // Main branch segment to domotica body.
-    const trunkToDomoticaStart = { x: trunkX, y: branchY }
+    // Match normal last-branch corners: nudge the horizontal start half a stroke into the
+    // vertical trunk so butt-capped ends form a filled square knee.
+    const trunkToDomoticaStartX = isLastBranchOnCircuit
+      ? trunkX + ((isHorizontalConverterBackup ? 1 : -1) * LAYOUT_CONSTANTS.BRANCH_LINE_WIDTH) / 2
+      : trunkX
+    const trunkToDomoticaStart = { x: trunkToDomoticaStartX, y: branchY }
     // Trunk wire ends exactly on the LEFT edge of the domotica box.
     const trunkToDomoticaEnd = { x: boxLeftX, y: branchY }
     const branchEntryWireProps = inheritedBranchWireProps

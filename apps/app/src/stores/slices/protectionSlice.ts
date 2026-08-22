@@ -6,6 +6,10 @@ import { renameCircuitCodeKeepingEndpoints } from '@/lib/eendraad/circuitEndpoin
 import { runDuplicateProtectionLeft } from '@/lib/eendraad/duplicateProtectionLeftCore'
 import { ensureSitplanPlacementsForEndpoints } from '@/lib/eendraad/duplicateSitplanHelpers'
 import { findParentCircuitInfo } from '@/lib/eendraad/findParentCircuitInfo'
+import {
+  liftCircuitContentAboveOwnProtection,
+  moveCircuitToCircuitContentPosition,
+} from '@/lib/eendraad/circuitContentInsertion'
 import { pruneEendraadFrames } from '@/lib/eendraad/frameContent'
 import { logger } from '@/lib/logger'
 import {
@@ -43,7 +47,6 @@ import {
 } from '@/lib/eendraad/projectElectricalDomain'
 import { resolveSecondaryBusEjectSelection } from '@/lib/eendraad/secondaryBusEjectEligibility'
 import { ensureInstallationFeedTopology } from '@/lib/feedTopology'
-import { clamp } from '@/lib/geometry'
 import { findPanelById } from '@/lib/panel/panelTree'
 import { getViewportCenterPlanSpaceIfApplicable } from '@/lib/plan/autoSitplanPlacement'
 import {
@@ -1059,7 +1062,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
     return createdId
   },
 
-  moveCircuitToSecondaryBus: (panelId, parentCircuitId, circuitId, insertIndex) =>
+  moveCircuitToSecondaryBus: (panelId, parentCircuitId, circuitId, insertIndex, options) =>
     set((state) => {
       if (!state.currentProject) return
       const panel = findPanelById(
@@ -1068,34 +1071,33 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
       )
       if (!panel) return
 
-      const allCircuits = getAllCircuits(panel)
-      const parentCircuit = allCircuits.find((c) => c.id === parentCircuitId)
-      if (!parentCircuit) return
-
-      // Remove circuit from any existing parent's subCircuitIds (if already nested elsewhere)
-      for (const other of allCircuits) {
-        if (other.subCircuitIds) {
-          const idx = other.subCircuitIds.indexOf(circuitId)
-          if (idx !== -1) {
-            other.subCircuitIds.splice(idx, 1)
-            if (other.subCircuitIds.length === 0) delete other.subCircuitIds
-            break
-          }
-        }
-      }
-
-      // Add to target parent's subCircuitIds at insertIndex
-      if (!parentCircuit.subCircuitIds) parentCircuit.subCircuitIds = []
-      const at = clamp(insertIndex, 0, parentCircuit.subCircuitIds.length)
-      if (parentCircuit.subCircuitIds.includes(circuitId)) {
-        const existing = parentCircuit.subCircuitIds.indexOf(circuitId)
-        parentCircuit.subCircuitIds.splice(existing, 1)
-        const newIdx = at > existing ? at - 1 : at
-        parentCircuit.subCircuitIds.splice(newIdx, 0, circuitId)
-      } else {
-        parentCircuit.subCircuitIds.splice(at, 0, circuitId)
-      }
+      const changed = moveCircuitToCircuitContentPosition(
+        panel,
+        parentCircuitId,
+        circuitId,
+        insertIndex,
+        options
+      )
+      if (!changed) return
       state.isDirty = true
       maybeApplyAutomaticEendraadNamingForPanel(state.currentProject, panelId)
     }),
+
+  liftCircuitContentAboveOwnProtection: (panelId, circuitId) => {
+    let changed = false
+    set((state) => {
+      if (!state.currentProject) return
+      const panel = findPanelById(
+        getMutableElectricalPanelsForProject(state.currentProject),
+        panelId
+      )
+      if (!panel) return
+
+      changed = liftCircuitContentAboveOwnProtection(panel, circuitId)
+      if (!changed) return
+      state.isDirty = true
+      maybeApplyAutomaticEendraadNamingForPanel(state.currentProject, panelId)
+    })
+    return changed
+  },
 })

@@ -194,6 +194,7 @@ export function FloorPlanMode({
     wall: Wall
     anchor: Point2
     current: Point2
+    dragSizingLatched: boolean
   } | null>(null)
   const [graphicPointerState, setGraphicPointerState] = useState<{
     start: Point2
@@ -751,9 +752,11 @@ export function FloorPlanMode({
   )
 
   const getOpeningPlacementOptions = useCallback(
-    (_kind: 'door' | 'window') => ({
+    (kind: 'door' | 'window') => ({
       snapWidthToCm: true as const,
       canvasPxPerMeter,
+      dragActivationThresholdPx: kind === 'door' ? 10 : 8,
+      minimumWidthPx: kind === 'door' ? 0.5 * canvasPxPerMeter : 0.15 * canvasPxPerMeter,
     }),
     [canvasPxPerMeter]
   )
@@ -793,7 +796,8 @@ export function FloorPlanMode({
       wall: Wall,
       anchor: Point2,
       current: Point2,
-      defaultWidth: number
+      defaultWidth: number,
+      dragSizingLatched = false
     ) => {
       if (!activeFloorId) return
       const floorPlan = (
@@ -807,7 +811,10 @@ export function FloorPlanMode({
         current,
         defaultWidth,
         6,
-        getOpeningPlacementOptions(kind)
+        {
+          ...getOpeningPlacementOptions(kind),
+          forceDragSizing: dragSizingLatched,
+        }
       )
       const fitted = fitOpeningPlacementForPreview(wall, placement, doors, windows)
       const validation = validateOpeningPlacement(
@@ -2302,7 +2309,20 @@ export function FloorPlanMode({
       }
 
       if ((activeTool === 'insertDoor' || activeTool === 'insertWindow') && openingPointerState) {
-        setOpeningPointerState((prev) => (prev ? { ...prev, current: canvasPoint } : prev))
+        setOpeningPointerState((prev) => {
+          if (!prev) return prev
+          const next = { ...prev, current: canvasPoint }
+          if (prev.dragSizingLatched) return next
+          const placement = computeOpeningDragPlacement(
+            prev.wall,
+            prev.anchor,
+            canvasPoint,
+            getDefaultOpeningWidth(prev.kind),
+            6,
+            getOpeningPlacementOptions(prev.kind)
+          )
+          return placement.isDraggingAlongWall ? { ...next, dragSizingLatched: true } : next
+        })
       }
 
       const shouldTrackWallHover =
@@ -2427,6 +2447,7 @@ export function FloorPlanMode({
           wall: closestWall,
           anchor,
           current: canvasPoint,
+          dragSizingLatched: false,
         })
       } else if (activeTool === 'drawGraphicElement') {
         const point = snapToGrid(canvasPoint, gridSize, planView.snapToGrid)
@@ -2473,7 +2494,8 @@ export function FloorPlanMode({
           openingPointerState.wall,
           openingPointerState.anchor,
           openingPointerState.current,
-          baseWidth
+          baseWidth,
+          openingPointerState.dragSizingLatched
         )
         setOpeningPointerState(null)
         suppressNextClickRef.current = true
@@ -2667,7 +2689,10 @@ export function FloorPlanMode({
       openingPointerState.current,
       baseWidth,
       6,
-      getOpeningPlacementOptions(openingPointerState.kind)
+      {
+        ...getOpeningPlacementOptions(openingPointerState.kind),
+        forceDragSizing: openingPointerState.dragSizingLatched,
+      }
     )
     const fitted = fitOpeningPlacementForPreview(
       openingPointerState.wall,
@@ -2725,13 +2750,26 @@ export function FloorPlanMode({
       if (!touch) return
       const canvasPoint = clientCoordsToCanvasPoint(touch.clientX, touch.clientY)
       if (!canvasPoint) return
-      setOpeningPointerState((prev) => (prev ? { ...prev, current: canvasPoint } : prev))
+      setOpeningPointerState((prev) => {
+        if (!prev) return prev
+        const next = { ...prev, current: canvasPoint }
+        if (prev.dragSizingLatched) return next
+        const placement = computeOpeningDragPlacement(
+          prev.wall,
+          prev.anchor,
+          canvasPoint,
+          getDefaultOpeningWidth(prev.kind),
+          6,
+          getOpeningPlacementOptions(prev.kind)
+        )
+        return placement.isDraggingAlongWall ? { ...next, dragSizingLatched: true } : next
+      })
       evt.preventDefault()
     }
 
     window.addEventListener('touchmove', handleWindowTouchMove, { capture: true, passive: false })
     return () => window.removeEventListener('touchmove', handleWindowTouchMove, true)
-  }, [openingPointerState, clientCoordsToCanvasPoint])
+  }, [openingPointerState, clientCoordsToCanvasPoint, getDefaultOpeningWidth, getOpeningPlacementOptions])
 
   useEffect(() => {
     if (!onOpeningPreviewOverrideChange) return
@@ -2830,7 +2868,8 @@ export function FloorPlanMode({
                   openingPointerState.wall,
                   openingPointerState.anchor,
                   openingPointerState.current,
-                  getDefaultOpeningWidth(openingPointerState.kind)
+                  getDefaultOpeningWidth(openingPointerState.kind),
+                  openingPointerState.dragSizingLatched
                 )
               }
               setOpeningPointerState(null)

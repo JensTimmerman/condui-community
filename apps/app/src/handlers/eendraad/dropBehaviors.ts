@@ -37,6 +37,7 @@ import {
 import {
   PROTECTION_SYMBOL_ID_TO_TYPE,
   PROTECTION_SYMBOL_IDS,
+  isCircuitTrunkAddOnProtectionType,
   resolveInitialProtectionBusLabel,
 } from '@/lib/protectionKind'
 import { getPortDomainsForSymbol, getSymbolById, resolveSymbolPortsForWire } from '@/lib/symbols'
@@ -677,16 +678,17 @@ const protectionBehavior: DropBehavior = {
 
     const protectionType = requestedProtectionType
 
-    // A rotating switch placed on an outgoing circuit wire is an inline switch, not a
+    // A rotating switch or SPD placed on an outgoing circuit wire is an inline add-on, not a
     // downstream protective boundary. Represent it on the existing circuit trunk so the
-    // owning MCB/RCBO remains the circuit protection and keeps its automatic bus letter.
-    // Secondary-bus slots deliberately remain protection-row targets because they do not
-    // identify a position on the circuit trunk.
+    // owning protection keeps its automatic bus letter. Secondary-bus slots deliberately
+    // remain protection-row targets because they do not identify a position on the trunk.
     if (
-      protectionType === 'ROTATING_SWITCH' &&
+      isCircuitTrunkAddOnProtectionType(protectionType) &&
       target.type === 'circuit' &&
       target.circuitId &&
+      typeof target.circuitTrunkSegmentIndex === 'number' &&
       !target.branchEndpoints?.length &&
+      target.insertAfterCircuitContent !== true &&
       typeof target.secondaryBusInsertIndex !== 'number'
     ) {
       if (circuitFeedsSubPanel(project, target.circuitId)) return
@@ -698,7 +700,7 @@ const protectionBehavior: DropBehavior = {
         id: deviceId,
         type: 'protection',
         protectionType,
-        symbol: 'rotating_switch',
+        symbol: symbol.id as TrunkDevice['symbol'],
         label: '',
         trunkPosition: getCircuitTrunkPositionForDrop(target, circuit),
         ...getDefaultTrunkDeviceProtectionProps(protectionType, getVoltagePolesConfig(project)),
@@ -786,14 +788,20 @@ const protectionBehavior: DropBehavior = {
             )
           : false
         if (!insertedBetween) {
-          moveParentContentToSubCircuit(
-            parentCircuit,
-            target.circuitId,
-            circuitId,
-            protectionId,
-            panel,
-            callbacks
-          )
+          if (target.insertAfterCircuitContent) {
+            callbacks.updateCircuit(parentCircuit.id, {
+              subCircuitIds: [...(parentCircuit.subCircuitIds ?? []), circuitId],
+            })
+          } else {
+            moveParentContentToSubCircuit(
+              parentCircuit,
+              target.circuitId,
+              circuitId,
+              protectionId,
+              panel,
+              callbacks
+            )
+          }
         }
       }
     }
@@ -950,14 +958,20 @@ const rcdBehavior: DropBehavior = {
             )
           : false
         if (!insertedBetween) {
-          moveParentContentToSubCircuit(
-            parentCircuit,
-            target.circuitId,
-            circuitId,
-            protectionId,
-            panel,
-            callbacks
-          )
+          if (target.insertAfterCircuitContent) {
+            callbacks.updateCircuit(parentCircuit.id, {
+              subCircuitIds: [...(parentCircuit.subCircuitIds ?? []), circuitId],
+            })
+          } else {
+            moveParentContentToSubCircuit(
+              parentCircuit,
+              target.circuitId,
+              circuitId,
+              protectionId,
+              panel,
+              callbacks
+            )
+          }
         }
       }
     }
@@ -2728,6 +2742,7 @@ export const dropBehaviors: Record<string, DropBehavior> = {
   switch_impulse: switchBehavior,
   switch_cross: switchBehavior,
   motion_detector: switchBehavior,
+  smoke_detector: switchBehavior,
   relay: switchBehavior,
   switch_single: switchBehavior,
   switch_double: switchBehavior,

@@ -249,7 +249,9 @@ function switchGroupKey(ep: Endpoint): string {
   const poles = sp?.poles ?? 1
   const twoPole = sp?.twoPole ? '2p' : ''
   const v = sp?.verklikkerlamp ? 'v' : ''
-  return [sym, poles, twoPole, v].join('|')
+  const smokeType = sym === 'smoke_detector' ? (ep.smokeDetectorProps?.type ?? 'smoke') : ''
+  const motionType = sym === 'motion_detector' ? (ep.motionDetectorProps?.type ?? 'spread') : ''
+  return [sym, poles, twoPole, v, smokeType, motionType].join('|')
 }
 
 function switchSummaryLabel(ep: Endpoint, t: (key: string) => string): string {
@@ -262,6 +264,18 @@ function switchSummaryLabel(ep: Endpoint, t: (key: string) => string): string {
     parts.push(t('symbols.switch_2p_twoway') || '2P')
   }
   if (sp?.verklikkerlamp) parts.push(t('endpoints.verklikkerlamp') || 'indicator')
+  if (sym === 'smoke_detector') {
+    const type = ep.smokeDetectorProps?.type ?? 'smoke'
+    if (type !== 'smoke') {
+      parts.push(t(`endpoints.smokeDetector.type_${type}`) || type)
+    }
+  }
+  if (sym === 'motion_detector') {
+    const type = ep.motionDetectorProps?.type ?? 'spread'
+    if (type !== 'spread') {
+      parts.push(t(`endpoints.motionDetector.type_${type}`) || type)
+    }
+  }
   return parts.length ? `${base} (${parts.join(', ')})` : base
 }
 
@@ -300,6 +314,16 @@ function buildSwitchSpecLines(ep: Endpoint, t: (key: string, fallback?: string) 
   if (sp?.verklikkerlamp) {
     lines.push(t('endpoints.verklikkerlamp'))
   }
+  if (sym === 'smoke_detector') {
+    const smokeLines = buildSmokeDetectorSpecLines(ep, t)
+    if (smokeLines) lines.push(...smokeLines)
+  }
+  if (sym === 'motion_detector') {
+    const type = ep.motionDetectorProps?.type ?? 'spread'
+    if (type !== 'spread') {
+      lines.push(t(`endpoints.motionDetector.type_${type}`))
+    }
+  }
   return lines.length ? lines : undefined
 }
 
@@ -317,6 +341,15 @@ function buildRelaySpecLines(ep: Endpoint, t: (key: string, fallback?: string) =
     lines.push(t(`endpoints.relay.control_${rp.control}`))
   }
   return lines.length ? lines : undefined
+}
+
+function buildSmokeDetectorSpecLines(
+  ep: Endpoint,
+  t: (key: string, fallback?: string) => string
+): string[] | undefined {
+  const type = ep.smokeDetectorProps?.type ?? 'smoke'
+  if (type === 'smoke') return undefined
+  return [t(`endpoints.smokeDetector.type_${type}`)]
 }
 
 function isStoveEndpoint(ep: Endpoint): boolean {

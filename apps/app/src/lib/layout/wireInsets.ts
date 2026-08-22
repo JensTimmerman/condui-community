@@ -9,7 +9,7 @@
  *   const adjusted = applyNodeWireInset(endPoint, otherEnd, node)
  */
 
-import type { LightPointDeviceProps } from '@/types/schema'
+import type { LightPointDeviceProps, MotionDetectorDeviceProps } from '@/types/schema'
 import { showLightPointDecentralOverlay } from '@/lib/lightPointProps'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -42,6 +42,23 @@ export const LIGHT_POINT_DECENTRAL_INSETS: WireInsets = {
   bottom: 15,
   left: 15,
   right: 15,
+}
+
+/** Smoke / fire detector square (smaller than full symbol canvas). */
+export const SMOKE_DETECTOR_INSETS: WireInsets = { top: 5.5, bottom: 5.5, left: 5.5, right: 5.5 }
+/** Spread motion detector (library default / fan-beam artwork). */
+export const MOTION_DETECTOR_SPREAD_INSETS: WireInsets = {
+  top: 6,
+  bottom: 6,
+  left: 8,
+  right: 7.5,
+}
+/** Generic IR motion detector — horizontal feeders only (taller rectangle). */
+export const MOTION_DETECTOR_GENERIC_INSETS: WireInsets = {
+  top: 0,
+  bottom: 0,
+  left: 5.5,
+  right: 5.5,
 }
 
 export const WIRE_INSETS: Record<string, WireInsets> = {
@@ -80,7 +97,9 @@ export const WIRE_INSETS: Record<string, WireInsets> = {
   // Switches (all switch types except relay and switch_impulse; see CATEGORY below)
   switch: SWITCH,
   switch_impulse: { top: 6, bottom: 6, left: 6, right: 6 },
-  motion_detector: { top: 6, bottom: 6, left: 8, right: 7.5 },
+  // Default motion_detector entry = spread; generic overrides in getWireInsets()
+  motion_detector: MOTION_DETECTOR_SPREAD_INSETS,
+  smoke_detector: SMOKE_DETECTOR_INSETS,
 
   earthing_separator: { top: 2, bottom: 2, left: 0, right: 0 },
 
@@ -146,10 +165,31 @@ const CATEGORY: Record<string, string> = {
   switch_1p_changeover: 'switch',
   switch_1p_pull: 'switch',
   switch_cross: 'switch',
-  motion_detector: 'switch',
 }
 
 // ─── Public API ────────────────────────────────────────────────────────────────
+
+export type WireInsetSymbolProps = {
+  lightPointProps?: LightPointDeviceProps
+  motionDetectorProps?: MotionDetectorDeviceProps
+}
+
+function resolveWireInsetOptions(
+  lightPointPropsOrOptions?: LightPointDeviceProps | WireInsetSymbolProps,
+  motionDetectorProps?: MotionDetectorDeviceProps
+): WireInsetSymbolProps {
+  if (
+    lightPointPropsOrOptions &&
+    ('lightPointProps' in lightPointPropsOrOptions ||
+      'motionDetectorProps' in lightPointPropsOrOptions)
+  ) {
+    return lightPointPropsOrOptions as WireInsetSymbolProps
+  }
+  return {
+    lightPointProps: lightPointPropsOrOptions as LightPointDeviceProps | undefined,
+    motionDetectorProps,
+  }
+}
 
 /**
  * Look up wire insets: symbolId → symbolId category → nodeType → nodeType category → zero.
@@ -157,10 +197,16 @@ const CATEGORY: Record<string, string> = {
 export function getWireInsets(
   nodeType: string,
   symbolId?: string,
-  lightPointProps?: LightPointDeviceProps
+  lightPointPropsOrOptions?: LightPointDeviceProps | WireInsetSymbolProps,
+  motionDetectorProps?: MotionDetectorDeviceProps
 ): WireInsets {
-  if (symbolId === 'light_point' && showLightPointDecentralOverlay(lightPointProps)) {
+  const options = resolveWireInsetOptions(lightPointPropsOrOptions, motionDetectorProps)
+
+  if (symbolId === 'light_point' && showLightPointDecentralOverlay(options.lightPointProps)) {
     return LIGHT_POINT_DECENTRAL_INSETS
+  }
+  if (symbolId === 'motion_detector' && (options.motionDetectorProps?.type ?? 'spread') === 'generic') {
+    return MOTION_DETECTOR_GENERIC_INSETS
   }
   if (symbolId) {
     if (symbolId in WIRE_INSETS) return WIRE_INSETS[symbolId]!
@@ -182,14 +228,15 @@ export function applyWireInset(
   otherEnd: { x: number; y: number },
   nodeType: string,
   symbolId?: string,
-  lightPointProps?: LightPointDeviceProps
+  lightPointPropsOrOptions?: LightPointDeviceProps | WireInsetSymbolProps,
+  motionDetectorProps?: MotionDetectorDeviceProps
 ): { x: number; y: number } {
   // Domotica uses custom wire geometry (boxLeft/boxRight/top/bottom) and should not be auto-inset.
   if (symbolId === 'domotica') {
     return point
   }
 
-  const insets = getWireInsets(nodeType, symbolId, lightPointProps)
+  const insets = getWireInsets(nodeType, symbolId, lightPointPropsOrOptions, motionDetectorProps)
 
   if (insets.top === 0 && insets.bottom === 0 && insets.left === 0 && insets.right === 0) {
     return point

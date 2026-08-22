@@ -29,12 +29,15 @@ const synonymMap: Record<string, string[]> = {
   'zekering': ['zekering', 'smeltveiligheid', 'fusible', 'fuse'],
   'smeltveiligheid': ['smeltveiligheid', 'zekering', 'fusible', 'fuse'],
   // Heating / HVAC / appliances (Dutch core terms)
-  'verwarming': ['verwarming', 'chauffage', 'heating', 'radiator', 'accumulatieverwarming', 'kachel', 'convector', 'vloerverwarming'],
+  'verwarming': ['verwarming', 'elektrische verwarming', 'chauffage', 'heating', 'electric heating', 'radiator', 'accumulatieverwarming', 'kachel', 'convector', 'vloerverwarming'],
+  'elektrische verwarming': ['elektrische verwarming', 'verwarming', 'electric heating', 'chauffage électrique', 'heating'],
   'accumulatieverwarming': ['accumulatieverwarming', 'verwarming', 'chauffage', 'accumulation heating'],
   'vloerverwarming': ['vloerverwarming', 'verwarming', 'chauffage', 'underfloor heating'],
   'kachel': ['kachel', 'verwarming', 'chauffage', 'stove', 'heater'],
   'radiator': ['radiator', 'verwarming', 'chauffage', 'heating'],
   'boiler': ['boiler', 'elektrische boiler', 'chauffe-eau', 'water heater'],
+  'stookolie': ['stookolie', 'stookolie ketel', 'mazout', 'oil boiler', 'fuel oil', 'chaudière au mazout'],
+  'stookolie ketel': ['stookolie ketel', 'stookolie', 'oil boiler', 'mazout', 'chaudière au mazout'],
   'fornuis': ['fornuis', 'cuisinière', 'stove', 'kookplaat', 'taque', 'cooker', 'hob'],
   'kookplaat': ['kookplaat', 'fornuis', 'cuisinière', 'stove', 'taque', 'cooker', 'hob'],
   
@@ -53,12 +56,15 @@ const synonymMap: Record<string, string[]> = {
   'disjoncteur différentiel combiné': ['disjoncteur différentiel combiné', 'differentieelautomaat', 'rcbo'],
   'fusible': ['fusible', 'zekering', 'smeltveiligheid', 'fuse'],
   // Heating / HVAC / appliances (French core terms)
-  'chauffage': ['chauffage', 'verwarming', 'heating', 'radiator', 'convecteur', 'accumulation', 'plancher chauffant'],
+  'chauffage': ['chauffage', 'chauffage électrique', 'verwarming', 'elektrische verwarming', 'heating', 'electric heating', 'radiator', 'convecteur', 'accumulation', 'plancher chauffant'],
+  'chauffage électrique': ['chauffage électrique', 'chauffage', 'electric heating', 'elektrische verwarming', 'heating'],
   'convecteur': ['convecteur', 'radiateur', 'chauffage', 'verwarming', 'heater'],
   'plancher chauffant': ['plancher chauffant', 'chauffage', 'verwarming', 'underfloor heating', 'vloerverwarming'],
   'cuisinière': ['cuisinière', 'fornuis', 'stove', 'kookplaat', 'taque', 'cooker', 'hob'],
   'taque': ['taque', 'cuisinière', 'fornuis', 'stove', 'kookplaat', 'cooker', 'hob'],
   'chauffe-eau': ['chauffe-eau', 'boiler', 'water heater', 'chauffe-eau électrique'],
+  'mazout': ['mazout', 'chaudière au mazout', 'stookolie', 'stookolie ketel', 'oil boiler', 'fuel oil'],
+  'chaudière au mazout': ['chaudière au mazout', 'mazout', 'oil boiler', 'stookolie ketel', 'stookolie'],
   
   // English synonyms
   'socket': ['socket', 'outlet', 'contactdoos', 'stopcontact', 'prise', 'prise de courant'],
@@ -76,8 +82,11 @@ const synonymMap: Record<string, string[]> = {
   'rcbo': ['rcbo', 'differentieelautomaat', 'disjoncteur différentiel combiné'],
   'fuse': ['fuse', 'zekering', 'smeltveiligheid', 'fusible'],
   // Heating / HVAC / appliances (English core terms)
-  'heating': ['heating', 'verwarming', 'chauffage', 'radiator', 'heater', 'space heater'],
+  'heating': ['heating', 'electric heating', 'verwarming', 'elektrische verwarming', 'chauffage', 'chauffage électrique', 'radiator', 'heater', 'space heater'],
+  'electric heating': ['electric heating', 'heating', 'elektrische verwarming', 'chauffage électrique', 'verwarming'],
   'heater': ['heater', 'heating', 'verwarming', 'chauffage', 'radiator'],
+  'oil boiler': ['oil boiler', 'fuel oil', 'stookolie', 'stookolie ketel', 'mazout', 'chaudière au mazout'],
+  'fuel oil': ['fuel oil', 'oil boiler', 'stookolie', 'stookolie ketel', 'mazout', 'chaudière au mazout'],
   'underfloor heating': ['underfloor heating', 'vloerverwarming', 'plancher chauffant'],
   'stove': ['stove', 'fornuis', 'cuisinière', 'kookplaat', 'taque', 'cooker', 'hob'],
   'hob': ['hob', 'cooktop', 'stove', 'kookplaat', 'taque', 'fornuis', 'cuisinière'],

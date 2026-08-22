@@ -1,6 +1,7 @@
 const Busboy = require('busboy')
 const path = require('path')
 const { createRequire } = require('module')
+const { gzipSync } = require('zlib')
 const { DOMParser, XMLSerializer } = require('@xmldom/xmldom')
 const { SvgConverter } = require('./_libredwg-js-svg-converter.cjs')
 
@@ -13,14 +14,30 @@ let libredwgPromise = null
 let wasmPathResolved = null
 let lastDwgReadWarning = null
 
+const LAMBDA_RESPONSE_LIMIT = 6_000_000
+
 function jsonResponse(statusCode, payload) {
+  const json = JSON.stringify(payload)
+  if (Buffer.byteLength(json) > LAMBDA_RESPONSE_LIMIT) {
+    const compressed = gzipSync(json)
+    return {
+      statusCode,
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Encoding': 'gzip',
+        'Cache-Control': 'no-store',
+      },
+      body: compressed.toString('base64'),
+      isBase64Encoded: true,
+    }
+  }
   return {
     statusCode,
     headers: {
       'Content-Type': 'application/json',
       'Cache-Control': 'no-store',
     },
-    body: JSON.stringify(payload),
+    body: json,
   }
 }
 

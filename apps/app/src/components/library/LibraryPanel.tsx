@@ -7,6 +7,7 @@ import { symbolCategories } from '@/lib/symbols'
 import SymbolItem from './SymbolItem'
 import type { SymbolMetadata } from '@/lib/symbols'
 import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
+import { getSymbolLibraryTooltip } from '@/lib/symbolTooltips'
 
 /** Categories shown in the library when panel canvas is maximized */
 const PANEL_VIEW_CATEGORIES = ['protection', 'domotica', 'metering', 'notes', 'grid'] as const
@@ -172,6 +173,7 @@ export default function LibraryPanel({
       symbol={symbol}
       onDragStart={onDragStart}
       localizedName={getLocalizedName(symbol)}
+      tooltip={getSymbolLibraryTooltip(symbol.id, i18n.language)}
       isFavorite={favoriteSymbols.includes(symbol.id)}
       onToggleFavorite={() => toggleFavorite(symbol.id)}
       compact={compact}

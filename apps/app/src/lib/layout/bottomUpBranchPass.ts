@@ -200,6 +200,8 @@ function createEndpointBranchRows(
   const result: BranchLayout[] = []
   let domoticaVerticalReserve = 0
   let labelVerticalReserve = 0
+  const nestedBranchGroupOffset =
+    (circuit.trunkDevices || []).length === 0 ? nestedBranchLabelClearance : 0
 
   endpointBranches.forEach((branchEndpoints, branchIndex) => {
     const trunkDevicesBetween = (circuit.trunkDevices || []).filter(
@@ -214,16 +216,13 @@ function createEndpointBranchRows(
       0,
       getBranchBottomLabelHeight(branchEndpoints) - availableLabelHeight
     )
-    let branchY =
+    const branchY =
       firstBranchY -
       branchIndex * constants.ENDPOINT_BRANCH_SPACING -
       interBranchTrunkDeviceOffset -
       domoticaVerticalReserve -
-      labelVerticalReserve
-
-    if ((circuit.trunkDevices || []).length === 0 && branchIndex === 0) {
-      branchY -= nestedBranchLabelClearance
-    }
+      labelVerticalReserve -
+      nestedBranchGroupOffset
 
     const storedBranch = storedBranches[branchIndex]
     const storedLabel = storedBranch?.label?.trim() ?? ''
@@ -273,9 +272,10 @@ function processNestedCircuitBranches(
     circuitMap: Map<string, Circuit>
     constants: BranchPassConstants
     branches: BranchLayout[]
+    secondaryBusYByCircuitId: Map<string, number>
   }
 ): void {
-  const { circuitLayouts, circuitMap, constants, branches } = context
+  const { circuitLayouts, circuitMap, constants, branches, secondaryBusYByCircuitId } = context
   const immediateParentLayout = circuitLayouts.find(
     (cl) => cl.circuit.id === immediateParentCircuit.id
   )
@@ -320,10 +320,16 @@ function processNestedCircuitBranches(
 
     const deeperNestedCircuits = resolveBranchSubCircuits(nestedCircuit, circuitMap)
     if (deeperNestedCircuits.length > 0) {
+      const topmostNestedBranchY = getTopmostBranchY(branches, nestedCircuit.id, nestedMcbY)
+      const nestedSecondaryBusY =
+        getCircuitBranches(nestedCircuit).length > 0
+          ? topmostNestedBranchY - constants.SECONDARY_BUS_ABOVE_ENDPOINTS_GAP
+          : topmostNestedBranchY
+      secondaryBusYByCircuitId.set(nestedCircuit.id, nestedSecondaryBusY)
       processNestedCircuitBranches(
         nestedCircuit,
         deeperNestedCircuits,
-        getTopmostBranchY(branches, nestedCircuit.id, nestedMcbY),
+        nestedSecondaryBusY,
         context
       )
     }
@@ -388,6 +394,7 @@ export function calculateBranchLayoutPass(
       circuitMap,
       constants,
       branches,
+      secondaryBusYByCircuitId,
     })
   }
 

@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { TouchPanIcon, TouchZoomIcon } from '@/components/icons/TouchGestureIcons'
 
 type ShortcutEntry = {
   id: string
@@ -181,17 +182,32 @@ const BASE_SHORTCUT_GROUPS: ShortcutGroup[] = [
   },
 ]
 
-function ShortcutKeys({ keys, translateKey }: { keys: ShortcutKeyId[]; translateKey: (key: string) => string }) {
+function ShortcutKeys({
+  keys,
+  translateKey,
+}: {
+  keys: ShortcutKeyId[]
+  translateKey: (key: string) => string
+}) {
   return (
     <div className="flex flex-wrap gap-1.5 sm:justify-end">
-      {keys.map((key) => (
-        <kbd
-          key={key}
-          className="rounded-md border border-gray-300 bg-gray-50 px-2 py-1 font-mono text-[0.72rem] font-semibold leading-none text-gray-700 shadow-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200"
-        >
-          {translateKey(`shortcuts.keys.${key}`)}
-        </kbd>
-      ))}
+      {keys.map((key) => {
+        const TouchIcon =
+          key === 'oneFingerDrag'
+            ? TouchPanIcon
+            : key === 'pinch' || key === 'twoFingerDragPinch'
+              ? TouchZoomIcon
+              : null
+        return (
+          <kbd
+            key={key}
+            className="flex items-center gap-1.5 rounded-md border border-gray-300 bg-gray-50 px-2 py-1 font-mono text-[0.72rem] font-semibold leading-none text-gray-700 shadow-sm dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200"
+          >
+            {TouchIcon ? <TouchIcon className="h-4 w-4 text-sky-700 dark:text-sky-300" /> : null}
+            {translateKey(`shortcuts.keys.${key}`)}
+          </kbd>
+        )
+      })}
     </div>
   )
 }
@@ -276,4 +292,3 @@ export function ShortcutsDialog() {
     </div>
   )
 }
-

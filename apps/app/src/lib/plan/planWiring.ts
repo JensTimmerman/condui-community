@@ -70,6 +70,7 @@ const SWITCH_SYMBOLS = new Set<string>([
   'switch_impulse',
   'switch_cross',
   'motion_detector',
+  'smoke_detector',
   'relay',
   'switch_single',
   'switch_double',

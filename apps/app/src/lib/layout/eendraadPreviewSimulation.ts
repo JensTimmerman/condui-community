@@ -22,6 +22,7 @@ import {
 import {
   PROTECTION_SYMBOL_ID_TO_TYPE,
   PROTECTION_SYMBOL_IDS,
+  isCircuitTrunkAddOnProtectionType,
   resolveInitialProtectionBusLabel,
 } from '@/lib/protectionKind'
 import { generateId } from '@/utils'
@@ -46,6 +47,10 @@ import {
 } from '@/handlers/eendraad/smartSwitchDrop'
 import { isPlugInAfterSocketDrop } from '@/lib/eendraad/endpointInsertAfter'
 import { clamp } from '@/lib/geometry'
+import {
+  liftCircuitContentAboveOwnProtection,
+  moveCircuitToCircuitContentPosition,
+} from '@/lib/eendraad/circuitContentInsertion'
 import {
   getElectricalInstallationFromProject,
   getMutableElectricalInstallationForProject,
@@ -642,9 +647,7 @@ function simulateEndpointDrop(
           )
         : -1
     const anchorBranchIndex =
-      branchIndexFromEndpoints >= 0
-        ? branchIndexFromEndpoints
-        : branchesSansNewEndpoint.length - 1
+      branchIndexFromEndpoints >= 0 ? branchIndexFromEndpoints : branchesSansNewEndpoint.length - 1
     const insertionIndex =
       insertAfterEndpointId === null
         ? Math.max(0, anchorBranchIndex)
@@ -708,6 +711,46 @@ function simulateProtectionDrop(
 
   // Map symbol.id → ProtectionType used by runtime dropBehaviors.
   const protectionType = PROTECTION_SYMBOL_ID_TO_TYPE[symbol.id] ?? 'MCB'
+  const isInlineCircuitProtectionDrop =
+    isCircuitTrunkAddOnProtectionType(protectionType) &&
+    target.type === 'circuit' &&
+    !!target.circuitId &&
+    typeof target.circuitTrunkSegmentIndex === 'number' &&
+    !target.branchEndpoints?.length &&
+    target.insertAfterCircuitContent !== true &&
+    typeof target.secondaryBusInsertIndex !== 'number'
+  if (isInlineCircuitProtectionDrop && target.circuitId) {
+    if (circuitFeedsSubPanelSim(project, target.circuitId)) return
+    const circuit = findCircuitInProject(project, target.circuitId)
+    if (!circuit) return
+    const segmentIndex = target.circuitTrunkSegmentIndex
+    if (typeof segmentIndex !== 'number') return
+
+    const trunkDeviceId = generateId()
+    const trunkDevice: TrunkDevice = {
+      id: trunkDeviceId,
+      type: 'protection',
+      protectionType,
+      symbol: symbol.id as TrunkDevice['symbol'],
+      label: '',
+      trunkPosition: getCircuitTrunkPositionForDropSim(target, circuit),
+      ...getDefaultTrunkDeviceProtectionProps(protectionType, getVoltagePolesConfig(project)),
+    }
+    const list = [...(circuit.trunkDevices ?? []), trunkDevice]
+    list.sort((a, b) => (a.trunkPosition ?? 0) - (b.trunkPosition ?? 0))
+    const currentIndex = list.findIndex((device) => device.id === trunkDeviceId)
+    if (currentIndex >= 0) {
+      list.splice(currentIndex, 1)
+      list.splice(Math.max(0, Math.min(segmentIndex, list.length)), 0, trunkDevice)
+    }
+    circuit.trunkDevices = list
+    if (!changeSet.affectedPanelIds.includes(panel.id)) changeSet.affectedPanelIds.push(panel.id)
+    if (!changeSet.affectedCircuitIds.includes(circuit.id)) {
+      changeSet.affectedCircuitIds.push(circuit.id)
+    }
+    changeSet.createdTrunkDeviceIds.push(trunkDeviceId)
+    return
+  }
   const defaults = getProtectionCreationProps(project, protectionType)
   const targetedCircuit =
     target.type === 'circuit' && target.circuitId
@@ -801,6 +844,11 @@ function simulateProtectionDrop(
         nextParentChildren.splice(insertBeforeIndex, 1, circuitId)
         parentCircuit.subCircuitIds = nextParentChildren
         circuit.subCircuitIds = [insertBeforeId]
+      } else if (target.insertAfterCircuitContent) {
+        parentCircuit.subCircuitIds = [...(parentCircuit.subCircuitIds ?? []), circuitId]
+        if (!changeSet.affectedCircuitIds.includes(target.circuitId)) {
+          changeSet.affectedCircuitIds.push(target.circuitId)
+        }
       } else {
         const hasEndpoints = parentCircuit.endpoints.length > 0
         const hasBranches = (parentCircuit.branches?.length ?? 0) > 0
@@ -972,39 +1020,77 @@ function simulateMoveCircuitToSecondaryBus(
   circuitId: string,
   insertIndex: number
 ): void {
-  const panels: Panel[] = []
-  const stack = [...projectPanels(project)]
-  while (stack.length) {
-    const p = stack.pop()!
-    panels.push(p)
-    if (p.subPanels?.length) stack.push(...p.subPanels)
+  for (const panel of projectPanels(project)) {
+    const stack = [panel]
+    while (stack.length > 0) {
+      const candidate = stack.pop()!
+      if (moveCircuitToCircuitContentPosition(candidate, parentCircuitId, circuitId, insertIndex)) {
+        return
+      }
+      stack.push(...(candidate.subPanels ?? []))
+    }
+  }
+}
+
+/** Preview reparenting an existing protection circuit before or after target circuit content. */
+export function simulateProtectionRelocationOnProject(
+  project: PreviewProject,
+  moving: { protectionId: string; circuitId: string },
+  target: DropTarget
+): EendraadPreviewChangeSet | null {
+  if (target.type !== 'circuit' || !target.circuitId || !target.panelId) return null
+  const cloned = cloneProject(project)
+  const panel = findPanelById(mutableProjectPanels(cloned), target.panelId)
+  if (!panel) return null
+
+  const parentCircuit = findCircuitInProject(cloned, target.circuitId)
+  if (!parentCircuit) return null
+
+  if (target.circuitId === moving.circuitId && target.insertAfterCircuitContent === true) {
+    const changed = liftCircuitContentAboveOwnProtection(panel, moving.circuitId)
+    if (!changed) return null
+    const parentId = [
+      ...(panel.circuits ?? []),
+      ...(panel.protections ?? []).flatMap((protection) => protection.circuits ?? []),
+    ].find((circuit) => circuit.subCircuitIds?.includes(moving.circuitId))?.id
+    return {
+      project: cloned,
+      affectedPanelIds: [panel.id],
+      affectedCircuitIds: parentId ? [parentId, moving.circuitId] : [moving.circuitId],
+      createdEndpointIds: [],
+      createdProtectionIds: [],
+      createdTrunkDeviceIds: [],
+      movedTrunkDeviceIds: [],
+      createdSupplyTrunkDeviceIds: [],
+      createdGroundTrunkDeviceIds: [],
+    }
   }
 
-  for (const panel of panels) {
-    const allCircuits = [] as Circuit[]
-    allCircuits.push(...panel.circuits)
-    if (panel.protections) {
-      for (const prot of panel.protections) {
-        if (prot.circuits) allCircuits.push(...prot.circuits)
-      }
-    }
+  const insertIndex =
+    typeof target.secondaryBusInsertIndex === 'number'
+      ? target.secondaryBusInsertIndex
+      : (parentCircuit.subCircuitIds?.length ?? 0)
+  const insertBeforeCircuitContent =
+    target.insertAfterCircuitContent !== true && typeof target.circuitTrunkSegmentIndex === 'number'
+  const changed = moveCircuitToCircuitContentPosition(
+    panel,
+    target.circuitId,
+    moving.circuitId,
+    insertIndex,
+    { insertBeforeCircuitContent }
+  )
+  if (!changed) return null
 
-    const parentCircuit = allCircuits.find((c) => c.id === parentCircuitId)
-    if (!parentCircuit) continue
-
-    for (const other of allCircuits) {
-      const existing = other.subCircuitIds?.indexOf(circuitId) ?? -1
-      if (existing !== -1) {
-        other.subCircuitIds!.splice(existing, 1)
-        if (other.subCircuitIds!.length === 0) delete other.subCircuitIds
-        break
-      }
-    }
-
-    if (!parentCircuit.subCircuitIds) parentCircuit.subCircuitIds = []
-    const at = clamp(insertIndex, 0, parentCircuit.subCircuitIds.length)
-    parentCircuit.subCircuitIds.splice(at, 0, circuitId)
-    return
+  return {
+    project: cloned,
+    affectedPanelIds: [panel.id],
+    affectedCircuitIds: [target.circuitId, moving.circuitId],
+    createdEndpointIds: [],
+    createdProtectionIds: [],
+    createdTrunkDeviceIds: [],
+    movedTrunkDeviceIds: [],
+    createdSupplyTrunkDeviceIds: [],
+    createdGroundTrunkDeviceIds: [],
   }
 }
 
@@ -1160,8 +1246,7 @@ function simulateSupplyTrunkDevice(
         supplyDevices,
         insertIndex,
         Boolean(
-          mainTargetPanel &&
-            getPanelFeedOrganization(project, mainTargetPanel) === 'split-backup'
+          mainTargetPanel && getPanelFeedOrganization(project, mainTargetPanel) === 'split-backup'
         )
       )
       const converterOutputChain = getDirectConverterOutputChainForChangeover(

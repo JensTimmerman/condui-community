@@ -103,13 +103,9 @@
     "openOnYoutube": "Voir sur YouTube"
   },
   "touchOnboarding": {
-    "title": "Contrôles tactiles",
     "close": "Fermer",
-    "tipPan": "Glissez avec un doigt pour déplacer le canevas.",
-    "tipZoom": "Pincez avec deux doigts pour zoomer ou dézoomer.",
-    "tipFocus": "Concentrez-vous sur la sélection active.",
-    "tipCompactPanels": "Utilisez les panneaux compacts pour le reste.",
-    "tipTablet": "Sur iPad et tablettes, l'éditeur complet reste disponible, avec priorité aux gestes tactiles."
+    "pan": "Déplacer",
+    "zoom": "Zoomer"
   },
   "shortcuts": {
     "title": "Raccourcis",
@@ -336,6 +332,8 @@
       "title": "Debug",
       "eendraadHitboxDebug": "Afficher les zones de détection du schéma unifilaire",
       "eendraadHitboxDebugHint": "Visualise les zones de détection utilisées pour le drop sur le schéma unifilaire. Uniquement dans l’interface, pas dans l’export.",
+      "eendraadTrunkLayoutDebug": "Afficher les cadres des troncs unifilaires",
+      "eendraadTrunkLayoutDebugHint": "Affiche les enveloppes visuelles utilisées pour espacer les troncs de circuits et les jeux de barres secondaires. Uniquement dans l’interface, pas dans l’export.",
       "planPlacementDebug": "Afficher le débogage du plan de situation (sitplan)",
       "planPlacementDebugHint": "Visualise les centres de symboles, les cadres de sélection, les positions d’étiquettes et les aides d’orientation basées sur les murs sur le sitplan. Uniquement dans l’interface, pas dans l’export.",
       "panelRelationDebug": "Afficher le débogage du routage des relations panneau (canvas panneau)",
@@ -550,6 +548,7 @@
   },
   "circuits": {
     "title": "Circuits",
+    "legendTitle": "Légende des circuits",
     "add": "Ajouter un circuit",
     "code": "Code",
     "kind": "Type",
@@ -677,6 +676,20 @@
       "control_impulse": "Impulsion",
       "control_thermostat": "Thermostat",
       "control_dimmer": "Variateur"
+    },
+    "smokeDetector": {
+      "type": "Type de détecteur",
+      "type_smoke": "Fumée",
+      "type_gas": "Gaz",
+      "type_manual": "Manuel",
+      "type_beam": "Faisceau",
+      "type_flame": "Flamme",
+      "type_heat": "Chaleur"
+    },
+    "motionDetector": {
+      "type": "Type de détecteur",
+      "type_spread": "Étendu",
+      "type_generic": "Général"
     },
     "energyMeter": {
       "poles": "Pôles"
@@ -932,7 +945,9 @@
     "toolDescription": "Tracer les chemins de câbles entre les symboles de l'étage actif"
   },
   "layout": {
-    "presetLabel": "Disposition"
+    "presetLabel": "Disposition",
+    "collapseBottomShelf": "Masquer le panneau",
+    "expandBottomShelf": "Afficher le panneau"
   },
   "floorPlanTools": {
     "drawMode": "Mode dessin",
@@ -1082,6 +1097,7 @@
     "switch_cross": "Interrupteur de croisement",
     "source_changeover": "Inverseur de sources",
     "motion_detector": "Détecteur de mouvement",
+    "smoke_detector": "Détecteur de fumée",
     "light_point": "Point lumineux",
     "light_spot": "Spot",
     "light_led": "Luminaire LED",
@@ -1098,10 +1114,14 @@
     "microwave": "Four à micro-ondes",
     "motor": "Moteur",
     "stove": "Cuisinière",
-    "heating": "Chauffage",
+    "heating": "Chauffage électrique",
     "ventilation": "Ventilation",
     "door_lock": "Serrure de porte",
     "furnace": "Source HVAC",
+    "furnace_heatpump": "Pompe à chaleur",
+    "furnace_gas": "Chauffage au gaz",
+    "furnace_oil": "Chaudière au mazout",
+    "furnace_pellets": "Poêle à pellets",
     "buzzer": "Buzzer",
     "bell": "Cloche",
     "horn": "Corne",

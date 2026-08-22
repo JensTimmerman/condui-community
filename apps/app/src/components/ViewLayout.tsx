@@ -48,16 +48,22 @@ const ViewportCanvasSurface = memo(function ViewportCanvasSurface({
   panelIndex,
   type,
   capabilities,
+  onCompactAuxPanelVisibilityChange,
 }: {
   panelIndex: number
   type: CanvasType
   capabilities?: EditorCapabilities
+  onCompactAuxPanelVisibilityChange?: (visible: boolean) => void
 }) {
   const onMultiFingerSwipe = useCallback<MultiFingerSwipeHandler>(
     (direction, fingerCount, startClientX) => {
       if (fingerCount !== 3) return
 
       if (direction === 'up' || direction === 'down') {
+        if (onCompactAuxPanelVisibilityChange) {
+          onCompactAuxPanelVisibilityChange(direction === 'up')
+          return
+        }
         useUIStore.getState().toggleViewportPanelFocus(panelIndex)
         return
       }
@@ -73,7 +79,7 @@ const ViewportCanvasSurface = memo(function ViewportCanvasSurface({
       if (direction === 'right' && panels.properties.visible) togglePanel('properties')
       if (direction === 'left' && !panels.properties.visible) togglePanel('properties')
     },
-    [panelIndex]
+    [onCompactAuxPanelVisibilityChange, panelIndex]
   )
 
   return (
@@ -93,6 +99,7 @@ function ViewLayout({
   capabilities,
   compact = false,
   compactOrientation = 'portrait',
+  onCompactAuxPanelVisibilityChange,
 }: {
   leftInsetPx?: number
   rightInsetPx?: number
@@ -101,6 +108,7 @@ function ViewLayout({
   capabilities?: EditorCapabilities
   compact?: boolean
   compactOrientation?: 'portrait' | 'landscape'
+  onCompactAuxPanelVisibilityChange?: (visible: boolean) => void
 }) {
   const layout = useUIStore((s) => s.viewportLayout)
   const setLayoutPrimaryRatio = useUIStore((s) => s.setLayoutPrimaryRatio)
@@ -169,7 +177,7 @@ function ViewLayout({
                   data-viewport-canvas={slot.type}
                 >
                   <div className="relative h-full w-full">
-                    <div className="absolute left-3 top-3 z-40 pointer-events-auto">
+                    <div className="absolute left-3 top-3 z-[60] pointer-events-auto">
                       <CanvasSwitcher
                         panelIndex={slot.panelIndex}
                         currentCanvas={layoutForRender.panels[slot.panelIndex]?.canvas ?? slot.type}
@@ -182,6 +190,7 @@ function ViewLayout({
                         panelIndex={slot.panelIndex}
                         type={slot.type}
                         capabilities={capabilities}
+                        onCompactAuxPanelVisibilityChange={onCompactAuxPanelVisibilityChange}
                       />
                     </div>
                   </div>

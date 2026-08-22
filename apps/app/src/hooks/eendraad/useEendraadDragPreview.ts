@@ -38,6 +38,8 @@ export interface DragPreviewState {
     endpointIds: string[]
   }
   movingPanelAttachment?: { panelId: string }
+  /** Existing protection/circuit being reparented instead of duplicated. */
+  movingProtection?: { protectionId: string; circuitId: string }
   /** Existing matching symbol that will be incremented instead of inserting a new entity. */
   sameSymbolAddMore?: SameSymbolAddMoreLayoutTarget
 }

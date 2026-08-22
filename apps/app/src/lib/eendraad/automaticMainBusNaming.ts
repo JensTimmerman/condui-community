@@ -490,17 +490,33 @@ function collectNamingTargets(panel: Panel, opts: AutomaticMainBusNamingOpts): {
     }
   }
 
-  /** Nested protections: children (subCircuitIds order) first, then this row — feeder-only defers. */
+  /**
+   * Nested protections:
+   * - hideFeederLetters=true keeps depth-first children-first ordering so omitted feeder rows do not
+   *   consume early letters.
+   * - hideFeederLetters=false applies bottom-up bus ordering (row first, then descendants) so a
+   *   feeder protection that is shown keeps the first letter for its branch.
+   */
   function appendProtectionSubtree(protection: ProtectionDevice) {
     const primary = protection.circuits![0]!
-    appendSubCircuitRows(primary.subCircuitIds)
+    if (opts.hideFeederLetters) {
+      appendSubCircuitRows(primary.subCircuitIds)
+      pushRow({ kind: 'protection', protection }, primary, protection)
+      return
+    }
     pushRow({ kind: 'protection', protection }, primary, protection)
+    appendSubCircuitRows(primary.subCircuitIds)
   }
 
   function appendDirectCircuitSubtree(circuit: Circuit) {
-    appendSubCircuitRows(circuit.subCircuitIds)
     const owner = findProtectionOwningCircuit(panel, circuit.id)
+    if (opts.hideFeederLetters) {
+      appendSubCircuitRows(circuit.subCircuitIds)
+      pushRow({ kind: 'directCircuit', circuit }, circuit, owner)
+      return
+    }
     pushRow({ kind: 'directCircuit', circuit }, circuit, owner)
+    appendSubCircuitRows(circuit.subCircuitIds)
   }
 
   for (const item of getMainBusOrder(panel)) {
@@ -512,8 +528,13 @@ function collectNamingTargets(panel: Panel, opts: AutomaticMainBusNamingOpts): {
       const protection = panel.protections.find((p) => p.id === item.id)
       if (!protection?.circuits?.length) continue
       const primary = protection.circuits[0]!
-      appendSubCircuitRows(primary.subCircuitIds)
-      pushRow({ kind: 'protection', protection }, primary, protection)
+      if (opts.hideFeederLetters) {
+        appendSubCircuitRows(primary.subCircuitIds)
+        pushRow({ kind: 'protection', protection }, primary, protection)
+      } else {
+        pushRow({ kind: 'protection', protection }, primary, protection)
+        appendSubCircuitRows(primary.subCircuitIds)
+      }
     }
   }
 

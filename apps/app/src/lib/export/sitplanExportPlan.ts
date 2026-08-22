@@ -119,31 +119,36 @@ function collectSitplanPlacements(project: SitplanExportProject): SitplanPlaceme
   return placements
 }
 
+/** True when the same endpoint label appears on endpoints owned by different panels. */
 export function hasDuplicateSitplanEndpointLabels(project: SitplanExportProject): boolean {
-  const labelCounts = new Map<string, number>()
+  const labelPanelIds = new Map<string, Set<string>>()
 
   const visitPanel = (panel: Panel): boolean => {
     for (const circuit of panel.circuits) {
       for (const endpoint of circuit.endpoints) {
         if (!shouldCountEndpointForDuplicateLabels(endpoint)) continue
-        for (const placement of endpoint.placements) {
-          if (!placement.floorId) continue
-          const next = (labelCounts.get(endpoint.label) ?? 0) + 1
-          labelCounts.set(endpoint.label, next)
-          if (next > 1) return true
+        const label = endpoint.label.trim()
+        let panelsForLabel = labelPanelIds.get(label)
+        if (!panelsForLabel) {
+          panelsForLabel = new Set<string>()
+          labelPanelIds.set(label, panelsForLabel)
         }
+        panelsForLabel.add(panel.id)
+        if (panelsForLabel.size > 1) return true
       }
     }
     for (const protection of panel.protections) {
       for (const circuit of protection.circuits ?? []) {
         for (const endpoint of circuit.endpoints) {
           if (!shouldCountEndpointForDuplicateLabels(endpoint)) continue
-          for (const placement of endpoint.placements) {
-            if (!placement.floorId) continue
-            const next = (labelCounts.get(endpoint.label) ?? 0) + 1
-            labelCounts.set(endpoint.label, next)
-            if (next > 1) return true
+          const label = endpoint.label.trim()
+          let panelsForLabel = labelPanelIds.get(label)
+          if (!panelsForLabel) {
+            panelsForLabel = new Set<string>()
+            labelPanelIds.set(label, panelsForLabel)
           }
+          panelsForLabel.add(panel.id)
+          if (panelsForLabel.size > 1) return true
         }
       }
     }
@@ -153,10 +158,32 @@ export function hasDuplicateSitplanEndpointLabels(project: SitplanExportProject)
   return getElectricalPanelsFromProject(project).some((panel) => visitPanel(panel))
 }
 
+/**
+ * Split sitplan export per panel when a floor has symbols for more than one panel
+ * (for example main house + distant garden shed). Repeated placements of the same
+ * endpoint on one panel do not trigger this.
+ */
+export function hasMultipleSitplanPanelsOnSameFloor(project: SitplanExportProject): boolean {
+  const panelsByFloor = new Map<string, Set<string>>()
+
+  for (const placement of collectSitplanPlacements(project)) {
+    if (!placement.floorId) continue
+    let panelsForFloor = panelsByFloor.get(placement.floorId)
+    if (!panelsForFloor) {
+      panelsForFloor = new Set<string>()
+      panelsByFloor.set(placement.floorId, panelsForFloor)
+    }
+    panelsForFloor.add(placement.panelId)
+    if (panelsForFloor.size > 1) return true
+  }
+
+  return false
+}
+
 export function buildSitplanExportTargets(project: SitplanExportProject): SitplanExportTarget[] {
   const floors = getBuildingFloorsFromProject(project)
 
-  if (!hasDuplicateSitplanEndpointLabels(project)) {
+  if (!hasMultipleSitplanPanelsOnSameFloor(project)) {
     return floors.map((floor) => ({
       id: `sitplan-${floor.id}`,
       floorId: floor.id,

@@ -34,6 +34,7 @@ import {
   DropZoneHintsOverlay,
   HitZoneDebugOverlay,
   OffscreenPreviewIndicator,
+  TrunkLayoutDebugOverlay,
 } from './eendraad'
 import { FrameComponent } from './eendraad/FrameComponent'
 import RenderNode from './eendraad/RenderNode'
@@ -172,7 +173,10 @@ import {
 import { resolvePlacementForFloorMove } from '@/lib/eendraad/floorMoveFromEendraad'
 import { ZOOM_100 } from '@/constants/canvasConstants'
 import { getPanelDiagramId, type BottomUpPanelLayout } from '@/lib/layout/bottomUpLayout'
-import { getChangedPreviewWireSegments } from '@/lib/layout/eendraadPreviewWires'
+import {
+  filterProtectionRelocationPreviewWires,
+  getChangedPreviewWireSegments,
+} from '@/lib/layout/eendraadPreviewWires'
 import { resolvePanelAttachmentPreviewGeometry } from '@/lib/layout/panelAttachmentPreview'
 import { resolveProtectionNestPreviewCircuitId } from '@/lib/layout/eendraadPreviewTarget'
 import {
@@ -508,6 +512,41 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   const layoutTree = useLayoutTree() // Tree-based rendering and operations
   const wireSegments = useEendraadWireSegments() // Tree-based wire generation
   const allEndpoints = useEendraadEndpoints()
+
+  // Ensure the main panel is visible on first render when no saved view exists.
+  // This runs from layout data alone — no Konva dependency — so it fires
+  // immediately without waiting for the canvas scene graph to populate.
+  const hasSetInitialView = useRef(false)
+  useEffect(() => {
+    if (hasSetInitialView.current || !layout || layout.panels.length === 0) return
+    const view = useUIStore.getState().eendraadView
+    if (view.pan.x !== 0 || view.pan.y !== 0) {
+      hasSetInitialView.current = true
+      return
+    }
+    hasSetInitialView.current = true
+    const frame = layout.panels[0]!.frame
+    const contentCenterX = frame.x + frame.width / 2
+    const contentCenterY = frame.y + frame.height / 2
+    const el = canvasRef.current?.getStage()?.container()
+    const rect = el?.getBoundingClientRect()
+    const vpW = rect?.width ?? 800
+    const vpH = rect?.height ?? 600
+    const padding = Math.min(vpW, vpH) * 0.1
+    const fitZoom = Math.min(
+      (vpW - padding * 2) / frame.width,
+      (vpH - padding * 2) / frame.height,
+      2
+    )
+    const zoom = Math.max(0.1, fitZoom)
+    setEendraadView({
+      zoom,
+      pan: {
+        x: vpW / 2 - contentCenterX * zoom,
+        y: vpH / 2 - contentCenterY * zoom,
+      },
+    })
+  }, [layout, setEendraadView])
 
   useEendraadCircuitLetterHotkeys(currentProject, pointerOverEendraadRef)
 
@@ -1956,7 +1995,9 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
 
       dropTarget = normalizeProtectionPlacementDropTarget(symbol, dropTarget)
 
-      logger.info(`[drop-diag] Executing drop: symbol=${symbol.id}, target=${JSON.stringify({ type: dropTarget.type, panelId: dropTarget.panelId, circuitId: dropTarget.circuitId, protectionId: dropTarget.protectionId })}`)
+      logger.info(
+        `[drop-diag] Executing drop: symbol=${symbol.id}, target=${JSON.stringify({ type: dropTarget.type, panelId: dropTarget.panelId, circuitId: dropTarget.circuitId, protectionId: dropTarget.protectionId })}`
+      )
       // Execute drop behavior
       const { openDialog } = useDialogStore.getState()
       const runDropBehavior = () =>
@@ -2216,6 +2257,20 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
         if (!symbolMeta) return
 
         handleDragOver(newPos, symbolMeta)
+        const sourcePanel = useProjectStore.getState().getPanelForProtection(elementId)
+        const circuitId = sourcePanel
+          ? pickRepresentativeCircuitIdForMainBusMove(sourcePanel, protection)
+          : protection.circuits?.[0]?.id
+        if (circuitId) {
+          setDragPreview((preview) =>
+            preview
+              ? {
+                  ...preview,
+                  movingProtection: { protectionId: elementId, circuitId },
+                }
+              : preview
+          )
+        }
         return
       }
 
@@ -3010,6 +3065,17 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
               }
               let moved = false
 
+              const isOwnUpperContentTarget =
+                target.type === 'circuit' &&
+                target.panelId &&
+                target.circuitId === busCircuitId &&
+                target.insertAfterCircuitContent === true
+              if (isOwnUpperContentTarget) {
+                moved = useProjectStore
+                  .getState()
+                  .liftCircuitContentAboveOwnProtection(target.panelId!, busCircuitId)
+              }
+
               if (target.type === 'supplyWire' && target.panelId) {
                 moved = useProjectStore
                   .getState()
@@ -3245,13 +3311,17 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                   targetItemCount > 0 && targetItemCount !== siblingCount
                     ? Math.floor((rawInsertIndex * siblingCount) / targetItemCount)
                     : rawInsertIndex
+                const insertBeforeCircuitContent =
+                  target.insertAfterCircuitContent !== true &&
+                  typeof target.circuitTrunkSegmentIndex === 'number'
 
-                if (!alreadyOnSecondary) {
+                if (!alreadyOnSecondary || insertBeforeCircuitContent) {
                   moveCircuitToSecondaryBus(
                     target.panelId,
                     target.circuitId,
                     busCircuitId,
-                    insertIndex
+                    insertIndex,
+                    { insertBeforeCircuitContent }
                   )
                   moved = true
                 }
@@ -5314,12 +5384,23 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
 
                   // Generated wire IDs are unstable between layouts, so compare topology and
                   // geometry. This avoids tinting unchanged panel/supply buses for endpoint drops.
-                  const previewWiresForPanel = getChangedPreviewWireSegments(
-                    previewGraph.wireSegments,
-                    wireSegments,
-                    panelId,
-                    previewPanelNode,
-                    diagramId
+                  const relocationSourceParentCircuitId =
+                    dragPreview?.movingProtection &&
+                    internalDragPlacement?.elementId ===
+                      dragPreview.movingProtection.protectionId &&
+                    internalDragPlacement.protectionBus?.kind === 'secondary'
+                      ? internalDragPlacement.protectionBus.parentCircuitId
+                      : undefined
+                  const previewWiresForPanel = filterProtectionRelocationPreviewWires(
+                    getChangedPreviewWireSegments(
+                      previewGraph.wireSegments,
+                      wireSegments,
+                      panelId,
+                      previewPanelNode,
+                      diagramId
+                    ),
+                    relocationSourceParentCircuitId,
+                    dragPreview?.dropTarget?.circuitId
                   )
 
                   // Collect nodes for newly created symbols (endpoints, protections, trunk devices).
@@ -6155,7 +6236,10 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
 
             {/* Debug: hit zone overlay (dev builds only, when enabled in settings) */}
             {import.meta.env.DEV && (
-              <HitZoneDebugOverlay layoutTree={layoutTree} dragPreview={dragPreview} />
+              <>
+                <TrunkLayoutDebugOverlay layout={layout} wireSegments={wireSegments} />
+                <HitZoneDebugOverlay layoutTree={layoutTree} dragPreview={dragPreview} />
+              </>
             )}
             {}
           </Group>
@@ -6390,6 +6474,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
           offsetPx={12}
           topOffsetPx={12}
           zIndex={30}
+          menuOpen={openEendraadMenu !== null}
           dataCanvasOverlayAnchor="right"
           dataCanvasOverlayPosition="top-right"
         >

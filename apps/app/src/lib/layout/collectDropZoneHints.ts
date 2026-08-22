@@ -601,8 +601,12 @@ function shouldIncludeHintNode(
     if (hitType === 'circuit') {
       const circuit = ctx.circuitId ? findCircuitInProject(project, ctx.circuitId) : undefined
       if (circuit?.supplySource?.kind === 'converter-backup') return false
+      if (ctx.circuitId && circuitFeedsSubPanel(project, ctx.circuitId)) return false
       if (node.type === 'branch' || node.type === 'trunkDevice') return false
-      if (node.id?.startsWith('circuit-trunk-')) return false
+      if (node.id?.startsWith('circuit-trunk-')) {
+        const parsed = node.id ? parseCircuitTrunkSegmentId(node.id) : null
+        return (circuit?.endpoints.length ?? 0) > 0 && parsed?.segmentIndex === 0
+      }
       if (node.id?.startsWith('circuit-nest-')) return true
       if (node.id?.startsWith('secondary-bus-segment-')) {
         return (circuit?.subCircuitIds?.length ?? 0) >= 2
@@ -739,8 +743,21 @@ function visitForHints(
         trunkSegmentCounts
       )
     ) {
-      const { x, y } = hintAnchor(node)
+      let { x, y } = hintAnchor(node)
       const trunkParsed = node.id ? parseCircuitTrunkSegmentId(node.id) : null
+      if (
+        isProtectionDragSymbol(symbol) &&
+        trunkParsed?.segmentIndex === 0 &&
+        nextCtx.circuitId
+      ) {
+        // The lower protection ball sits just above the owning protection, well
+        // below the endpoint branches. The upper circuit-nest ball remains above
+        // the branches, making the two insertion directions explicit.
+        const bounds = getHitZoneBounds(node, 'core')
+        const height = Math.max(0, bounds.bottom - bounds.top)
+        x = (bounds.left + bounds.right) / 2
+        y = bounds.bottom - Math.min(28, height / 2)
+      }
       const baseMatch = buildHintMatch(node, node.hitZone.type, nextCtx)
       const previewsSecondaryBus =
         isProtectionDragSymbol(symbol) &&

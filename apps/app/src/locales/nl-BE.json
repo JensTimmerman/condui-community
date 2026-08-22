@@ -103,13 +103,9 @@
     "openOnYoutube": "Bekijk op YouTube"
   },
   "touchOnboarding": {
-    "title": "Aanraakbediening",
     "close": "Sluiten",
-    "tipPan": "Sleep met één vinger om over het canvas te pannen.",
-    "tipZoom": "Knijp met twee vingers om in of uit te zoomen.",
-    "tipFocus": "Focus op de actieve selectie.",
-    "tipCompactPanels": "Gebruik de compacte panelen voor de rest.",
-    "tipTablet": "Op iPad en tablets blijft de volledige editor beschikbaar, met prioriteit voor aanraakgebaren."
+    "pan": "Pannen",
+    "zoom": "Zoomen"
   },
   "shortcuts": {
     "title": "Sneltoetsen",
@@ -336,6 +332,8 @@
       "title": "Debug",
       "eendraadHitboxDebug": "Toon hitboxen van het eendraadschema",
       "eendraadHitboxDebugHint": "Visualiseer de hittzones die gebruikt worden voor drop-detectie op het eendraadsschema. Enkel in de UI, niet in export.",
+      "eendraadTrunkLayoutDebug": "Toon indelingsvakken van eendraadstrunks",
+      "eendraadTrunkLayoutDebugHint": "Toon de visuele omhullingen waarmee stroombaantrunks en secundaire rails worden verdeeld. Enkel in de UI, niet in export.",
       "planPlacementDebug": "Toon situatietekening-debug (sitplan)",
       "planPlacementDebugHint": "Visualiseer symboolcentra, selectiekaders, labelposities en muur-gebaseerde oriëntatiehulpen op het sitplan. Enkel in de UI, niet in export.",
       "panelRelationDebug": "Toon relationele routeringsdebug voor panelen (panel canvas)",
@@ -556,6 +554,7 @@
   },
   "circuits": {
     "title": "Stroombanen",
+    "legendTitle": "Stroombaanlegende",
     "add": "Stroombaan toevoegen",
     "code": "Code",
     "kind": "Type",
@@ -683,6 +682,20 @@
       "control_impulse": "Impuls",
       "control_thermostat": "Thermostaat",
       "control_dimmer": "Dimmer"
+    },
+    "smokeDetector": {
+      "type": "Detectortype",
+      "type_smoke": "Rook",
+      "type_gas": "Gas",
+      "type_manual": "Manueel",
+      "type_beam": "Straal",
+      "type_flame": "Vlam",
+      "type_heat": "Warmte"
+    },
+    "motionDetector": {
+      "type": "Detectortype",
+      "type_spread": "Spreid",
+      "type_generic": "Algemeen"
     },
     "energyMeter": {
       "poles": "Polen"
@@ -938,7 +951,9 @@
     "toolDescription": "Teken bedradingsroutes tussen symbolen op de actieve verdieping"
   },
   "layout": {
-    "presetLabel": "Layout"
+    "presetLabel": "Layout",
+    "collapseBottomShelf": "Paneel verbergen",
+    "expandBottomShelf": "Paneel tonen"
   },
   "floorPlanTools": {
     "drawMode": "Tekenmodus",
@@ -1088,6 +1103,7 @@
     "switch_cross": "Kruisschakelaar",
     "source_changeover": "Omschakelaar",
     "motion_detector": "Bewegingsdetector",
+    "smoke_detector": "Rookdetector",
     "light_point": "Lichtpunt",
     "light_spot": "Spot",
     "light_led": "LED armatuur",
@@ -1104,10 +1120,14 @@
     "microwave": "Microgolfoven",
     "motor": "Motor",
     "stove": "Fornuis",
-    "heating": "Verwarming",
+    "heating": "Elektrische Verwarming",
     "ventilation": "Ventilatie",
     "door_lock": "Deurslot",
     "furnace": "HVAC-bron",
+    "furnace_heatpump": "Warmtepomp",
+    "furnace_gas": "Gasverwarming",
+    "furnace_oil": "Stookolie Ketel",
+    "furnace_pellets": "Pelletkachel",
     "buzzer": "Zoemer",
     "bell": "Bel",
     "horn": "Hoorn",

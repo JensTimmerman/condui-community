@@ -3,7 +3,8 @@ let measureCanvas: HTMLCanvasElement | null = null
 export function measureSymbolLabelTextWidth(
   text: string,
   fontFamily: string,
-  fontSize: number
+  fontSize: number,
+  fontStyle: 'normal' | 'italic' = 'normal'
 ): number {
   if (typeof document === 'undefined') {
     return Math.max(...text.split('\n').map((line) => line.length * fontSize * 0.6))
@@ -18,6 +19,6 @@ export function measureSymbolLabelTextWidth(
   if (!context) {
     return Math.max(...text.split('\n').map((line) => line.length * fontSize * 0.6))
   }
-  context.font = `${fontSize}px ${fontFamily}`
+  context.font = `${fontStyle === 'normal' ? '' : `${fontStyle} `}${fontSize}px ${fontFamily}`
   return Math.ceil(Math.max(...text.split('\n').map((line) => context.measureText(line).width)))
 }

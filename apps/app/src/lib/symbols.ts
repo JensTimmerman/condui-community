@@ -426,7 +426,33 @@ export const symbols: SymbolMetadata[] = [
     category: 'switches',
     scope: 'both',
     svgPath: '/symbols/switches/motion_detector.svg',
-    tags: ['switch', 'motion', 'detector', 'presence', 'bewegingsdetector', 'bewegingsmelder'],
+    tags: ['switch', 'motion', 'detector', 'presence', 'bewegingsdetector', 'bewegingsmelder', 'IR'],
+  },
+  {
+    id: 'smoke_detector',
+    name: 'Smoke detector',
+    nameNL: 'Rookdetector',
+    nameFR: 'Détecteur de fumée',
+    category: 'switches',
+    scope: 'both',
+    svgPath: '/symbols/switches/smoke_detector.svg',
+    tags: [
+      'switch',
+      'smoke',
+      'detector',
+      'fire',
+      'gas',
+      'heat',
+      'flame',
+      'beam',
+      'rookdetector',
+      'branddetector',
+      'rookmelder',
+      'gasdetector',
+      'warmtedetector',
+      'vlamdetector',
+      'straaldetector',
+    ],
   },
   {
     id: 'relay',
@@ -593,17 +619,20 @@ export const symbols: SymbolMetadata[] = [
   },
   {
     id: 'heating',
-    name: 'Heating',
-    nameNL: 'Verwarming',
-    nameFR: 'Chauffage',
+    name: 'Electric heating',
+    nameNL: 'Elektrische Verwarming',
+    nameFR: 'Chauffage électrique',
     category: 'hvac',
     scope: 'both',
     svgPath: '/symbols/appliances/heating.svg',
     tags: [
       'appliance',
       'heating',
+      'electric heating',
       'verwarming',
+      'elektrische verwarming',
       'chauffage',
+      'chauffage électrique',
       'radiator',
       'accumulation',
       'accumulatieverwarming',
@@ -715,9 +744,9 @@ export const symbols: SymbolMetadata[] = [
   },
   {
     id: 'furnace_oil',
-    name: 'Oil heating',
-    nameNL: 'Stookolie',
-    nameFR: 'Mazout',
+    name: 'Oil boiler',
+    nameNL: 'Stookolie Ketel',
+    nameFR: 'Chaudière au mazout',
     category: 'hvac',
     scope: 'both',
     svgPath: '/symbols/hvac/furnace_oil.svg',
@@ -725,11 +754,15 @@ export const symbols: SymbolMetadata[] = [
       'hvac',
       'fuel oil',
       'oil',
+      'oil boiler',
+      'boiler',
       'heating',
       'verwarming',
       'chauffage',
       'mazout',
+      'chaudière au mazout',
       'stookolie',
+      'stookolie ketel',
     ],
   },
   {
@@ -961,6 +994,22 @@ export const RELAY_OVERLAY_PATHS = {
   dimmer: '/symbols/switches/relay_overlay_dimmer.svg',
 } as const
 
+/** Smoke / fire detector overlay SVG paths (drawn on top of smoke_detector_base) */
+export const SMOKE_DETECTOR_OVERLAY_PATHS = {
+  smoke: '/symbols/switches/smoke_detector_overlay_smoke.svg',
+  gas: '/symbols/switches/smoke_detector_overlay_gas.svg',
+  manual: '/symbols/switches/smoke_detector_overlay_manual.svg',
+  beam: '/symbols/switches/smoke_detector_overlay_beam.svg',
+  flame: '/symbols/switches/smoke_detector_overlay_flame.svg',
+  heat: '/symbols/switches/smoke_detector_overlay_heat.svg',
+} as const
+
+/** Motion detector full-symbol SVG paths (spread is library default) */
+export const MOTION_DETECTOR_SVG_PATHS = {
+  spread: '/symbols/switches/motion_detector.svg',
+  generic: '/symbols/switches/motion_detector_generic.svg',
+} as const
+
 /** Light point (regular light) overlay SVG paths */
 export const LIGHT_POINT_OVERLAY_PATHS = {
   safety: '/symbols/lighting/light_point_overlay_safety.svg',
@@ -1133,6 +1182,8 @@ export interface SwitchSymbolProps {
   poles?: 1 | 2 | 3 | 4
   twoPole?: boolean
   verklikkerlamp?: boolean
+  /** Only used when symbol is motion_detector; defaults to spread */
+  motionDetectorType?: 'spread' | 'generic'
 }
 
 /**
@@ -1147,6 +1198,7 @@ export function getSwitchSymbolPaths(
   const poles = sp.poles ?? 1
   const verklikkerlamp = sp.verklikkerlamp ?? false
   const twoPole = sp.twoPole ?? false
+  const motionDetectorType = sp.motionDetectorType ?? 'spread'
 
   // Legacy: treat as new symbol with default props
   const key = LEGACY_SYMBOL_IDS[symbolKey] ?? symbolKey
@@ -1190,7 +1242,10 @@ export function getSwitchSymbolPaths(
       basePath = '/symbols/switches/switch_cross.svg'
       break
     case 'motion_detector':
-      basePath = '/symbols/switches/motion_detector.svg'
+      basePath = MOTION_DETECTOR_SVG_PATHS[motionDetectorType]
+      break
+    case 'smoke_detector':
+      basePath = '/symbols/switches/smoke_detector_base.svg'
       break
     case 'relay':
       basePath = '/symbols/switches/relay.svg'
@@ -1200,6 +1255,22 @@ export function getSwitchSymbolPaths(
   }
 
   return overlayPath ? { basePath, overlayPath } : { basePath }
+}
+
+/**
+ * SVG path for compact previews (library icon, Domotica main device, switch type dropdown).
+ * For overlay-based symbols (relay, smoke_detector) this is the catalog composite that
+ * already includes the default overlay artwork — not the bare base used on canvas.
+ */
+export function getSwitchDisplaySvgPath(
+  symbolKey: string,
+  switchProps?: SwitchSymbolProps | null
+): string {
+  const key = LEGACY_SYMBOL_IDS[symbolKey] ?? symbolKey
+  if (key === 'relay' || key === 'smoke_detector') {
+    return getSymbolById(key)?.svgPath ?? getSwitchSymbolPaths(key, switchProps).basePath
+  }
+  return getSwitchSymbolPaths(key, switchProps).basePath
 }
 
 /** Symbol keys that support the verklikkerlamp (indicator light) overlay */

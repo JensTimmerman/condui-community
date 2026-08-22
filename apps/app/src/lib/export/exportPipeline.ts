@@ -59,7 +59,7 @@ import { addExportFontToPdf } from './pdfFontRegistration'
 import { getInstallerProfile, type InstallerProfile } from '@/lib/installerProfile'
 import { getInfoBlockBrandForCurrentDomain } from '@/utils/language'
 import i18n from '@/i18n'
-import { buildPanelCircuitLegendRows, buildPanelLegendSvg } from './panelLegendSvg'
+import { buildPanelCircuitLegendRows, buildPanelLegendSvgs } from './panelLegendSvg'
 import { getPanelDiagramTitleLine } from '@/lib/panel/panelDiagramLabels'
 import { buildSitplanExportTargets } from './sitplanExportPlan'
 import { exportLog } from './exportLogger'
@@ -775,7 +775,6 @@ export async function exportToPDF(
         if (legendRows.length > 0) {
           const orientation = 'portrait' as const
           const pageSize: [number, number] = [A4_PORTRAIT.width, A4_PORTRAIT.height]
-          pdf.addPage(pageSize, orientation)
           const legendLabels = {
             title: i18n.t('circuits.legendTitle', 'Circuit legend'),
             panel: i18n.t('panels.distribution', 'Distribution board'),
@@ -801,46 +800,58 @@ export async function exportToPDF(
               other: i18n.t('circuits.other', 'Other'),
             },
           } as const
-          const legendSvg = buildPanelLegendSvg(legendRows, fontFamily, legendLabels, exportTheme)
-          if (isLimitedRasterExport) {
-            await composeLimitedRasterPdfPage(
-              pdf,
-              legendSvg,
-              {
-                id: 'panel-legend',
-                scene: {
-                  id: 'panel-legend',
-                  kind: 'panel',
-                  rootNode: null as unknown as ExportScene['rootNode'],
-                  bounds: {
-                    x: 0,
-                    y: 0,
-                    width: A4_PORTRAIT.width,
-                    height: A4_PORTRAIT.height,
-                    space: 'scene',
+          const legendSvgs = buildPanelLegendSvgs(
+            legendRows,
+            fontFamily,
+            legendLabels,
+            exportTheme
+          )
+          for (const [legendPageIndex, legendSvg] of legendSvgs.entries()) {
+            const legendPageId =
+              legendSvgs.length === 1 ? 'panel-legend' : `panel-legend-${legendPageIndex + 1}`
+            pdf.addPage(pageSize, orientation)
+            if (isLimitedRasterExport) {
+              await composeLimitedRasterPdfPage(
+                pdf,
+                legendSvg,
+                {
+                  id: legendPageId,
+                  scene: {
+                    id: legendPageId,
+                    kind: 'panel',
+                    rootNode: null as unknown as ExportScene['rootNode'],
+                    bounds: {
+                      x: 0,
+                      y: 0,
+                      width: A4_PORTRAIT.width,
+                      height: A4_PORTRAIT.height,
+                      space: 'scene',
+                    },
+                    preferredOrientation: orientation,
                   },
-                  preferredOrientation: orientation,
+                  pageSize: 'A4',
+                  orientation,
                 },
-                pageSize: 'A4',
+                diagnostics,
+                null,
+                null,
+                exportTheme
+              )
+            } else {
+              await composeFullSvgPage(
+                pdf,
+                legendSvg,
+                legendPageId,
+                diagnostics,
                 orientation,
-              },
-              diagnostics,
-              null,
-              null,
-              exportTheme
-            )
-          } else {
-            await composeFullSvgPage(
-              pdf,
-              legendSvg,
-              'panel-legend',
-              diagnostics,
-              orientation,
-              exportTheme
-            )
+                exportTheme
+              )
+            }
+            successfulPages++
           }
-          successfulPages++
-          exportLog('[Export] Added panel circuit legend page')
+          exportLog(
+            `[Export] Added ${legendSvgs.length} panel circuit legend page${legendSvgs.length === 1 ? '' : 's'}`
+          )
         }
       }
 

@@ -19,7 +19,17 @@ import { EENDRAAD_PANEL_SYMBOL_WIDTH, getEendraadPanelBodyCenterYOffset } from '
 import { useThemeColors } from '@/lib/theme/hooks'
 import { useCanvasFontFamily } from '@/editions/community/communityHooks'
 import type { BottomUpPanelLayout } from '@/lib/layout/bottomUpLayout'
-import { estimateCircuitNotesWidth } from '@/lib/layout/bottomUpLayout'
+import {
+  CIRCUIT_NOTES_FONT_SIZE,
+  CIRCUIT_NOTES_LINE_HEIGHT,
+  CIRCUIT_NOTES_VERTICAL_X_NUDGE,
+  estimateCircuitNotesBlockHeight,
+  estimateCircuitNotesRenderedWidth,
+  estimateCircuitNotesWidth,
+  getCircuitNotesVisualLines,
+  measureCircuitNotesLineWidth,
+  normalizeCircuitNotesText,
+} from '@/lib/layout/circuitNoteMetrics'
 import type { Endpoint, ProtectionDevice, TrunkDevice, Panel } from '@/types/schema'
 import { isPanelOnlySubPanelFeeder as isPanelOnlySubPanelFeederCircuit } from '@/lib/layout/bottomUpLayout'
 import type { Point } from '@/types/ui'
@@ -538,7 +548,9 @@ function CircuitNotesLabel({ node }: { node: LayoutNode }) {
   const colors = useThemeColors()
   const fontFamily = useCanvasFontFamily()
   const textColor = colors.secondaryText
-  const notesText = node.visual?.type === 'label' ? node.visual.text : ''
+  const notesText = normalizeCircuitNotesText(
+    node.visual?.type === 'label' ? node.visual.text : ''
+  )
   const orientation =
     node.visual?.type === 'label' ? (node.visual.notesOrientation ?? 'horizontal') : 'horizontal'
   const notesVisible = node.visual?.type === 'label' ? node.visual.notesVisible !== false : true
@@ -548,23 +560,25 @@ function CircuitNotesLabel({ node }: { node: LayoutNode }) {
   }
 
   const isVertical = orientation === 'vertical'
-  const fontSize = 10
-  const lineHeight = 14
+  const fontSize = CIRCUIT_NOTES_FONT_SIZE
+  const lineHeight = CIRCUIT_NOTES_LINE_HEIGHT
 
-  // Horizontal: width from text length (tight box), clamped
-  const hWidth = estimateCircuitNotesWidth(notesText)
-  const hHeight = lineHeight
-
-  // Konva Text `wrap="word"` expands height for multi-line notes, but the
-  // current layout assumes a single-line height. To keep the *bottom edge*
-  // aligned (so the last line doesn't drift into the trunk/collision area),
-  // estimate how many wrapped lines we render and adjust the Y offset.
-  const wrappedLines = !isVertical
-    ? estimateCircuitNotesWrappedLineCount(notesText, fontFamily, fontSize, hWidth)
-    : 1
-  const horizontalBlockHeight = wrappedLines * lineHeight
+  // Both orientations use one shared text block. Rotating it swaps its painted
+  // width and height, so multiline vertical notes become wider columns.
+  const hWidth = estimateCircuitNotesRenderedWidth(notesText, fontFamily, fontSize)
+  const visualLines = getCircuitNotesVisualLines(
+    notesText,
+    fontFamily,
+    fontSize,
+    estimateCircuitNotesWidth(notesText, fontFamily, fontSize)
+  )
+  const blockHeight = estimateCircuitNotesBlockHeight(
+    notesText,
+    fontFamily,
+    fontSize,
+    lineHeight
+  )
   let rotation = 0
-  let align = 'center'
 
   if (isVertical) {
     // Vertical: rotate -90°. We want the *visual* centre of the rendered text
@@ -574,95 +588,33 @@ function CircuitNotesLabel({ node }: { node: LayoutNode }) {
     // - shift the group's Y up by half the horizontal width so the rotated
     //   box sits symmetrically around the anchor.
     rotation = -90
-    align = 'left'
   }
 
-  const groupX = node.bounds.x + (isVertical ? hHeight / 4 : 0)
+  const groupX = node.bounds.x + (isVertical ? CIRCUIT_NOTES_VERTICAL_X_NUDGE : 0)
   const groupY = isVertical ? node.bounds.y - hWidth / 2 : node.bounds.y
-  const textY = isVertical ? -hHeight / 2 : -horizontalBlockHeight + lineHeight / 2
+  const textY = isVertical ? -blockHeight / 2 : -blockHeight + lineHeight / 2
 
   return (
     <Group x={groupX} y={groupY} offsetX={0} offsetY={0} rotation={rotation}>
-      <Text
-        x={-hWidth / 2}
-        y={textY}
-        width={hWidth}
-        text={notesText}
-        fontSize={fontSize}
-        fontFamily={fontFamily}
-        fontStyle="italic"
-        fill={textColor}
-        align={align}
-        wrap="word"
-        // Konva interprets `lineHeight` as a multiplier of `fontSize`.
-        lineHeight={lineHeight / fontSize}
-        listening={false}
-      />
+      {visualLines.map((line, index) => {
+        const lineWidth = measureCircuitNotesLineWidth(line, fontFamily, fontSize)
+        return (
+          <Text
+            key={`${index}-${line}`}
+            x={-lineWidth / 2}
+            y={textY + index * lineHeight}
+            width={lineWidth}
+            text={line}
+            fontSize={fontSize}
+            fontFamily={fontFamily}
+            fontStyle="italic"
+            fill={textColor}
+            align="left"
+            wrap="none"
+            listening={false}
+          />
+        )
+      })}
     </Group>
   )
-}
-
-let circuitNotesMeasureCanvas: HTMLCanvasElement | null = null
-function measureCircuitNotesTextWidth(text: string, fontFamily: string, fontSize: number): number {
-  if (typeof document === 'undefined') {
-    return text.length * fontSize * 0.6
-  }
-  if (!circuitNotesMeasureCanvas) {
-    circuitNotesMeasureCanvas = document.createElement('canvas')
-  }
-  const context = circuitNotesMeasureCanvas.getContext('2d')
-  if (!context) {
-    return text.length * fontSize * 0.6
-  }
-  context.font = `italic ${fontSize}px ${fontFamily}`
-  return Math.ceil(context.measureText(text).width)
-}
-
-function estimateCircuitNotesWrappedLineCount(
-  text: string,
-  fontFamily: string,
-  fontSize: number,
-  maxWidth: number
-): number {
-  const raw = (text ?? '').toString()
-  if (raw.trim().length === 0) return 1
-
-  // Mimic Konva `wrap="word"`: wrap on whitespace boundaries within each
-  // explicit newline-separated paragraph.
-  const paragraphs = raw.split(/\r?\n/)
-  const spaceWidth = measureCircuitNotesTextWidth(' ', fontFamily, fontSize)
-
-  let totalLines = 0
-
-  for (const para of paragraphs) {
-    const words = para.split(/\s+/).filter(Boolean)
-    if (words.length === 0) {
-      totalLines += 1
-      continue
-    }
-
-    let lines = 1
-    let currentWidth = 0
-
-    for (const word of words) {
-      const wordWidth = measureCircuitNotesTextWidth(word, fontFamily, fontSize)
-
-      if (currentWidth === 0) {
-        currentWidth = wordWidth
-        continue
-      }
-
-      const nextWidth = currentWidth + spaceWidth + wordWidth
-      if (nextWidth <= maxWidth) {
-        currentWidth = nextWidth
-      } else {
-        lines += 1
-        currentWidth = wordWidth
-      }
-    }
-
-    totalLines += lines
-  }
-
-  return Math.max(1, totalLines)
 }

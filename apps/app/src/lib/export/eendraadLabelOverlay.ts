@@ -1,6 +1,16 @@
 import { jsPDF } from 'jspdf'
 import type { BottomUpPanelLayout } from '@/lib/layout/bottomUpLayout'
-import { estimateCircuitNotesWidth, LAYOUT_CONSTANTS } from '@/lib/layout/bottomUpLayout'
+import { LAYOUT_CONSTANTS } from '@/lib/layout/bottomUpLayout'
+import {
+  CIRCUIT_NOTES_FONT_SIZE,
+  CIRCUIT_NOTES_LINE_HEIGHT,
+  CIRCUIT_NOTES_VERTICAL_X_NUDGE,
+  estimateCircuitNotesRenderedWidth,
+  estimateCircuitNotesWidth,
+  getCircuitNotesVisualLines,
+  measureCircuitNotesLineWidth,
+  normalizeCircuitNotesText,
+} from '@/lib/layout/circuitNoteMetrics'
 import type { ExportTheme, SceneBounds, ComposedPagePlacement } from './types'
 import type { Note, WireSegment } from '@/types/schema'
 import { noteContentToLines } from '@/utils/noteMarkdown'
@@ -38,6 +48,72 @@ const SECONDARY_BUS_REFERENCE_TEXT_CHAR_WIDTH = 0.62
 const SECONDARY_BUS_REFERENCE_MIN_TEXT_WIDTH = 10
 const SECONDARY_BUS_REFERENCE_TEXT_GAP = 7
 const SECONDARY_BUS_REFERENCE_ARROW_LENGTH = 22
+
+interface CircuitNoteLinePlacement {
+  text: string
+  x: number
+  y: number
+  width: number
+  rotationDeg: number
+}
+
+function getCircuitNoteLinePlacements(params: {
+  text: string
+  x: number
+  y: number
+  orientation: 'horizontal' | 'vertical'
+  fontFamily: string
+}): CircuitNoteLinePlacement[] {
+  const text = normalizeCircuitNotesText(params.text)
+  const wrappingWidth = estimateCircuitNotesWidth(
+    text,
+    params.fontFamily,
+    CIRCUIT_NOTES_FONT_SIZE
+  )
+  const lines = getCircuitNotesVisualLines(
+    text,
+    params.fontFamily,
+    CIRCUIT_NOTES_FONT_SIZE,
+    wrappingWidth
+  )
+  const renderedWidth = estimateCircuitNotesRenderedWidth(
+    text,
+    params.fontFamily,
+    CIRCUIT_NOTES_FONT_SIZE
+  )
+  const blockHeight = lines.length * CIRCUIT_NOTES_LINE_HEIGHT
+  const isVertical = params.orientation === 'vertical'
+  const groupX = params.x + (isVertical ? CIRCUIT_NOTES_VERTICAL_X_NUDGE : 0)
+  const groupY = isVertical ? params.y - renderedWidth / 2 : params.y
+  const textTop = isVertical
+    ? -blockHeight / 2
+    : -blockHeight + CIRCUIT_NOTES_LINE_HEIGHT / 2
+
+  return lines.map((line, index) => {
+    const width = measureCircuitNotesLineWidth(
+      line,
+      params.fontFamily,
+      CIRCUIT_NOTES_FONT_SIZE
+    )
+    const localCenterY =
+      textTop + index * CIRCUIT_NOTES_LINE_HEIGHT + CIRCUIT_NOTES_FONT_SIZE / 2
+    return isVertical
+      ? {
+          text: line,
+          x: groupX + localCenterY,
+          y: groupY + width / 2,
+          width,
+          rotationDeg: -90,
+        }
+      : {
+          text: line,
+          x: groupX - width / 2,
+          y: groupY + localCenterY,
+          width,
+          rotationDeg: 0,
+        }
+  })
+}
 const SECONDARY_BUS_REFERENCE_ARROW_HEAD_LENGTH = 6
 const SECONDARY_BUS_REFERENCE_ARROW_HEAD_HALF_HEIGHT = 3
 const SECONDARY_BUS_REFERENCE_STROKE_WIDTH = 1.2
@@ -130,7 +206,6 @@ export function collectEendraadTextOverlays(
   const overlays: ExportTextOverlay[] = []
   const colors = getThemeColors(exportTheme)
   const fontFamily = getExportFontFamily()
-  void fontFamily
 
   const subPanelFeedAnchors = getSubPanelIncomingFeedLabelAnchors(panelLayout)
   const protectionXByCircuitId = new Map<string, number>()
@@ -208,28 +283,33 @@ export function collectEendraadTextOverlays(
 
   if (panelLayout.circuitNotes && panelLayout.circuitNotes.length > 0) {
     for (const note of panelLayout.circuitNotes) {
-      const text = (note.label ?? '').trim()
+      const text = normalizeCircuitNotesText(note.label)
       if (!text || note.notesVisible === false) continue
 
-      const isVertical = note.notesOrientation === 'vertical'
-      const estWidth = estimateCircuitNotesWidth(text)
-
-      overlays.push({
-        id: `circuit-notes-${note.circuitId}`,
-        kind: 'circuit-note',
-        circuitId: note.circuitId,
+      const placements = getCircuitNoteLinePlacements({
         text,
-        // Preserve layout/canvas semantics: (x, y) is the same anchor the
-        // canvas uses for the note group, not a reinterpreted "visual centre".
         x: note.x,
         y: note.y,
-        fontSize: NOTES_FONT_SIZE,
-        fontStyle: 'italic',
-        color: colors.secondaryText ?? colors.textColor,
-        align: 'center',
-        rotationDeg: isVertical ? -90 : 0,
-        estimatedWidthPx: estWidth,
-        notesVisible: note.notesVisible,
+        orientation: note.notesOrientation ?? 'horizontal',
+        fontFamily,
+      })
+      placements.forEach((placement, index) => {
+        overlays.push({
+          id: `circuit-notes-${note.circuitId}-${index}`,
+          kind: 'circuit-note',
+          circuitId: note.circuitId,
+          text: placement.text,
+          x: placement.x,
+          y: placement.y,
+          fontSize: NOTES_FONT_SIZE,
+          fontStyle: 'italic',
+          color: colors.secondaryText ?? colors.textColor,
+          align: 'left',
+          rotationDeg: placement.rotationDeg,
+          estimatedWidthPx: placement.width,
+          estimatedHeightPx: CIRCUIT_NOTES_FONT_SIZE,
+          notesVisible: note.notesVisible,
+        })
       })
     }
   }
@@ -1412,39 +1492,37 @@ export function injectEendraadLabelsIntoSvg(
 
   // Circuit notes labels (drawn after regular labels; same positions as live canvas)
   for (const note of circuitNotes) {
-    const x = note.x
-    const y = note.y
-    const text = (note.label ?? '').trim()
+    const text = normalizeCircuitNotesText(note.label)
     if (!text) continue
 
     const orientation = note.notesOrientation ?? 'horizontal'
-    const isVertical = orientation === 'vertical'
+    const placements = getCircuitNoteLinePlacements({
+      text,
+      x: note.x,
+      y: note.y,
+      orientation,
+      fontFamily,
+    })
 
-    // Mirror CircuitNotesLabel sizing/positioning so export matches canvas.
-    const estWidth = estimateCircuitNotesWidth(text)
-
-    // Canvas: in vertical mode, the group is shifted up by estWidth / 2 and then
-    // rotated -90° around its center. Reproduce the same shift here.
-    const textY = isVertical ? y - estWidth / 2 : y
-
-    const textEl = doc.createElementNS(ns, 'text')
-    textEl.setAttribute('x', String(x))
-    textEl.setAttribute('y', String(textY))
-    textEl.setAttribute('font-size', String(NOTES_FONT_SIZE))
-    textEl.setAttribute('font-family', fontFamily)
-    textEl.setAttribute('fill', notesFill)
-    textEl.setAttribute('font-style', 'italic')
-    textEl.setAttribute('text-anchor', 'middle')
-    // Match canvas "centered text" semantics more closely than "hanging".
-    textEl.setAttribute('dominant-baseline', 'middle')
-
-    if (isVertical) {
-      // Rotate around the shifted center point, same as canvas group pivot.
-      textEl.setAttribute('transform', `rotate(-90 ${x} ${textY})`)
+    for (const placement of placements) {
+      const textEl = doc.createElementNS(ns, 'text')
+      textEl.setAttribute('x', String(placement.x))
+      textEl.setAttribute('y', String(placement.y))
+      textEl.setAttribute('font-size', String(NOTES_FONT_SIZE))
+      textEl.setAttribute('font-family', fontFamily)
+      textEl.setAttribute('fill', notesFill)
+      textEl.setAttribute('font-style', 'italic')
+      textEl.setAttribute('text-anchor', 'start')
+      textEl.setAttribute('dominant-baseline', 'middle')
+      if (placement.rotationDeg !== 0) {
+        textEl.setAttribute(
+          'transform',
+          `rotate(${placement.rotationDeg} ${placement.x} ${placement.y})`
+        )
+      }
+      textEl.textContent = placement.text
+      labelGroup.appendChild(textEl)
     }
-
-    textEl.textContent = text
-    labelGroup.appendChild(textEl)
   }
 
   svgRoot.appendChild(labelGroup)

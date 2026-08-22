@@ -869,8 +869,21 @@ function ImportPlanImageDialog({ isOpen, onClose, initialFile = null }: ImportPl
         return computeImportedScale(page, importedAsset, perPageRef)
       }
 
-      const getImportedFloorName = (pageIndex: number) =>
-        `${t('canvas.floor')} ${pageIndex + 1}`
+      const floorNamePrefix = t('canvas.floor')
+      const usedFloorNames = new Set(
+        getCompatibilityFloorsFromProject(currentProject).map((f: Floor) => f.name),
+      )
+      let nextFloorNumber = usedFloorNames.size + 1
+      const getImportedFloorName = (_pageIndex: number) => {
+        let candidate = `${floorNamePrefix} ${nextFloorNumber}`
+        while (usedFloorNames.has(candidate)) {
+          nextFloorNumber++
+          candidate = `${floorNamePrefix} ${nextFloorNumber}`
+        }
+        usedFloorNames.add(candidate)
+        nextFloorNumber++
+        return candidate
+      }
       const getCadCropOffset = (
         pageAsset: { pageIndex: number; width: number; height: number; crop?: PdfImportCropBox },
         referenceAsset: { width: number; height: number; crop?: PdfImportCropBox } | undefined,

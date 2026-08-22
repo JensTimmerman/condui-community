@@ -13,6 +13,7 @@ import type { Circuit, ProtectionDevice, Endpoint, TrunkDevice, CircuitKind, Sym
 const SWITCH_SYMBOLS: SymbolKey[] = [
   'switch', 'switch_1p_twoway', 'switch_2p_twoway', 'switch_dimmer',
   'switch_1p_changeover', 'switch_1p_pull', 'switch_impulse', 'switch_cross', 'motion_detector',
+  'smoke_detector',
   'switch_single', 'switch_double',
 ]
 

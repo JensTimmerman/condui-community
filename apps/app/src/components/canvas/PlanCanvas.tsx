@@ -4011,6 +4011,43 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
   )
   useEffect(
     function () {
+      const canCancelWithShortcut =
+        activeTool === 'wiring' || activeTool === 'move' || activeTool === 'resetScale'
+      if (!canCancelWithShortcut) return
+      const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.key !== 'Escape') return
+        if (isKeyboardTypingTarget(event.target)) return
+        event.preventDefault()
+        if (activeTool === 'resetScale' && isResettingScale) {
+          handleScaleRulerCancel()
+          return
+        }
+        applyActiveTool('none')
+      }
+      const handleContextMenu = (event: MouseEvent) => {
+        if (event.button !== 2) return
+        const target = event.target
+        const insidePlan = target instanceof Node && !!containerRef.current?.contains(target)
+        if (!insidePlan) return
+        event.preventDefault()
+        event.stopPropagation()
+        if (activeTool === 'resetScale' && isResettingScale) {
+          handleScaleRulerCancel()
+          return
+        }
+        applyActiveTool('none')
+      }
+      window.addEventListener('keydown', handleKeyDown)
+      window.addEventListener('contextmenu', handleContextMenu, true)
+      return () => {
+        window.removeEventListener('keydown', handleKeyDown)
+        window.removeEventListener('contextmenu', handleContextMenu, true)
+      }
+    },
+    [activeTool, applyActiveTool, handleScaleRulerCancel, isResettingScale]
+  )
+  useEffect(
+    function () {
       if (activeTool !== 'wiring') {
         if (planWireDragSourcePlacementId !== null) {
           applyPlanWireDragSourcePlacementId(null)
@@ -8242,8 +8279,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
           <CanvasFloatingControlRail
             side="left"
             verticalAlign="center"
-            topSafeZonePx={110}
-            bottomSafeZonePx={80}
+            topOverlayInsetPx={68}
             zIndex={30}
             dataCanvasOverlayAnchor="left"
           >
@@ -8373,6 +8409,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
           offsetPx={12}
           topOffsetPx={12}
           zIndex={30}
+          menuOpen={openMenu !== null}
           dataCanvasOverlayAnchor="right"
           dataCanvasOverlayPosition="top-right"
         >
