@@ -69,7 +69,11 @@ export function focusSelectionOnCanvas(
     state.setPanelCanvas(0, targetCanvas)
   }
 
-  for (const delayMs of [0, options?.delayMs ?? 80, 220, 500]) {
+  // Request the first fit synchronously so clicking an issue feels immediate.
+  // Keep short retries for the canvas/layout render pass, but avoid a long
+  // fallback that makes a successful focus appear to lag by half a second.
+  useUIStore.getState().requestFitToView([targetCanvas])
+  for (const delayMs of [options?.delayMs ?? 80, 220]) {
     window.setTimeout(() => {
       useUIStore.getState().requestFitToView([targetCanvas])
     }, delayMs)

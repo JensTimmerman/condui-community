@@ -8,8 +8,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   RotateCcw,
-  ChevronDown,
-  ChevronRight,
+  CircleHelp,
 } from 'lucide-react'
 import { focusIssue } from '@/lib/validation/core/api'
 import type { Issue, ScopeType } from '@/lib/validation/core/types'
@@ -28,6 +27,8 @@ import {
 } from '@/lib/validation/circuitCableSection'
 import { DefaultQueryAPI } from '@/lib/validation/core/query-api'
 import { getOneWireSegmentsFromProject } from '@/lib/projectV2/annotations'
+import { getValidationAreiUrl } from '@/lib/validation/areiLinks'
+import { useSettingsStore } from '@/stores/settingsStore'
 import {
   getElectricalPanelsFromProject,
   type ProjectWithOptionalV2Electrical,
@@ -152,6 +153,7 @@ function ValidationIssuesDialog({
 }: ValidationIssuesDialogProps) {
   const { t } = useTranslation()
   const currentProject = useProjectStore((state: ProjectState) => state.currentProject)
+  const language = useSettingsStore((state) => state.language)
   const issues = useValidationStore((state: ValidationState) => state.issues)
   const status = useValidationStore((state: ValidationState) => state.status)
   const errorCount = useValidationStore((state: ValidationState) => state.getErrorCount())
@@ -165,8 +167,6 @@ function ValidationIssuesDialog({
     warning: true,
     info: true,
   })
-
-  const [expandedDetails, setExpandedDetails] = useState<Record<string, boolean>>({})
 
   const severityCounts: Record<string, number> = {}
   for (const issue of issues) {
@@ -231,13 +231,6 @@ function ValidationIssuesDialog({
     setSeverityFilter((prev) => ({
       ...prev,
       [severity]: !prev[severity],
-    }))
-  }
-
-  const toggleDetails = (issueId: string) => {
-    setExpandedDetails((prev) => ({
-      ...prev,
-      [issueId]: !prev[issueId],
     }))
   }
 
@@ -369,7 +362,15 @@ function ValidationIssuesDialog({
     })
   }
 
-  const handleIssueClick = (issue: Issue) => {
+  const handleIssueClick = (issue: Issue, interactionMethod: 'pointer' | 'keyboard' = 'pointer') => {
+    trackGoogleAnalyticsEvent('validation_issue_card_click', {
+      rule_id: issue.ruleId,
+      severity: issue.severity,
+      scope_type: issue.scope.type,
+      source: 'validation_card',
+      interaction_method: interactionMethod,
+    })
+
     if (issue.ruleId === HIDDEN_SITUATION_PLAN_RULE_ID && currentProject) {
       if (!openHiddenSituationPlanValidationDialog(currentProject, t)) {
         onClose()
@@ -380,6 +381,8 @@ function ValidationIssuesDialog({
         severity: issue.severity,
         scope_type: issue.scope.type,
         selection_type: 'hidden_situation_plan_dialog',
+        source: 'validation_card',
+        interaction_method: interactionMethod,
       })
       return
     }
@@ -814,10 +817,29 @@ function ValidationIssuesDialog({
       severity: issue.severity,
       scope_type: issue.scope.type,
       selection_type: explicitSelection?.type ?? selectionType,
+      source: 'validation_card',
+      interaction_method: interactionMethod,
     })
     focusSelectionOnCanvas(nextSelection, { preferredCanvas: 'eendraad' })
     onClose()
   }
+
+  const getAreiLinkLabel = (severity: Issue['severity']) =>
+    t(
+      severity === 'error'
+        ? 'validation.readMoreAboutError'
+        : severity === 'warning'
+          ? 'validation.readMoreAboutWarning'
+          : 'validation.readMoreAboutInfo',
+      {
+        defaultValue:
+          severity === 'error'
+            ? 'Read more about this error'
+            : severity === 'warning'
+              ? 'Read more about this warning'
+              : 'Read more about this message',
+      },
+    )
 
   return (
     <div className={`flex flex-col h-full ${showHeader ? 'max-h-[80vh]' : ''}`.trim()}>
@@ -972,7 +994,7 @@ function ValidationIssuesDialog({
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
                           e.preventDefault()
-                          handleIssueClick(issue)
+                          handleIssueClick(issue, 'keyboard')
                         }
                       }}
                     >
@@ -1014,34 +1036,30 @@ function ValidationIssuesDialog({
                               {t('contextMenu.showHidden', 'Show hidden…')}
                             </button>
                           )}
-                          {issue.details && (
-                            <div className="mb-1.5">
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  toggleDetails(issue.id)
-                                }}
-                                className="inline-flex items-center gap-1 text-xs font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white"
-                              >
-                                {expandedDetails[issue.id] ? (
-                                  <ChevronDown className="w-3 h-3" />
-                                ) : (
-                                  <ChevronRight className="w-3 h-3" />
-                                )}
-                                <span>
-                                  {expandedDetails[issue.id]
-                                    ? t('validation.lessInfo', { defaultValue: 'Less info' })
-                                    : t('validation.moreInfo', { defaultValue: 'More info' })}
-                                </span>
-                              </button>
-                              {expandedDetails[issue.id] && (
-                                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                  {issue.details}
-                                </p>
-                              )}
-                            </div>
-                          )}
+                          <div className="mb-1.5">
+                            <a
+                              href={getValidationAreiUrl(issue.ruleId, language)}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                trackGoogleAnalyticsEvent('validation_arei_link_open', {
+                                  rule_id: issue.ruleId,
+                                  severity: issue.severity,
+                                  source: 'validation_card',
+                                })
+                              }}
+                              className="group inline-flex items-center gap-1 text-xs font-medium text-sky-700 underline decoration-sky-300 underline-offset-2 transition-colors hover:text-sky-900 hover:decoration-sky-700 focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-600 dark:text-sky-300 dark:decoration-sky-700 dark:hover:text-sky-100 dark:hover:decoration-sky-200 dark:focus-visible:outline-sky-300"
+                              title={getAreiLinkLabel(issue.severity)}
+                              aria-label={getAreiLinkLabel(issue.severity)}
+                            >
+                              <CircleHelp
+                                className="h-3.5 w-3.5 transition-transform group-hover:scale-110"
+                                aria-hidden="true"
+                              />
+                              <span>{getAreiLinkLabel(issue.severity)}</span>
+                            </a>
+                          </div>
                           {(issue.citations.length > 0 ||
                             (import.meta.env.DEV && currentProject)) && (
                             <div className="flex items-center justify-between mt-2">

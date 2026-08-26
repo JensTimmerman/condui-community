@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, MapPin } from 'lucide-react'
+import { ChevronDown, Eye, EyeOff, MapPin } from 'lucide-react'
 import { DebouncedTextInput, DebouncedTextarea } from '@/components/forms'
 import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
 import {
@@ -179,9 +179,13 @@ export function ProjectProperties({
   } = useEditionFeatureAvailability(project?.project.id)
   const installation = project ? getElectricalInstallationFromProject(project) : undefined
   const projectInfo = project?.project
-  const siteLocation = (project as (Project & {
-    site?: { location?: { latitude?: number; longitude?: number } }
-  }) | null)?.site?.location
+  const siteLocation = (
+    project as
+      | (Project & {
+          site?: { location?: { latitude?: number; longitude?: number } }
+        })
+      | null
+  )?.site?.location
   const customer = projectInfo?.customer
   const inspectionAgency = projectInfo?.inspectionAgency
   const updateProject = useCallback(
@@ -552,7 +556,8 @@ export function ProjectProperties({
                   disabled={readOnly}
                   onChange={(event) =>
                     updateInstallation({
-                      installationProfile: event.target.value as Installation['installationProfile'],
+                      installationProfile: event.target
+                        .value as Installation['installationProfile'],
                     })
                   }
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 disabled:opacity-60"
@@ -579,7 +584,7 @@ export function ProjectProperties({
                       updateInstallation({
                         nominalVoltage: applyNominalVoltageSystem(
                           installation.nominalVoltage,
-                          system,
+                          system
                         ),
                       })
                     }
@@ -589,22 +594,22 @@ export function ProjectProperties({
                   className={`grid gap-3 ${hidesLineToNeutralField(normalizeNominalVoltageSystem(installation.nominalVoltage.system)) ? 'grid-cols-1' : 'grid-cols-2'}`}
                 >
                   {!hidesLineToNeutralField(
-                    normalizeNominalVoltageSystem(installation.nominalVoltage.system),
+                    normalizeNominalVoltageSystem(installation.nominalVoltage.system)
                   ) && (
-                      <div>
-                        <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                          {t('installation.lineToNeutral', 'Line-to-Neutral (V)')}
-                        </label>
-                        <input
-                          type="number"
-                          value={installation.nominalVoltage.uLineToNeutral}
-                          disabled
-                          min="0"
-                          step="1"
-                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-400 cursor-not-allowed [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                        />
-                      </div>
-                    )}
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                        {t('installation.lineToNeutral', 'Line-to-Neutral (V)')}
+                      </label>
+                      <input
+                        type="number"
+                        value={installation.nominalVoltage.uLineToNeutral}
+                        disabled
+                        min="0"
+                        step="1"
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-400 cursor-not-allowed [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      />
+                    </div>
+                  )}
                   <div>
                     <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
                       {t('installation.lineToLine', 'Line-to-Line (V)')}
@@ -658,8 +663,40 @@ export function ProjectProperties({
         </button>
         {inspectionExpanded && (
           <div className="px-3 pb-3 space-y-3">
-            {showInspectionAgencyCatalog ? (
-              <div className="flex justify-end">
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() =>
+                  updateProject({
+                    showInspectionAgencyInInfoBlock:
+                      projectInfo?.showInspectionAgencyInInfoBlock !== true,
+                  })
+                }
+                disabled={readOnly}
+                aria-pressed={projectInfo?.showInspectionAgencyInInfoBlock === true}
+                aria-label={
+                  projectInfo?.showInspectionAgencyInInfoBlock === true
+                    ? t('project.hideInspectionAgencyInInfoBlock', 'Hide in drawing info blocks')
+                    : t('project.showInspectionAgencyInInfoBlock', 'Show in drawing info blocks')
+                }
+                title={
+                  projectInfo?.showInspectionAgencyInInfoBlock === true
+                    ? t('project.hideInspectionAgencyInInfoBlock', 'Hide in drawing info blocks')
+                    : t('project.showInspectionAgencyInInfoBlock', 'Show in drawing info blocks')
+                }
+                className={`rounded-md border p-1.5 disabled:cursor-not-allowed disabled:opacity-50 ${
+                  projectInfo?.showInspectionAgencyInInfoBlock === true
+                    ? 'border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-950/40 dark:text-sky-200'
+                    : 'border-gray-300 text-gray-500 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-800'
+                }`}
+              >
+                {projectInfo?.showInspectionAgencyInInfoBlock === true ? (
+                  <Eye className="h-4 w-4" />
+                ) : (
+                  <EyeOff className="h-4 w-4" />
+                )}
+              </button>
+              {showInspectionAgencyCatalog ? (
                 <button
                   type="button"
                   onClick={() => setInspectionAgencyPickerOpen(true)}
@@ -668,8 +705,8 @@ export function ProjectProperties({
                 >
                   {t('inspectionAgencies.fillButton', 'Fill from approved list')}
                 </button>
-              </div>
-            ) : null}
+              ) : null}
+            </div>
             <div>
               <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
                 {t('project.inspectionAgencyName', 'Agency name')}
@@ -937,4 +974,3 @@ export function ProjectProperties({
     </div>
   )
 }
-

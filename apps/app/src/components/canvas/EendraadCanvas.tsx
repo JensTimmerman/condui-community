@@ -359,6 +359,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   const moveCircuitToSecondaryBus = useProjectStore(
     (s: ProjectState) => s.moveCircuitToSecondaryBus
   )
+  const moveCircuitsToRcdBus = useProjectStore((s: ProjectState) => s.moveCircuitsToRcdBus)
   const withSingleUndoEntry = useProjectStore((s: ProjectState) => s.withSingleUndoEntry)
   const relocateCircuitTrunkDevice = useProjectStore(
     (s: ProjectState) => s.relocateCircuitTrunkDevice
@@ -749,7 +750,10 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   }, [activePlacementSymbolId, layoutTree, dragPreview])
 
   // Layout + wires preview graph based on simulated drop
-  const previewGraph = useEendraadPreviewGraph(dragPreview?.sameSymbolAddMore ? null : dragPreview)
+  const previewGraph = useEendraadPreviewGraph(
+    dragPreview?.sameSymbolAddMore ? null : dragPreview,
+    layout
+  )
 
   useEffect(() => {
     if (!import.meta.env.VITE_E2E) return
@@ -2262,10 +2266,31 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
           ? pickRepresentativeCircuitIdForMainBusMove(sourcePanel, protection)
           : protection.circuits?.[0]?.id
         if (circuitId) {
+          const resolvedTarget = layoutTree
+            ? resolveProtectionDropTargetForPosition(
+                layoutTree,
+                newPos,
+                (tree, pos) =>
+                  findDropTargetWithDebug(tree, pos, {
+                    preferMainBusOverGroundWire: true,
+                    preferMainBusOverSupplyWire: true,
+                    preferSecondaryBusForNestedProtection: true,
+                  }),
+                (panelId) => getPanelById(panelId),
+                elementId,
+                (id) => getProtectionById(id),
+                { nestOnRcd: true }
+              )
+            : null
+          if (layoutTree && !resolvedTarget) {
+            setDragPreview(null)
+            return
+          }
           setDragPreview((preview) =>
             preview
               ? {
                   ...preview,
+                  ...(resolvedTarget ? { dropTarget: resolvedTarget } : {}),
                   movingProtection: { protectionId: elementId, circuitId },
                 }
               : preview
@@ -2336,6 +2361,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
     },
     [
       getEndpointById,
+      getPanelById,
       getProtectionById,
       getTrunkDeviceById,
       handleDragOver,
@@ -2424,7 +2450,10 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                 preferMainBusOverSupplyWire: true,
                 preferSecondaryBusForNestedProtection: true,
               }),
-            (panelId) => store.getPanelById(panelId)
+            (panelId) => store.getPanelById(panelId),
+            undefined,
+            undefined,
+            { nestOnRcd: true }
           )
           if (!target?.panelId) return false
           const selectedProtections = classified.protectionIds
@@ -2472,6 +2501,13 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
             return false
           }
 
+          if (
+            target.type === 'circuit' &&
+            movable.some((item) => store.getPanelForProtection(item.id)?.id !== target.panelId)
+          ) {
+            return false
+          }
+
           return withSingleUndoEntry(
             () => {
               if (target.type === 'mainBus') {
@@ -2481,6 +2517,14 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                     .getState()
                     .moveCircuitToMainBus(target.panelId!, item.circuitId, baseIndex + index)
                 })
+              } else if (target.protectionId) {
+                const moved = useProjectStore.getState().moveCircuitsToRcdBus(
+                  target.panelId!,
+                  target.protectionId,
+                  movable.map((item) => item.circuitId),
+                  target.secondaryBusInsertIndex ?? 0
+                )
+                if (!moved) return false
               } else {
                 const baseIndex = target.secondaryBusInsertIndex ?? 0
                 movable.forEach((item, index) => {
@@ -2950,7 +2994,8 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                   }),
                 (panelId) => getPanelById(panelId),
                 elementId,
-                (id) => getProtectionById(id)
+                (id) => getProtectionById(id),
+                { nestOnRcd: true }
               )
             return withSingleUndoEntry(
               () => {
@@ -3029,34 +3074,20 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                 return false
               }
 
-              let { target } = findDropTargetWithDebug(layoutTree, position, {
-                preferMainBusOverGroundWire: true,
-                preferMainBusOverSupplyWire: true,
-                preferSecondaryBusForNestedProtection: true,
-              })
-
-              // Dropping on another MCB (protection on main bus): treat as main-bus drop after that MCB
-              if (
-                (target.type === 'protection' || target.protectionId) &&
-                target.panelId &&
-                target.protectionId
-              ) {
-                const panel = getPanelById(target.panelId)
-                if (panel) {
-                  const mainBusItemsNorm = getMainBusItemsWithIndices(panel)
-                  const idx = mainBusItemsNorm.findIndex(
-                    (item) => item.type === 'protection' && item.id === target.protectionId
-                  )
-                  if (idx >= 0) {
-                    target = {
-                      ...target,
-                      type: 'mainBus',
-                      panelId: target.panelId,
-                      mainBusInsertIndex: idx + 1,
-                    } as typeof target
-                  }
-                }
-              }
+              const target = resolveProtectionDropTargetForPosition(
+                layoutTree,
+                position,
+                (tree, pos) =>
+                  findDropTargetWithDebug(tree, pos, {
+                    preferMainBusOverGroundWire: true,
+                    preferMainBusOverSupplyWire: true,
+                    preferSecondaryBusForNestedProtection: true,
+                  }),
+                (panelId) => getPanelById(panelId),
+                undefined,
+                undefined,
+                { nestOnRcd: true }
+              ) ?? { type: null }
 
               if (
                 protectionDropTargetHitsSource(elementId, target, (id) => getProtectionById(id))
@@ -3316,14 +3347,23 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                   typeof target.circuitTrunkSegmentIndex === 'number'
 
                 if (!alreadyOnSecondary || insertBeforeCircuitContent) {
-                  moveCircuitToSecondaryBus(
-                    target.panelId,
-                    target.circuitId,
-                    busCircuitId,
-                    insertIndex,
-                    { insertBeforeCircuitContent }
-                  )
-                  moved = true
+                  if (target.protectionId) {
+                    moved = moveCircuitsToRcdBus(
+                      target.panelId,
+                      target.protectionId,
+                      [busCircuitId],
+                      insertIndex
+                    )
+                  } else {
+                    moveCircuitToSecondaryBus(
+                      target.panelId,
+                      target.circuitId,
+                      busCircuitId,
+                      insertIndex,
+                      { insertBeforeCircuitContent }
+                    )
+                    moved = true
+                  }
                 }
               }
 
@@ -3581,6 +3621,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
       moveCircuitOnMainBus,
       moveCircuitToMainBus,
       moveCircuitToSecondaryBus,
+      moveCircuitsToRcdBus,
       relocateCircuitTrunkDevice,
       resolveTrunkRelocateDropTarget,
       setDragPreview,

@@ -237,14 +237,46 @@ export function resolveProtectionDropTargetForPosition(
   getPanelById: (panelId: string) => Panel | undefined,
   sourceProtectionId?: string,
   getProtectionById?: (id: string) => ProtectionDevice | null | undefined,
+  options?: { nestOnRcd?: boolean },
 ): DropTarget | null {
   let { target } = findDropTarget(layoutTree, position)
   if (!target?.panelId) return null
 
   const protectionId =
     target.type === 'protection' ? target.protectionId : (target as DropTarget).protectionId
-  if (protectionId && target.panelId) {
-    const panel = getPanelById(target.panelId)
+  const panel = target.panelId ? getPanelById(target.panelId) : undefined
+  const explicitTargetProtection = panel?.protections.find(
+    (protection) => protection.id === protectionId
+  )
+  const targetProtection =
+    explicitTargetProtection ??
+    (target.type === 'circuit' &&
+    target.circuitId &&
+    (typeof target.circuitTrunkSegmentIndex === 'number' ||
+      target.insertAfterCircuitContent === true)
+      ? panel?.protections.find(
+          (protection) =>
+            (protection.type === 'RCD' || protection.type === 'RCBO') &&
+            protection.circuits?.some((circuit) => circuit.id === target.circuitId)
+        )
+      : undefined)
+  const isRcdTarget =
+    targetProtection?.type === 'RCD' || targetProtection?.type === 'RCBO'
+  if (options?.nestOnRcd && isRcdTarget) {
+    const anchorCircuit = targetProtection.circuits?.[0]
+    if (!anchorCircuit) return null
+    target = {
+      ...target,
+      type: 'circuit',
+      circuitId: anchorCircuit.id,
+      protectionId: targetProtection.id,
+      secondaryBusInsertIndex:
+        target.secondaryBusInsertIndex ?? anchorCircuit.subCircuitIds?.length ?? 0,
+      secondaryBusItemCount:
+        target.secondaryBusItemCount ?? anchorCircuit.subCircuitIds?.length ?? 0,
+    }
+  }
+  if (protectionId && target.panelId && !(options?.nestOnRcd && isRcdTarget)) {
     if (panel) {
       const mainBusItemsNorm = getMainBusItemsWithIndices(panel)
       const idx = mainBusItemsNorm.findIndex(

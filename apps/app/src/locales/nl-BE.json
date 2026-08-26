@@ -381,6 +381,8 @@
     "meterEanCodePlaceholder": "bijv. 5412345678901234",
     "inspectionAgency": "Keuringsorganisme",
     "inspectionAgencyName": "Naam organisme",
+    "showInspectionAgencyInInfoBlock": "Tonen in infoblokken van schema's",
+    "hideInspectionAgencyInInfoBlock": "Verbergen in infoblokken van schema's",
     "created": "Aangemaakt",
     "updated": "Bijgewerkt",
     "recent": "Recent",
@@ -728,6 +730,7 @@
       "mainSwitchType": "Schakelaar type"
     },
     "solarPanel": {
+      "groupTitle": "Merk en model",
       "wattage": "Vermogen (W)",
       "voltage": "Spanning (V)"
     },
@@ -1196,6 +1199,7 @@
     },
     "reason": {
       "circuitRefMismatch": "Stroombaan onder verkeerde beveiliging",
+      "protectionReferenceConflict": "Conflicterende verwijzingen naar beveiligingen",
       "endpointNotInBranch": "Eindpunt niet op tak",
       "branchRefsMissingEndpoint": "Tak verwijst naar ontbrekend eindpunt",
       "frameContentOrphan": "Kader verwijst naar ontbrekende inhoud",
@@ -1230,8 +1234,9 @@
     "revalidate": "Opnieuw valideren",
     "revalidateInProgress": "Bezig met opnieuw valideren…",
     "goToIssue": "Ga naar probleem",
-    "moreInfo": "Meer info",
-    "lessInfo": "Minder info",
+    "readMoreAboutError": "Meer lezen over deze fout",
+    "readMoreAboutWarning": "Meer lezen over deze waarschuwing",
+    "readMoreAboutInfo": "Meer lezen over deze melding",
     "scopeLabels": {
       "circuit": "Stroombaan",
       "board": "Bord",
@@ -1437,6 +1442,7 @@
     },
     "orphanDetection": {
       "circuitRefMismatch": "Stroombaan {{circuitCode}} staat onder beveiliging \"{{listedUnderLabel}}\" maar verschijnt op het éénlijnschema onder stroombaan {{parentCircuitCode}} (beveiliging \"{{displayedUnderLabel}}\").",
+      "protectionReferenceConflict": "Stroombaan {{circuitCode}} wordt door meerdere beveiligingen verwezen ({{protectionLabels}}). Bij nesten van differentiëlen en differentieelautomaten blijft de stroombaan onder haar automaat en wordt ze via de ankerstroombaan gekoppeld. Herstel eerst de topologie van het éénlijnschema.",
       "endpointNotInBranch": "Eindpunt \"{{endpointLabel}}\" op stroombaan {{circuitCode}} staat op geen enkele tak en verschijnt niet op het éénlijnschema.",
       "branchRefsMissingEndpoint": "Tak \"{{branchLabel}}\" op stroombaan {{circuitCode}} verwijst naar ontbrekend eindpunt {{endpointId}}.",
       "frameContentOrphans": "Kader \"{{frameTitle}}\" verwijst naar ontbrekende of ongeldige inhoud ({{contentId}}).",

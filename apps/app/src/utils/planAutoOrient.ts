@@ -8,12 +8,14 @@
  * - Floor plan image under the placement – used as a fallback and to support
  *   legacy/imported plans without drawn walls.
  *
- * Both sources use quadrant wedges (45° slice from center to each side) so a
- * placement need not sit exactly on top of a wall.
+ * Drawn walls use the nearest segment normal for exact alignment. Raster plans
+ * use quadrant wedges (45° slice from center to each side) as a forgiving
+ * fallback because their wall geometry is not available.
  */
 
 import type { Placement, Rotation, SituationPlanRotation, Wall } from '@/types/schema'
 import { clamp } from '@/lib/geometry'
+import { MULTI_SOCKET_OFFSET, SYMBOL_SIZE } from '@/components/canvas/eendraad/canvasSymbols'
 import {
   getClosestPointOnCurvedWall,
   getWallPathPoints,
@@ -35,8 +37,9 @@ const MIN_IMAGE_SCORE_MARGIN = 0.07
 const WALL_SEARCH_RADIUS_FACTOR = 4.5
 
 type NearestDrawnWall = {
-  wall: Wall
   distance: number
+  point: { x: number; y: number }
+  tangent: { x: number; y: number }
 }
 
 function nearestDrawnWall(placement: Placement, walls: Wall[]): NearestDrawnWall | null {
@@ -45,7 +48,11 @@ function nearestDrawnWall(placement: Placement, walls: Wall[]): NearestDrawnWall
     if (isCurvedWall(wall)) {
       const closest = getClosestPointOnCurvedWall(wall, placement.pos)
       if (closest && (!nearest || closest.distance < nearest.distance)) {
-        nearest = { wall, distance: closest.distance }
+        nearest = {
+          distance: closest.distance,
+          point: closest.point,
+          tangent: closest.tangent,
+        }
       }
       continue
     }
@@ -67,32 +74,46 @@ function nearestDrawnWall(placement: Placement, walls: Wall[]): NearestDrawnWall
         start.x + t * vx - placement.pos.x,
         start.y + t * vy - placement.pos.y
       )
-      if (!nearest || distance < nearest.distance) nearest = { wall, distance }
+      if (!nearest || distance < nearest.distance) {
+        nearest = {
+          distance,
+          point: {
+            x: start.x + t * vx,
+            y: start.y + t * vy,
+          },
+          tangent: { x: vx, y: vy },
+        }
+      }
     }
   }
   return nearest
 }
 
-function rotationFromCurvedWall(
+function rotationFromWallNormal(
   placement: Placement,
-  wall: Wall,
+  point: { x: number; y: number },
+  tangent: { x: number; y: number },
+  distance: number,
   wallFacingSide: WallFacingSide,
-  symbolBaseSizePx: number
+  symbolBaseSizePx: number,
+  socketCount: number
 ): SituationPlanRotation | null {
-  const closest = getClosestPointOnCurvedWall(wall, placement.pos)
   const symbolRadius = (symbolBaseSizePx / 2) * placement.scale
-  if (!closest || closest.distance > 2 * symbolRadius || closest.distance < 1e-3) return null
+  const symbolSize = symbolBaseSizePx * placement.scale
+  const socketOffset = MULTI_SOCKET_OFFSET * (symbolSize / SYMBOL_SIZE)
+  const socketExtraWidth = Math.max(0, socketCount - 1) * socketOffset
+  if (distance > 2 * symbolRadius + socketExtraWidth || distance < 1e-3) return null
 
-  const tangentLength = Math.hypot(closest.tangent.x, closest.tangent.y)
+  const tangentLength = Math.hypot(tangent.x, tangent.y)
   if (tangentLength < 1e-6) return null
-  const tangent = {
-    x: closest.tangent.x / tangentLength,
-    y: closest.tangent.y / tangentLength,
+  const unitTangent = {
+    x: tangent.x / tangentLength,
+    y: tangent.y / tangentLength,
   }
-  const normalA = { x: -tangent.y, y: tangent.x }
+  const normalA = { x: -unitTangent.y, y: unitTangent.x }
   const towardWall = {
-    x: closest.point.x - placement.pos.x,
-    y: closest.point.y - placement.pos.y,
+    x: point.x - placement.pos.x,
+    y: point.y - placement.pos.y,
   }
   const normal = normalA.x * towardWall.x + normalA.y * towardWall.y >= 0
     ? normalA
@@ -437,23 +458,29 @@ export function suggestRotationForPlacement(
     walls?: Wall[]
     /** Base symbol size (pre-placement.scale), in plan/stage pixels. */
     symbolBaseSizePx?: number
+    /** Number of rendered socket copies; used to include their extra footprint in wall pickup. */
+    socketCount?: number
   },
   wallFacingSide: WallFacingSide = 'left'
 ): SituationPlanRotation | null {
   const walls = ctx.walls ?? []
   const base = ctx.symbolBaseSizePx ?? SYMBOL_BASE_SIZE
+  const socketCount = Math.max(1, ctx.socketCount ?? 1)
 
   // 1) Prefer vector walls when present
   if (walls.length > 0) {
     const nearest = nearestDrawnWall(placement, walls)
-    if (nearest && isCurvedWall(nearest.wall)) {
-      const curvedRotation = rotationFromCurvedWall(
+    if (nearest) {
+      const wallRotation = rotationFromWallNormal(
         placement,
-        nearest.wall,
+        nearest.point,
+        nearest.tangent,
+        nearest.distance,
         wallFacingSide,
-        base
+        base,
+        socketCount
       )
-      if (curvedRotation != null) return curvedRotation
+      if (wallRotation != null) return wallRotation
     }
     const wallScores = getQuadrantWallScoresFromWalls(placement, walls, base)
     if (wallScores) {

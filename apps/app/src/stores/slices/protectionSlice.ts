@@ -45,6 +45,7 @@ import {
   syncLinkedSubPanelHierarchy,
   syncManualChronologyForInstallDateUpdate,
 } from '@/lib/eendraad/projectElectricalDomain'
+import { moveCircuitsToRcdBus } from '@/lib/eendraad/panelAttachmentMove'
 import { resolveSecondaryBusEjectSelection } from '@/lib/eendraad/secondaryBusEjectEligibility'
 import { ensureInstallationFeedTopology } from '@/lib/feedTopology'
 import { findPanelById } from '@/lib/panel/panelTree'
@@ -1082,6 +1083,25 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
       state.isDirty = true
       maybeApplyAutomaticEendraadNamingForPanel(state.currentProject, panelId)
     }),
+
+  moveCircuitsToRcdBus: (panelId, rcdProtectionId, circuitIds, insertIndex) => {
+    let moved = false
+    set((state) => {
+      if (!state.currentProject) return
+      const result = moveCircuitsToRcdBus(
+        getMutableElectricalPanelsForProject(state.currentProject),
+        panelId,
+        rcdProtectionId,
+        circuitIds,
+        insertIndex
+      )
+      if (!result) return
+      moved = true
+      state.isDirty = true
+      maybeApplyAutomaticEendraadNamingForPanel(state.currentProject, panelId)
+    })
+    return moved
+  },
 
   liftCircuitContentAboveOwnProtection: (panelId, circuitId) => {
     let changed = false

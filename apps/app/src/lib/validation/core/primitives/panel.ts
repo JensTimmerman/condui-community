@@ -715,6 +715,12 @@ function checkEendraadOrphans(context: CheckContext, _params?: Record<string, un
           displayedUnderLabel: opts.displayedUnderLabel,
           defaultValue: `Circuit {{circuitCode}} is listed under protection "{{listedUnderLabel}}" but appears in the one-line diagram under circuit {{parentCircuitCode}} (protection "{{displayedUnderLabel}}").`,
         }),
+      protectionReferenceConflict: (opts) =>
+        i18n.t('validation.orphanDetection.protectionReferenceConflict', {
+          circuitCode: opts.circuitCode,
+          protectionLabels: opts.protectionLabels,
+          defaultValue: `Circuit {{circuitCode}} is referenced by multiple protections ({{protectionLabels}}). Repair the one-line topology before continuing.`,
+        }),
       endpointNotInBranch: (opts) =>
         i18n.t('validation.orphanDetection.endpointNotInBranch', {
           endpointLabel: opts.endpointLabel,

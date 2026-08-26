@@ -31,6 +31,9 @@ export function createPlanMultiplierAltDuplicatePlacement(
       x: refPlacement.pos.x + PLAN_ALT_DRAG_COPY_OFFSET.x,
       y: refPlacement.pos.y + PLAN_ALT_DRAG_COPY_OFFSET.y,
     },
+    ...(endpoint.type === 'socket' && refPlacement.rotationMode !== 'explicit'
+      ? { rotationDeg: 0 }
+      : {}),
     locked: false,
   })
   useUIStore.getState().setSelection({ type: 'placement', ids: [newPlacementId] })
@@ -85,7 +88,10 @@ export function createPlanPropertyAltDuplicatePlacement(
       x: refPlacement.pos.x + PLAN_ALT_DRAG_COPY_OFFSET.x,
       y: refPlacement.pos.y + PLAN_ALT_DRAG_COPY_OFFSET.y,
     },
-    rotationDeg: refPlacement.rotationDeg ?? 0,
+    rotationDeg:
+      source.type === 'socket' && refPlacement.rotationMode !== 'explicit'
+        ? 0
+        : refPlacement.rotationDeg ?? 0,
     rotationMode: refPlacement.rotationMode,
     scale: refPlacement.scale ?? 1,
     locked: false,
@@ -162,7 +168,10 @@ export function runPlanEndpointAltDragDuplicate(
     floorId,
     layer: refPlacement?.layer ?? 'electrical',
     pos: { x: dropPos.x, y: dropPos.y },
-    rotationDeg: refPlacement?.rotationDeg ?? 0,
+    rotationDeg:
+      source.type === 'socket' && refPlacement?.rotationMode !== 'explicit'
+        ? 0
+        : refPlacement?.rotationDeg ?? 0,
     rotationMode: refPlacement?.rotationMode,
     scale: refPlacement?.scale ?? 1,
     locked: false,

@@ -1364,13 +1364,7 @@ export interface WireSegment {
   busFeedKind?: 'grid' | 'backup'
   showBusFeedMarker?: boolean
   /** Optional side placement used by compact detached-supply rail markers. */
-  busFeedMarkerSide?:
-    | 'left'
-    | 'right'
-    | 'below'
-    | 'below-left'
-    | 'below-right'
-    | 'stub-center'
+  busFeedMarkerSide?: 'left' | 'right' | 'below' | 'below-left' | 'below-right' | 'stub-center'
   /** Ephemeral one-wire frame identity when one panel renders in multiple frames. */
   diagramId?: string
   /** True for horizontal supply trunk segments (between supply symbol and main bus). */
@@ -1482,6 +1476,8 @@ export type OrphanStatus =
 export type OrphanReason =
   | 'circuitMissingProtection'
   | 'circuitRefMismatch'
+  /** Circuit is referenced by multiple protections instead of being owned by exactly one. */
+  | 'protectionReferenceConflict'
   | 'endpointNotInBranch'
   | 'branchRefsMissingEndpoint'
   | 'frameContentOrphan'
@@ -1573,6 +1569,8 @@ export interface Project {
     customer?: ProjectCustomerContact
     /** Optional control/inspection organism metadata imported from external tools. */
     inspectionAgency?: ProjectPartyContact
+    /** Show the inspection agency as a fourth, left-most column in every drawing info block. */
+    showInspectionAgencyInInfoBlock?: boolean
     /** Optional per-project installer override; when set, used instead of global installer profile. */
     installerOverride?: {
       name: string

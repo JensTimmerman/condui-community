@@ -48,10 +48,10 @@ bindProjectStoreApi(useProjectStore)
 useProjectStore.subscribe((state: ProjectState, prevState: ProjectState) => {
   const currentProject = state.currentProject
   const previousProject = prevState?.currentProject
-  if (!projectHistory.isRecordingEnabled() || !previousProject || !currentProject) return
   if (projectHistory.consumeSkipNextSubscriberRun()) {
     return
   }
+  if (!projectHistory.isRecordingEnabled() || !previousProject || !currentProject) return
   if (projectHistory.consumeSuppressNextDebouncedRun()) {
     return
   }

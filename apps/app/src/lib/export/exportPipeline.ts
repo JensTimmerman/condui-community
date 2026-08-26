@@ -41,6 +41,7 @@ import {
 import { getPdfContentHeightMm } from './pdfPageLayout'
 import { A4_LANDSCAPE, A4_PORTRAIT } from './pageSizes'
 import { buildInfoBlockSvg } from './infoBlockSvg'
+import { getInfoBlockTotalWidth, isInspectionAgencyInfoBlockVisible } from '@/lib/infoBlockLayout'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useUIStore } from '@/stores/uiStore'
 import { yieldToBrowser } from './yieldToBrowser'
@@ -403,6 +404,9 @@ export async function exportToPDF(
         const usableHeight = getPdfContentHeightMm('landscape', {
           hasInfoBlock: true,
           hasPanelTitle: true,
+          infoBlockNativeWidth: getInfoBlockTotalWidth(
+            isInspectionAgencyInfoBlockVisible(context.project)
+          ),
         })
         const rawDocumentScale = usableHeight / maxHeight
         const initialDocumentScale = Math.min(rawDocumentScale, EENDRAAD_MAX_SCALE_MM_PER_PX)
@@ -462,6 +466,10 @@ export async function exportToPDF(
       })
       const headerInstaller = i18n.t('infoBlock.headerInstaller', 'Installer')
       const headerInstallation = i18n.t('infoBlock.headerInstallation', 'Installation address')
+      const headerInspectionAgency = i18n.t('project.inspectionAgency', 'Inspection agency')
+      const infoBlockNativeWidth = getInfoBlockTotalWidth(
+        isInspectionAgencyInfoBlockVisible(project)
+      )
       const fontFamily = getExportFontFamily()
 
       const getViewTitleForSceneKind = (kind: ExportScene['kind']): string => {
@@ -649,6 +657,7 @@ export async function exportToPDF(
               viewTitle,
               headerInstaller,
               headerInstallation,
+              headerInspectionAgency,
               isDark: exportTheme === 'dark',
               fontFamily,
               countryLabel,
@@ -689,6 +698,7 @@ export async function exportToPDF(
                   diagnostics,
                   {
                     svgString: infoBlockSvg,
+                    nativeWidth: infoBlockNativeWidth,
                   },
                   panelTitle,
                   exportTheme
@@ -700,6 +710,7 @@ export async function exportToPDF(
                   diagnostics,
                   {
                     svgString: infoBlockSvg,
+                    nativeWidth: infoBlockNativeWidth,
                   },
                   panelTitle,
                   referenceLink,
@@ -800,12 +811,7 @@ export async function exportToPDF(
               other: i18n.t('circuits.other', 'Other'),
             },
           } as const
-          const legendSvgs = buildPanelLegendSvgs(
-            legendRows,
-            fontFamily,
-            legendLabels,
-            exportTheme
-          )
+          const legendSvgs = buildPanelLegendSvgs(legendRows, fontFamily, legendLabels, exportTheme)
           for (const [legendPageIndex, legendSvg] of legendSvgs.entries()) {
             const legendPageId =
               legendSvgs.length === 1 ? 'panel-legend' : `panel-legend-${legendPageIndex + 1}`

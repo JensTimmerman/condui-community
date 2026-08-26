@@ -21,7 +21,7 @@
       }
 
       .cls-3, .cls-4 {
-        stroke-width: 2px;
+        stroke-width: 1.35px;
       }
 
       .cls-6, .cls-4 {

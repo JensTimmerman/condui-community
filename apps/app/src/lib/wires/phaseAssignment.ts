@@ -988,6 +988,17 @@ export function isPhaseAssignmentLabelVisible(
   return phaseAssignmentDiffersFromInstallation(assignment, system)
 }
 
+/** Resolve the phase label using the default/explicit visibility contract. */
+export function getVisiblePhaseAssignmentLabel(
+  assignment: CircuitPhaseAssignment | undefined,
+  system: VoltageSystem,
+  configuredVisibility?: boolean
+): string | undefined {
+  return isPhaseAssignmentLabelVisible(assignment, system, configuredVisibility)
+    ? getPhaseAssignmentLabel(assignment, system)
+    : undefined
+}
+
 /** Resolve the phase annotation shown beside a protection. */
 export function getProtectionPhaseLabel(
   protection: ProtectionDevice,
@@ -995,22 +1006,14 @@ export function getProtectionPhaseLabel(
   panels: Panel[] = [],
   installation?: Installation
 ): string | undefined {
-  const candidates = (protection.circuits ?? []).flatMap((circuit) => {
+  const candidates = (protection.circuits ?? []).map((circuit) => {
     const inherited = getInheritedCircuitPhaseState(circuit, panels, system, installation)
     const effective = getEffectiveCircuitPhaseState(circuit, panels, system, installation)
-    return [
-      {
-        assignment: effective.assignment,
-        visible: isPhaseAssignmentLabelVisible(
-          effective.assignment,
-          system,
-          circuit.showPhaseLabel ?? inherited.showPhaseLabel
-        ),
-      },
-    ]
+    return getVisiblePhaseAssignmentLabel(
+      effective.assignment,
+      system,
+      circuit.showPhaseLabel ?? inherited.showPhaseLabel
+    )
   })
-  return candidates
-    .filter((candidate) => candidate.visible === true)
-    .map((candidate) => getPhaseAssignmentLabel(candidate.assignment, system))
-    .find((label): label is string => label != null)
+  return candidates.find((label): label is string => label != null)
 }

@@ -4,7 +4,12 @@ import {
   findPanelOwnDistributionEndpoint,
   resolvePanelSupplyLinkForPanel,
 } from '@/lib/eendraad/panelSupplyLink'
-import { moveProtectionToMainBusInsertIndex } from '@/lib/eendraad/mainBusOrder'
+import {
+  getMainBusOrder,
+  isCircuitNestedUnderPanelBus,
+  moveProtectionToMainBusInsertIndex,
+} from '@/lib/eendraad/mainBusOrder'
+import { findPanelById } from '@/lib/panel/panelTree'
 import type { Circuit, Panel, ProtectionDevice } from '@/types/schema'
 import { generateId } from '@/utils/project'
 
@@ -13,6 +18,12 @@ export interface MovePanelAttachmentResult {
   feederCircuitId: string
   parentCircuitId?: string
   rcdProtectionId?: string
+}
+
+export interface MoveCircuitsToRcdBusResult {
+  panelId: string
+  rcdProtectionId: string
+  circuitIds: string[]
 }
 
 function createDirectFeederCircuit(source: Circuit, targetPanel: Panel): Circuit {
@@ -242,6 +253,96 @@ export function movePanelAttachmentOnRcdBus(
     feederCircuitId: carrier.feederCircuit.id,
     rcdProtectionId: targetRcd.id,
   }
+}
+
+/**
+ * Group direct main-bus protection circuits under an existing RCD/RCBO bus.
+ *
+ * The individual protection remains the circuit's structural owner. The RCD
+ * keeps only its anchor circuit; the anchor's subCircuitIds link groups the
+ * moved MCBs on the RCD secondary bus. Do not copy child circuit objects into
+ * the RCD circuits list: that creates a second protection owner and renders a
+ * duplicate circuit/protection.
+ */
+export function moveCircuitsToRcdBus(
+  panels: Panel[],
+  panelId: string,
+  rcdProtectionId: string,
+  circuitIds: string[],
+  insertIndex: number
+): MoveCircuitsToRcdBusResult | null {
+  const panel = findPanelById(panels, panelId)
+  const targetRcd = panel?.protections.find(
+    (protection) =>
+      protection.id === rcdProtectionId &&
+      (protection.type === 'RCD' || protection.type === 'RCBO')
+  )
+  if (!panel || !targetRcd) return null
+
+  const uniqueCircuitIds = [...new Set(circuitIds)]
+  if (uniqueCircuitIds.length === 0) return null
+
+  const mainBusProtectionIds = new Set(
+    getMainBusOrder(panel)
+      .filter((item) => item.type === 'protection')
+      .map((item) => item.id)
+  )
+  for (const circuitId of uniqueCircuitIds) {
+    // A previous version could leave the same circuit referenced by the RCD
+    // before the structural child link was written. Prefer the non-target
+    // protection so this operation can also repair that intermediate state.
+    const owner =
+      panel.protections.find(
+        (protection) =>
+          protection.id !== targetRcd.id &&
+          protection.circuits?.some((circuit) => circuit.id === circuitId)
+      ) ??
+      panel.protections.find((protection) =>
+        protection.circuits?.some((circuit) => circuit.id === circuitId)
+      )
+    const circuit = owner?.circuits?.find((candidate) => candidate.id === circuitId)
+    if (
+      !owner ||
+      owner.id === targetRcd.id ||
+      owner.circuits?.length !== 1 ||
+      owner.directPanelFeeder ||
+      owner.subPanelId ||
+      !mainBusProtectionIds.has(owner.id) ||
+      !circuit ||
+      isCircuitNestedUnderPanelBus(panel, circuit.id) ||
+      panel.protections.some(
+        (protection) =>
+          protection.id !== targetRcd.id &&
+          (protection.type === 'RCD' || protection.type === 'RCBO') &&
+          protection.circuits?.some((candidate) => candidate.id === circuit.id)
+      )
+    ) {
+      return null
+    }
+  }
+
+  const selectedIds = new Set(uniqueCircuitIds)
+  const anchorCircuit = (targetRcd.circuits ?? []).find(
+    (circuit) => !selectedIds.has(circuit.id)
+  )
+  if (!anchorCircuit) return null
+  // Repair a previous bad move by removing selected children from the RCD's
+  // own list. They remain owned by their MCB protections and are grouped only
+  // through the anchor's subCircuitIds.
+  targetRcd.circuits = (targetRcd.circuits ?? []).filter(
+    (circuit) => !selectedIds.has(circuit.id)
+  )
+  const nestedOrder = (anchorCircuit.subCircuitIds ?? []).filter(
+    (circuitId) => !selectedIds.has(circuitId)
+  )
+  const nestedInsertIndex = Math.max(
+    0,
+    Math.min(insertIndex, nestedOrder.length)
+  )
+  nestedOrder.splice(nestedInsertIndex, 0, ...uniqueCircuitIds)
+  anchorCircuit.subCircuitIds = nestedOrder
+
+  return { panelId, rcdProtectionId, circuitIds: uniqueCircuitIds }
 }
 
 /** Move a secondary-panel attachment directly onto its source panel's main bus. */

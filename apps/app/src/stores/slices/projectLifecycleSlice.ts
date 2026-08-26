@@ -16,7 +16,8 @@ import { summarizeConverterDcPersistence } from '@/lib/supplyAssembly/persistenc
 let activeSavePromise: Promise<void> | null = null
 
 export const createProjectLifecycleSlice: ProjectSliceCreator = (set, get) => ({
-    setProject: (project) =>
+    setProject: (project) => {
+      projectHistory.resetForProjectSwitch()
       set((state) => {
         const hydratedProject = hydrateProjectForEditor(project)
         if (!supportsExtendedInstallationProfiles(state.currentProjectStorageMode)) {
@@ -32,7 +33,8 @@ export const createProjectLifecycleSlice: ProjectSliceCreator = (set, get) => ({
         state.planFloorOverlayVisibleByBaseFloorId = {}
         state.planCanvasPlanImageOffsetByFloorId = {}
         clearSessionActionLog()
-      }),
+      })
+    },
 
     setCurrentProjectStorageMode: (mode) =>
       set((state) => {

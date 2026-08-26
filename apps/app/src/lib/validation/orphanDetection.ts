@@ -10,19 +10,22 @@ import { logger } from '@/lib/logger'
  *    The diagram will only show it under the parent circuit, so it appears "orphaned"
  *    from the protection that lists it.
  *
- * 2. Endpoint not in any branch: circuit.endpoints contains an endpoint that
+ * 2. Protection reference conflict: a circuit is listed by multiple protections. RCD/RCBO
+ *    secondary-bus nesting uses the anchor's subCircuitIds and does not duplicate ownership.
+ *
+ * 3. Endpoint not in any branch: circuit.endpoints contains an endpoint that
  *    is not in any branch.endpointIds, so it never appears on a branch in the layout.
  *
- * 3. Branch references missing endpoint: branch.endpointIds references an
+ * 4. Branch references missing endpoint: branch.endpointIds references an
  *    endpoint id that is not in circuit.endpoints (stale reference).
  *
- * 4. Frame content orphans: eendraadFrames[].contentIds reference endpoints or
+ * 5. Frame content orphans: eendraadFrames[].contentIds reference endpoints or
  *    protections that don't exist or belong to another panel.
  *
- * 5. Sitplan placement missing: endpoint is on the one-line diagram (and should appear on the
+ * 6. Sitplan placement missing: endpoint is on the one-line diagram (and should appear on the
  *    floor plan) but has no placements — invisible on every PlanCanvas floor.
  *
- * 6. Sub-circuit self-reference: `circuit.subCircuitIds` contains the circuit's own id (invalid).
+ * 7. Sub-circuit self-reference: `circuit.subCircuitIds` contains the circuit's own id (invalid).
  *    One-line layout may skip the circuit while plan-drop pickers still list it.
  */
 
@@ -240,6 +243,13 @@ export interface OrphanReport {
     displayedUnderProtectionId: string
     displayedUnderProtectionLabel: string
   }>
+  /** Circuit is referenced by multiple protections instead of having one structural owner. */
+  protectionReferenceConflict: Array<{
+    circuitId: string
+    circuitCode: string
+    protectionIds: string[]
+    protectionLabels: string[]
+  }>
   /** Endpoint exists in circuit.endpoints but is not in any branch.endpointIds */
   endpointNotInBranch: Array<{
     circuitId: string
@@ -394,6 +404,7 @@ export function detectPanelOrphans(project: OrphanDetectionProject, panelId: str
   const report: OrphanReport = {
     circuitMissingProtection: [],
     circuitRefMismatch: [],
+    protectionReferenceConflict: [],
     endpointNotInBranch: [],
     branchRefsMissingEndpoint: [],
     frameContentOrphans: [],
@@ -607,12 +618,24 @@ export function detectPanelOrphans(project: OrphanDetectionProject, panelId: str
     }
   }
 
-  // 1. Circuit reference mismatch
-  // A sub-circuit is correctly stored in its own protection's circuits AND in the parent's
-  // subCircuitIds; the one-line diagram shows it under the parent by design. So we do not
-  // report "listed under protection B, parent under A" as a mismatch — that is the valid
-  // structure when B is a sub-circuit of A. (A real mismatch would be e.g. the same circuit
-  // in two protections' circuits arrays; that is not possible with the current data model.)
+  // 1. Circuit reference integrity
+  // A circuit has exactly one protection owner. RCD/RCBO grouping is represented by the
+  // anchor circuit's subCircuitIds, not by copying child circuit objects into the RCD list.
+  // Duplicate ownership makes the layout render the same protection twice and is a hard error,
+  // even when a parent link happens to exist.
+  for (const circuit of circuits) {
+    const owners = currentPanel.protections.filter((protection) =>
+      protection.circuits?.some((candidate) => candidate.id === circuit.id)
+    )
+    if (owners.length <= 1) continue
+
+    report.protectionReferenceConflict.push({
+      circuitId: circuit.id,
+      circuitCode: validationCircuitCode(circuit.code),
+      protectionIds: owners.map((owner) => owner.id),
+      protectionLabels: owners.map((owner) => validationProtectionLabel(owner.label)),
+    })
+  }
 
   // 2 & 3. Endpoint/branch consistency per circuit
   for (const circuit of circuits) {
@@ -989,6 +1012,16 @@ export function getDetectedOrphans(project: OrphanDetectionProject): DetectedOrp
           originalParentId: item.listedUnderProtectionId,
           originalRefId: item.parentCircuitId,
         },
+    })
+    }
+    for (const item of report.protectionReferenceConflict) {
+      out.push({
+        id: `protection-reference-conflict-${item.circuitId}`,
+        kind: 'circuit',
+        reason: 'protectionReferenceConflict',
+        summary: `Circuit "${item.circuitCode}" has conflicting protection references`,
+        panelId,
+        focusSelection: { type: 'circuit', ids: [item.circuitId] },
       })
     }
     for (const item of report.endpointNotInBranch) {
@@ -1298,6 +1331,7 @@ export function logOrphanReport(project: OrphanDetectionProject): void {
     const count =
       report.circuitMissingProtection.length +
       report.circuitRefMismatch.length +
+      report.protectionReferenceConflict.length +
       report.endpointNotInBranch.length +
       report.branchRefsMissingEndpoint.length +
       report.frameContentOrphans.length +
@@ -1347,6 +1381,24 @@ export function logOrphanReport(project: OrphanDetectionProject): void {
           parentCircuitId: item.parentCircuitId,
           parentCircuitCode: item.parentCircuitCode,
           displayedUnderProtectionId: item.displayedUnderProtectionId,
+          panelId,
+        }
+      )
+    }
+
+    for (const item of report.protectionReferenceConflict) {
+      const protections = item.protectionLabels.join('", "')
+      logger.error(
+        `${ORPHAN_LOG_PREFIX} Protection reference conflict: circuit "${item.circuitCode}" (id: ${item.circuitId}) is referenced by multiple protections ("${protections}"). RCD/RCBO grouping must use the anchor circuit's subCircuitIds without duplicating the child in the RCD list.`
+      )
+      logger.error(
+        `${ORPHAN_LOG_PREFIX} Likely cause: a multi-select RCD move copied the circuit into both the RCD grouping and its MCB, or a partial undo left competing protection owners. Repair the topology before rendering or exporting.`,
+        {
+          type: 'protectionReferenceConflict',
+          circuitId: item.circuitId,
+          circuitCode: item.circuitCode,
+          protectionIds: item.protectionIds,
+          protectionLabels: item.protectionLabels,
           panelId,
         }
       )
@@ -1602,6 +1654,7 @@ export function orphanReportToIssues(
   msg: {
     circuitMissingProtection: (opts: Record<string, string>) => string
     circuitRefMismatch: (opts: Record<string, string>) => string
+    protectionReferenceConflict: (opts: Record<string, string>) => string
     endpointNotInBranch: (opts: Record<string, string>) => string
     branchRefsMissingEndpoint: (opts: Record<string, string>) => string
     frameContentOrphans: (opts: Record<string, string>) => string
@@ -1639,7 +1692,6 @@ export function orphanReportToIssues(
       tags: ['orphan', 'eendraad', 'consistency'],
     })
   }
-
   for (const item of report.circuitRefMismatch) {
     issues.push({
       id: `${ruleId}:board:${panelId}:circuit-ref:${item.circuitId}`,
@@ -1661,6 +1713,32 @@ export function orphanReportToIssues(
       details: undefined,
       citations: [],
       tags: ['orphan', 'eendraad', 'consistency'],
+    })
+  }
+
+  for (const item of report.protectionReferenceConflict) {
+    issues.push({
+      id: `${ruleId}:board:${panelId}:protection-reference-conflict:${item.circuitId}`,
+      ruleId,
+      severity: 'error',
+      jurisdiction,
+      rulesetVersion,
+      scope: { type: 'board', id: panelId },
+      offenders: [
+        { kind: 'circuit', id: item.circuitId, viewHint: 'eendraad' },
+        ...item.protectionIds.map((id) => ({
+          kind: 'protection' as const,
+          id,
+          viewHint: 'eendraad' as const,
+        })),
+      ],
+      message: msg.protectionReferenceConflict({
+        circuitCode: item.circuitCode,
+        protectionLabels: item.protectionLabels.join('", "'),
+      }),
+      details: undefined,
+      citations: [],
+      tags: ['orphan', 'eendraad', 'topology', 'consistency'],
     })
   }
 

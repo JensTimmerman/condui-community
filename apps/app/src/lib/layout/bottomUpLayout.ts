@@ -19,9 +19,10 @@ import {
 } from '@/components/canvas/eendraad/canvasSymbols'
 import {
   getInfoBlockMinFrameSize,
+  getInfoBlockTotalWidth,
   INFO_BLOCK_HEIGHT,
-  INFO_BLOCK_TOTAL_WIDTH,
   INFO_BLOCK_FRAME_MARGIN,
+  isInspectionAgencyInfoBlockVisible,
 } from '@/lib/infoBlockLayout'
 import { ensureInstallationFeedTopology, getPanelFeedProjection } from '@/lib/feedTopology'
 import {
@@ -70,11 +71,7 @@ import {
   getCircuitNotesPaintBounds,
   normalizeCircuitNotesText,
 } from './circuitNoteMetrics'
-import {
-  arrangeBottomRightBlock,
-  layoutRectsOverlap,
-  type OneWireLayoutBlock,
-} from './oneWireBlockLayout'
+import { arrangeBottomRightBlock, type OneWireLayoutBlock } from './oneWireBlockLayout'
 export { estimateCircuitNotesWidth } from './circuitNoteMetrics'
 
 // Layout constants (bottom-up, but Y increases DOWNWARD on screen)
@@ -528,6 +525,7 @@ interface BottomUpPanelLayoutOptions {
   supplyEndpointKind?: 'mains' | 'continuation'
   /** Render the compact detached-feed destination label and frame geometry. */
   feedOutput?: boolean
+  showInspectionAgencyInInfoBlock?: boolean
 }
 
 export interface BottomUpLayoutResult {
@@ -760,18 +758,25 @@ function applyPanelFrameBottomAlignmentByRow(
       panelLayout.frame.height = targetHeight
       const infoBlock = panelLayout.layoutBlocks?.find((block) => block.kind === 'info-block')
       if (!infoBlock) return
-      const bottomAlignedInfoBlock = {
-        ...infoBlock,
-        y:
-          panelLayout.frame.y +
-          panelLayout.frame.height -
-          infoBlock.height -
-          INFO_BLOCK_FRAME_MARGIN,
-      }
-      const collides = panelLayout.layoutBlocks?.some(
-        (block) => block !== infoBlock && layoutRectsOverlap(bottomAlignedInfoBlock, block, 10)
+      const bottomAlignedY =
+        panelLayout.frame.y + panelLayout.frame.height - infoBlock.height - INFO_BLOCK_FRAME_MARGIN
+      const requiredInfoY = Math.max(
+        bottomAlignedY,
+        ...(panelLayout.layoutBlocks ?? [])
+          .filter(
+            (block) =>
+              block !== infoBlock &&
+              block.x < infoBlock.x + infoBlock.width + 10 &&
+              block.x + block.width + 10 > infoBlock.x
+          )
+          .map((block) => block.y + block.height + 10)
       )
-      if (!collides) infoBlock.y = bottomAlignedInfoBlock.y
+      panelLayout.frame.height = Math.max(
+        panelLayout.frame.height,
+        requiredInfoY + infoBlock.height + INFO_BLOCK_FRAME_MARGIN - panelLayout.frame.y
+      )
+      infoBlock.y =
+        panelLayout.frame.y + panelLayout.frame.height - infoBlock.height - INFO_BLOCK_FRAME_MARGIN
     }
   })
 }
@@ -3337,7 +3342,10 @@ function calculateBottomUpPanelLayout(
     installation && rootPanels ? getPanelFrameTitlePadding(panel, installation, rootPanels) : 28
   let frameY = minY - frameTopTitlePadding
   let frameWidth = totalWidthWithSupply + FRAME_PADDING * 2
-  const { minWidth: minFrameWidth, minHeight: minFrameHeight } = getInfoBlockMinFrameSize()
+  const infoBlockWidth = getInfoBlockTotalWidth(options.showInspectionAgencyInInfoBlock)
+  const { minWidth: minFrameWidth, minHeight: minFrameHeight } = getInfoBlockMinFrameSize(
+    options.showInspectionAgencyInInfoBlock
+  )
   frameWidth = Math.max(frameWidth, minFrameWidth) + (options.feedOutput ? 36 : 0)
 
   const supplyDeviceBottomExtent = ({
@@ -3691,28 +3699,31 @@ function calculateBottomUpPanelLayout(
   const collisionClearance = 10
   const compactInfoTop = renderedMainBusY + LAYOUT_CONSTANTS.BUS_THICKNESS / 2 + collisionClearance
   const compactFrameBottom = compactInfoTop + INFO_BLOCK_HEIGHT + INFO_BLOCK_FRAME_MARGIN
-  const infoArrangement = arrangeBottomRightBlock({
-    frameLeft: frameX,
-    frameTop: frameY,
-    initialFrameRight: frameX + frameWidth,
-    initialFrameBottom: compactFrameBottom,
-    frameMargin: INFO_BLOCK_FRAME_MARGIN,
-    blockWidth: INFO_BLOCK_TOTAL_WIDTH,
-    blockHeight: INFO_BLOCK_HEIGHT,
-    obstacles: layoutObstacles,
-    clearance: collisionClearance,
-    preferBelow: layoutObstacles.some((block) => block.kind === 'supply-stub'),
-  })
-  frameWidth = infoArrangement.frameRight - frameX
-  // The frame contains every measured primitive, but content elsewhere in the
-  // drawing must not drag the independently placed info block downward.
   const measuredLayoutBottom = Math.max(
     frameBottomY,
     ...layoutObstacles.map((block) => block.y + block.height)
   )
   const contentFrameBottom = measuredLayoutBottom + FRAME_PADDING
-  const baseFrameBottom = Math.max(infoArrangement.frameBottom, contentFrameBottom)
-  const baseFrameHeight = baseFrameBottom - frameY
+  const infoArrangement = arrangeBottomRightBlock({
+    frameLeft: frameX,
+    frameTop: frameY,
+    initialFrameRight: frameX + frameWidth,
+    initialFrameBottom: Math.max(compactFrameBottom, contentFrameBottom),
+    frameMargin: INFO_BLOCK_FRAME_MARGIN,
+    blockWidth: infoBlockWidth,
+    blockHeight: INFO_BLOCK_HEIGHT,
+    obstacles: layoutObstacles,
+    clearance: collisionClearance,
+    // The optional fourth info column is wide enough that side-stepping it
+    // beside supply content produces a needlessly panoramic frame. Keep the
+    // compact position when it is already clear, but resolve collisions by
+    // adding a lower row. Short feed stubs use that same visual rule.
+    preferBelow:
+      options.showInspectionAgencyInInfoBlock === true ||
+      layoutObstacles.some((block) => block.kind === 'supply-stub'),
+  })
+  frameWidth = infoArrangement.frameRight - frameX
+  const baseFrameHeight = infoArrangement.frameBottom - frameY
 
   // Respect minimum frame height required by the info block, but keep all panel
   // bottoms aligned: when we increase the height, shift the frame upward so the
@@ -3756,22 +3767,13 @@ function calculateBottomUpPanelLayout(
     frameY = baseBottom - frameHeight
   }
 
-  const bottomAlignedInfoBlock = {
-    ...infoArrangement.block,
-    y: frameY + frameHeight - INFO_BLOCK_HEIGHT - INFO_BLOCK_FRAME_MARGIN,
-  }
-  const finalInfoBlock = layoutObstacles.some((block) =>
-    layoutRectsOverlap(bottomAlignedInfoBlock, block, collisionClearance)
-  )
-    ? infoArrangement.block
-    : bottomAlignedInfoBlock
   const infoBlockBounds: OneWireLayoutBlock = {
     id: `${options.diagramId ?? panel.id}-info`,
     kind: 'info-block',
     label: `info block (${infoArrangement.placement})`,
-    x: finalInfoBlock.x,
-    y: finalInfoBlock.y,
-    width: INFO_BLOCK_TOTAL_WIDTH,
+    x: frameX + frameWidth - infoBlockWidth - INFO_BLOCK_FRAME_MARGIN,
+    y: frameY + frameHeight - INFO_BLOCK_HEIGHT - INFO_BLOCK_FRAME_MARGIN,
+    width: infoBlockWidth,
     height: INFO_BLOCK_HEIGHT,
   }
   const layoutBlocks = [
@@ -4133,6 +4135,7 @@ export function calculateBottomUpLayout(
     const renderPanelOnly =
       !isSubPanel && rootPanelCount > 1 && supplyAssemblyRole.linked && !detachSupply
     const suppressInlineSupplyTopology = detachSupply || renderPanelOnly
+    const showInspectionAgencyInInfoBlock = isInspectionAgencyInfoBlockVisible(project)
     const panelForMainDiagram = detachSupply
       ? clonePanelForDiagramRole(flatPanel.panel, 'panel')
       : flatPanel.panel
@@ -4143,16 +4146,19 @@ export function calculateBottomUpLayout(
       parentMcbInfo,
       installation,
       panels,
-      suppressInlineSupplyTopology
-        ? {
-            includeSupplyTopology: false,
-            includeGroundDevices: false,
-            diagramId: flatPanel.panel.id,
-            ownerPanelId: flatPanel.panel.id,
-            frameRole: 'panel',
-            supplyEndpointKind: 'continuation',
-          }
-        : undefined
+      {
+        showInspectionAgencyInInfoBlock,
+        ...(suppressInlineSupplyTopology
+          ? ({
+              includeSupplyTopology: false,
+              includeGroundDevices: false,
+              diagramId: flatPanel.panel.id,
+              ownerPanelId: flatPanel.panel.id,
+              frameRole: 'panel',
+              supplyEndpointKind: 'continuation',
+            } as const)
+          : {}),
+      }
     )
 
     if (detachSupply) {
@@ -4166,6 +4172,7 @@ export function calculateBottomUpLayout(
           installation,
           panels,
           {
+            showInspectionAgencyInInfoBlock,
             diagramId: `${flatPanel.panel.id}--supply`,
             ownerPanelId: flatPanel.panel.id,
             frameRole: 'supply',

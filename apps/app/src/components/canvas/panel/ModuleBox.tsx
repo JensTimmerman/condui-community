@@ -16,6 +16,14 @@ import type { KonvaEventObject } from 'konva/lib/Node'
 import { DOMOTICA_CONTROL_OVERLAY_PATHS, getSwitchDisplaySvgPath, getSymbolById, getDomainForSymbol } from '@/lib/symbols'
 import { loadProcessedSymbol } from '@/lib/symbolImage'
 import { getSurgeProtectionSymbolPath } from '@/lib/surgeProtectionSymbol'
+import {
+  CONVERTER_ARTWORK_PATHS,
+  getConverterArtworkLayout,
+  getConverterCornerPosition,
+  getConverterDomainCorner,
+  isDirectionalConverterSymbol,
+  SUPPLY_ASSEMBLY_CONNECTION_DOMAINS,
+} from '@/lib/converterArtwork'
 import { logger } from '@/lib/logger'
 import { useIsMarqueeSelecting, useIsPreviewSelected } from '@/contexts/SelectionPreviewContext'
 import { getSpdPanelModuleLayout } from './spdPanelModuleLayout'
@@ -519,6 +527,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
   const energyDeviceSymbol = trunkInfo?.device.symbol ?? domoticaEndpoint?.symbol
   const energySymbolMeta = energyDeviceSymbol ? getSymbolById(energyDeviceSymbol) : null
   const isEnergyConversionModule = !!energySymbolMeta && energySymbolMeta.category === 'energyConversion'
+  const isDirectionalEnergyConversion = isDirectionalConverterSymbol(energyDeviceSymbol)
   const energyDomains = isEnergyConversionModule && energyDeviceSymbol
     ? getDomainForSymbol(energyDeviceSymbol)
     : null
@@ -547,6 +556,8 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
   const [acSymbolImage, setAcSymbolImage] = useState<HTMLImageElement | null>(null)
   const [dcSymbolImage, setDcSymbolImage] = useState<HTMLImageElement | null>(null)
   const [energyDeviceImage, setEnergyDeviceImage] = useState<HTMLImageElement | null>(null)
+  const [energyBaseImage, setEnergyBaseImage] = useState<HTMLImageElement | null>(null)
+  const [energyDiagonalImage, setEnergyDiagonalImage] = useState<HTMLImageElement | null>(null)
   const [rotatingSwitchImage, setRotatingSwitchImage] = useState<HTMLImageElement | null>(null)
   const [spdSymbolImage, setSpdSymbolImage] = useState<HTMLImageElement | null>(null)
   const [relaySymbolImage, setRelaySymbolImage] = useState<HTMLImageElement | null>(null)
@@ -570,14 +581,28 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
 
   // Show the actual conversion-device symbol in the center of the panel module.
   useEffect(() => {
-    if (!isEnergyConversionModule || !energySymbolMeta?.svgPath) {
+    if (!isEnergyConversionModule || isDirectionalEnergyConversion || !energySymbolMeta?.svgPath) {
       setEnergyDeviceImage(null)
       return
     }
     loadProcessedSymbol(energySymbolMeta.svgPath, themeMode === 'dark')
       .then(setEnergyDeviceImage)
       .catch(() => setEnergyDeviceImage(null))
-  }, [energySymbolMeta?.svgPath, isEnergyConversionModule, themeMode])
+  }, [energySymbolMeta?.svgPath, isDirectionalEnergyConversion, isEnergyConversionModule, themeMode])
+
+  useEffect(() => {
+    if (!isDirectionalEnergyConversion) {
+      setEnergyBaseImage(null)
+      setEnergyDiagonalImage(null)
+      return
+    }
+    loadProcessedSymbol(CONVERTER_ARTWORK_PATHS.base, themeMode === 'dark')
+      .then(setEnergyBaseImage)
+      .catch(() => setEnergyBaseImage(null))
+    loadProcessedSymbol(CONVERTER_ARTWORK_PATHS.diagonal, themeMode === 'dark')
+      .then(setEnergyDiagonalImage)
+      .catch(() => setEnergyDiagonalImage(null))
+  }, [isDirectionalEnergyConversion, themeMode])
 
   useEffect(() => {
     if (!isSelectorSwitchModule || !rotatingSwitchSymbolMeta?.svgPath) {
@@ -772,47 +797,110 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
           const centerTop = topBandHeight
           const centerBottom = bottomBandTop
 
+          const artworkLayout = isDirectionalEnergyConversion
+            ? getConverterArtworkLayout(
+                energyDomains.inputDomain,
+                energyDomains.outputDomain,
+                SUPPLY_ASSEMBLY_CONNECTION_DOMAINS,
+              )
+            : null
+
           const getImageForDomain = (domain: 'AC' | 'DC') =>
             domain === 'DC' ? dcSymbolImage : acSymbolImage
 
-          const inputImg = getImageForDomain(energyDomains.inputDomain)
-          const outputImg = getImageForDomain(energyDomains.outputDomain)
+          const getDomainPosition = (domain: 'AC' | 'DC') => {
+            const corner = artworkLayout
+              ? getConverterDomainCorner(artworkLayout, domain)
+              : undefined
+            if (!corner) {
+              const isOutput = domain === energyDomains.outputDomain
+              return {
+                x: isOutput ? padding + iconSize / 2 : effectiveWidth - padding - iconSize / 2,
+                y: isOutput ? centerTop + padding + iconSize / 2 : centerBottom - padding - iconSize / 2,
+              }
+            }
+            const point = getConverterCornerPosition(
+              corner,
+              effectiveWidth,
+              centerBandHeight,
+              padding,
+              iconSize,
+            )
+            return {
+              x: effectiveWidth / 2 + point.x,
+              y: centerTop + centerBandHeight / 2 + point.y,
+            }
+          }
 
           return (
             <>
-              {/* Diagonal line from bottom-left to top-right, same color as outline */}
+              {/* The diagonal follows the same domain-aware corner choice as the symbols. */}
               <Line
-                points={[padding, centerBottom - padding, effectiveWidth - padding, centerTop + padding]}
+                points={
+                  artworkLayout?.diagonal === 'top-left-to-bottom-right'
+                    ? [padding, centerTop + padding, effectiveWidth - padding, centerBottom - padding]
+                    : [padding, centerBottom - padding, effectiveWidth - padding, centerTop + padding]
+                }
                 stroke={debugBorder}
                 strokeWidth={1}
                 listening={false}
               />
-              {/* Output domain symbol – top-left of the center band */}
-              {outputImg && (
-                <Image
-                  image={outputImg}
-                  width={iconSize}
-                  height={iconSize}
-                  offsetX={iconSize / 2}
-                  offsetY={iconSize / 2}
-                  x={padding + iconSize / 2}
-                  y={centerTop + padding + iconSize / 2}
-                  listening={false}
-                />
-              )}
-              {/* Input domain symbol – bottom-right of the center band */}
-              {inputImg && (
-                <Image
-                  image={inputImg}
-                  width={iconSize}
-                  height={iconSize}
-                  offsetX={iconSize / 2}
-                  offsetY={iconSize / 2}
-                  x={effectiveWidth - padding - iconSize / 2}
-                  y={centerBottom - padding - iconSize / 2}
-                  listening={false}
-                />
-              )}
+              {(['AC', 'DC'] as const).map((domain) => {
+                const image = getImageForDomain(domain)
+                const point = getDomainPosition(domain)
+                if (!image || !point) return null
+                return (
+                  <Image
+                    key={domain}
+                    image={image}
+                    width={iconSize}
+                    height={iconSize}
+                    offsetX={iconSize / 2}
+                    offsetY={iconSize / 2}
+                    x={point.x}
+                    y={point.y}
+                    listening={false}
+                  />
+                )
+              })}
+            </>
+          )
+        })()
+      )}
+      {isDirectionalEnergyConversion && energyBaseImage && energyDiagonalImage && (
+        (() => {
+          const symbolSize = Math.min(effectiveModuleWidth * 0.48, centerBandHeight * 0.72)
+          return (
+            <>
+              <Image
+                image={energyBaseImage}
+                width={symbolSize}
+                height={symbolSize}
+                offsetX={symbolSize / 2}
+                offsetY={symbolSize / 2}
+                x={effectiveModuleWidth / 2}
+                y={topBandHeight + centerBandHeight / 2}
+                listening={false}
+              />
+              <Image
+                image={energyDiagonalImage}
+                width={symbolSize}
+                height={symbolSize}
+                offsetX={symbolSize / 2}
+                offsetY={symbolSize / 2}
+                x={effectiveModuleWidth / 2}
+                y={topBandHeight + centerBandHeight / 2}
+                scaleX={
+                  getConverterArtworkLayout(
+                    energyDomains?.inputDomain ?? 'AC',
+                    energyDomains?.outputDomain ?? 'DC',
+                    SUPPLY_ASSEMBLY_CONNECTION_DOMAINS,
+                  ).diagonal === 'top-left-to-bottom-right'
+                    ? -1
+                    : 1
+                }
+                listening={false}
+              />
             </>
           )
         })()

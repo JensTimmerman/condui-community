@@ -3,7 +3,7 @@
  */
 
 import type Konva from 'konva'
-import type { ProjectAddress, WireSegment } from '@/types/schema'
+import type { ProjectAddress, ProjectPartyContact, WireSegment } from '@/types/schema'
 import type { BottomUpLayoutResult } from '@/lib/layout/bottomUpLayout'
 
 import type { PlanGraphicExportDescriptor } from '@/lib/export/planGraphicSvgInject'
@@ -177,6 +177,8 @@ export type ExportProject = ProjectWithOptionalV2Electrical &
       id: string
       name?: string
       installerOverride?: ExportProjectInstallerOverride
+      inspectionAgency?: ProjectPartyContact
+      showInspectionAgencyInInfoBlock?: boolean
     }
   }
 

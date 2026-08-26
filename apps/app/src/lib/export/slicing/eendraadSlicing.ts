@@ -86,9 +86,7 @@ function getMainBusBlocks(panelLayout: BottomUpPanelLayout): MainBusBlock[] {
     return descendants
   }
 
-  const topLevel = circuits
-    .filter((cl) => cl.parentCircuit === null)
-    .sort((a, b) => a.x - b.x)
+  const topLevel = circuits.filter((cl) => cl.parentCircuit === null).sort((a, b) => a.x - b.x)
 
   for (const cl of topLevel) {
     const descendants = collectDescendants(cl)
@@ -160,10 +158,20 @@ function isBusSectionBoundary(blocks: MainBusBlock[], cutPoint: number): boolean
   return false
 }
 
-function computeGlobalScale(sceneBounds: ExportScene['bounds']): number {
+function getPanelInfoBlockNativeWidth(panelLayout: BottomUpPanelLayout): number | undefined {
+  return panelLayout.layoutBlocks?.find((block) => block.kind === 'info-block')?.width
+}
+
+function computeGlobalScale(
+  sceneBounds: ExportScene['bounds'],
+  panelLayout: BottomUpPanelLayout
+): number {
   return (
-    getPdfContentHeightMm('landscape', { hasInfoBlock: true, hasPanelTitle: true }) /
-    sceneBounds.height
+    getPdfContentHeightMm('landscape', {
+      hasInfoBlock: true,
+      hasPanelTitle: true,
+      infoBlockNativeWidth: getPanelInfoBlockNativeWidth(panelLayout),
+    }) / sceneBounds.height
   )
 }
 
@@ -356,6 +364,7 @@ export async function calculateEendraadSlices(
     const contentHeight = getPdfContentHeightMm('landscape', {
       hasInfoBlock: true,
       hasPanelTitle: true,
+      infoBlockNativeWidth: getPanelInfoBlockNativeWidth(panelLayout),
     })
     const globalScale = Math.min(
       EENDRAAD_MAX_SCALE_MM_PER_PX,
@@ -377,7 +386,7 @@ export async function calculateEendraadSlices(
     }
   }
   const blocks = getMainBusBlocks(panelLayout)
-  const rawScale = documentGlobalScale ?? computeGlobalScale(sceneBounds)
+  const rawScale = documentGlobalScale ?? computeGlobalScale(sceneBounds, panelLayout)
   const globalScale = Math.min(rawScale, EENDRAAD_MAX_SCALE_MM_PER_PX)
   const mainBusY = panelLayout.mainBus.y
   const sliceWidthPx = getSliceWidthPxForScale(globalScale)

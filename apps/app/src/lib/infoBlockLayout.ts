@@ -38,11 +38,12 @@
  * via useCanvasFontFamily() (same as rest of canvas).
  */
 
-import type { Installation } from '@/types/schema'
+import type { Installation, ProjectPartyContact } from '@/types/schema'
 import { getVoltageSummaryLabel } from '@/utils/voltageLabel'
 
 /** Column widths (px). Change these to resize columns; total frame width is derived automatically. */
 export const INFO_BLOCK_BOX_WIDTHS = {
+  inspectionAgency: 150,
   installer: 150,
   address: 120,
   general: 120,
@@ -77,12 +78,50 @@ export const INFO_BLOCK_TOTAL_WIDTH =
   INFO_BLOCK_BOX_WIDTHS.general +
   INFO_BLOCK_GAP * 2
 
+export function getInfoBlockTotalWidth(showInspectionAgency = false): number {
+  return (
+    INFO_BLOCK_TOTAL_WIDTH +
+    (showInspectionAgency ? INFO_BLOCK_BOX_WIDTHS.inspectionAgency + INFO_BLOCK_GAP : 0)
+  )
+}
+
+export function isInspectionAgencyInfoBlockVisible(project: unknown): boolean {
+  return (
+    (project as { project?: { showInspectionAgencyInInfoBlock?: boolean } } | null | undefined)
+      ?.project?.showInspectionAgencyInInfoBlock === true
+  )
+}
+
+export function getInfoBlockColumnPositions(showInspectionAgency = false): {
+  inspectionAgency: number | null
+  installer: number
+  address: number
+  general: number
+  separators: number[]
+} {
+  const inspectionAgency = showInspectionAgency ? 0 : null
+  const installer = showInspectionAgency
+    ? INFO_BLOCK_BOX_WIDTHS.inspectionAgency + INFO_BLOCK_GAP
+    : 0
+  const address = installer + INFO_BLOCK_BOX_WIDTHS.installer + INFO_BLOCK_GAP
+  const general = address + INFO_BLOCK_BOX_WIDTHS.address + INFO_BLOCK_GAP
+  const separators = [
+    ...(showInspectionAgency ? [INFO_BLOCK_BOX_WIDTHS.inspectionAgency + INFO_BLOCK_GAP / 2] : []),
+    installer + INFO_BLOCK_BOX_WIDTHS.installer + INFO_BLOCK_GAP / 2,
+    address + INFO_BLOCK_BOX_WIDTHS.address + INFO_BLOCK_GAP / 2,
+  ]
+  return { inspectionAgency, installer, address, general, separators }
+}
+
 /** Height-building blocks (px). Adjust to change total frame height. */
 export const INFO_BLOCK_INSTALLER_TOP_HEIGHT = 30
 export const INFO_BLOCK_IMAGE_AREA_HEIGHT = 44
 export const INFO_BLOCK_MADE_WITH_HEIGHT = 10
 export const INFO_BLOCK_INSTALLER_HEIGHT =
-  INFO_BLOCK_INSTALLER_TOP_HEIGHT + INFO_BLOCK_IMAGE_AREA_HEIGHT + INFO_BLOCK_MADE_WITH_HEIGHT + INFO_BLOCK_PADDING * 2
+  INFO_BLOCK_INSTALLER_TOP_HEIGHT +
+  INFO_BLOCK_IMAGE_AREA_HEIGHT +
+  INFO_BLOCK_MADE_WITH_HEIGHT +
+  INFO_BLOCK_PADDING * 2
 
 /** Total block height (all three columns use this). */
 export const INFO_BLOCK_HEIGHT = INFO_BLOCK_INSTALLER_HEIGHT
@@ -91,11 +130,36 @@ export const INFO_BLOCK_HEIGHT = INFO_BLOCK_INSTALLER_HEIGHT
 export const INFO_BLOCK_FRAME_MARGIN = 10
 
 /** Minimum panel frame width/height so the info block fits inside. Use in layout for dynamic min size. */
-export function getInfoBlockMinFrameSize(): { minWidth: number; minHeight: number } {
+export function getInfoBlockMinFrameSize(showInspectionAgency = false): {
+  minWidth: number
+  minHeight: number
+} {
   return {
-    minWidth: INFO_BLOCK_TOTAL_WIDTH + INFO_BLOCK_FRAME_MARGIN * 2,
+    minWidth: getInfoBlockTotalWidth(showInspectionAgency) + INFO_BLOCK_FRAME_MARGIN * 2,
     minHeight: INFO_BLOCK_HEIGHT + INFO_BLOCK_FRAME_MARGIN * 2,
   }
+}
+
+export function formatInspectionAgencyDetails(
+  agency: ProjectPartyContact | undefined,
+  countryDisplay?: string
+): string {
+  if (!agency) return ''
+  const address = agency.address
+  const street = address ? [address.street, address.number].filter(Boolean).join(' ').trim() : ''
+  const country = address
+    ? (address.country === 'BE' || !address.country) && countryDisplay
+      ? countryDisplay
+      : address.country
+    : ''
+  const parts = address
+    ? [street, `${address.postalCode} ${address.city}`.trim(), country].filter(Boolean)
+    : []
+  const displayPhone = pickInstallerDisplayPhone(agency.phone, agency.mobile)
+  if (displayPhone) parts.push(displayPhone)
+  const email = agency.email?.trim()
+  if (email) parts.push(email)
+  return parts.join('\n')
 }
 
 /** Vertical step per row in the general column (page, date, voltage, EAN). */
@@ -133,8 +197,13 @@ export function formatInstallerAddress(
   countryDisplay?: string,
   contact?: InstallerAddressContact
 ): string {
-  const country = (address.country === 'BE' || !address.country) && countryDisplay ? countryDisplay : (address.country || 'BE')
-  const parts = [address.street, `${address.postalCode} ${address.city}`.trim(), country].filter(Boolean)
+  const country =
+    (address.country === 'BE' || !address.country) && countryDisplay
+      ? countryDisplay
+      : address.country || 'BE'
+  const parts = [address.street, `${address.postalCode} ${address.city}`.trim(), country].filter(
+    Boolean
+  )
   const displayPhone = contact ? pickInstallerDisplayPhone(contact.phone, contact.mobile) : ''
   if (displayPhone) parts.push(displayPhone)
   const email = contact?.email?.trim() ?? ''

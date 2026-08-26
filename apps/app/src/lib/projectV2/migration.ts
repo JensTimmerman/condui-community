@@ -717,6 +717,7 @@ export function migrateProjectV1ToV2(project: Project): ProjectV2 {
       protectionCreationTemplates: project.project.protectionCreationTemplates,
       customer: project.project.customer,
       inspectionAgency: project.project.inspectionAgency,
+      showInspectionAgencyInInfoBlock: project.project.showInspectionAgencyInInfoBlock,
       installerOverride: project.project.installerOverride,
       importSources: project.project.importSources,
     },

@@ -10,10 +10,7 @@ import type {
   Project,
 } from './schema'
 import type { ViewportLayout } from './ui'
-import type {
-  AuxiliaryElectricalEnclosure,
-  OffGridSupplyAssembly,
-} from './supplyAssembly'
+import type { AuxiliaryElectricalEnclosure, OffGridSupplyAssembly } from './supplyAssembly'
 
 export const PROJECT_V2_SCHEMA_VERSION = '2.1.0' as const
 
@@ -73,6 +70,7 @@ export interface ProjectV2Meta {
   protectionCreationTemplates?: Project['project']['protectionCreationTemplates']
   customer?: Project['project']['customer']
   inspectionAgency?: Project['project']['inspectionAgency']
+  showInspectionAgencyInInfoBlock?: Project['project']['showInspectionAgencyInInfoBlock']
   installerOverride?: Project['project']['installerOverride']
   importSources?: Project['project']['importSources']
 }

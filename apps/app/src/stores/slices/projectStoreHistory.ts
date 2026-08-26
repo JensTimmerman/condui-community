@@ -67,6 +67,12 @@ class ProjectHistoryCoordinator {
     this.suppressNextDebouncedSubscriber = false
   }
 
+  resetForProjectSwitch(): void {
+    this.clearPending()
+    this.clearDebouncedSuppression()
+    this.skipNextSubscriber = true
+  }
+
   clearPending(): void {
     if (this.pendingTimer != null) {
       clearTimeout(this.pendingTimer)

@@ -61,7 +61,11 @@ import {
 import type { WireTranslateFn } from '@/lib/wires/wireFingerprint'
 import { shouldShowDomainChangeMarker } from '@/lib/wires/domainChangeMarker'
 import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
-import { getPhaseAssignmentLabel, isPhaseAssignmentLabelVisible } from '@/lib/wires/phaseAssignment'
+import {
+  getPhaseAssignmentLabel,
+  getVisiblePhaseAssignmentLabel,
+  isPhaseAssignmentLabelVisible,
+} from '@/lib/wires/phaseAssignment'
 import { getBusFeedMarkerPosition } from '@/lib/layout/busFeedMarkerGeometry'
 import { orderWireSegmentsForRendering } from './wireRenderOrder'
 import { wireSegmentSelectsBusSection } from '@/lib/wires/wireSelectionTarget'
@@ -609,8 +613,12 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
     !!wireSegment.circuitId &&
     wireSegment.toElementType === 'protection'
   const protectionPhaseLabel =
-    isProtectionInputPhaseSegment && phaseSystem && wireSegment.showPhaseLabel === true
-      ? getPhaseAssignmentLabel(wireSegment.phaseAssignment, phaseSystem)
+    isProtectionInputPhaseSegment && phaseSystem
+      ? getVisiblePhaseAssignmentLabel(
+          wireSegment.phaseAssignment,
+          phaseSystem,
+          wireSegment.showPhaseLabel
+        )
       : undefined
   const protectionPhaseLabelWidth = 48
   const protectionPhaseLabelOffsetY =

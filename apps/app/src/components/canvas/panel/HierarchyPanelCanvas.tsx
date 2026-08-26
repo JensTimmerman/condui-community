@@ -91,6 +91,14 @@ import type { CanvasDropMeta, Point, Selection as CanvasSelection } from '@/type
 import type { ContextMenuItem } from '@/components/common/ContextMenu'
 import { getSymbolById, type SymbolMetadata } from '@/lib/symbols'
 import { loadProcessedSymbol } from '@/lib/symbolImage'
+import {
+  CONVERTER_ARTWORK_PATHS,
+  getConverterArtworkLayout,
+  getConverterCornerPosition,
+  getConverterDomainCorner,
+  isDirectionalConverterSymbol,
+  SUPPLY_ASSEMBLY_CONNECTION_DOMAINS,
+} from '@/lib/converterArtwork'
 import type { EditorCapabilities } from '@/lib/viewerMode'
 import { polesFromConfig } from '@/constants/poleConfig'
 import { clamp, rectContainsRect } from '@/lib/geometry'
@@ -118,7 +126,12 @@ function ConverterBackupFeedMarker({
   const converter = converterId ? getTrunkDeviceById(converterId)?.device : undefined
   const symbolPath = getSymbolById(converter?.symbol ?? 'inverter')?.svgPath
   const [symbolImage, setSymbolImage] = useState<HTMLImageElement | null>(null)
+  const [baseImage, setBaseImage] = useState<HTMLImageElement | null>(null)
+  const [diagonalImage, setDiagonalImage] = useState<HTMLImageElement | null>(null)
+  const [acImage, setAcImage] = useState<HTMLImageElement | null>(null)
+  const [dcImage, setDcImage] = useState<HTMLImageElement | null>(null)
   const geometry = getConverterBackupFeedMarkerGeometry(surface)
+  const isDirectional = isDirectionalConverterSymbol(converter?.symbol)
 
   useEffect(() => {
     if (!symbolPath) {
@@ -129,6 +142,28 @@ function ConverterBackupFeedMarker({
       .then(setSymbolImage)
       .catch(() => setSymbolImage(null))
   }, [symbolPath, themeMode])
+
+  useEffect(() => {
+    if (!isDirectional) {
+      setBaseImage(null)
+      setDiagonalImage(null)
+      setAcImage(null)
+      setDcImage(null)
+      return
+    }
+    loadProcessedSymbol(CONVERTER_ARTWORK_PATHS.base, themeMode === 'dark')
+      .then(setBaseImage)
+      .catch(() => setBaseImage(null))
+    loadProcessedSymbol(CONVERTER_ARTWORK_PATHS.diagonal, themeMode === 'dark')
+      .then(setDiagonalImage)
+      .catch(() => setDiagonalImage(null))
+    loadProcessedSymbol(CONVERTER_ARTWORK_PATHS.AC, themeMode === 'dark')
+      .then(setAcImage)
+      .catch(() => setAcImage(null))
+    loadProcessedSymbol(CONVERTER_ARTWORK_PATHS.DC, themeMode === 'dark')
+      .then(setDcImage)
+      .catch(() => setDcImage(null))
+  }, [isDirectional, themeMode])
 
   if (!geometry) return null
   const half = geometry.symbolSize / 2
@@ -145,7 +180,70 @@ function ConverterBackupFeedMarker({
           listening={false}
         />
       ))}
-      {symbolImage ? (
+      {isDirectional && baseImage && diagonalImage ? (
+        (() => {
+          const size = geometry.symbolSize
+          const iconSize = size * 0.27
+          const layout = getConverterArtworkLayout(
+            converter?.symbol === 'inverter' ? 'DC' : 'AC',
+            converter?.symbol === 'inverter' ? 'AC' : 'DC',
+            SUPPLY_ASSEMBLY_CONNECTION_DOMAINS,
+          )
+          const domainPosition = (domain: 'AC' | 'DC') => {
+            const corner = getConverterDomainCorner(layout, domain)
+            if (!corner) return undefined
+            const point = getConverterCornerPosition(corner, size, size, size * 0.12, iconSize)
+            return { x: size / 2 + point.x, y: size / 2 + point.y }
+          }
+          const acPosition = domainPosition('AC')
+          const dcPosition = domainPosition('DC')
+          return (
+            <>
+              <KonvaImage
+                image={baseImage}
+                x={geometry.sourceX}
+                y={geometry.sourceY}
+                width={size}
+                height={size}
+                offsetX={half}
+                offsetY={half}
+                listening={false}
+              />
+              <KonvaImage
+                image={diagonalImage}
+                x={geometry.sourceX}
+                y={geometry.sourceY}
+                width={size}
+                height={size}
+                offsetX={half}
+                offsetY={half}
+                scaleX={layout.diagonal === 'top-left-to-bottom-right' ? -1 : 1}
+                listening={false}
+              />
+              {acImage && acPosition && (
+                <KonvaImage
+                  image={acImage}
+                  x={geometry.sourceX + acPosition.x - iconSize / 2}
+                  y={geometry.sourceY + acPosition.y - iconSize / 2}
+                  width={iconSize}
+                  height={iconSize}
+                  listening={false}
+                />
+              )}
+              {dcImage && dcPosition && (
+                <KonvaImage
+                  image={dcImage}
+                  x={geometry.sourceX + dcPosition.x - iconSize / 2}
+                  y={geometry.sourceY + dcPosition.y - iconSize / 2}
+                  width={iconSize}
+                  height={iconSize}
+                  listening={false}
+                />
+              )}
+            </>
+          )
+        })()
+      ) : symbolImage ? (
         <KonvaImage
           image={symbolImage}
           x={geometry.sourceX - half}

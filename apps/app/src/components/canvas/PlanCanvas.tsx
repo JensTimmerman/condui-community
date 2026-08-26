@@ -5369,6 +5369,9 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
             imagePosition: planImagePosition,
             walls: wallsForRender,
             symbolBaseSizePx: baseSymbolSizePx,
+            ...(endpoint.type === 'socket'
+              ? { socketCount: endpoint.socketProps?.socketCount ?? 1 }
+              : {}),
           },
           wallFacingSide
         )

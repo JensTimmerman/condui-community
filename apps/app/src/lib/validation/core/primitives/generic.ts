@@ -33,6 +33,18 @@ function hasUpstreamOvercurrent(
     return { passed: true }
   }
 
+  // An RCD may temporarily own an empty circuit row while it has no connected
+  // load yet. There is nothing downstream to protect in that state, so do not
+  // report the missing overcurrent device warning until the circuit is used.
+  const directProtection = query.getProtectionForCircuit(circuit.id)
+  const hasConnectedLoad =
+    circuit.endpoints.length > 0 ||
+    (circuit.branches?.length ?? 0) > 0 ||
+    (circuit.trunkDevices?.length ?? 0) > 0
+  if (directProtection?.type === 'RCD' && !hasConnectedLoad) {
+    return { passed: true }
+  }
+
   const upstream = query.getUpstream(scope.id)
   const hasOvercurrent = upstream.some((item: { type: 'protection' | 'circuit'; id: string }) => {
     if (item.type === 'protection') {

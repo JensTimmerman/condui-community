@@ -16,7 +16,7 @@ import type {
 } from './types'
 import { A4_LANDSCAPE, A4_PORTRAIT, PAGE_MARGIN } from './pageSizes'
 import { getExportFontFamily } from './fontPostProcessor'
-import { INFO_BLOCK_TOTAL_WIDTH, INFO_BLOCK_HEIGHT } from '@/lib/infoBlockLayout'
+import { INFO_BLOCK_HEIGHT } from '@/lib/infoBlockLayout'
 import { exportLog } from './exportLogger'
 import {
   getInfoBlockReservedZoneMm,
@@ -39,6 +39,8 @@ const LIMITED_RASTER_JPEG_QUALITY = 0.62
 export interface PdfPageInfoBlock {
   /** Pre-built SVG string for the info block (from buildInfoBlockSvg). */
   svgString: string
+  /** Native SVG width; used to reserve the correct aspect-ratio-aware page zone. */
+  nativeWidth: number
 }
 
 function addReferenceLinkToPdf(
@@ -128,6 +130,7 @@ export async function composePdfPage(
     const contentHeight = getPdfContentHeightMm(orientation, {
       hasInfoBlock: !!infoBlock?.svgString,
       hasPanelTitle: !!panelTitle,
+      infoBlockNativeWidth: infoBlock?.nativeWidth,
     })
     const contentX = PAGE_MARGIN
     let contentY = PAGE_MARGIN
@@ -243,7 +246,10 @@ export async function composePdfPage(
     positionedSvg.appendChild(positionedGroup)
 
     if (infoBlock?.svgString) {
-      const { widthMm: boxW, heightMm: boxH } = getInfoBlockReservedZoneMm(orientation)
+      const { widthMm: boxW, heightMm: boxH } = getInfoBlockReservedZoneMm(
+        orientation,
+        infoBlock.nativeWidth
+      )
       const boxX = pageWidth - PAGE_MARGIN - boxW
       const boxY = pageHeight - PAGE_MARGIN - boxH
       const infoBlockSvgDoc = parser.parseFromString(infoBlock.svgString, 'image/svg+xml')
@@ -256,7 +262,7 @@ export async function composePdfPage(
       const infoInner = svgDoc.createElementNS('http://www.w3.org/2000/svg', 'svg')
       infoInner.setAttribute('width', `${boxW}`)
       infoInner.setAttribute('height', `${boxH}`)
-      infoInner.setAttribute('viewBox', `0 0 ${INFO_BLOCK_TOTAL_WIDTH} ${INFO_BLOCK_HEIGHT}`)
+      infoInner.setAttribute('viewBox', `0 0 ${infoBlock.nativeWidth} ${INFO_BLOCK_HEIGHT}`)
       infoInner.setAttribute('preserveAspectRatio', 'xMidYMid meet')
       while (infoBlockSvgEl.firstChild) {
         const node = infoBlockSvgEl.firstChild
@@ -425,6 +431,7 @@ export async function composeLimitedRasterPdfPage(
     const contentHeight = getPdfContentHeightMm(orientation, {
       hasInfoBlock: !!infoBlock?.svgString,
       hasPanelTitle: !!panelTitle,
+      infoBlockNativeWidth: infoBlock?.nativeWidth,
     })
     const contentX = PAGE_MARGIN
     let contentY = PAGE_MARGIN
@@ -512,7 +519,10 @@ export async function composeLimitedRasterPdfPage(
     positionedSvg.appendChild(positionedGroup)
 
     if (infoBlock?.svgString) {
-      const { widthMm: boxW, heightMm: boxH } = getInfoBlockReservedZoneMm(orientation)
+      const { widthMm: boxW, heightMm: boxH } = getInfoBlockReservedZoneMm(
+        orientation,
+        infoBlock.nativeWidth
+      )
       const boxX = pageWidth - PAGE_MARGIN - boxW
       const boxY = pageHeight - PAGE_MARGIN - boxH
       const infoBlockSvgDoc = parser.parseFromString(infoBlock.svgString, 'image/svg+xml')
@@ -522,7 +532,7 @@ export async function composeLimitedRasterPdfPage(
       const infoInner = svgDoc.createElementNS('http://www.w3.org/2000/svg', 'svg')
       infoInner.setAttribute('width', `${boxW}`)
       infoInner.setAttribute('height', `${boxH}`)
-      infoInner.setAttribute('viewBox', `0 0 ${INFO_BLOCK_TOTAL_WIDTH} ${INFO_BLOCK_HEIGHT}`)
+      infoInner.setAttribute('viewBox', `0 0 ${infoBlock.nativeWidth} ${INFO_BLOCK_HEIGHT}`)
       infoInner.setAttribute('preserveAspectRatio', 'xMidYMid meet')
       while (infoBlockSvgEl.firstChild) {
         const node = infoBlockSvgEl.firstChild

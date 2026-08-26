@@ -42,6 +42,11 @@ The root document contains these portable domains:
 | `disciplines.electrical` | Installation, panels, devices, plan wiring, one-wire annotations, and optional supply assemblies.     |
 | `validation`             | Optional quarantined data retained for recovery and diagnostics.                                      |
 
+The optional `project.showInspectionAgencyInInfoBlock` boolean controls whether the
+portable inspection-agency contact stored in `project.inspectionAgency` is rendered as
+a fourth column in drawing info blocks. Missing or `false` leaves the standard
+three-column info block unchanged.
+
 Within `disciplines.electrical`, a protection record with `directPanelFeeder: true` is a
 structural one-wire carrier for a secondary panel connected directly to a busbar. It
 retains the feeder circuit and `subPanelId`, but readers must not interpret it as a

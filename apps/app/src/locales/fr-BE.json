@@ -381,6 +381,8 @@
     "meterEanCodePlaceholder": "p.ex. 5412345678901234",
     "inspectionAgency": "Organisme de contrôle",
     "inspectionAgencyName": "Nom de l'organisme",
+    "showInspectionAgencyInInfoBlock": "Afficher dans les cartouches des schémas",
+    "hideInspectionAgencyInInfoBlock": "Masquer dans les cartouches des schémas",
     "created": "Créé",
     "updated": "Mis à jour",
     "recent": "Récents",
@@ -722,6 +724,7 @@
       "mainSwitchType": "Type d'interrupteur"
     },
     "solarPanel": {
+      "groupTitle": "Marque et modèle",
       "wattage": "Puissance (W)",
       "voltage": "Tension (V)"
     },
@@ -1190,6 +1193,7 @@
     },
     "reason": {
       "circuitRefMismatch": "Circuit sous mauvaise protection",
+      "protectionReferenceConflict": "Références de protections contradictoires",
       "endpointNotInBranch": "Point non sur une branche",
       "branchRefsMissingEndpoint": "Branche référence un point manquant",
       "frameContentOrphan": "Cadre référence un contenu manquant",
@@ -1221,8 +1225,9 @@
     "checking": "Vérification...",
     "errorsFound": "{{count}} erreur(s) trouvée(s)",
     "warningsFound": "{{count}} avertissement(s) trouvé(s)",
-    "moreInfo": "Plus d'infos",
-    "lessInfo": "Moins d'infos",
+    "readMoreAboutError": "En savoir plus sur cette erreur",
+    "readMoreAboutWarning": "En savoir plus sur cet avertissement",
+    "readMoreAboutInfo": "En savoir plus sur ce message",
     "scopeLabels": {
       "circuit": "Circuit",
       "board": "Tableau",
@@ -1425,6 +1430,7 @@
     },
     "orphanDetection": {
       "circuitRefMismatch": "Le circuit {{circuitCode}} est listé sous la protection « {{listedUnderLabel}} » mais apparaît sur le schéma unifilaire sous le circuit {{parentCircuitCode}} (protection « {{displayedUnderLabel}} »).",
+      "protectionReferenceConflict": "Le circuit {{circuitCode}} est référencé par plusieurs protections ({{protectionLabels}}). Pour un regroupement RCD/RCBO, le circuit reste sous son disjoncteur et est relié via le circuit d’ancrage. Corrigez la topologie du schéma unifilaire avant de continuer.",
       "endpointNotInBranch": "Le point « {{endpointLabel}} » du circuit {{circuitCode}} n'est sur aucune branche et n'apparaîtra pas sur le schéma unifilaire.",
       "branchRefsMissingEndpoint": "La branche « {{branchLabel}} » du circuit {{circuitCode}} référence un point manquant {{endpointId}}.",
       "frameContentOrphans": "Le cadre « {{frameTitle}} » référence un contenu manquant ou invalide ({{contentId}}).",

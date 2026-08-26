@@ -378,12 +378,15 @@ export function usePlanDragHandling(
               const endpoint = getEndpointById(row.endpointId)
               const placement = endpoint?.placements.find((p: Placement) => p.id === placementId)
               if (!placement || !endpoint) return
+              const placementCtx = endpoint.type === 'socket'
+                ? { ...ctx, socketCount: endpoint.socketProps?.socketCount ?? 1 }
+                : ctx
 
               if (endpoint.type === 'socket') {
                 const suggested = resolveDragEndRotation(
                   placement.id,
                   placement,
-                  ctx,
+                  placementCtx,
                   'left',
                 )
                 if (suggested != null && suggested !== placement.rotationDeg) {
@@ -394,7 +397,7 @@ export function usePlanDragHandling(
                 const suggested = resolveDragEndRotation(
                   placement.id,
                   placement,
-                  ctx,
+                  placementCtx,
                   'top',
                 )
                 if (suggested != null && suggested !== placement.rotationDeg) {
@@ -445,12 +448,15 @@ export function usePlanDragHandling(
               const ctx = hasImage
                 ? { image: planImage, imagePosition: planImagePosition, walls, symbolBaseSizePx: baseSymbolSizePx }
                 : { walls, symbolBaseSizePx: baseSymbolSizePx }
+              const placementCtx = endpoint?.type === 'socket'
+                ? { ...ctx, socketCount: endpoint.socketProps?.socketCount ?? 1 }
+                : ctx
               const tmpPlacement = { ...placement, pos: currentPos }
               if (
                 endpoint?.type === 'socket' &&
                 !hasExplicitSituationPlanRotation(tmpPlacement)
               ) {
-                const suggested = suggestRotationForPlacement(tmpPlacement, ctx)
+                const suggested = suggestRotationForPlacement(tmpPlacement, placementCtx)
                 if (suggested != null) {
                   const prev = usePlanDragVisualStore.getState().rotations.get(placement.id)
                   if (prev !== suggested) rotationPatch.set(placement.id, suggested)
@@ -459,7 +465,7 @@ export function usePlanDragHandling(
                 endpoint?.symbol === 'panel_distribution' &&
                 !hasExplicitSituationPlanRotation(tmpPlacement)
               ) {
-                const suggested = suggestRotationForPlacement(tmpPlacement, ctx, 'top')
+                const suggested = suggestRotationForPlacement(tmpPlacement, placementCtx, 'top')
                 if (suggested != null) {
                   const prev = usePlanDragVisualStore.getState().rotations.get(placement.id)
                   if (prev !== suggested) rotationPatch.set(placement.id, suggested)
@@ -491,6 +497,9 @@ export function usePlanDragHandling(
               const ctx = hasImage
                 ? { image: planImage, imagePosition: planImagePosition, walls, symbolBaseSizePx: baseSymbolSizePx }
                 : { walls, symbolBaseSizePx: baseSymbolSizePx }
+              const placementCtx = endpoint?.type === 'socket'
+                ? { ...ctx, socketCount: endpoint.socketProps?.socketCount ?? 1 }
+                : ctx
               // Use the drop position (same one used by drag preview) so commit
               // cannot snap back to a rotation computed from stale pre-drag data.
               const placementAtDrop = { ...placement, pos: finalPos }
@@ -498,7 +507,7 @@ export function usePlanDragHandling(
                 const suggested = resolveDragEndRotation(
                   placement.id,
                   placementAtDrop,
-                  ctx,
+                  placementCtx,
                   'left',
                 )
                 if (suggested != null && suggested !== placement.rotationDeg) {
@@ -509,7 +518,7 @@ export function usePlanDragHandling(
                 const suggested = resolveDragEndRotation(
                   placement.id,
                   placementAtDrop,
-                  ctx,
+                  placementCtx,
                   'top',
                 )
                 if (suggested != null && suggested !== placement.rotationDeg) {
@@ -694,11 +703,14 @@ export function usePlanDragHandling(
               const endpoint = getEndpointById(row.endpointId)
               const placement = endpoint?.placements.find((p: Placement) => p.id === placementId)
               if (!placement || !endpoint) return
+              const placementCtx = endpoint.type === 'socket'
+                ? { ...ctx, socketCount: endpoint.socketProps?.socketCount ?? 1 }
+                : ctx
               if (endpoint.type === 'socket') {
                 const suggested = resolveDragEndRotation(
                   placement.id,
                   placement,
-                  ctx,
+                  placementCtx,
                   'left',
                 )
                 if (suggested != null && suggested !== placement.rotationDeg) {
@@ -709,7 +721,7 @@ export function usePlanDragHandling(
                 const suggested = resolveDragEndRotation(
                   placement.id,
                   placement,
-                  ctx,
+                  placementCtx,
                   'top',
                 )
                 if (suggested != null && suggested !== placement.rotationDeg) {

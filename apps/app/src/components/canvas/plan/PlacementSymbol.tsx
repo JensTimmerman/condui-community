@@ -23,6 +23,14 @@ import {
 } from '@/lib/symbols'
 import { loadProcessedSymbol } from '@/lib/symbolImage'
 import {
+  CONVERTER_ARTWORK_PATHS,
+  CONVERTER_DOMAIN_ICON_SIZE_RATIO,
+  getCanonicalConverterArtworkLayout,
+  getConverterCornerPosition,
+  getConverterDomainCorner,
+  isDirectionalConverterSymbol,
+} from '@/lib/converterArtwork'
+import {
   showLightPointDecentralOverlay,
   showLightPointSafetyOverlay,
 } from '@/lib/lightPointProps'
@@ -319,6 +327,9 @@ function PlacementSymbolInner({
   const colors = useThemeColors()
   const fontFamily = useCanvasFontFamily()
   const [processedImage, setProcessedImage] = useState<HTMLImageElement | null>(null)
+  const [converterDiagonalImage, setConverterDiagonalImage] = useState<HTMLImageElement | null>(null)
+  const [converterAcImage, setConverterAcImage] = useState<HTMLImageElement | null>(null)
+  const [converterDcImage, setConverterDcImage] = useState<HTMLImageElement | null>(null)
   const [overlaySwitchImage, setOverlaySwitchImage] = useState<HTMLImageElement | null>(null)
   const [overlaySwitchLockImage, setOverlaySwitchLockImage] = useState<HTMLImageElement | null>(null)
   const [switchOverlayImage, setSwitchOverlayImage] = useState<HTMLImageElement | null>(null)
@@ -459,10 +470,18 @@ function PlacementSymbolInner({
   const isTransformer = endpoint?.symbol === 'transformer'
   const conversionProps = trunkDevice?.conversionProps ?? endpoint?.energyConversionProps
   const transformerLabel = isTransformer ? (conversionProps?.transformerOverlayLabel || '').trim() : ''
+  const isDirectionalConverter = isDirectionalConverterSymbol(endpoint?.symbol)
+  const converterInputDomain = endpoint?.symbol === 'inverter' ? 'DC' : 'AC'
+  const converterOutputDomain = endpoint?.symbol === 'inverter' ? 'AC' : 'DC'
+  const converterArtworkLayout = isDirectionalConverter
+    ? getCanonicalConverterArtworkLayout(converterInputDomain, converterOutputDomain)
+    : null
 
   // Base SVG path: switches use getSwitchSymbolPaths; boiler/heating use getFixedApplianceSymbolPath; else symbol.svgPath
   const baseSvgPath = isEarthing
     ? symbol?.svgPath
+    : isDirectionalConverter
+      ? CONVERTER_ARTWORK_PATHS.base
     : isSwitch && endpoint?.symbol
       ? getSwitchSymbolPaths(endpoint.symbol, switchSymbolPathProps).basePath
       : endpoint?.symbol === 'boiler'
@@ -493,6 +512,28 @@ function PlacementSymbolInner({
       setProcessedImage(null)
     })
   }, [baseSvgPath, theme.mode])
+
+  // Directional converters are composed from the shared base, diagonal, and
+  // domain artwork so the situation plan uses the same symbol as the other
+  // canvas renderers.
+  useEffect(() => {
+    if (!isDirectionalConverter) {
+      setConverterDiagonalImage(null)
+      setConverterAcImage(null)
+      setConverterDcImage(null)
+      return
+    }
+    const isDark = theme.mode === 'dark'
+    loadProcessedSymbol(CONVERTER_ARTWORK_PATHS.diagonal, isDark)
+      .then(setConverterDiagonalImage)
+      .catch(() => setConverterDiagonalImage(null))
+    loadProcessedSymbol(CONVERTER_ARTWORK_PATHS.AC, isDark)
+      .then(setConverterAcImage)
+      .catch(() => setConverterAcImage(null))
+    loadProcessedSymbol(CONVERTER_ARTWORK_PATHS.DC, isDark)
+      .then(setConverterDcImage)
+      .catch(() => setConverterDcImage(null))
+  }, [isDirectionalConverter, theme.mode])
 
   // Load socket overlay images when socketProps request them (sitplan)
   useEffect(() => {
@@ -1176,6 +1217,58 @@ function PlacementSymbolInner({
                 outlineHeight,
                 symbolColor,
               )}
+            </>
+          ) : isDirectionalConverter && converterDiagonalImage && converterArtworkLayout ? (
+            <>
+              <Image
+                image={processedImage ?? undefined}
+                width={outlineWidth}
+                height={outlineHeight}
+                offsetX={outlineWidth / 2}
+                offsetY={outlineHeight / 2}
+                listening={i === 0 && !touchPrimary}
+              />
+              <Image
+                image={converterDiagonalImage}
+                width={outlineWidth}
+                height={outlineHeight}
+                offsetX={outlineWidth / 2}
+                offsetY={outlineHeight / 2}
+                scaleX={converterArtworkLayout.diagonal === 'top-left-to-bottom-right' ? -1 : 1}
+                listening={false}
+              />
+              {(['AC', 'DC'] as const).map((domain) => {
+                const image = domain === 'AC' ? converterAcImage : converterDcImage
+                const corner = getConverterDomainCorner(converterArtworkLayout, domain)
+                if (!image || !corner) return null
+                const symbolExtent = Math.min(outlineWidth, outlineHeight)
+                // AC/DC SVGs use a 24×24 viewBox while the converter artwork
+                // uses 48×48. Render them at half the converter size so their
+                // visible strokes match the original combined SVGs.
+                const iconSize = symbolExtent * CONVERTER_DOMAIN_ICON_SIZE_RATIO
+                const point = getConverterCornerPosition(
+                  corner,
+                  outlineWidth,
+                  outlineHeight,
+                  symbolExtent * 0.12,
+                  iconSize,
+                  iconSize,
+                  false,
+                )
+                return (
+                  <Image
+                    key={domain}
+                    image={image}
+                    width={iconSize}
+                    height={iconSize}
+                    offsetX={iconSize / 2}
+                    offsetY={iconSize / 2}
+                    x={point.x}
+                    y={point.y}
+                    listening={false}
+                  />
+                )
+              })}
             </>
           ) : (
             <Image

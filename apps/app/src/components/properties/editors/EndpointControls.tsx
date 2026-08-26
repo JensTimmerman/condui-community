@@ -1334,7 +1334,7 @@ export function EndpointCertificationSection({
     symbol !== 'rectifier' &&
     symbol !== 'ev' &&
     symbol !== 'battery' &&
-    !(symbol === 'solar_panel' && endpoint.solarPanelProps?.plugIn)
+    symbol !== 'solar_panel'
   ) {
     return null
   }
@@ -1345,9 +1345,11 @@ export function EndpointCertificationSection({
         fields={
           symbol === 'ev'
             ? ['brand', 'model', 'serialNumber']
-            : symbol === 'battery' || symbol === 'solar_panel'
-              ? ['brand', 'model', 'serialNumber']
-              : ['brand', 'model', 'serialNumber', 'power']
+            : symbol === 'solar_panel'
+              ? ['brand', 'model']
+              : symbol === 'battery'
+                ? ['brand', 'model', 'serialNumber']
+                : ['brand', 'model', 'serialNumber', 'power']
         }
         values={
           symbol === 'ev'
@@ -1435,8 +1437,16 @@ export function EndpointCertificationSection({
         selectClass={selectClass}
         t={t}
         title={t(
-          symbol === 'ev' ? 'endpoints.evCharger.groupTitle' : 'endpoints.certification.groupTitle',
-          symbol === 'ev' ? 'EV charger details' : 'Device identification (certification)'
+          symbol === 'solar_panel'
+            ? 'endpoints.solarPanel.groupTitle'
+            : symbol === 'ev'
+              ? 'endpoints.evCharger.groupTitle'
+              : 'endpoints.certification.groupTitle',
+          symbol === 'solar_panel'
+            ? 'Brand and model'
+            : symbol === 'ev'
+              ? 'EV charger details'
+              : 'Device identification (certification)'
         )}
         synergrid={
           !canUseSynergridList

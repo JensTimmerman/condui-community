@@ -15,6 +15,7 @@ import {
   type EendraadPreviewChangeSet,
 } from '@/lib/layout/eendraadPreviewSimulation'
 import type { WireSegment, Endpoint, ProtectionDevice, TrunkDevice, Panel } from '@/types/schema'
+import { buildStablePreviewCircuitOverrides } from '@/lib/layout/previewCircuitAnchorOverrides'
 import type { DragPreviewState } from './useEendraadDragPreview'
 import {
   getElectricalInstallationFromProject,
@@ -51,6 +52,7 @@ export interface EendraadPreviewGraph {
  */
 export function useEendraadPreviewGraph(
   dragPreview: DragPreviewState | null,
+  currentLayout: BottomUpLayoutResult | null = null
 ): EendraadPreviewGraph | null {
   const currentProject = useProjectStore((s: ProjectState) => s.currentProject)
   const eendraadLayoutOverrides = useUIStore((s: UIState) => s.eendraadLayoutOverrides)
@@ -108,7 +110,18 @@ export function useEendraadPreviewGraph(
       overrides.set(key, value)
     })
 
-    const layout = calculateBottomUpLayout(sim.project, overrides)
+    const preliminaryLayout = calculateBottomUpLayout(sim.project, overrides)
+    const stableOverrides = currentLayout
+      ? buildStablePreviewCircuitOverrides(
+          currentLayout,
+          preliminaryLayout,
+          overrides,
+          sim.affectedPanelIds
+        )
+      : overrides
+    const layout = currentLayout
+      ? calculateBottomUpLayout(sim.project, stableOverrides)
+      : preliminaryLayout
     if (!layout) return null
 
     const layoutTree = buildLayoutTree(layout)
@@ -177,5 +190,5 @@ export function useEendraadPreviewGraph(
         new Set([...sim.createdTrunkDeviceIds, ...sim.movedTrunkDeviceIds]),
       ),
     }
-  }, [currentProject, dragPreview, eendraadLayoutOverrides])
+  }, [currentProject, currentLayout, dragPreview, eendraadLayoutOverrides])
 }

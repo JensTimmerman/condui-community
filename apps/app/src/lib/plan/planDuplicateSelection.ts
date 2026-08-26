@@ -24,6 +24,7 @@ import {
   type ProjectWithOptionalV2Building,
 } from '@/lib/projectV2/buildingFloors'
 import type { ProjectWithOptionalV2Electrical } from '@/lib/projectV2/electrical'
+import { suggestRotationForPlacement } from '@/utils/planAutoOrient'
 
 type PlanDuplicateProject = ProjectWithOptionalV2Building & ProjectWithOptionalV2Electrical
 
@@ -310,11 +311,55 @@ function duplicateNonMultiplierProperty(
 
 export type PlanDuplicateResult = Selection | null
 
+/** Recompute automatic plan angles after the duplicate's offset has been applied. */
+function reorientDuplicatedPlanPlacements(
+  result: PlanDuplicateResult,
+  baseSymbolSizePx?: number,
+): void {
+  if (!result) return
+
+  const store = useProjectStore.getState()
+  const placementIds = result.type === 'placement'
+    ? result.ids
+    : result.type === 'endpoint'
+      ? result.ids.flatMap((endpointId) =>
+          store.getEndpointById(endpointId)?.placements.map((placement) => placement.id) ?? []
+        )
+      : []
+
+  for (const placementId of placementIds) {
+    const row = store.getPlacementById(placementId)
+    const endpointId = row?.endpointId
+    if (!endpointId) continue
+    const endpoint = store.getEndpointById(endpointId)
+    if (!endpoint || (endpoint.type !== 'socket' && endpoint.symbol !== 'panel_distribution')) {
+      continue
+    }
+    if (row.rotationMode === 'explicit') continue
+
+    const floor = store.getFloorById(row.floorId)
+    const walls = floor?.floorPlan?.walls ?? []
+    const suggested = suggestRotationForPlacement(
+      row,
+      {
+        walls,
+        ...(baseSymbolSizePx != null ? { symbolBaseSizePx: baseSymbolSizePx } : {}),
+        ...(endpoint.type === 'socket'
+          ? { socketCount: endpoint.socketProps?.socketCount ?? 1 }
+          : {}),
+      },
+      endpoint.symbol === 'panel_distribution' ? 'top' : 'left',
+    )
+    store.updatePlacement(placementId, { rotationDeg: suggested ?? 0 })
+  }
+}
+
 export function runPlanDuplicate(
   selection: Selection,
   activeFloorId: string | null,
   options?: {
     fallbackPosition?: Point
+    baseSymbolSizePx?: number
     withSingleUndoEntry?: (fn: () => boolean, opts?: { sessionLabel?: string }) => boolean
   },
 ): PlanDuplicateResult {
@@ -443,6 +488,7 @@ export function runPlanDuplicate(
     options.withSingleUndoEntry(
       () => {
         result = run()
+        reorientDuplicatedPlanPlacements(result, options?.baseSymbolSizePx)
         return result != null
       },
       { sessionLabel: 'duplicate plan selection' },
@@ -450,5 +496,7 @@ export function runPlanDuplicate(
     return result
   }
 
-  return run()
+  const result = run()
+  reorientDuplicatedPlanPlacements(result, options?.baseSymbolSizePx)
+  return result
 }

@@ -124,10 +124,6 @@ export default defineConfig({
         globIgnores: [
           'print-labels/**',
           'docs-learning/**',
-          'social/admin-preview.*',
-          'social/arei-preview*',
-          'social/docs-preview*',
-          'social/eendra-app-preview*',
         ],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//],

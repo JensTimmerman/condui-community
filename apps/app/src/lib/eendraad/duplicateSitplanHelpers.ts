@@ -29,12 +29,15 @@ export type ClonePlacementsOptions = {
   symbolType?: string
   socketCount?: number
   baseSymbolSizePx?: number
+  /** Auto-oriented plan symbols must not carry an automatic angle to their new position. */
+  autoOrient?: boolean
 }
 
 export function clonePlacementsOptionsForEndpoint(source: Endpoint): ClonePlacementsOptions {
   return {
     symbolType: source.symbol,
     socketCount: source.type === 'socket' ? source.socketProps?.socketCount ?? 1 : 1,
+    autoOrient: source.type === 'socket' || source.symbol === 'panel_distribution',
   }
 }
 
@@ -93,6 +96,7 @@ export function clonePlacementsForDuplicate(
   return placements.map((p) => ({
     ...JSON.parse(JSON.stringify(p)),
     id: generateId(),
+    ...(options?.autoOrient && p.rotationMode !== 'explicit' ? { rotationDeg: 0 } : {}),
     pos: {
       x: p.pos.x + offset.x,
       y: p.pos.y + offset.y,

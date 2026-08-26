@@ -381,6 +381,8 @@
     "meterEanCodePlaceholder": "e.g. 5412345678901234",
     "inspectionAgency": "Inspection agency",
     "inspectionAgencyName": "Agency name",
+    "showInspectionAgencyInInfoBlock": "Show in drawing info blocks",
+    "hideInspectionAgencyInInfoBlock": "Hide in drawing info blocks",
     "created": "Created",
     "updated": "Updated",
     "recent": "Recent",
@@ -722,6 +724,7 @@
       "mainSwitchType": "Switch type"
     },
     "solarPanel": {
+      "groupTitle": "Brand and model",
       "wattage": "Wattage (W)",
       "voltage": "Voltage (V)"
     },
@@ -1193,6 +1196,7 @@
     },
     "reason": {
       "circuitRefMismatch": "Circuit under wrong protection",
+      "protectionReferenceConflict": "Conflicting protection references",
       "endpointNotInBranch": "Endpoint not on branch",
       "branchRefsMissingEndpoint": "Branch references missing endpoint",
       "frameContentOrphan": "Frame references missing content",
@@ -1227,8 +1231,9 @@
     "revalidate": "Re-validate now",
     "revalidateInProgress": "Re-validating…",
     "goToIssue": "Go to issue",
-    "moreInfo": "More info",
-    "lessInfo": "Less info",
+    "readMoreAboutError": "Read more about this error",
+    "readMoreAboutWarning": "Read more about this warning",
+    "readMoreAboutInfo": "Read more about this message",
     "scopeLabels": {
       "circuit": "Circuit",
       "board": "Panel",
@@ -1434,6 +1439,7 @@
     },
     "orphanDetection": {
       "circuitRefMismatch": "Circuit {{circuitCode}} is listed under protection \"{{listedUnderLabel}}\" but appears in the one-line diagram under circuit {{parentCircuitCode}} (protection \"{{displayedUnderLabel}}\").",
+      "protectionReferenceConflict": "Circuit {{circuitCode}} is referenced by multiple protections ({{protectionLabels}}). RCD/RCBO nesting must keep the child under its MCB and link it from the anchor circuit. Repair the one-line topology before continuing.",
       "endpointNotInBranch": "Endpoint \"{{endpointLabel}}\" on circuit {{circuitCode}} is not on any branch and will not appear on the one-line diagram.",
       "branchRefsMissingEndpoint": "Branch \"{{branchLabel}}\" on circuit {{circuitCode}} references missing endpoint {{endpointId}}.",
       "frameContentOrphans": "Frame \"{{frameTitle}}\" references missing or invalid content ({{contentId}}).",

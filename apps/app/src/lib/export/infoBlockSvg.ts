@@ -4,6 +4,7 @@
  */
 
 import type { InstallerProfile } from '@/lib/installerProfile'
+import type { ProjectPartyContact } from '@/types/schema'
 import {
   getElectricalInstallationFromProject,
   type ProjectWithOptionalV2Electrical,
@@ -11,7 +12,6 @@ import {
 import {
   INFO_BLOCK_BOX_WIDTHS,
   INFO_BLOCK_PADDING,
-  INFO_BLOCK_GAP,
   INFO_BLOCK_STROKE_WIDTH_FRAME,
   INFO_BLOCK_STROKE_WIDTH_SEPARATOR,
   INFO_BLOCK_FONT_SIZE_HEADER,
@@ -22,13 +22,16 @@ import {
   INFO_BLOCK_BODY_TOP_GAP,
   INFO_BLOCK_HEADER_LINE_INSET,
   INFO_BLOCK_BODY_LINE_HEIGHT,
-  INFO_BLOCK_TOTAL_WIDTH,
   INFO_BLOCK_HEIGHT,
   INFO_BLOCK_INSTALLER_TOP_HEIGHT,
   INFO_BLOCK_IMAGE_AREA_HEIGHT,
   formatInstallationAddress,
+  formatInspectionAgencyDetails,
   formatInstallerAddress,
+  getInfoBlockColumnPositions,
+  getInfoBlockTotalWidth,
   getVoltageLabel,
+  isInspectionAgencyInfoBlockVisible,
 } from '@/lib/infoBlockLayout'
 import { getThemeColors } from '@/lib/theme/colors'
 
@@ -43,18 +46,24 @@ function escapeXml(s: string): string {
 
 export interface InfoBlockSvgOptions {
   profile: InstallerProfile | null
-  project: (ProjectWithOptionalV2Electrical & {
-    project?: {
-      name?: string
-      meterEanCode?: string
-      updatedAt?: string
-    }
-  }) | null
+  project:
+    | (ProjectWithOptionalV2Electrical & {
+        project?: {
+          name?: string
+          meterEanCode?: string
+          updatedAt?: string
+          inspectionAgency?: ProjectPartyContact
+          showInspectionAgencyInInfoBlock?: boolean
+        }
+      })
+    | null
   viewTitle: string
   /** Column header for installer column (e.g. "Installer") */
   headerInstaller: string
   /** Column header for address column (e.g. "Installation address") */
   headerInstallation: string
+  /** Column header for the optional inspection-agency column. */
+  headerInspectionAgency: string
   /** Light theme = false, dark = true */
   isDark: boolean
   fontFamily: string
@@ -63,7 +72,7 @@ export interface InfoBlockSvgOptions {
 }
 
 /**
- * Build an SVG string for the info block, in its native size (INFO_BLOCK_TOTAL_WIDTH x INFO_BLOCK_HEIGHT).
+ * Build an SVG string for the info block at its native dynamic width and fixed height.
  * The caller scales and positions it on the PDF page.
  */
 export function buildInfoBlockSvg(options: InfoBlockSvgOptions): string {
@@ -73,6 +82,7 @@ export function buildInfoBlockSvg(options: InfoBlockSvgOptions): string {
     viewTitle,
     headerInstaller,
     headerInstallation,
+    headerInspectionAgency,
     isDark,
     fontFamily,
     countryLabel,
@@ -84,9 +94,13 @@ export function buildInfoBlockSvg(options: InfoBlockSvgOptions): string {
   const textColor = colors.textColor
   const secondaryColor = colors.secondaryText
 
-  const installerBoxX = 0
-  const addressBoxX = INFO_BLOCK_BOX_WIDTHS.installer + INFO_BLOCK_GAP
-  const generalBoxX = addressBoxX + INFO_BLOCK_BOX_WIDTHS.address + INFO_BLOCK_GAP
+  const showInspectionAgency = isInspectionAgencyInfoBlockVisible(project)
+  const infoBlockWidth = getInfoBlockTotalWidth(showInspectionAgency)
+  const columnPositions = getInfoBlockColumnPositions(showInspectionAgency)
+  const inspectionAgencyBoxX = columnPositions.inspectionAgency
+  const installerBoxX = columnPositions.installer
+  const addressBoxX = columnPositions.address
+  const generalBoxX = columnPositions.general
 
   const headerY = INFO_BLOCK_PADDING
   const headerLineY = headerY + INFO_BLOCK_FONT_SIZE_HEADER + INFO_BLOCK_HEADER_LINE_GAP
@@ -94,9 +108,6 @@ export function buildInfoBlockSvg(options: InfoBlockSvgOptions): string {
 
   const sepTopY = INFO_BLOCK_PADDING
   const sepBottomY = INFO_BLOCK_HEIGHT - INFO_BLOCK_PADDING
-  const sep1X = INFO_BLOCK_BOX_WIDTHS.installer + INFO_BLOCK_GAP / 2
-  const sep2X = addressBoxX + INFO_BLOCK_BOX_WIDTHS.address + INFO_BLOCK_GAP / 2
-
   const col1Left = installerBoxX
   const col1Right = installerBoxX + INFO_BLOCK_BOX_WIDTHS.installer
   const col2Left = addressBoxX
@@ -135,22 +146,52 @@ export function buildInfoBlockSvg(options: InfoBlockSvgOptions): string {
         email: profile.email,
       })
     : ''
+  const inspectionAgency = project?.project?.inspectionAgency
+  const inspectionAgencyDetails = formatInspectionAgencyDetails(inspectionAgency, countryLabel)
+  const inspectionAgencyCompanyNumber = inspectionAgency?.companyNumber?.trim() ?? ''
 
   const lines: string[] = []
 
   // Root SVG
   lines.push(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${INFO_BLOCK_TOTAL_WIDTH}" height="${INFO_BLOCK_HEIGHT}" viewBox="0 0 ${INFO_BLOCK_TOTAL_WIDTH} ${INFO_BLOCK_HEIGHT}">`
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${infoBlockWidth}" height="${INFO_BLOCK_HEIGHT}" viewBox="0 0 ${infoBlockWidth} ${INFO_BLOCK_HEIGHT}">`
   )
   lines.push(
-    `<rect x="0" y="0" width="${INFO_BLOCK_TOTAL_WIDTH}" height="${INFO_BLOCK_HEIGHT}" fill="none" stroke="${frameColor}" stroke-width="${INFO_BLOCK_STROKE_WIDTH_FRAME}"/>`
+    `<rect x="0" y="0" width="${infoBlockWidth}" height="${INFO_BLOCK_HEIGHT}" fill="none" stroke="${frameColor}" stroke-width="${INFO_BLOCK_STROKE_WIDTH_FRAME}"/>`
   )
-  lines.push(
-    `<line x1="${sep1X}" y1="${sepTopY}" x2="${sep1X}" y2="${sepBottomY}" stroke="${frameColor}" stroke-width="${INFO_BLOCK_STROKE_WIDTH_SEPARATOR}"/>`
-  )
-  lines.push(
-    `<line x1="${sep2X}" y1="${sepTopY}" x2="${sep2X}" y2="${sepBottomY}" stroke="${frameColor}" stroke-width="${INFO_BLOCK_STROKE_WIDTH_SEPARATOR}"/>`
-  )
+  columnPositions.separators.forEach((separatorX) => {
+    lines.push(
+      `<line x1="${separatorX}" y1="${sepTopY}" x2="${separatorX}" y2="${sepBottomY}" stroke="${frameColor}" stroke-width="${INFO_BLOCK_STROKE_WIDTH_SEPARATOR}"/>`
+    )
+  })
+
+  if (inspectionAgencyBoxX != null) {
+    const inspectionRight = inspectionAgencyBoxX + INFO_BLOCK_BOX_WIDTHS.inspectionAgency
+    lines.push(
+      `<text x="${inspectionAgencyBoxX + INFO_BLOCK_PADDING}" y="${headerY + INFO_BLOCK_FONT_SIZE_HEADER}" font-family="${escapeXml(fontFamily)}, sans-serif" font-size="${INFO_BLOCK_FONT_SIZE_HEADER}" font-weight="bold" fill="${textColor}">${escapeXml(headerInspectionAgency)}</text>`
+    )
+    lines.push(
+      `<line x1="${inspectionAgencyBoxX + INFO_BLOCK_HEADER_LINE_INSET}" y1="${headerLineY}" x2="${inspectionRight - INFO_BLOCK_HEADER_LINE_INSET}" y2="${headerLineY}" stroke="${frameColor}" stroke-width="${INFO_BLOCK_STROKE_WIDTH_SEPARATOR}"/>`
+    )
+    lines.push(
+      `<text x="${inspectionAgencyBoxX + INFO_BLOCK_PADDING}" y="${bodyStartY + INFO_BLOCK_FONT_SIZE_NAME}" font-family="${escapeXml(fontFamily)}, sans-serif" font-size="${INFO_BLOCK_FONT_SIZE_NAME}" font-weight="bold" fill="${textColor}">${escapeXml(inspectionAgency?.name ?? '')}</text>`
+    )
+    if (inspectionAgencyCompanyNumber) {
+      lines.push(
+        `<text x="${inspectionRight - INFO_BLOCK_PADDING}" y="${bodyStartY + 6}" font-family="${escapeXml(fontFamily)}, sans-serif" font-size="6" font-style="italic" fill="${secondaryColor}" fill-opacity="0.8" text-anchor="end">${escapeXml(inspectionAgencyCompanyNumber)}</text>`
+      )
+    }
+    inspectionAgencyDetails.split('\n').forEach((line, index) => {
+      const y =
+        bodyStartY +
+        INFO_BLOCK_BODY_LINE_HEIGHT +
+        INFO_BLOCK_FONT_SIZE_BODY +
+        index * INFO_BLOCK_BODY_LINE_HEIGHT
+      lines.push(
+        `<text x="${inspectionAgencyBoxX + INFO_BLOCK_PADDING}" y="${y}" font-family="${escapeXml(fontFamily)}, sans-serif" font-size="${INFO_BLOCK_FONT_SIZE_BODY}" fill="${secondaryColor}">${escapeXml(line)}</text>`
+      )
+    })
+  }
 
   // Installer column
   lines.push(

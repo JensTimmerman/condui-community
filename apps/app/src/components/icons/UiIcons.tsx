@@ -37,6 +37,31 @@ function SvgIcon({ svg, className = 'w-6 h-6' }: { svg: string; className?: stri
   )
 }
 
+function MaskIcon({ src, className = 'w-6 h-6' }: { src: string; className?: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`block shrink-0 bg-current ${className}`}
+      style={{
+        WebkitMask: `url("${src}") center / contain no-repeat`,
+        mask: `url("${src}") center / contain no-repeat`,
+      }}
+    />
+  )
+}
+
+export function FindFocusIcon({ className }: IconProps) {
+  return <MaskIcon src="/icons/ui-find-focus.svg" className={className} />
+}
+
+export function MaximizeCanvasIcon({ className }: IconProps) {
+  return <MaskIcon src="/icons/ui-maximize-canvas.svg" className={className} />
+}
+
+export function RestoreLayoutIcon({ className }: IconProps) {
+  return <MaskIcon src="/icons/ui-restore-layout.svg" className={className} />
+}
+
 export function DrawPencilIcon({ className }: IconProps) {
   return (
     <svg

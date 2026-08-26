@@ -5,10 +5,11 @@ import { ZOOM_MIN, ZOOM_MAX, zoomToDisplayPercent } from '@/constants/canvasCons
 import { preventCanvasToolbarMouseFocus } from '@/lib/ui/preventCanvasToolbarMouseFocus'
 import { useCanvasOverlayScale } from '@/contexts/CanvasOverlayScaleContext'
 import { useUIStore } from '@/stores/uiStore'
-
-const ICON_FIND_FOCUS = '/icons/ui-find-focus.svg'
-const ICON_MAXIMIZE_CANVAS = '/icons/ui-maximize-canvas.svg'
-const ICON_RESTORE_LAYOUT = '/icons/ui-restore-layout.svg'
+import {
+  FindFocusIcon,
+  MaximizeCanvasIcon,
+  RestoreLayoutIcon,
+} from '@/components/icons/UiIcons'
 
 interface ViewNavigationToolbarProps {
   zoom: number
@@ -19,19 +20,6 @@ interface ViewNavigationToolbarProps {
   isMaximized?: boolean
   canvasType?: CanvasType
   position?: 'bottom-right' | 'top-right'
-}
-
-function ToolbarIcon({ src, className = 'h-6 w-6' }: { src: string; className?: string }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={`block bg-current ${className}`}
-      style={{
-        WebkitMask: `url("${src}") center / contain no-repeat`,
-        mask: `url("${src}") center / contain no-repeat`,
-      }}
-    />
-  )
 }
 
 function ViewNavigationToolbar({
@@ -104,7 +92,7 @@ function ViewNavigationToolbar({
           title={`${t('canvas.fitToView')} (F)`}
           aria-label={t('canvas.fitToView')}
         >
-          <ToolbarIcon src={ICON_FIND_FOCUS} />
+          <FindFocusIcon />
         </button>
 
         {canToggleMaximize && (
@@ -116,14 +104,14 @@ function ViewNavigationToolbar({
             title={isMaximized ? restoreLabel : maximizeLabel}
             aria-label={isMaximized ? restoreLabel : maximizeLabel}
           >
-            <ToolbarIcon src={isMaximized ? ICON_RESTORE_LAYOUT : ICON_MAXIMIZE_CANVAS} />
+            {isMaximized ? <RestoreLayoutIcon /> : <MaximizeCanvasIcon />}
           </button>
         )}
       </div>
     )
   }
 
-  const findFocusIcon = <ToolbarIcon src={ICON_FIND_FOCUS} className="h-5 w-5" />
+  const findFocusIcon = <FindFocusIcon className="h-5 w-5" />
 
   return (
     <div
@@ -196,10 +184,11 @@ function ViewNavigationToolbar({
           title={isMaximized ? restoreLabel : maximizeLabel}
           aria-label={isMaximized ? restoreLabel : maximizeLabel}
         >
-          <ToolbarIcon
-            src={isMaximized ? ICON_RESTORE_LAYOUT : ICON_MAXIMIZE_CANVAS}
-            className="h-5 w-5"
-          />
+          {isMaximized ? (
+            <RestoreLayoutIcon className="h-5 w-5" />
+          ) : (
+            <MaximizeCanvasIcon className="h-5 w-5" />
+          )}
         </button>
       )}
     </div>

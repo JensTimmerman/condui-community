@@ -122,9 +122,6 @@ export function InstallerInfoSection() {
       <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200">
         {t('settings.installerInfo.title')}
       </h3>
-      <p className="text-xs text-gray-500 dark:text-gray-400">
-        {t('settings.installerInfo.hint')}
-      </p>
       {}
 
       <div>

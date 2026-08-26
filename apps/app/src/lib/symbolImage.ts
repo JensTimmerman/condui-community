@@ -28,6 +28,7 @@ import {
   symbols,
 } from '@/lib/symbols'
 import { PLAN_GRAPHIC_ELEMENT_ASSETS } from '@/lib/plan/graphicElements'
+import { getConverterArtworkCatalogPaths } from '@/lib/converterArtwork'
 
 const blobUrlCache = new Map<string, string>()
 /**
@@ -81,6 +82,7 @@ const EXTRA_SYMBOL_SVG_PATHS = [
   '/symbols/switches/motion_detector_generic.svg',
   '/symbols/energy-conversion/symbol_AC.svg',
   '/symbols/energy-conversion/symbol_DC.svg',
+  ...getConverterArtworkCatalogPaths(),
 ] as const
 
 function getThemeSymbolColor(isDark: boolean): string {

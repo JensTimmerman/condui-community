@@ -22,7 +22,6 @@ import {
 import {
   INFO_BLOCK_BOX_WIDTHS,
   INFO_BLOCK_PADDING,
-  INFO_BLOCK_GAP,
   INFO_BLOCK_STROKE_WIDTH_FRAME,
   INFO_BLOCK_STROKE_WIDTH_SEPARATOR,
   INFO_BLOCK_FONT_SIZE_HEADER,
@@ -39,14 +38,19 @@ import {
   INFO_BLOCK_IMAGE_AREA_HEIGHT,
   INFO_BLOCK_GENERAL_ROW_HEIGHT,
   formatInstallationAddress,
+  formatInspectionAgencyDetails,
   formatInstallerAddress,
+  getInfoBlockColumnPositions,
+  getInfoBlockTotalWidth,
   getVoltageLabel,
+  isInspectionAgencyInfoBlockVisible,
 } from '@/lib/infoBlockLayout'
 import {
   getElectricalInstallationFromProject,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import type { InstallerProfile } from '@/lib/installerProfile'
+import type { ProjectPartyContact } from '@/types/schema'
 
 export type InfoBlockBoxId = 'installer' | 'address' | 'ean'
 
@@ -55,6 +59,8 @@ type InfoBlockProject = ProjectWithOptionalV2Electrical & {
     name?: string
     meterEanCode?: string
     updatedAt?: string
+    inspectionAgency?: ProjectPartyContact
+    showInspectionAgencyInInfoBlock?: boolean
   }
 }
 
@@ -101,9 +107,19 @@ export function InfoBlock({
   const [signatureImage, setSignatureImage] = useState<HTMLImageElement | null>(null)
   const installerNameRef = useRef<Konva.Text>(null)
   const [installerNameHeight, setInstallerNameHeight] = useState(INFO_BLOCK_BODY_LINE_HEIGHT)
+  const inspectionAgencyNameRef = useRef<Konva.Text>(null)
+  const [inspectionAgencyNameHeight, setInspectionAgencyNameHeight] = useState(
+    INFO_BLOCK_BODY_LINE_HEIGHT
+  )
 
   const fitImageInBox = useCallback(
-    (image: HTMLImageElement | null, boxWidth: number, boxHeight: number, boxX: number, boxY: number) => {
+    (
+      image: HTMLImageElement | null,
+      boxWidth: number,
+      boxHeight: number,
+      boxX: number,
+      boxY: number
+    ) => {
       if (!image || !image.width || !image.height) {
         return { x: boxX, y: boxY, width: boxWidth, height: boxHeight }
       }
@@ -118,7 +134,7 @@ export function InfoBlock({
       const width = height * imageRatio
       return { x: boxX + (boxWidth - width) / 2, y: boxY, width, height }
     },
-    [],
+    []
   )
 
   useEffect(() => {
@@ -164,7 +180,9 @@ export function InfoBlock({
 
   const eanDisplay =
     eanText && eanText.trim().length > 0
-      ? /^EAN/i.test(eanText.trim()) ? eanText : `EAN ${eanText}`
+      ? /^EAN/i.test(eanText.trim())
+        ? eanText
+        : `EAN ${eanText}`
       : ''
 
   const madeWithKey = 'infoBlock.madeWith'
@@ -173,13 +191,15 @@ export function InfoBlock({
 
   const headerInstallation = t('infoBlock.headerInstallation', 'Installation address')
   const headerInstaller = t('infoBlock.headerInstaller', 'Installer')
+  const headerInspectionAgency = t('project.inspectionAgency', 'Inspection agency')
+  const showInspectionAgency = isInspectionAgencyInfoBlockVisible(project)
+  const inspectionAgency = project?.project?.inspectionAgency
+  const inspectionAgencyDetails = formatInspectionAgencyDetails(inspectionAgency, countryLabel)
+  const inspectionAgencyCompanyNumber = inspectionAgency?.companyNumber?.trim() ?? ''
+  const infoBlockWidth = getInfoBlockTotalWidth(showInspectionAgency)
 
   const isSelected = (id: InfoBlockBoxId) =>
-    id === 'installer'
-      ? installerSelected
-      : id === 'address'
-        ? addressSelected
-        : eanSelected
+    id === 'installer' ? installerSelected : id === 'address' ? addressSelected : eanSelected
 
   const handleBoxClick = useCallback(
     (e: { cancelBubble?: boolean }, id: InfoBlockBoxId) => {
@@ -192,9 +212,11 @@ export function InfoBlock({
     [interactive, setSelection]
   )
 
-  const installerBoxX = 0
-  const addressBoxX = INFO_BLOCK_BOX_WIDTHS.installer + INFO_BLOCK_GAP
-  const generalBoxX = addressBoxX + INFO_BLOCK_BOX_WIDTHS.address + INFO_BLOCK_GAP
+  const columnPositions = getInfoBlockColumnPositions(showInspectionAgency)
+  const inspectionAgencyBoxX = columnPositions.inspectionAgency
+  const installerBoxX = columnPositions.installer
+  const addressBoxX = columnPositions.address
+  const generalBoxX = columnPositions.general
 
   // Header + separators layout (all from infoBlockLayout for easy tweaking)
   const headerY = INFO_BLOCK_PADDING
@@ -203,9 +225,6 @@ export function InfoBlock({
 
   const sepTopY = INFO_BLOCK_PADDING
   const sepBottomY = INFO_BLOCK_HEIGHT - INFO_BLOCK_PADDING
-  const sep1X = INFO_BLOCK_BOX_WIDTHS.installer + INFO_BLOCK_GAP / 2
-  const sep2X = addressBoxX + INFO_BLOCK_BOX_WIDTHS.address + INFO_BLOCK_GAP / 2
-
   const col1Left = installerBoxX
   const col1Right = installerBoxX + INFO_BLOCK_BOX_WIDTHS.installer
   const col2Left = addressBoxX
@@ -217,13 +236,20 @@ export function InfoBlock({
   const logoY = INFO_BLOCK_PADDING + INFO_BLOCK_INSTALLER_TOP_HEIGHT
   const signatureY = logoY + halfImageHeight
   const mediaBoxWidth = 50
-  const mediaBoxX = installerBoxX + INFO_BLOCK_BOX_WIDTHS.installer - INFO_BLOCK_PADDING - mediaBoxWidth
+  const mediaBoxX =
+    installerBoxX + INFO_BLOCK_BOX_WIDTHS.installer - INFO_BLOCK_PADDING - mediaBoxWidth
   const installerTextWidth =
     INFO_BLOCK_BOX_WIDTHS.installer -
     INFO_BLOCK_PADDING * 2 -
     (logoImage || signatureImage ? mediaBoxWidth + INFO_BLOCK_PADDING : 0)
   const logoRect = fitImageInBox(logoImage, mediaBoxWidth, halfImageHeight, mediaBoxX, logoY)
-  const signatureRect = fitImageInBox(signatureImage, mediaBoxWidth, halfImageHeight, mediaBoxX, signatureY)
+  const signatureRect = fitImageInBox(
+    signatureImage,
+    mediaBoxWidth,
+    halfImageHeight,
+    mediaBoxX,
+    signatureY
+  )
   const headerLetterSpacing = 0.5
   const installeradressLineHeight = 1.5
   const adressLineHeight = 1.5
@@ -235,6 +261,10 @@ export function InfoBlock({
       })
     : ''
   const installerAddressY = bodyStartY + installerNameHeight
+  const inspectionAgencyMetaWidth = inspectionAgencyCompanyNumber ? 66 : 0
+  const inspectionAgencyNameWidth =
+    INFO_BLOCK_BOX_WIDTHS.inspectionAgency - INFO_BLOCK_PADDING * 2 - inspectionAgencyMetaWidth
+  const inspectionAgencyDetailsY = bodyStartY + inspectionAgencyNameHeight
 
   useLayoutEffect(() => {
     const height = installerNameRef.current?.height()
@@ -242,13 +272,19 @@ export function InfoBlock({
     setInstallerNameHeight(height)
   }, [fontFamily, installerNameHeight, installerTextWidth, profile?.name])
 
+  useLayoutEffect(() => {
+    const height = inspectionAgencyNameRef.current?.height()
+    if (!height || height === inspectionAgencyNameHeight) return
+    setInspectionAgencyNameHeight(height)
+  }, [fontFamily, inspectionAgency?.name, inspectionAgencyNameHeight, inspectionAgencyNameWidth])
+
   return (
     <Group name="export-info-block" x={x} y={y} listening={interactive}>
       {/* Main outer frame */}
       <Rect
         x={0}
         y={0}
-        width={INFO_BLOCK_TOTAL_WIDTH}
+        width={infoBlockWidth}
         height={INFO_BLOCK_HEIGHT}
         stroke={frameColor}
         strokeWidth={INFO_BLOCK_STROKE_WIDTH_FRAME}
@@ -257,18 +293,91 @@ export function InfoBlock({
       />
 
       {/* Vertical separators between columns (thin, with margin from top/bottom) */}
-      <Line
-        points={[sep1X, sepTopY, sep1X, sepBottomY]}
-        stroke={frameColor}
-        strokeWidth={INFO_BLOCK_STROKE_WIDTH_SEPARATOR}
-        listening={false}
-      />
-      <Line
-        points={[sep2X, sepTopY, sep2X, sepBottomY]}
-        stroke={frameColor}
-        strokeWidth={INFO_BLOCK_STROKE_WIDTH_SEPARATOR}
-        listening={false}
-      />
+      {columnPositions.separators.map((separatorX) => (
+        <Line
+          key={`separator-${separatorX}`}
+          points={[separatorX, sepTopY, separatorX, sepBottomY]}
+          stroke={frameColor}
+          strokeWidth={INFO_BLOCK_STROKE_WIDTH_SEPARATOR}
+          listening={false}
+        />
+      ))}
+
+      {inspectionAgencyBoxX != null && (
+        <Group>
+          <Text
+            x={inspectionAgencyBoxX + INFO_BLOCK_PADDING}
+            y={headerY}
+            text={headerInspectionAgency}
+            fontSize={INFO_BLOCK_FONT_SIZE_HEADER}
+            fontFamily={fontFamily}
+            fontStyle="bold"
+            fill={textColor}
+            listening={false}
+            letterSpacing={headerLetterSpacing}
+          />
+          <Line
+            points={[
+              inspectionAgencyBoxX + INFO_BLOCK_HEADER_LINE_INSET,
+              headerLineY,
+              inspectionAgencyBoxX +
+                INFO_BLOCK_BOX_WIDTHS.inspectionAgency -
+                INFO_BLOCK_HEADER_LINE_INSET,
+              headerLineY,
+            ]}
+            stroke={frameColor}
+            strokeWidth={INFO_BLOCK_STROKE_WIDTH_SEPARATOR}
+            listening={false}
+          />
+          <Text
+            ref={inspectionAgencyNameRef}
+            x={inspectionAgencyBoxX + INFO_BLOCK_PADDING}
+            y={bodyStartY}
+            text={inspectionAgency?.name ?? ''}
+            fontSize={INFO_BLOCK_FONT_SIZE_NAME}
+            fontFamily={fontFamily}
+            fontStyle="bold"
+            fill={textColor}
+            listening={false}
+            width={inspectionAgencyNameWidth}
+            wrap="word"
+          />
+          {inspectionAgencyCompanyNumber && (
+            <Text
+              x={
+                inspectionAgencyBoxX +
+                INFO_BLOCK_BOX_WIDTHS.inspectionAgency -
+                INFO_BLOCK_PADDING -
+                inspectionAgencyMetaWidth
+              }
+              y={bodyStartY}
+              text={inspectionAgencyCompanyNumber}
+              fontSize={6}
+              fontFamily={fontFamily}
+              fontStyle="italic"
+              fill={secondaryColor}
+              opacity={0.8}
+              listening={false}
+              width={inspectionAgencyMetaWidth}
+              align="right"
+              wrap="none"
+              ellipsis={true}
+            />
+          )}
+          <Text
+            x={inspectionAgencyBoxX + INFO_BLOCK_PADDING}
+            y={inspectionAgencyDetailsY}
+            text={inspectionAgencyDetails}
+            fontSize={INFO_BLOCK_FONT_SIZE_BODY}
+            fontFamily={fontFamily}
+            fill={secondaryColor}
+            listening={false}
+            width={INFO_BLOCK_BOX_WIDTHS.inspectionAgency - INFO_BLOCK_PADDING * 2}
+            wrap="word"
+            lineHeight={adressLineHeight}
+          />
+        </Group>
+      )}
 
       {/* Installer column */}
       <Group>
@@ -282,7 +391,7 @@ export function InfoBlock({
           fontStyle="bold"
           fill={textColor}
           listening={false}
-          letterSpacing= {headerLetterSpacing}
+          letterSpacing={headerLetterSpacing}
         />
         <Line
           points={[
@@ -335,7 +444,7 @@ export function InfoBlock({
           width={installerTextWidth}
           wrap="word"
           lineHeight={installeradressLineHeight}
-          letterSpacing= {headerLetterSpacing}
+          letterSpacing={headerLetterSpacing}
         />
         <Text
           x={installerBoxX + INFO_BLOCK_PADDING}
@@ -347,7 +456,7 @@ export function InfoBlock({
           listening={false}
           width={installerTextWidth}
           wrap="word"
-          lineHeight= {installeradressLineHeight}
+          lineHeight={installeradressLineHeight}
         />
         {/* Logo (right side, half height) */}
         {logoImage && (
@@ -398,7 +507,7 @@ export function InfoBlock({
           fontStyle="bold"
           fill={textColor}
           listening={false}
-          letterSpacing= {headerLetterSpacing}
+          letterSpacing={headerLetterSpacing}
         />
         <Line
           points={[
@@ -459,7 +568,7 @@ export function InfoBlock({
           listening={false}
           width={INFO_BLOCK_BOX_WIDTHS.address - INFO_BLOCK_PADDING * 2}
           wrap="word"
-          lineHeight= {adressLineHeight}
+          lineHeight={adressLineHeight}
         />
       </Group>
 
@@ -475,7 +584,7 @@ export function InfoBlock({
           fontStyle="bold"
           fill={textColor}
           listening={false}
-          letterSpacing= {headerLetterSpacing}
+          letterSpacing={headerLetterSpacing}
         />
         <Line
           points={[

@@ -21,7 +21,7 @@ import {
   DOMOTICA_CONTROL_OVERLAY_PATHS,
   TRANSFORMER_OVERLAY_PATHS,
 } from '@/lib/symbols'
-import { loadProcessedSymbol } from '@/lib/symbolImage'
+import { SYMBOL_EXPORT_ATTR_SVG_PATH, loadProcessedSymbol } from '@/lib/symbolImage'
 import {
   showLightPointDecentralOverlay,
   showLightPointSafetyOverlay,
@@ -67,6 +67,16 @@ import {
   getVisibleConversionLabelParts,
   getVisibleEndpointNoteText,
 } from '@/lib/conversionLabels'
+import { useEendraadWireSegments } from '@/hooks/eendraad'
+import {
+  CONVERTER_ARTWORK_PATHS,
+  CONVERTER_DOMAIN_ICON_SIZE_RATIO,
+  getConverterArtworkLayout,
+  getConverterConnectionDomains,
+  getConverterCornerPosition,
+  getConverterDomainCorner,
+  isDirectionalConverterSymbol,
+} from '@/lib/converterArtwork'
 
 const INTERACTIVE_HIT_FILL = 'rgba(0, 0, 0, 0.01)'
 type EendraadPointerEvent = {
@@ -126,6 +136,9 @@ export const EndpointSymbol = memo(function EndpointSymbol({
   const fontFamily = useCanvasFontFamily()
   const isPreviewSelected = useIsPreviewSelected('endpoint', endpoint.id)
   const [processedImage, setProcessedImage] = useState<HTMLImageElement | null>(null)
+  const [converterDiagonalImage, setConverterDiagonalImage] = useState<HTMLImageElement | null>(null)
+  const [converterAcImage, setConverterAcImage] = useState<HTMLImageElement | null>(null)
+  const [converterDcImage, setConverterDcImage] = useState<HTMLImageElement | null>(null)
   const [overlaySwitchImage, setOverlaySwitchImage] = useState<HTMLImageElement | null>(null)
   const [overlaySwitchLockImage, setOverlaySwitchLockImage] = useState<HTMLImageElement | null>(null)
   const [switchOverlayImage, setSwitchOverlayImage] = useState<HTMLImageElement | null>(null)
@@ -147,6 +160,18 @@ export const EndpointSymbol = memo(function EndpointSymbol({
   >({})
   
   const symbol = endpoint.symbol ? getSymbolById(endpoint.symbol) : null
+  const isDirectionalConverter = isDirectionalConverterSymbol(endpoint.symbol)
+  const wireSegments = useEendraadWireSegments()
+  const converterConnectionDomains = isDirectionalConverter
+    ? getConverterConnectionDomains(wireSegments, endpoint.id, position, SYMBOL_SIZE)
+    : {}
+  const converterArtworkLayout = isDirectionalConverter
+    ? getConverterArtworkLayout(
+        endpoint.symbol === 'inverter' ? 'DC' : 'AC',
+        endpoint.symbol === 'inverter' ? 'AC' : 'DC',
+        converterConnectionDomains,
+      )
+    : null
   const isDomoticaParent = endpoint.symbol === 'domotica' && !endpoint.domoticaChildProps
 
   const isSocket = endpoint.type === 'socket'
@@ -209,7 +234,9 @@ export const EndpointSymbol = memo(function EndpointSymbol({
         ? getFixedApplianceSymbolPath('boiler', endpoint.fixedApplianceProps) ?? symbol?.svgPath
         : endpoint.symbol === 'heating'
           ? getFixedApplianceSymbolPath('heating', endpoint.fixedApplianceProps) ?? symbol?.svgPath
-          : symbol?.svgPath
+          : isDirectionalConverter
+            ? CONVERTER_ARTWORK_PATHS.base
+            : symbol?.svgPath
   const switchOverlayPath = isSwitch && endpoint.symbol
     ? getSwitchSymbolPaths(endpoint.symbol, switchSymbolPathProps).overlayPath
     : undefined
@@ -229,6 +256,23 @@ export const EndpointSymbol = memo(function EndpointSymbol({
       setProcessedImage(null)
     })
   }, [baseSvgPath, theme.mode])
+
+  useEffect(() => {
+    if (!isDirectionalConverter) {
+      setConverterDiagonalImage(null)
+      setConverterAcImage(null)
+      setConverterDcImage(null)
+      return
+    }
+    const paths = [
+      [CONVERTER_ARTWORK_PATHS.diagonal, setConverterDiagonalImage],
+      [CONVERTER_ARTWORK_PATHS.AC, setConverterAcImage],
+      [CONVERTER_ARTWORK_PATHS.DC, setConverterDcImage],
+    ] as const
+    for (const [path, setter] of paths) {
+      loadProcessedSymbol(path, theme?.mode === 'dark').then(setter).catch(() => setter(null))
+    }
+  }, [isDirectionalConverter, theme?.mode])
 
   // Load socket overlay images when socketProps request them
   useEffect(() => {
@@ -533,6 +577,23 @@ export const EndpointSymbol = memo(function EndpointSymbol({
     ),
   )
   const domoticaHeight = DOMOTICA_BASE_HEIGHT + Math.max(0, domoticaEndpointCount - 1) * DOMOTICA_OUTPUT_SPACING
+  const converterIconSize = SYMBOL_SIZE * CONVERTER_DOMAIN_ICON_SIZE_RATIO
+  const converterIconMargin = 2
+  const converterImagePosition = (domain: 'AC' | 'DC') => {
+    const corner = converterArtworkLayout
+      ? getConverterDomainCorner(converterArtworkLayout, domain)
+      : undefined
+    if (!corner) return undefined
+    return getConverterCornerPosition(
+      corner,
+      SYMBOL_SIZE,
+      SYMBOL_SIZE,
+      converterIconMargin,
+      converterIconSize,
+    )
+  }
+  const converterAcPosition = converterImagePosition('AC')
+  const converterDcPosition = converterImagePosition('DC')
 
   if (!symbol) return null
   if (!processedImage && !isDomoticaParent) return null
@@ -746,16 +807,70 @@ export const EndpointSymbol = memo(function EndpointSymbol({
       {/* Render socket symbols (1-4 copies offset to the right) */}
       {processedImage && Array.from({ length: socketCount }, (_, i) => (
         <Group key={i} x={(mirrorHorizontally ? -1 : 1) * i * MULTI_SOCKET_OFFSET}>
-          <Image
-            image={processedImage}
-            width={SYMBOL_SIZE}
-            height={SYMBOL_SIZE}
-            offsetX={SYMBOL_SIZE / 2}
-            offsetY={SYMBOL_SIZE / 2}
-            scaleX={mirrorHorizontally ? -1 : 1}
-            y={0}
-            listening={false}
-          />
+          {isDirectionalConverter ? (
+            <>
+              <Image
+                image={processedImage}
+                {...{ [SYMBOL_EXPORT_ATTR_SVG_PATH]: CONVERTER_ARTWORK_PATHS.base }}
+                width={SYMBOL_SIZE}
+                height={SYMBOL_SIZE}
+                offsetX={SYMBOL_SIZE / 2}
+                offsetY={SYMBOL_SIZE / 2}
+                y={0}
+                listening={false}
+              />
+              {converterDiagonalImage && converterArtworkLayout && (
+                <Image
+                  image={converterDiagonalImage}
+                  {...{ [SYMBOL_EXPORT_ATTR_SVG_PATH]: CONVERTER_ARTWORK_PATHS.diagonal }}
+                  width={SYMBOL_SIZE}
+                  height={SYMBOL_SIZE}
+                  offsetX={SYMBOL_SIZE / 2}
+                  offsetY={SYMBOL_SIZE / 2}
+                  scaleX={converterArtworkLayout.diagonal === 'top-left-to-bottom-right' ? -1 : 1}
+                  y={0}
+                  listening={false}
+                />
+              )}
+              {converterAcImage && converterAcPosition && (
+                <Image
+                  image={converterAcImage}
+                  {...{ [SYMBOL_EXPORT_ATTR_SVG_PATH]: CONVERTER_ARTWORK_PATHS.AC }}
+                  width={converterIconSize}
+                  height={converterIconSize}
+                  offsetX={converterIconSize / 2}
+                  offsetY={converterIconSize / 2}
+                  x={converterAcPosition.x}
+                  y={converterAcPosition.y}
+                  listening={false}
+                />
+              )}
+              {converterDcImage && converterDcPosition && (
+                <Image
+                  image={converterDcImage}
+                  {...{ [SYMBOL_EXPORT_ATTR_SVG_PATH]: CONVERTER_ARTWORK_PATHS.DC }}
+                  width={converterIconSize}
+                  height={converterIconSize}
+                  offsetX={converterIconSize / 2}
+                  offsetY={converterIconSize / 2}
+                  x={converterDcPosition.x}
+                  y={converterDcPosition.y}
+                  listening={false}
+                />
+              )}
+            </>
+          ) : (
+            <Image
+              image={processedImage}
+              width={SYMBOL_SIZE}
+              height={SYMBOL_SIZE}
+              offsetX={SYMBOL_SIZE / 2}
+              offsetY={SYMBOL_SIZE / 2}
+              scaleX={mirrorHorizontally ? -1 : 1}
+              y={0}
+              listening={false}
+            />
+          )}
           {/* Relay control overlay */}
           {endpoint.symbol === 'relay' && relayOverlayImage && (
             <Image
