@@ -3,6 +3,7 @@ import type { Project, ProjectSliceCreator } from './projectStoreTypes'
 import { recordSessionAction } from '@/lib/diagnostics/sessionActionLog'
 import { syncSequentialEndpointBranchLabelsToCircuit } from '@/lib/eendraad/automaticEndpointBranchNaming'
 import { syncPlugInPropsForDcEndpoints } from '@/lib/eendraad/endpointInsertAfter'
+import { getEarthingSeparatorPairIds } from '@/lib/eendraad/earthingSeparatorPairs'
 import { pruneEendraadFrames } from '@/lib/eendraad/frameContent'
 import { logger } from '@/lib/logger'
 import {
@@ -42,7 +43,6 @@ import type {
   Installation,
   JunctionPanelPlacement,
   Panel,
-  PanelGridModuleRef,
   Placement,
   ProtectionDevice,
 } from '@/types/schema'
@@ -131,19 +131,28 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
           if (!installation) return
           let removedLabel: string | undefined
           if (installation.groundTrunkDevices) {
-            const index = installation.groundTrunkDevices.findIndex((d) => d.id === deviceId)
-            if (index !== -1) {
-              const [removed] = installation.groundTrunkDevices.splice(index, 1)
-              if (removed?.type === 'junction_panel') {
-                removedLabel = removed.label
+            const idsToDelete = new Set(
+              getEarthingSeparatorPairIds(installation.groundTrunkDevices, deviceId)
+            )
+            const removed = installation.groundTrunkDevices.filter((device) =>
+              idsToDelete.has(device.id)
+            )
+            if (removed.length > 0) {
+              installation.groundTrunkDevices = installation.groundTrunkDevices.filter(
+                (device) => !idsToDelete.has(device.id)
+              )
+              const removedJunctionPanel = removed.find(
+                (device) => device.type === 'junction_panel'
+              )
+              if (removedJunctionPanel) removedLabel = removedJunctionPanel.label
+              for (const removedId of idsToDelete) {
+                cleanupPanelGridSlotsForDevice(panels, {
+                  kind: 'trunkDevice',
+                  id: removedId,
+                  scope: 'ground',
+                })
               }
-              const deviceRef: PanelGridModuleRef = {
-                kind: 'trunkDevice',
-                id: deviceId,
-                scope: 'ground',
-              }
-              cleanupPanelGridSlotsForDevice(panels, deviceRef)
-              pruneEendraadFrames(project, { removedMemberIds: [deviceId] })
+              pruneEendraadFrames(project, { removedMemberIds: [...idsToDelete] })
               state.isDirty = true
             }
           }

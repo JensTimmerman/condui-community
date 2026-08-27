@@ -65,6 +65,7 @@ export function getSupplyMetadataCalloutLeaderPoints({
   symbolWidth,
   symbolHeight,
   placementKind,
+  mirrorHorizontally = false,
 }: {
   placement: SupplyMetadataCalloutPlacement
   width: number
@@ -72,11 +73,17 @@ export function getSupplyMetadataCalloutLeaderPoints({
   symbolWidth: number
   symbolHeight: number
   placementKind: SupplyMetadataCalloutPlacementKind
+  /** Keep the leader attached to the equivalent symbol port in a mirrored supply layout. */
+  mirrorHorizontally?: boolean
 }): [number, number, number, number] {
-  const symbolAnchor =
+  const canonicalSymbolAnchor =
     placementKind === 'top'
       ? { x: 0, y: -symbolHeight / 2 - 2 }
       : { x: -symbolWidth / 2 - 2, y: -symbolHeight / 2 - 2 }
+  const symbolAnchor = {
+    x: mirrorHorizontally ? -canonicalSymbolAnchor.x : canonicalSymbolAnchor.x,
+    y: canonicalSymbolAnchor.y,
+  }
   const bottom = placement.y + height
   const anchors = [
     { x: placement.x, y: bottom },

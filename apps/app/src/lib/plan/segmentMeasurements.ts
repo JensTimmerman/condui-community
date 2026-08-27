@@ -2,6 +2,7 @@ import type { Point2 } from '@/types/schema'
 import { clamp } from '@/lib/geometry'
 
 export interface SegmentMeasurementGuide {
+  measurementId: string
   segmentIndex: number
   start: Point2
   end: Point2
@@ -12,6 +13,7 @@ export interface SegmentMeasurementGuide {
   lengthPx: number
   lengthCm: number
   label: string
+  distanceInterval?: DistanceMeasurementInterval
 }
 
 interface BuildSegmentMeasurementGuidesInput {
@@ -24,6 +26,10 @@ interface BuildSegmentMeasurementGuidesInput {
 export interface DistanceMeasurementInterval {
   startDistance: number
   endDistance: number
+  /** Opening whose position can be edited through this clear-distance guide. */
+  openingId?: string
+  /** Which side of the opening the clear distance belongs to. */
+  openingSide?: 'start' | 'end'
 }
 
 interface BuildDistanceMeasurementGuidesInput {
@@ -31,6 +37,8 @@ interface BuildDistanceMeasurementGuidesInput {
   intervals: DistanceMeasurementInterval[]
   pxPerMeter: number
   extensionOffset: number
+  /** Persists each label's side while its measured geometry changes during a drag. */
+  normalSideByKey?: Map<string, -1 | 1>
 }
 
 function formatLengthCentimeters(lengthCm: number): string {
@@ -142,6 +150,7 @@ export function buildSegmentMeasurementGuides({
 
     const lengthCm = (lengthPx / pxPerMeter) * 100
     guides.push({
+      measurementId: `segment-${segmentIndex}`,
       segmentIndex,
       start,
       end,
@@ -166,8 +175,15 @@ export function buildDistanceMeasurementGuides({
   intervals,
   pxPerMeter,
   extensionOffset,
+  normalSideByKey,
 }: BuildDistanceMeasurementGuidesInput): SegmentMeasurementGuide[] {
-  if (points.length < 2 || !Number.isFinite(pxPerMeter) || pxPerMeter <= 0 || intervals.length === 0) return []
+  if (
+    points.length < 2 ||
+    !Number.isFinite(pxPerMeter) ||
+    pxPerMeter <= 0 ||
+    intervals.length === 0
+  )
+    return []
 
   const centroid = getWallCentroid(points)
   const lengths = cumulativeLengths(points)
@@ -194,14 +210,23 @@ export function buildDistanceMeasurementGuides({
       y: (start.y + end.y) / 2,
     }
 
-    let normal = leftNormal
-    if (centroid) {
+    let normalSide: -1 | 1 = 1
+    const sideKey =
+      interval.openingId && interval.openingSide
+        ? `${interval.openingId}:${interval.openingSide}`
+        : `distance:${index}`
+    const cachedNormalSide = normalSideByKey?.get(sideKey)
+    if (cachedNormalSide != null) {
+      normalSide = cachedNormalSide
+    } else if (centroid) {
       const toCentroid = { x: centroid.x - midpoint.x, y: centroid.y - midpoint.y }
       const dot = toCentroid.x * leftNormal.x + toCentroid.y * leftNormal.y
       if (dot > 0) {
-        normal = { x: -leftNormal.x, y: -leftNormal.y }
+        normalSide = -1
       }
+      normalSideByKey?.set(sideKey, normalSide)
     }
+    const normal = { x: leftNormal.x * normalSide, y: leftNormal.y * normalSide }
 
     const offsetStart = {
       x: start.x + normal.x * extensionOffset,
@@ -214,6 +239,7 @@ export function buildDistanceMeasurementGuides({
     const lengthCm = (lengthPx / pxPerMeter) * 100
 
     guides.push({
+      measurementId: `distance-${index}`,
       segmentIndex: -100000 - index,
       start,
       end,
@@ -227,6 +253,7 @@ export function buildDistanceMeasurementGuides({
       lengthPx,
       lengthCm,
       label: formatLengthCentimeters(lengthCm),
+      distanceInterval: interval,
     })
   })
 

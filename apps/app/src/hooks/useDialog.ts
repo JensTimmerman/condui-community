@@ -42,6 +42,7 @@ export function useDialog() {
       cancelLabel?: string
       onConfirm: () => void
       onCancel?: () => void
+      onClose?: () => void
       size?: 'sm' | 'md' | 'lg' | 'xl'
     }) => {
       openDialog({

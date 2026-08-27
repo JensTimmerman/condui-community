@@ -114,6 +114,7 @@ import {
   applyOpeningMoveOnSegment,
   getOpeningsBySegment,
   minSegmentLengthForOpenings,
+  applyOpeningDistanceOnSegment,
   preserveOpeningPositionsAfterPointChange,
   sanitizeWallOpeningPositions,
   isRigidTranslation,
@@ -131,7 +132,9 @@ import {
   clampAnchoredDimensionResize,
   resizeDimensionFromDrag,
   resolveDimensionDrag,
+  snapDimensionValue,
   type DimensionDragMode,
+  type DimensionDragModifiers,
 } from '@/lib/plan/dimensionDragGesture'
 import { isFloorPlanTouchDragTool } from '@/lib/plan/planFloorDrawingKeyboardGate'
 import {
@@ -239,6 +242,7 @@ import { trackGoogleAnalyticsEvent } from '@/lib/analytics/googleAnalytics'
 import { applyEendraadCircuitFocus } from '@/lib/eendraad/focusCircuit'
 import type { EditorCapabilities } from '@/lib/viewerMode'
 import {
+  buildManualOtherPlanWireRoute,
   buildManualPlanWireRoutesForPlacementMove,
   deriveAutoPlanWireRoutes,
   endpointCanStartPlanWire,
@@ -3222,13 +3226,23 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
   )
 
   const applyOpeningDimensionDrag = useCallback(
-    (pointer: Point2, mode: 'preview' | 'commit') => {
+    (
+      pointer: Point2,
+      mode: 'preview' | 'commit',
+      modifiers: DimensionDragModifiers = { precise: false, quantize: false }
+    ) => {
       const drag = openingDimensionDragRef.current
       if (!drag) return
       const { wall, geom } = drag
+      const effectivePointer = modifiers.precise
+        ? {
+            x: drag.start.x + (pointer.x - drag.start.x) * 0.1,
+            y: drag.start.y + (pointer.y - drag.start.y) * 0.1,
+          }
+        : pointer
       const resolution = resolveDimensionDrag(
         drag.start,
-        pointer,
+        effectivePointer,
         geom.tangent,
         drag.outwardNormal,
         drag.mode,
@@ -3239,7 +3253,15 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
 
       const minimumWidth = Math.max(1, canvasPxPerMeter / 100)
       const rawResize = resizeDimensionFromDrag(drag.baseWidth, resolution, minimumWidth)
-      const width = snapOpeningWidthToWholeCentimeters(rawResize.width, canvasPxPerMeter)
+      const dimensionSnapStep = planView.snapToGrid
+        ? gridSize
+        : modifiers.quantize
+          ? canvasPxPerMeter / 10
+          : 0
+      const width =
+        dimensionSnapStep > 0
+          ? snapDimensionValue(rawResize.width, dimensionSnapStep, minimumWidth)
+          : snapOpeningWidthToWholeCentimeters(rawResize.width, canvasPxPerMeter)
       const segmentLength = geom.segmentEndDist - geom.segmentStartDist
       const boundedWidth = Math.min(width, Math.max(minimumWidth, segmentLength))
       const totalLength = getWallTotalLength(wall.points)
@@ -3320,14 +3342,23 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
       if (drag.kind === 'door') updateDoor(drag.entityId, fitted)
       else updateWindow(drag.entityId, fitted)
     },
-    [baseDoors, baseWindows, canvasPxPerMeter, planView.zoom, updateDoor, updateWindow]
+    [
+      baseDoors,
+      baseWindows,
+      canvasPxPerMeter,
+      gridSize,
+      planView.snapToGrid,
+      planView.zoom,
+      updateDoor,
+      updateWindow,
+    ]
   )
 
   const endOpeningDimensionDrag = useCallback(
-    (pointer: Point2 | null) => {
+    (pointer: Point2 | null, modifiers: DimensionDragModifiers) => {
       const drag = openingDimensionDragRef.current
       if (!drag) return
-      if (pointer) applyOpeningDimensionDrag(pointer, 'commit')
+      if (pointer) applyOpeningDimensionDrag(pointer, 'commit', modifiers)
       else if (drag.lastResult) {
         applyPreviewDoors(null)
         applyPreviewWindows(null)
@@ -3964,18 +3995,26 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
       if (!sourcePlacementId) {
         if (planWireRoutablePlacementIds.has(targetPlacementId)) return 'legal'
         const placement = visiblePlacements.find(
-          (candidate: Placement & { endpointId?: string }) => candidate.id === targetPlacementId
+          (candidate: Placement & { endpointId?: string; trunkDeviceId?: string }) =>
+            candidate.id === targetPlacementId
         )
+        if (placement?.trunkDeviceId) return 'legal'
         const endpoint = placement?.endpointId ? getEndpointById(placement.endpointId) : null
         return endpointCanStartPlanWire(endpoint) ? 'legal' : 'illegal'
       }
       if (sourcePlacementId === targetPlacementId) return 'illegal'
-      return buildManualPlanWireRoutesForPlacementMove(
+      return (buildManualOtherPlanWireRoute(
         currentProject,
         activeFloorId,
         sourcePlacementId,
         targetPlacementId
-      )
+      ) ??
+        buildManualPlanWireRoutesForPlacementMove(
+          currentProject,
+          activeFloorId,
+          sourcePlacementId,
+          targetPlacementId
+        ))
         ? 'legal'
         : 'illegal'
     },
@@ -3992,7 +4031,8 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
     insertPlanWireWaypoint: handleInsertPlanWireWaypoint,
     movePlanWireWaypoint: handleMovePlanWireWaypoint,
     removePlanWireWaypoint: handleRemovePlanWireWaypoint,
-    reorderPlanWirePlacement: handlePlanWireReorderPlacement,
+    drawPlanWire: handleDrawPlanWire,
+    removeManualOtherPlanWiresFromOrigin,
     hideSocketWireRouteForPlacementDrop,
   } = usePlanWireEditing({ activeFloorId, currentProject })
   useEffect(
@@ -4074,7 +4114,10 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
           const endpoint = sourcePlacement?.endpointId
             ? getEndpointById(sourcePlacement.endpointId)
             : null
-          if (endpoint?.type === 'socket') {
+          if (
+            !removeManualOtherPlanWiresFromOrigin(sourcePlacementId) &&
+            endpoint?.type === 'socket'
+          ) {
             hideSocketWireRouteForPlacementDrop(sourcePlacementId)
           }
         }
@@ -4099,6 +4142,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
       currentProject,
       getEndpointById,
       hideSocketWireRouteForPlacementDrop,
+      removeManualOtherPlanWiresFromOrigin,
       planWireDragSourcePlacementId,
       planWireHoverPlacementId,
       planWirePreviewPoint,
@@ -5784,12 +5828,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
         requestedLength,
         Math.ceil(openingMinimum / lengthSnapStep) * lengthSnapStep
       )
-      const resize = resizeWallShapeSegment(
-        wall.points,
-        segmentIndex,
-        targetLength,
-        lengthSnapStep
-      )
+      const resize = resizeWallShapeSegment(wall.points, segmentIndex, targetLength, lengthSnapStep)
       if (!resize) return
 
       const constrained = adjustVerticesAndOpenings(
@@ -5824,13 +5863,93 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
     [activeFloor?.floorPlan, canvasPxPerMeter, updateWall, withSingleUndoEntry]
   )
 
+  const commitWallOpeningDistance = useCallback(
+    (wallId: string, openingId: string, side: 'start' | 'end', lengthCm: number) => {
+      const floorPlan = activeFloor?.floorPlan
+      if (!floorPlan || !Number.isFinite(lengthCm) || lengthCm < 0 || canvasPxPerMeter <= 0) {
+        return
+      }
+
+      const wall = floorPlan.walls.find((entry: Wall) => entry.id === wallId)
+      if (!wall) return
+      const doors = floorPlan.doors.filter((door: Door) => door.wallId === wallId)
+      const windows = floorPlan.windows.filter((window: Window) => window.wallId === wallId)
+      const opening =
+        doors.find((door) => door.id === openingId) ??
+        windows.find((window) => window.id === openingId)
+      if (!opening) return
+
+      const geom = computeOpeningGeometry(wall.points, opening.position)
+      if (!geom) return
+      const segmentLength = geom.segmentEndDist - geom.segmentStartDist
+      if (segmentLength <= 1e-6) return
+      const segmentOpenings = getOpeningsBySegment(wall.points, doors, windows).get(
+        geom.segmentIndex
+      )
+      if (!segmentOpenings) return
+
+      const requestedDistance = (lengthCm / 100) * canvasPxPerMeter
+      const openingIndex = segmentOpenings.findIndex((entry) => entry.id === openingId)
+      if (openingIndex < 0) return
+      const previous = segmentOpenings[openingIndex - 1]
+      const next = segmentOpenings[openingIndex + 1]
+      const leftBoundary = previous ? previous.centerAlongSegment + previous.width / 2 : 0
+      const rightBoundary = next ? next.centerAlongSegment - next.width / 2 : segmentLength
+      // The displayed interval can start/end at another opening, not only at a
+      // wall vertex. Convert that interval-relative value to a segment-edge value
+      // before applying the shared train-of-carts constraint.
+      const distanceFromSegmentEdge =
+        side === 'start'
+          ? leftBoundary + requestedDistance
+          : segmentLength - rightBoundary + requestedDistance
+      const result = applyOpeningDistanceOnSegment({
+        openingId,
+        kind: doors.some((door) => door.id === openingId) ? 'door' : 'window',
+        width: opening.width,
+        segmentIndex: geom.segmentIndex,
+        segmentStartDist: geom.segmentStartDist,
+        segmentEndDist: geom.segmentEndDist,
+        segmentLength,
+        segmentOpenings,
+        side,
+        distance: distanceFromSegmentEdge,
+      })
+
+      const doorUpdates: Array<{ id: string; position: number }> = []
+      const windowUpdates: Array<{ id: string; position: number }> = []
+      const totalLength = getWallTotalLength(wall.points)
+      if (totalLength <= 1e-6) return
+      for (const [id, centerAlongSegment] of result.positionsByOpeningId) {
+        const position = (geom.segmentStartDist + centerAlongSegment) / totalLength
+        const existingDoor = doors.find((door) => door.id === id)
+        const existingWindow = windows.find((window) => window.id === id)
+        if (existingDoor && Math.abs(existingDoor.position - position) > 1e-6) {
+          doorUpdates.push({ id, position })
+        } else if (existingWindow && Math.abs(existingWindow.position - position) > 1e-6) {
+          windowUpdates.push({ id, position })
+        }
+      }
+      if (doorUpdates.length === 0 && windowUpdates.length === 0) return
+
+      withSingleUndoEntry(
+        () => {
+          for (const update of doorUpdates) updateDoor(update.id, { position: update.position })
+          for (const update of windowUpdates) updateWindow(update.id, { position: update.position })
+          return true
+        },
+        { sessionLabel: 'move-opening-by-distance' }
+      )
+    },
+    [activeFloor?.floorPlan, canvasPxPerMeter, updateDoor, updateWindow, withSingleUndoEntry]
+  )
+
   const handleWallDimensionDrag = useCallback(
     (
       wallId: string,
       segmentIndex: number,
       delta: Point2,
       phase: 'start' | 'preview' | 'commit' | 'cancel',
-      _precise: boolean
+      modifiers: DimensionDragModifiers
     ) => {
       const floorPlan = activeFloor?.floorPlan
       if (!floorPlan) return
@@ -5890,7 +6009,11 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
         drag.wall.points,
         segmentIndex,
         delta,
-        canvasPxPerMeter / 1000,
+        planView.snapToGrid
+          ? gridSize
+          : modifiers.quantize
+            ? canvasPxPerMeter / 10
+            : canvasPxPerMeter / 1000,
         drag.minimumSegmentLength,
         drag.parallelDragDirection ?? undefined
       )
@@ -5949,7 +6072,14 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
       applyPreviewDoors(null)
       applyPreviewWindows(null)
     },
-    [activeFloor?.floorPlan, canvasPxPerMeter, updateWall, withSingleUndoEntry]
+    [
+      activeFloor?.floorPlan,
+      canvasPxPerMeter,
+      gridSize,
+      planView.snapToGrid,
+      updateWall,
+      withSingleUndoEntry,
+    ]
   )
 
   // Keyboard shortcuts are now handled by usePlanKeyboard hook
@@ -7159,6 +7289,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
                   selectedSegmentIndices={selectedSegmentIndices}
                   showSegmentMeasurements={isFloorPlanMode && activeTool !== 'none'}
                   onSegmentLengthCommit={commitWallSegmentLength}
+                  onOpeningDistanceCommit={commitWallOpeningDistance}
                   onSegmentDimensionDrag={handleWallDimensionDrag}
                   hoveredWallId={shouldHandleWallHover ? hoveredWallId : null}
                   hoveredDoorId={isFloorPlanMode ? hoveredDoorId : null}
@@ -7857,7 +7988,9 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
                 isActive={openingWidthEditorActive}
                 onActivate={() => setOpeningWidthEditorActive(true)}
                 onDimensionDragStart={beginOpeningDimensionDrag}
-                onDimensionDragMove={(pointer) => applyOpeningDimensionDrag(pointer, 'preview')}
+                onDimensionDragMove={(pointer, modifiers) =>
+                  applyOpeningDimensionDrag(pointer, 'preview', modifiers)
+                }
                 onDimensionDragEnd={endOpeningDimensionDrag}
                 opening={selectedOpeningForWidthEditor}
                 themeMode={theme.mode}
@@ -7890,6 +8023,9 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
                   theme={theme.mode}
                   clientToPlan={clientToPlan}
                   getEndpointById={getEndpointById}
+                  getTrunkDeviceById={(id) =>
+                    useProjectStore.getState().getTrunkDeviceById(id)?.device
+                  }
                   active={activeTool === 'wiring' && !isExporting}
                   onInsertWaypoint={handleInsertPlanWireWaypoint}
                   onMoveWaypoint={handleMovePlanWireWaypoint}
@@ -7958,12 +8094,16 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
                     ) => {
                       const endpoint =
                         placement.endpointId != null ? getEndpointById(placement.endpointId) : null
-                      const trunkDevice = (placement as Placement & { trunkDeviceId?: string }).trunkDeviceId
-                        ? useProjectStore.getState().getTrunkDeviceById(
-                            (placement as Placement & { trunkDeviceId: string }).trunkDeviceId
-                          )?.device
+                      const trunkDevice = (placement as Placement & { trunkDeviceId?: string })
+                        .trunkDeviceId
+                        ? useProjectStore
+                            .getState()
+                            .getTrunkDeviceById(
+                              (placement as Placement & { trunkDeviceId: string }).trunkDeviceId
+                            )?.device
                         : null
-                      const labelText = endpoint?.label ?? trunkDevice?.label ?? placement.junctionPanelLabel
+                      const labelText =
+                        endpoint?.label ?? trunkDevice?.label ?? placement.junctionPanelLabel
                       if (!labelText) return null
                       const staticLabelPosition = labelPositions.get(placement.id)
                       if (!staticLabelPosition && !isDraggingRef.current) return null
@@ -8005,8 +8145,14 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
               {activeTool === 'wiring' &&
                 !isExporting &&
                 visiblePlacements.map(
-                  (placement: Placement & { endpointId?: string; junctionPanelLabel?: string }) => {
-                    if (!placement.endpointId) return null
+                  (
+                    placement: Placement & {
+                      endpointId?: string
+                      trunkDeviceId?: string
+                      junctionPanelLabel?: string
+                      isEarthing?: boolean
+                    }
+                  ) => {
                     const placementPos = planDragPositions.get(placement.id) ?? placement.pos
                     const radius = Math.max(
                       screenPxToCanvasUnits(planView.zoom, 14, 8, 28),
@@ -8055,7 +8201,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
                           applyPlanWirePreviewPoint(null)
                           if (!sourcePlacementId || sourcePlacementId === placement.id) return
                           if (getPlanWireTargetStatus(placement.id) !== 'legal') return
-                          handlePlanWireReorderPlacement(sourcePlacementId, placement.id)
+                          handleDrawPlanWire(sourcePlacementId, placement.id)
                         }}
                       />
                     )

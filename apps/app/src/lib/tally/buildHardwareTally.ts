@@ -32,12 +32,10 @@ import {
   getElectricalPanelsFromProject,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
+import type { Selection } from '@/types/ui'
 
 /** Selection payload to select this item in the app */
-export interface TallyDetailSelection {
-  type: 'panel' | 'protection' | 'circuit' | 'endpoint' | 'trunkDevice'
-  ids: string[]
-}
+export type TallyDetailSelection = Pick<Selection, 'type' | 'ids' | 'wireMetadata'>
 
 /** Single detail row when a group is expanded (e.g. label for MCB, branch/circuit for endpoint) */
 export interface TallyDetail {
@@ -79,7 +77,9 @@ export interface TallyCategory {
 
 export type TallyData = TallyCategory[]
 
-function deriveProjectWireSegments(project: ProjectWithOptionalV2Electrical): WireSegment[] {
+type TallyProject = ProjectWithOptionalV2Electrical
+
+function deriveProjectWireSegments(project: TallyProject): WireSegment[] {
   try {
     const panels = getElectricalPanelsFromProject(project)
     const installation = getElectricalInstallationFromProject(project)
@@ -93,7 +93,10 @@ function deriveProjectWireSegments(project: ProjectWithOptionalV2Electrical): Wi
 }
 
 function wireSegmentDetailLabel(segment: WireSegment, t: WireTranslateFn): string {
-  if (segment.isSupplyTrunk || (segment.type === 'vertical' && !segment.circuitId && !segment.fromElementType)) {
+  if (
+    segment.isSupplyTrunk ||
+    (segment.type === 'vertical' && !segment.circuitId && !segment.fromElementType)
+  ) {
     const role = segment.supplyWireRole
     if (role === 'upstream') return t('wires.supplySegmentUpstream', 'Supply side (to separator)')
     if (role === 'crossing') return t('wires.supplySegmentCrossing', 'Panel boundary')
@@ -103,6 +106,74 @@ function wireSegmentDetailLabel(segment: WireSegment, t: WireTranslateFn): strin
   if (segment.fromElementType === 'ground') return t('tally.groundPathSegment', 'Ground')
   if (segment.circuitId) return segment.circuitId
   return segment.id
+}
+
+/** Match the wire-selection payload created when the same segments are clicked on the canvas. */
+function wireSegmentsSelection(segments: WireSegment[]): TallyDetailSelection {
+  return {
+    type: 'wire',
+    ids: segments.map((segment) => segment.id),
+    wireMetadata: segments.map((segment) => ({
+      id: segment.id,
+        type: segment.type === 'secondaryBus' ? 'mainBus' : segment.type,
+        domain: segment.domain,
+        circuitId: segment.circuitId,
+        panelId: segment.panelId,
+        isSupply:
+          (segment.type === 'vertical' && !segment.circuitId && !segment.fromElementType) ||
+          Boolean(segment.isSupplyTrunk),
+        isGround: segment.fromElementType === 'ground',
+        ...(segment.supplyWireRole && { supplyWireRole: segment.supplyWireRole }),
+        ...(segment.supplyFeedScope && { supplyFeedScope: segment.supplyFeedScope }),
+        ...(segment.supplyAssemblyId && { supplyAssemblyId: segment.supplyAssemblyId }),
+        ...(segment.supplyConnectionId && { supplyConnectionId: segment.supplyConnectionId }),
+        ...(segment.supplySectionKey && { supplySectionKey: segment.supplySectionKey }),
+        ...(segment.isSupplyTrunk &&
+          segment.supplySegmentIndex !== undefined && {
+            supplySegmentIndex: segment.supplySegmentIndex,
+          }),
+        ...(segment.circuitId && {
+          fromElementType: segment.fromElementType,
+          fromElementId: segment.fromElementId,
+          toElementType: segment.toElementType,
+          toElementId: segment.toElementId,
+        }),
+        ...(segment.feederProtectionId && { feederProtectionId: segment.feederProtectionId }),
+        ...(segment.showWireLabelOnBusStub && { showWireLabelOnBusStub: true as const }),
+        ...(segment.domoticaOutputGroup &&
+          typeof segment.domoticaOutputIndex === 'number' && {
+            domoticaOutputGroup: segment.domoticaOutputGroup,
+            domoticaOutputIndex: segment.domoticaOutputIndex,
+          }),
+    })),
+  }
+}
+
+type CircuitOwner = { circuit: Circuit; panel: Panel }
+
+function circuitOwnerKey(panelId: string, circuitId: string): string {
+  return `${panelId}:${circuitId}`
+}
+
+function getCircuitOwners(panels: Panel[]): Map<string, CircuitOwner> {
+  const owners = new Map<string, CircuitOwner>()
+  for (const panel of panels) {
+    for (const { circuit } of getAllCircuits(panel)) {
+      owners.set(circuitOwnerKey(panel.id, circuit.id), { circuit, panel })
+    }
+  }
+  return owners
+}
+
+function uniqueEnteredWireLength(segments: WireSegment[]): number | undefined {
+  const lengths = new Set(
+    segments
+      .map((segment) => segment.wireLengthM)
+      .filter((length): length is number => length != null && length > 0)
+      .map((length) => Math.round(length * 1000) / 1000)
+  )
+  if (lengths.size === 0) return undefined
+  return [...lengths].reduce((total, length) => total + length, 0)
 }
 
 const STOVE_LABEL_PATTERN = /stove|fornuis|cuisinière|cooker|four\s*intégré/i
@@ -116,7 +187,9 @@ function getAllPanelsRecursive(panels: Panel[]): Panel[] {
   return out
 }
 
-function getAllCircuits(panel: Panel): Array<{ circuit: Circuit; protectionLabel?: string; panel: Panel }> {
+function getAllCircuits(
+  panel: Panel
+): Array<{ circuit: Circuit; protectionLabel?: string; panel: Panel }> {
   const out: Array<{ circuit: Circuit; protectionLabel?: string; panel: Panel }> = []
   for (const c of panel.circuits ?? []) {
     out.push({ circuit: c, panel })
@@ -207,7 +280,10 @@ function protectionGroupKey(pr: ProtectionDevice | TrunkDevice): string {
   return [type, rating, curve, sens, res, breakCap, poles].filter(Boolean).join('|')
 }
 
-function protectionSummaryLabel(pr: ProtectionDevice | TrunkDevice, t: (key: string) => string): string {
+function protectionSummaryLabel(
+  pr: ProtectionDevice | TrunkDevice,
+  t: (key: string) => string
+): string {
   const type = ('protectionType' in pr ? pr.protectionType : (pr as ProtectionDevice).type) ?? 'MCB'
   const parts: string[] = []
   if (pr.ratingA != null) parts.push(`${pr.ratingA}A`)
@@ -298,7 +374,10 @@ function buildSocketSpecLines(ep: Endpoint, t: WireTranslateFn): string[] | unde
   return lines.length ? lines : undefined
 }
 
-function buildSwitchSpecLines(ep: Endpoint, t: (key: string, fallback?: string) => string): string[] | undefined {
+function buildSwitchSpecLines(
+  ep: Endpoint,
+  t: (key: string, fallback?: string) => string
+): string[] | undefined {
   const sym = ep.symbol ?? 'switch'
   const sp = ep.switchProps
   const lines: string[] = []
@@ -327,7 +406,10 @@ function buildSwitchSpecLines(ep: Endpoint, t: (key: string, fallback?: string) 
   return lines.length ? lines : undefined
 }
 
-function buildRelaySpecLines(ep: Endpoint, t: (key: string, fallback?: string) => string): string[] | undefined {
+function buildRelaySpecLines(
+  ep: Endpoint,
+  t: (key: string, fallback?: string) => string
+): string[] | undefined {
   const rp = ep.relayProps
   if (!rp) return undefined
   const lines: string[] = []
@@ -448,11 +530,14 @@ function energyConversionEndpointSummaryParts(ep: Endpoint, t: (key: string) => 
         : t('endpoints.transformer.safety_open_short')
     )
   }
-  if (p?.transformerShortCircuitProtected) parts.push(t('endpoints.transformer.shortCircuitProtected'))
+  if (p?.transformerShortCircuitProtected)
+    parts.push(t('endpoints.transformer.shortCircuitProtected'))
   if (p?.transformerProtected) parts.push(t('endpoints.transformer.protective'))
   if (p?.transformerOverlayLabel?.trim()) parts.push(p.transformerOverlayLabel.trim())
-  if (p?.pMaxPrimaryW?.trim()) parts.push(`${t('endpoints.conversion.pMaxPrimary')} ${p.pMaxPrimaryW.trim()}`)
-  if (p?.pMaxSecondaryW?.trim()) parts.push(`${t('endpoints.conversion.pMaxSecondary')} ${p.pMaxSecondaryW.trim()}`)
+  if (p?.pMaxPrimaryW?.trim())
+    parts.push(`${t('endpoints.conversion.pMaxPrimary')} ${p.pMaxPrimaryW.trim()}`)
+  if (p?.pMaxSecondaryW?.trim())
+    parts.push(`${t('endpoints.conversion.pMaxSecondary')} ${p.pMaxSecondaryW.trim()}`)
   return parts
 }
 
@@ -473,11 +558,14 @@ function energyConversionTrunkSummaryParts(d: TrunkDevice, t: (key: string) => s
         : t('endpoints.transformer.safety_open_short')
     )
   }
-  if (p?.transformerShortCircuitProtected) parts.push(t('endpoints.transformer.shortCircuitProtected'))
+  if (p?.transformerShortCircuitProtected)
+    parts.push(t('endpoints.transformer.shortCircuitProtected'))
   if (p?.transformerProtected) parts.push(t('endpoints.transformer.protective'))
   if (p?.transformerOverlayLabel?.trim()) parts.push(p.transformerOverlayLabel.trim())
-  if (p?.pMaxPrimaryW?.trim()) parts.push(`${t('endpoints.conversion.pMaxPrimary')} ${p.pMaxPrimaryW.trim()}`)
-  if (p?.pMaxSecondaryW?.trim()) parts.push(`${t('endpoints.conversion.pMaxSecondary')} ${p.pMaxSecondaryW.trim()}`)
+  if (p?.pMaxPrimaryW?.trim())
+    parts.push(`${t('endpoints.conversion.pMaxPrimary')} ${p.pMaxPrimaryW.trim()}`)
+  if (p?.pMaxSecondaryW?.trim())
+    parts.push(`${t('endpoints.conversion.pMaxSecondary')} ${p.pMaxSecondaryW.trim()}`)
   return parts
 }
 
@@ -502,14 +590,17 @@ function buildEnergyConversionPropsSpecLines(
           : 'endpoints.transformer.safety_open_short'
       lines.push(`${t('endpoints.transformer.safetyType')}: ${t(sk)}`)
     }
-    if (p.transformerShortCircuitProtected) lines.push(t('endpoints.transformer.shortCircuitProtected'))
+    if (p.transformerShortCircuitProtected)
+      lines.push(t('endpoints.transformer.shortCircuitProtected'))
     if (p.transformerProtected) lines.push(t('endpoints.transformer.protective'))
   }
   if (p.transformerOverlayLabel?.trim()) {
     lines.push(`${t('endpoints.transformer.overlayLabel')}: ${p.transformerOverlayLabel.trim()}`)
   }
-  if (p.pMaxPrimaryW?.trim()) lines.push(`${t('endpoints.conversion.pMaxPrimary')}: ${p.pMaxPrimaryW.trim()}`)
-  if (p.pMaxSecondaryW?.trim()) lines.push(`${t('endpoints.conversion.pMaxSecondary')}: ${p.pMaxSecondaryW.trim()}`)
+  if (p.pMaxPrimaryW?.trim())
+    lines.push(`${t('endpoints.conversion.pMaxPrimary')}: ${p.pMaxPrimaryW.trim()}`)
+  if (p.pMaxSecondaryW?.trim())
+    lines.push(`${t('endpoints.conversion.pMaxSecondary')}: ${p.pMaxSecondaryW.trim()}`)
   return lines
 }
 
@@ -543,8 +634,8 @@ function buildEnergyConversionTrunkSpecLines(
 
 /** Build full hardware tally from project. t() is i18n t function for symbol/option labels. */
 export function buildHardwareTally(
-  project: ProjectWithOptionalV2Electrical | null,
-  t: WireTranslateFn,
+  project: TallyProject | null,
+  t: WireTranslateFn
 ): TallyData {
   if (!project) return []
 
@@ -560,18 +651,12 @@ export function buildHardwareTally(
     string,
     { details: TallyDetail[]; hasSupply: boolean; representative: ProtectionDevice | TrunkDevice }
   >()
-  function addProtection(
-    pr: ProtectionDevice | TrunkDevice,
-    isSupply: boolean,
-    panel?: Panel
-  ) {
+  function addProtection(pr: ProtectionDevice | TrunkDevice, isSupply: boolean, panel?: Panel) {
     const key = protectionGroupKey(pr)
     const existing = protectionMap.get(key)
     const label = pr.label || ''
     const panelName = panel?.name ?? mainPanelName
-    const subcircuitPath = isSupply
-      ? `${mainPanelName} > Supply`
-      : `${panelName} > ${label}`
+    const subcircuitPath = isSupply ? `${mainPanelName} > Supply` : `${panelName} > ${label}`
     const selection: TallyDetailSelection = isSupply
       ? { type: 'trunkDevice', ids: [pr.id] }
       : { type: 'protection', ids: [pr.id] }
@@ -819,7 +904,10 @@ export function buildHardwareTally(
   }
 
   // --- Sockets ---
-  const socketMap = new Map<string, { details: TallyDetail[]; summaryLabel: string; representative: Endpoint }>()
+  const socketMap = new Map<
+    string,
+    { details: TallyDetail[]; summaryLabel: string; representative: Endpoint }
+  >()
   for (const panel of panels) {
     for (const { circuit, protectionLabel } of getAllCircuits(panel)) {
       for (const ep of circuit.endpoints ?? []) {
@@ -832,7 +920,13 @@ export function buildHardwareTally(
           label: ep.label || branchLabel,
           branchOrCircuit: branchLabel,
           panelName: panel.name,
-          subcircuitPath: buildPathWithSubcircuits(panel.name, protectionLabel, getCircuitPathFromRoot(panels, circuit.id), branchLabel, t),
+          subcircuitPath: buildPathWithSubcircuits(
+            panel.name,
+            protectionLabel,
+            getCircuitPathFromRoot(panels, circuit.id),
+            branchLabel,
+            t
+          ),
           selection: { type: 'endpoint', ids: [ep.id] },
         }
         if (existing) {
@@ -865,7 +959,10 @@ export function buildHardwareTally(
   }
 
   // --- Switches (excluding impulse) ---
-  const switchMap = new Map<string, { details: TallyDetail[]; summaryLabel: string; representative: Endpoint }>()
+  const switchMap = new Map<
+    string,
+    { details: TallyDetail[]; summaryLabel: string; representative: Endpoint }
+  >()
   for (const panel of panels) {
     for (const { circuit, protectionLabel } of getAllCircuits(panel)) {
       for (const ep of circuit.endpoints ?? []) {
@@ -878,7 +975,13 @@ export function buildHardwareTally(
           label: ep.label || branchLabel,
           branchOrCircuit: branchLabel,
           panelName: panel.name,
-          subcircuitPath: buildPathWithSubcircuits(panel.name, protectionLabel, getCircuitPathFromRoot(panels, circuit.id), branchLabel, t),
+          subcircuitPath: buildPathWithSubcircuits(
+            panel.name,
+            protectionLabel,
+            getCircuitPathFromRoot(panels, circuit.id),
+            branchLabel,
+            t
+          ),
           selection: { type: 'endpoint', ids: [ep.id] },
         }
         if (existing) {
@@ -911,7 +1014,10 @@ export function buildHardwareTally(
   }
 
   // --- Impulse switches ---
-  const impulseMap = new Map<string, { details: TallyDetail[]; summaryLabel: string; representative: Endpoint }>()
+  const impulseMap = new Map<
+    string,
+    { details: TallyDetail[]; summaryLabel: string; representative: Endpoint }
+  >()
   for (const panel of panels) {
     for (const { circuit, protectionLabel } of getAllCircuits(panel)) {
       for (const ep of circuit.endpoints ?? []) {
@@ -924,7 +1030,13 @@ export function buildHardwareTally(
           label: ep.label || branchLabel,
           branchOrCircuit: branchLabel,
           panelName: panel.name,
-          subcircuitPath: buildPathWithSubcircuits(panel.name, protectionLabel, getCircuitPathFromRoot(panels, circuit.id), branchLabel, t),
+          subcircuitPath: buildPathWithSubcircuits(
+            panel.name,
+            protectionLabel,
+            getCircuitPathFromRoot(panels, circuit.id),
+            branchLabel,
+            t
+          ),
           selection: { type: 'endpoint', ids: [ep.id] },
         }
         if (existing) {
@@ -971,7 +1083,13 @@ export function buildHardwareTally(
           label: ep.label || branchLabel,
           branchOrCircuit: branchLabel,
           panelName: panel.name,
-          subcircuitPath: buildPathWithSubcircuits(panel.name, protectionLabel, getCircuitPathFromRoot(panels, circuit.id), branchLabel, t),
+          subcircuitPath: buildPathWithSubcircuits(
+            panel.name,
+            protectionLabel,
+            getCircuitPathFromRoot(panels, circuit.id),
+            branchLabel,
+            t
+          ),
           selection: { type: 'endpoint', ids: [ep.id] },
         }
         if (existing) {
@@ -998,7 +1116,10 @@ export function buildHardwareTally(
   }
 
   // --- Relays ---
-  const relayMap = new Map<string, { details: TallyDetail[]; summaryLabel: string; representative: Endpoint }>()
+  const relayMap = new Map<
+    string,
+    { details: TallyDetail[]; summaryLabel: string; representative: Endpoint }
+  >()
   for (const panel of panels) {
     for (const { circuit, protectionLabel } of getAllCircuits(panel)) {
       for (const ep of circuit.endpoints ?? []) {
@@ -1012,7 +1133,13 @@ export function buildHardwareTally(
           label: ep.label || branchLabel,
           branchOrCircuit: branchLabel,
           panelName: panel.name,
-          subcircuitPath: buildPathWithSubcircuits(panel.name, protectionLabel, getCircuitPathFromRoot(panels, circuit.id), branchLabel, t),
+          subcircuitPath: buildPathWithSubcircuits(
+            panel.name,
+            protectionLabel,
+            getCircuitPathFromRoot(panels, circuit.id),
+            branchLabel,
+            t
+          ),
           selection: { type: 'endpoint', ids: [ep.id] },
         }
         if (existing) {
@@ -1059,7 +1186,13 @@ export function buildHardwareTally(
           label: ep.label || branchLabel,
           branchOrCircuit: branchLabel,
           panelName: panel.name,
-          subcircuitPath: buildPathWithSubcircuits(panel.name, protectionLabel, getCircuitPathFromRoot(panels, circuit.id), branchLabel, t),
+          subcircuitPath: buildPathWithSubcircuits(
+            panel.name,
+            protectionLabel,
+            getCircuitPathFromRoot(panels, circuit.id),
+            branchLabel,
+            t
+          ),
           selection: { type: 'endpoint', ids: [ep.id] },
         }
         if (existing) {
@@ -1098,7 +1231,13 @@ export function buildHardwareTally(
           label: ep.label || branchLabel,
           branchOrCircuit: branchLabel,
           panelName: panel.name,
-          subcircuitPath: buildPathWithSubcircuits(panel.name, protectionLabel, getCircuitPathFromRoot(panels, circuit.id), branchLabel, t),
+          subcircuitPath: buildPathWithSubcircuits(
+            panel.name,
+            protectionLabel,
+            getCircuitPathFromRoot(panels, circuit.id),
+            branchLabel,
+            t
+          ),
           selection: { type: 'endpoint', ids: [ep.id] },
         })
       }
@@ -1163,8 +1302,20 @@ export function buildHardwareTally(
     })
   }
 
-  // --- Wires (grouped by cable/route fingerprint, with optional length totals) ---
+  // --- Wires (one logical circuit/ground run, grouped by cable/route fingerprint) ---
   const wireSegments = deriveProjectWireSegments(project)
+  const circuitOwners = getCircuitOwners(panels)
+  const logicalWireRuns = new Map<string, WireSegment[]>()
+  for (const segment of wireSegments) {
+    if (!isHardwareTallyWireSegment(segment)) continue
+    const logicalKey =
+      segment.fromElementType === 'ground'
+        ? `ground:${segment.panelId}`
+        : segment.circuitId
+          ? `circuit:${circuitOwnerKey(segment.panelId, segment.circuitId)}`
+          : `segment:${segment.id}`
+    logicalWireRuns.set(logicalKey, [...(logicalWireRuns.get(logicalKey) ?? []), segment])
+  }
   const wireMap = new Map<
     string,
     {
@@ -1174,51 +1325,56 @@ export function buildHardwareTally(
       totalLengthM: number
     }
   >()
-  for (const segment of wireSegments) {
-    if (!isHardwareTallyWireSegment(segment)) continue
+  for (const segments of logicalWireRuns.values()) {
+    const segment = segments[0]
+    if (!segment) continue
     const key = wireSegmentFingerprint(segment)
     const summaryLabel = formatWireTallySummaryLabel(segment, t)
     const isSupply =
       segment.isSupplyTrunk === true ||
       (segment.type === 'vertical' && !segment.circuitId && !segment.fromElementType)
     const panel = panels.find((p) => p.id === segment.panelId)
+    const circuitOwner = segment.circuitId
+      ? circuitOwners.get(circuitOwnerKey(segment.panelId, segment.circuitId))
+      : undefined
     const detail: TallyDetail = {
-      label: wireSegmentDetailLabel(segment, t),
+      label: circuitOwner?.circuit.code.trim() || wireSegmentDetailLabel(segment, t),
       panelName: panel?.name ?? mainPanelName,
       subcircuitPath: panel?.name ?? mainPanelName,
-      selection: segment.circuitId
-        ? { type: 'circuit', ids: [segment.circuitId] }
-        : undefined,
+      selection: wireSegmentsSelection(
+        segment.fromElementType === 'ground' ? [segment] : segments
+      ),
     }
-    const lengthContribution = segment.wireLengthM != null && segment.wireLengthM > 0 ? segment.wireLengthM : 0
+    const enteredLengthM = uniqueEnteredWireLength(segments)
     const existing = wireMap.get(key)
     if (existing) {
       existing.details.push(detail)
       if (isSupply) existing.hasSupply = true
-      existing.totalLengthM += lengthContribution
+      existing.totalLengthM += enteredLengthM ?? 0
     } else {
       wireMap.set(key, {
         details: [detail],
         summaryLabel,
         hasSupply: isSupply,
-        totalLengthM: lengthContribution,
+        totalLengthM: enteredLengthM ?? 0,
       })
     }
   }
   if (wireMap.size > 0) {
     const groups: TallyGroup[] = []
     for (const [, { details, summaryLabel, hasSupply, totalLengthM }] of wireMap) {
-      const specLines =
-        totalLengthM > 0
+      const specLines = [
+        ...(totalLengthM > 0
           ? [t('tally.wireLengthTotal', { length: formatWireLengthMeters(totalLengthM, t) })]
-          : undefined
+          : []),
+      ]
       groups.push({
         summaryLabel,
         count: details.length,
         details,
         hasSupply,
         totalLengthM: totalLengthM > 0 ? totalLengthM : undefined,
-        specLines,
+        specLines: specLines.length > 0 ? specLines : undefined,
       })
     }
     groups.sort((a, b) => a.summaryLabel.localeCompare(b.summaryLabel))

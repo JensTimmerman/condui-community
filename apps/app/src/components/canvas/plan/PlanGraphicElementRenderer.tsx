@@ -33,6 +33,11 @@ import {
   clearFloorPlanDrawDimensionEditor,
   setFloorPlanDrawDimensionEditor,
 } from './floorPlanDrawDimensionEditorStore'
+import { normalizeDimensionRotationDeg } from '@/lib/plan/dimensionDragGesture'
+import {
+  scalePlanGraphicPath,
+  scalePlanGraphicPathUniformly,
+} from '@/lib/plan/planGraphicPath'
 
 const PLAN_GRAPHIC_HOVER_COLOR = '#eab308'
 
@@ -53,7 +58,10 @@ interface PlanGraphicElementRendererProps {
   fontFamily: string
   snapFloorPoint?: (point: Point2) => GraphicElementSnapFloorPointResult
   onSnapGuidesChange?: (guides: GraphicElementSnapGuide[]) => void
-  onSelect: (elementId: string, event?: { shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean }) => void
+  onSelect: (
+    elementId: string,
+    event?: { shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean }
+  ) => void
   onMove: (elementId: string, pos: Point2) => void
   onResize: (elementId: string, size: { width: number; height: number }) => void
   onRotate: (elementId: string, rotationDeg: number) => void
@@ -95,6 +103,26 @@ function fitLinePoints(
     )
   }
   return fitted
+}
+
+function fitPathData(
+  data: string,
+  viewBoxWidth: number,
+  viewBoxHeight: number,
+  width: number,
+  height: number
+): string {
+  return scalePlanGraphicPath(data, viewBoxWidth, viewBoxHeight, width, height)
+}
+
+function fitPathDataUniformly(
+  data: string,
+  viewBoxWidth: number,
+  viewBoxHeight: number,
+  width: number,
+  height: number
+): string {
+  return scalePlanGraphicPathUniformly(data, viewBoxWidth, viewBoxHeight, width, height)
 }
 
 export function PlanGraphicElementShape({
@@ -139,20 +167,39 @@ export function PlanGraphicElementShape({
         </>
       )
     case 'shower':
-      return (
-        <>
-          <Rect x={x} y={y} width={w} height={h} cornerRadius={Math.min(w, h) * 0.0514} {...common} />
-          <Circle x={fitX(16.39, 100, w)} y={fitY(85.01, 100, h)} radius={Math.min(w, h) * 0.0789} {...common} />
-          <Path
-            data="M57.89,32.49c0,4.35-3.53,7.89-7.89,7.89s-7.89-3.54-7.89-7.89c0-3.34,2.07-6.19,5-7.34V4.98c0-.98.8-1.78,1.78-1.78h2.44c.99,0,1.78.8,1.78,1.78v20.26c2.81,1.2,4.78,4,4.78,7.25Z"
-            x={x}
-            y={y}
-            scaleX={w / 100}
-            scaleY={h / 100}
-            {...pathCommon}
-          />
-        </>
-      )
+      {
+        const showerHeadSize = Math.min(w, h)
+        return (
+          <>
+            <Rect
+              x={x}
+              y={y}
+              width={w}
+              height={h}
+              cornerRadius={Math.min(w, h) * 0.0514}
+              {...common}
+            />
+            <Circle
+              x={fitX(16.39, 100, w)}
+              y={fitY(85.01, 100, h)}
+              radius={Math.min(w, h) * 0.0789}
+              {...common}
+            />
+            <Path
+              data={fitPathDataUniformly(
+                'M57.89,32.49c0,4.35-3.53,7.89-7.89,7.89s-7.89-3.54-7.89-7.89c0-3.34,2.07-6.19,5-7.34V4.98c0-.98.8-1.78,1.78-1.78h2.44c.99,0,1.78.8,1.78,1.78v20.26c2.81,1.2,4.78,4,4.78,7.25Z',
+                100,
+                100,
+                w,
+                h
+              )}
+              x={-showerHeadSize / 2}
+              y={y}
+              {...pathCommon}
+            />
+          </>
+        )
+      }
     case 'bathtub':
       return (
         <>
@@ -172,7 +219,16 @@ export function PlanGraphicElementShape({
             cornerRadius={Math.min((20 / 170) * w, (20 / 75) * h)}
             {...common}
           />
-          <Line points={fitLinePoints([147.54, 17.99, 161.94, 17.99, 161.94, 57.01, 147.54, 57.01], 170, 75, w, h)} {...lineCommon} />
+          <Line
+            points={fitLinePoints(
+              [147.54, 17.99, 161.94, 17.99, 161.94, 57.01, 147.54, 57.01],
+              170,
+              75,
+              w,
+              h
+            )}
+            {...lineCommon}
+          />
           <Ellipse
             x={fitX(154.74, 170, w)}
             y={fitY(36.82, 75, h)}
@@ -193,25 +249,47 @@ export function PlanGraphicElementShape({
             cornerRadius={Math.min((6 / 60) * w, (6 / 45) * h)}
             {...common}
           />
-          <Ellipse x={fitX(30, 60, w)} y={fitY(24.49, 45, h)} radiusX={(26.1 / 60) * w} radiusY={(16.17 / 45) * h} {...common} />
-          <Ellipse x={fitX(30, 60, w)} y={fitY(24.49, 45, h)} radiusX={(3.62 / 60) * w} radiusY={(3.49 / 45) * h} {...common} />
-          <Ellipse x={fitX(30, 60, w)} y={fitY(4.44, 45, h)} radiusX={(2.11 / 60) * w} radiusY={(2.03 / 45) * h} {...common} />
+          <Ellipse
+            x={fitX(30, 60, w)}
+            y={fitY(24.49, 45, h)}
+            radiusX={(26.1 / 60) * w}
+            radiusY={(16.17 / 45) * h}
+            {...common}
+          />
+          <Ellipse
+            x={fitX(30, 60, w)}
+            y={fitY(24.49, 45, h)}
+            radiusX={(3.62 / 60) * w}
+            radiusY={(3.49 / 45) * h}
+            {...common}
+          />
+          <Ellipse
+            x={fitX(30, 60, w)}
+            y={fitY(4.44, 45, h)}
+            radiusX={(2.11 / 60) * w}
+            radiusY={(2.03 / 45) * h}
+            {...common}
+          />
         </>
       )
     case 'toilet':
       return (
         <Path
-          data="M20,55c11.35,0,16.84-8.81,16.84-24.12C36.84,15.57,33.91,0,33.91,0c0,0-13.91,0-13.91,0H6.09s-2.93,15.57-2.93,30.88c0,15.31,5.49,24.12,16.84,24.12Z"
+          data={fitPathData(
+            'M20,55c11.35,0,16.84-8.81,16.84-24.12C36.84,15.57,33.91,0,33.91,0c0,0-13.91,0-13.91,0H6.09s-2.93,15.57-2.93,30.88c0,15.31,5.49,24.12,16.84,24.12Z',
+            40,
+            55,
+            w,
+            h
+          )}
           x={x}
           y={y}
-          scaleX={w / 40}
-          scaleY={h / 55}
           {...pathCommon}
         />
       )
     case 'car':
       return (
-        <Group x={x} y={y} scaleX={w / 180} scaleY={h / 80} listening={false}>
+        <Group listening={false}>
           {[
             'M5.71,40c0-13.36,1.39-17.81,3.08-22.11s4.93-6.23,6.62-6.83,1.57-2.14.94-3.52',
             'M44.97,11.21l75.59-1.19s-17.4,5.94-27.1,7.42-21,1.36-28.17.59c-11.09-1.19-20.32-6.83-20.32-6.83Z',
@@ -225,17 +303,38 @@ export function PlanGraphicElementShape({
             'M162.91,73.43s-.48-1.82-.63-2.86,2.77-2.04,5.7-4.88,6.31-7.74,6.31-25.69h0c0-17.96-3.39-22.86-6.31-25.69s-5.85-3.84-5.7-4.88.63-2.86.63-2.86',
             'M113.16,69.86c-.46,5.76-3.54,8.72-1.69,9.91s8.01-2.37,8.31-9.8',
           ].map((data, index) => (
-            <Path key={index} data={data} stroke={graphicStrokeColor} strokeWidth={180 / w} fill={undefined} listening={false} lineCap="round" lineJoin="round" />
+            <Path
+              key={index}
+              data={fitPathData(data, 180, 80, w, h)}
+              x={x}
+              y={y}
+              stroke={graphicStrokeColor}
+              strokeWidth={1}
+              fill={undefined}
+              listening={false}
+              lineCap="round"
+              lineJoin="round"
+            />
           ))}
-          {([
-            [9.56, 16.26, 29.11, 15.66],
-            [173.07, 24.71, 128.26, 12.69],
-            [80.34, 10.65, 78.5, 18.59],
-            [9.56, 63.74, 29.11, 64.34],
-            [173.06, 55.29, 128.26, 67.31],
-            [80.34, 69.35, 78.49, 61.41],
-          ] as Array<[number, number, number, number]>).map(([x1, y1, x2, y2], index) => (
-            <Line key={`line-${index}`} points={[x1, y1, x2, y2]} stroke={graphicStrokeColor} strokeWidth={180 / w} listening={false} lineCap="round" lineJoin="round" />
+          {(
+            [
+              [9.56, 16.26, 29.11, 15.66],
+              [173.07, 24.71, 128.26, 12.69],
+              [80.34, 10.65, 78.5, 18.59],
+              [9.56, 63.74, 29.11, 64.34],
+              [173.06, 55.29, 128.26, 67.31],
+              [80.34, 69.35, 78.49, 61.41],
+            ] as Array<[number, number, number, number]>
+          ).map(([x1, y1, x2, y2], index) => (
+            <Line
+              key={`line-${index}`}
+              points={fitLinePoints([x1, y1, x2, y2], 180, 80, w, h)}
+              stroke={graphicStrokeColor}
+              strokeWidth={1}
+              listening={false}
+              lineCap="round"
+              lineJoin="round"
+            />
           ))}
         </Group>
       )
@@ -261,10 +360,7 @@ function rotatePoint2(point: Point2, angleDeg: number): Point2 {
 }
 
 function worldToElementLocal(point: Point2, center: Point2, rotationDeg: number): Point2 {
-  return rotatePoint2(
-    { x: point.x - center.x, y: point.y - center.y },
-    -rotationDeg
-  )
+  return rotatePoint2({ x: point.x - center.x, y: point.y - center.y }, -rotationDeg)
 }
 
 function constrainFloorDeltaToElementAxis(
@@ -273,8 +369,7 @@ function constrainFloorDeltaToElementAxis(
   axisMode: 'horizontal' | 'vertical'
 ): Point2 {
   const local = rotatePoint2(floorDelta, -rotationDeg)
-  const constrainedLocal =
-    axisMode === 'horizontal' ? { x: local.x, y: 0 } : { x: 0, y: local.y }
+  const constrainedLocal = axisMode === 'horizontal' ? { x: local.x, y: 0 } : { x: 0, y: local.y }
   return rotatePoint2(constrainedLocal, rotationDeg)
 }
 
@@ -289,8 +384,7 @@ function projectFloorPointOntoElementAxis(
     axisMode === 'horizontal' ? { x: 1, y: 0 } : { x: 0, y: 1 },
     rotationDeg
   )
-  const t =
-    (point.x - axisOrigin.x) * axisDir.x + (point.y - axisOrigin.y) * axisDir.y
+  const t = (point.x - axisOrigin.x) * axisDir.x + (point.y - axisOrigin.y) * axisDir.y
   return {
     x: axisOrigin.x + t * axisDir.x,
     y: axisOrigin.y + t * axisDir.y,
@@ -419,8 +513,7 @@ function GraphicElementNode({
   const paddingY = 4 / zoom
   const handleSize = Math.max(11 / zoom, 8)
   const handleStrokeWidth = Math.max(2 / zoom, 1.5)
-  const rotationHandleRadius =
-    renderElement.height / 2 + handleOffset + handleSize * 4.6
+  const rotationHandleRadius = renderElement.height / 2 + handleOffset + handleSize * 4.6
   const handleFillColor = '#ffffff'
   const handleStrokeColor = '#0284c7'
   const moveHandleRadius = handleSize * 0.82
@@ -453,12 +546,7 @@ function GraphicElementNode({
       x: axisOrigin.x + floorDelta.x,
       y: axisOrigin.y + floorDelta.y,
     })
-    const nextPos = projectFloorPointOntoElementAxis(
-      snapped,
-      axisOrigin,
-      rotationDeg,
-      axisMode
-    )
+    const nextPos = projectFloorPointOntoElementAxis(snapped, axisOrigin, rotationDeg, axisMode)
     return {
       ...base,
       pos: nextPos,
@@ -580,7 +668,9 @@ function GraphicElementNode({
           placement: 'center',
           value: draftText || `${Math.round(valueCm)}`,
           active: true,
-          rotationDeg: renderElement.rotationDeg ?? 0,
+          rotationDeg: normalizeDimensionRotationDeg(
+            (renderElement.rotationDeg ?? 0) + (widthField ? 0 : 90)
+          ),
         },
       ],
       onActivate: () => undefined,
@@ -608,7 +698,6 @@ function GraphicElementNode({
         setDraftText('')
       },
     })
-
   }, [
     active,
     canvasPxPerMeter,
@@ -640,7 +729,8 @@ function GraphicElementNode({
     field: DimensionField,
     x: number,
     y: number,
-    valuePx: number
+    valuePx: number,
+    rotationDeg: number
   ) => {
     const valueCm = canvasPxPerMeter > 0 ? (valuePx / canvasPxPerMeter) * 100 : 0
     const activeField = editingField === field
@@ -651,8 +741,9 @@ function GraphicElementNode({
     if (activeField) return null
     return (
       <Group
-        x={x - boxWidth / 2}
-        y={y - boxHeight / 2}
+        x={x}
+        y={y}
+        rotation={rotationDeg}
         listening={active && selected && !locked}
         onPointerDown={(event) => {
           if (!isPrimaryPlanActivationEvent(event.evt)) return
@@ -676,14 +767,18 @@ function GraphicElementNode({
         }}
       >
         <Rect
+          x={-boxWidth / 2}
+          y={-boxHeight / 2}
           width={boxWidth}
           height={boxHeight}
           fill={themeMode === 'dark' ? PLAN_GRAPHIC_LABEL_FILL_DARK : PLAN_GRAPHIC_LABEL_FILL_LIGHT}
-          stroke={activeField ? '#0284c7' : locked ? '#9ca3af' : '#111827'}
+          stroke={locked ? '#9ca3af' : '#0284c7'}
           strokeWidth={strokeWidth}
           cornerRadius={4 / zoom}
         />
         <Text
+          x={-boxWidth / 2}
+          y={-boxHeight / 2}
           width={boxWidth}
           height={boxHeight}
           align="center"
@@ -691,6 +786,7 @@ function GraphicElementNode({
           text={text}
           fontSize={fontSize}
           fontFamily={fontFamily}
+          fontStyle="bold"
           fill={
             activeField
               ? '#0284c7'
@@ -773,16 +869,25 @@ function GraphicElementNode({
       onPointerDown={(event) => {
         if (!isPrimaryPlanActivationEvent(event.evt)) return
         event.cancelBubble = true
-        onSelect(element.id, event.evt as { shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean })
+        onSelect(
+          element.id,
+          event.evt as { shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean }
+        )
       }}
       onClick={(event) => {
         if (!isPrimaryPlanActivationEvent(event.evt)) return
         event.cancelBubble = true
-        onSelect(element.id, event.evt as { shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean })
+        onSelect(
+          element.id,
+          event.evt as { shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean }
+        )
       }}
       onTap={(event) => {
         event.cancelBubble = true
-        onSelect(element.id, event.evt as { shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean })
+        onSelect(
+          element.id,
+          event.evt as { shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean }
+        )
       }}
       onDragStart={() => {
         onSelect(element.id)
@@ -840,16 +945,11 @@ function GraphicElementNode({
             'width',
             0,
             -renderElement.height / 2 - handleOffset - moveHandleRadius * 2.7,
-            renderElement.width
+            renderElement.width,
+            0
           )}
-          {renderDimensionBox('height', heightLabelCenterX, 0, renderElement.height)}
-          {renderMoveHandle(
-            'move-top',
-            0,
-            -renderElement.height / 2 - handleOffset,
-            0,
-            'vertical'
-          )}
+          {renderDimensionBox('height', heightLabelCenterX, 0, renderElement.height, 90)}
+          {renderMoveHandle('move-top', 0, -renderElement.height / 2 - handleOffset, 0, 'vertical')}
           {renderMoveHandle(
             'move-left',
             -renderElement.width / 2 - handleOffset,
@@ -865,12 +965,14 @@ function GraphicElementNode({
             180,
             'vertical'
           )}
-          {([
-            [-1, -1],
-            [1, -1],
-            [1, 1],
-            [-1, 1],
-          ] as Array<[-1 | 1, -1 | 1]>).map(([signX, signY]) => (
+          {(
+            [
+              [-1, -1],
+              [1, -1],
+              [1, 1],
+              [-1, 1],
+            ] as Array<[-1 | 1, -1 | 1]>
+          ).map(([signX, signY]) => (
             <Rect
               key={`resize-${signX}-${signY}`}
               x={(signX * renderElement.width) / 2}
@@ -939,7 +1041,8 @@ function GraphicElementNode({
             }}
             onDragEnd={(event) => {
               event.cancelBubble = true
-              const nextElement = updateRotationFromPointer(event) ?? interactionDraftRef.current ?? renderElement
+              const nextElement =
+                updateRotationFromPointer(event) ?? interactionDraftRef.current ?? renderElement
               const nextRotation = nextElement.rotationDeg ?? 0
               onRotate(element.id, nextRotation)
               rotationBaseRef.current = null

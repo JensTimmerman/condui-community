@@ -21,6 +21,7 @@ import {
 } from '@/lib/plan/planGraphicCatalogSvg'
 import type { ExportTheme } from './types'
 import type { SceneBounds } from './types'
+import type { PlanGraphicElementKind } from '@/types/schema'
 
 export type PlanGraphicExportDescriptor = {
   siblingIndex: number
@@ -30,6 +31,7 @@ export type PlanGraphicExportDescriptor = {
   width: number
   height: number
   svgPath: string
+  kind: PlanGraphicElementKind
   strokeColor: string
 }
 
@@ -110,21 +112,22 @@ function appendBakedCatalogShape(
 }
 
 /** Paths stay in catalog space under scale(); non-scaling-stroke keeps weight uniform. */
-function appendScaledCatalogPaths(
+function appendScaledPathGroup(
   doc: Document,
   parent: SVGGElement,
-  shapes: PlanGraphicCatalogShape[],
+  pathShapes: Extract<PlanGraphicCatalogShape, { kind: 'path' }>[],
   viewBox: ViewBox,
   scaleX: number,
-  scaleY: number
+  scaleY: number,
+  offsetX = 0,
+  offsetY = 0
 ): void {
-  const pathShapes = shapes.filter((s): s is Extract<PlanGraphicCatalogShape, { kind: 'path' }> => s.kind === 'path')
   if (pathShapes.length === 0) return
 
   const scaled = doc.createElementNS(SVG_NS, 'g')
   scaled.setAttribute(
     'transform',
-    `scale(${scaleX} ${scaleY}) translate(${-viewBox.x} ${-viewBox.y})`
+    `translate(${offsetX} ${offsetY}) scale(${scaleX} ${scaleY}) translate(${-viewBox.x} ${-viewBox.y})`
   )
 
   for (const shape of pathShapes) {
@@ -141,6 +144,29 @@ function appendScaledCatalogPaths(
   parent.appendChild(scaled)
 }
 
+function appendScaledCatalogPaths(
+  doc: Document,
+  parent: SVGGElement,
+  shapes: PlanGraphicCatalogShape[],
+  viewBox: ViewBox,
+  scaleX: number,
+  scaleY: number,
+  preserveLastPathAspectRatio: boolean
+): void {
+  const pathShapes = shapes.filter((s): s is Extract<PlanGraphicCatalogShape, { kind: 'path' }> => s.kind === 'path')
+  if (pathShapes.length === 0) return
+
+  const lastPath = preserveLastPathAspectRatio ? pathShapes.at(-1) : undefined
+  const regularPaths = lastPath ? pathShapes.slice(0, -1) : pathShapes
+  appendScaledPathGroup(doc, parent, regularPaths, viewBox, scaleX, scaleY)
+
+  if (lastPath) {
+    const pathScale = Math.min(scaleX, scaleY)
+    const offsetX = ((scaleX - pathScale) * viewBox.width) / 2
+    appendScaledPathGroup(doc, parent, [lastPath], viewBox, pathScale, pathScale, offsetX)
+  }
+}
+
 function appendCatalogShapes(
   doc: Document,
   parent: SVGGElement,
@@ -148,13 +174,22 @@ function appendCatalogShapes(
   targetWidth: number,
   targetHeight: number,
   scaleX: number,
-  scaleY: number
+  scaleY: number,
+  preserveLastPathAspectRatio: boolean
 ): void {
   for (const shape of parsed.shapes) {
     if (shape.kind === 'path') continue
     appendBakedCatalogShape(doc, parent, shape, parsed.viewBox, targetWidth, targetHeight)
   }
-  appendScaledCatalogPaths(doc, parent, parsed.shapes, parsed.viewBox, scaleX, scaleY)
+  appendScaledCatalogPaths(
+    doc,
+    parent,
+    parsed.shapes,
+    parsed.viewBox,
+    scaleX,
+    scaleY,
+    preserveLastPathAspectRatio
+  )
 }
 
 async function loadParsedCatalog(
@@ -191,7 +226,16 @@ function buildGraphicGroupElement(
   )
 
   const local = doc.createElementNS(SVG_NS, 'g')
-  appendCatalogShapes(doc, local, parsed, desc.width, desc.height, scaleX, scaleY)
+  appendCatalogShapes(
+    doc,
+    local,
+    parsed,
+    desc.width,
+    desc.height,
+    scaleX,
+    scaleY,
+    desc.kind === 'shower'
+  )
   wrapper.appendChild(local)
   return wrapper
 }
@@ -239,6 +283,7 @@ export async function collectAndRemovePlanGraphicElementsForExport(
       width: size.width,
       height: size.height,
       svgPath: asset.svgPath,
+      kind: asset.kind,
       strokeColor,
     })
 

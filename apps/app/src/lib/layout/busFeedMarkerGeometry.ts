@@ -13,19 +13,45 @@ export interface BusFeedMarkerBounds {
   height: number
 }
 
+const FEED_MARKER_LABEL_HALF_WIDTH = 30
+const FEED_MARKER_RAIL_OFFSET_Y = 16
+const FEED_MARKER_LABEL_WIRE_CLEARANCE = 3
+const FEED_MARKER_LONG_LABEL_WIDTH = 120
+/** Caption baseline relative to the feed symbol centre. */
+export const BUS_FEED_MARKER_LABEL_Y = 10
+const BUS_FEED_MARKER_LABEL_BOTTOM = BUS_FEED_MARKER_LABEL_Y + 9
+
+export interface BusFeedMarkerLabelLayout {
+  x: number
+  width: number
+  align: 'center' | 'right'
+}
+
 /** Shared anchor used by the renderer and layout debug bounds. */
 export function getBusFeedMarkerPosition(wireSegment: WireSegment): BusFeedMarkerPoint {
-  const stubX = getLeftBiasedBusFeedStubX(wireSegment.startPoint.x, wireSegment.endPoint.x)
-  const distance = Math.max(0, wireSegment.endPoint.x - wireSegment.startPoint.x)
+  // Detached supply-frame rails reverse their rendered endpoints when the
+  // assembly is mirrored. Marker placement is visual rather than directional,
+  // so calculate from the physical left/right rail edges in either layout.
+  const railLeftX = Math.min(wireSegment.startPoint.x, wireSegment.endPoint.x)
+  const railRightX = Math.max(wireSegment.startPoint.x, wireSegment.endPoint.x)
+  const stubX = getLeftBiasedBusFeedStubX(railLeftX, railRightX)
+  const distance = railRightX - railLeftX
   switch (wireSegment.busFeedMarkerSide) {
     case 'left':
       return { x: wireSegment.startPoint.x - 24, y: wireSegment.startPoint.y - 10 }
     case 'right':
       return { x: wireSegment.endPoint.x + 4, y: wireSegment.startPoint.y - 10 }
     case 'below-left':
-      return { x: stubX - distance, y: wireSegment.startPoint.y + 20 }
+      return {
+        // Mirror the grid marker's offset from the rail edge.
+        x:
+          wireSegment.busFeedKind === 'backup'
+            ? railLeftX * 2 - stubX
+            : stubX - distance,
+        y: wireSegment.startPoint.y + FEED_MARKER_RAIL_OFFSET_Y,
+      }
     case 'below-right':
-      return { x: stubX + distance, y: wireSegment.startPoint.y + 20 }
+      return { x: stubX + distance, y: wireSegment.startPoint.y + FEED_MARKER_RAIL_OFFSET_Y }
     case 'stub-center':
       return { x: wireSegment.startPoint.x, y: wireSegment.endPoint.y + 11 }
     case 'below':
@@ -35,6 +61,28 @@ export function getBusFeedMarkerPosition(wireSegment: WireSegment): BusFeedMarke
       }
     default:
       return { x: wireSegment.endPoint.x, y: wireSegment.endPoint.y + 11 }
+  }
+}
+
+/**
+ * Keep a switchable-backup caption clear of its adjacent feed riser.  Its text
+ * grows leftward in every locale, while ordinary grid labels stay centered.
+ */
+export function getBusFeedMarkerLabelLayout(wireSegment: WireSegment): BusFeedMarkerLabelLayout {
+  if (wireSegment.busFeedKind === 'backup' && wireSegment.busFeedMarkerSide === 'below-left') {
+    const marker = getBusFeedMarkerPosition(wireSegment)
+    const railCenterX = (wireSegment.startPoint.x + wireSegment.endPoint.x) / 2
+    const rightEdgeX = railCenterX - FEED_MARKER_LABEL_WIRE_CLEARANCE
+    return {
+      x: rightEdgeX - marker.x - FEED_MARKER_LONG_LABEL_WIDTH,
+      width: FEED_MARKER_LONG_LABEL_WIDTH,
+      align: 'right',
+    }
+  }
+  return {
+    x: -FEED_MARKER_LABEL_HALF_WIDTH,
+    width: FEED_MARKER_LABEL_HALF_WIDTH * 2,
+    align: 'center',
   }
 }
 
@@ -48,12 +96,14 @@ export function getBusFeedMarkerPaintBounds(wireSegment: WireSegment): BusFeedMa
 
   if (wireSegment.showBusFeedMarker && wireSegment.busFeedKind) {
     const marker = getBusFeedMarkerPosition(wireSegment)
-    // The symbol is 20×20 centered on the anchor. Its centered 60 px label
-    // starts at y=14 and uses a 7 px font.
-    left = Math.min(left, marker.x - 30)
-    right = Math.max(right, marker.x + 30)
+    const label = getBusFeedMarkerLabelLayout(wireSegment)
+    // The symbol is 20×20 centered on the anchor. Its label starts just
+    // beneath it, leaving clearance from the supply rail below.
+    // and uses a 7 px font.
+    left = Math.min(left, marker.x - 10, marker.x + label.x)
+    right = Math.max(right, marker.x + 10, marker.x + label.x + label.width)
     top = Math.min(top, marker.y - 10)
-    bottom = Math.max(bottom, marker.y + 23)
+    bottom = Math.max(bottom, marker.y + BUS_FEED_MARKER_LABEL_BOTTOM)
   }
   if (wireSegment.phaseLabelAnchor) {
     left = Math.min(left, wireSegment.phaseLabelAnchor.x)

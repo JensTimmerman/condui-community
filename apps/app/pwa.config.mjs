@@ -1,7 +1,7 @@
 /** Shared PWA manifest fields for vite-plugin-pwa. */
-/** Matches Condui_favicon.svg background (#1f2937). */
+/** Background for the Condui wordmark favicon and install tiles. */
 export const PWA_THEME_COLOR = '#1f2937'
-/** Splash / icon tile — matches generated PWA PNGs (favicon mark on slate). */
+/** Splash / icon tile — matches generated PWA PNGs (wordmark on slate). */
 export const PWA_BACKGROUND_COLOR = PWA_THEME_COLOR
 
 /** Install / taskbar / start-menu branding (always Condui, not domain-based). */

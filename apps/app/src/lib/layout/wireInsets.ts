@@ -80,7 +80,7 @@ export const WIRE_INSETS: Record<string, WireInsets> = {
   protection: { top: 8, bottom: 6, left: 8, right: 6 },
   rotating_switch: { top: 9, bottom: 6, left: 9, right: 6 },
   source_changeover: { top: 10, bottom: 10, left: 10, right: 10 },
-  fuse: { top: 0, bottom: 0, left: 0, right: 0 },
+  fuse: { top: 9, bottom: 9, left: 9, right: 9 },
 
   // ── Symbol overrides (take precedence over node type) ───
   socket: SOCKET,
@@ -144,7 +144,7 @@ export const WIRE_INSETS: Record<string, WireInsets> = {
   rectifier: { top: 8, bottom: 8, left: 8, right: 8 },
   inverter: { top: 8, bottom: 8, left: 8, right: 8 },
   dc_dc_converter: { top: 8, bottom: 8, left: 8, right: 8 },
-  solar_panel: { top: 8, bottom: 8, left: 8, right: 8 },
+  solar_panel: { top: 8, bottom: 8, left: 8, right: 9 },
   battery: { top: 0, bottom: 0, left: 6, right: 5 },
 }
 

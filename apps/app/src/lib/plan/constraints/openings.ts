@@ -189,7 +189,10 @@ export function sanitizeWallOpeningPositions(
   points: Point2[],
   doors: Door[],
   windows: Window[]
-): { doorUpdates: Array<{ id: string; position: number }>; windowUpdates: Array<{ id: string; position: number }> } {
+): {
+  doorUpdates: Array<{ id: string; position: number }>
+  windowUpdates: Array<{ id: string; position: number }>
+} {
   const doorUpdates: Array<{ id: string; position: number }> = []
   const windowUpdates: Array<{ id: string; position: number }> = []
   const totalLength = getWallTotalLength(points)
@@ -299,7 +302,10 @@ export function preserveOpeningPositionsAfterPointChange(
   doors: Door[],
   windows: Window[],
   excludeOpeningIds: Set<string> = new Set()
-): { doorUpdates: Array<{ id: string; position: number }>; windowUpdates: Array<{ id: string; position: number }> } {
+): {
+  doorUpdates: Array<{ id: string; position: number }>
+  windowUpdates: Array<{ id: string; position: number }>
+} {
   const doorUpdates: Array<{ id: string; position: number }> = []
   const windowUpdates: Array<{ id: string; position: number }> = []
   const oldTotal = getWallTotalLength(oldPoints)
@@ -351,7 +357,7 @@ export function preserveOpeningPositionsAfterPointChange(
 export function recomputeOpeningLocalFromNormalized(
   points: Point2[],
   doors: Door[],
-  windows: Window[],
+  windows: Window[]
 ): void {
   const totalLength = getWallTotalLength(points)
   if (totalLength < DISTANCE_EPS) return
@@ -369,7 +375,10 @@ export function recomputeOpeningLocalFromNormalized(
     }
     const seg = segInfos[segIndex]
     if (!seg) {
-      return { segmentIndex: undefined as number | undefined, centerAlongSegment: undefined as number | undefined }
+      return {
+        segmentIndex: undefined as number | undefined,
+        centerAlongSegment: undefined as number | undefined,
+      }
     }
     const centerAlongSegment = centerDist - seg.startDist
     return { segmentIndex: segIndex, centerAlongSegment }
@@ -392,13 +401,7 @@ export function recomputeOpeningLocalFromNormalized(
  * for all openings on that segment from the desired center of the moved opening.
  */
 export function applyOpeningMoveOnSegment(input: OpeningMoveInput): OpeningPositionsResult {
-  const {
-    segmentOpenings,
-    segmentLength,
-    desiredCenterAlongSegment,
-    width,
-    openingId,
-  } = input
+  const { segmentOpenings, segmentLength, desiredCenterAlongSegment, width, openingId } = input
 
   const halfWidth = width / 2
   const desiredCenter = clamp(segmentLength - halfWidth, halfWidth, desiredCenterAlongSegment)
@@ -423,4 +426,41 @@ export function applyOpeningMoveOnSegment(input: OpeningMoveInput): OpeningPosit
     }
   }
   return { positionsByOpeningId: fit.positionsByOpeningId, wasAdjusted }
+}
+
+/**
+ * Move an opening by editing the clear distance on one side of it.
+ * Values outside the available segment are intentionally passed through the
+ * normal opening-move clamp, so an oversized distance parks the opening
+ * against the opposite boundary instead of producing invalid geometry.
+ */
+export function applyOpeningDistanceOnSegment(input: {
+  openingId: string
+  kind: 'door' | 'window'
+  width: number
+  segmentIndex: number
+  segmentStartDist: number
+  segmentEndDist: number
+  segmentLength: number
+  segmentOpenings: OpeningOnSegment[]
+  side: 'start' | 'end'
+  distance: number
+}): OpeningPositionsResult {
+  const distance = Math.max(0, input.distance)
+  const desiredCenterAlongSegment =
+    input.side === 'start'
+      ? distance + input.width / 2
+      : input.segmentLength - distance - input.width / 2
+
+  return applyOpeningMoveOnSegment({
+    openingId: input.openingId,
+    kind: input.kind,
+    width: input.width,
+    segmentIndex: input.segmentIndex,
+    segmentStartDist: input.segmentStartDist,
+    segmentEndDist: input.segmentEndDist,
+    segmentLength: input.segmentLength,
+    segmentOpenings: input.segmentOpenings,
+    desiredCenterAlongSegment,
+  })
 }

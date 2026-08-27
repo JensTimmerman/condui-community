@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 import { useProjectStore, type ProjectState } from '@/stores/projectStore'
 import { ensureMutablePlanWiringForProject } from '@/lib/projectV2/planWiring'
 import {
+  buildManualOtherPlanWireRoute,
   buildManualPlanWireRoutesForPlacementMove,
   hidePlanSocketWireRouteForPlacementDrop,
   removePlanWireRouteWaypoint,
@@ -71,25 +72,76 @@ export function usePlanWireEditing({
     })
   }, [])
 
-  const reorderPlanWirePlacement = useCallback(
+  const drawPlanWire = useCallback(
     (sourcePlacementId: string, targetPlacementId: string) => {
       if (!activeFloorId || !currentProject || sourcePlacementId === targetPlacementId) return
+      const otherRoute = buildManualOtherPlanWireRoute(
+        currentProject,
+        activeFloorId,
+        sourcePlacementId,
+        targetPlacementId,
+      )
       const routes = buildManualPlanWireRoutesForPlacementMove(
         currentProject,
         activeFloorId,
         sourcePlacementId,
         targetPlacementId,
       )
-      if (!routes || routes.length === 0) return
+      if (!otherRoute && (!routes || routes.length === 0)) return
       useProjectStore.setState((state: ProjectState) => {
         const project = state.currentProject
         if (!project) return
         const planWiring = ensureMutablePlanWiringForProject(project)
-        planWiring.routes = replacePlanWireSpanRoutes(planWiring.routes, routes)
+        if (otherRoute) {
+          planWiring.routes = [
+            ...planWiring.routes.filter((route) => route.id !== otherRoute.id),
+            otherRoute,
+          ]
+          planWiring.visibility = {
+            ...planWiring.visibility,
+            wiresVisible: true,
+            otherVisible: true,
+          }
+        } else if (routes) {
+          planWiring.routes = replacePlanWireSpanRoutes(planWiring.routes, routes)
+          const kind = routes[0]?.kind
+          planWiring.visibility = {
+            ...planWiring.visibility,
+            wiresVisible: true,
+            ...(kind === 'lighting-control' ? { lightingVisible: true } : { socketsVisible: true }),
+          }
+        }
         state.isDirty = true
       })
     },
     [activeFloorId, currentProject],
+  )
+
+  const removeManualOtherPlanWiresFromOrigin = useCallback(
+    (sourcePlacementId: string) => {
+      if (!activeFloorId) return false
+      let removed = false
+      useProjectStore.setState((state: ProjectState) => {
+        const project = state.currentProject
+        if (!project) return
+        const planWiring = ensureMutablePlanWiringForProject(project)
+        const routes = planWiring.routes.filter(
+          (route) =>
+            !(
+              route.source === 'manual' &&
+              route.kind === 'other' &&
+              route.floorId === activeFloorId &&
+              route.from.placementId === sourcePlacementId
+            )
+        )
+        if (routes.length === planWiring.routes.length) return
+        planWiring.routes = routes
+        state.isDirty = true
+        removed = true
+      })
+      return removed
+    },
+    [activeFloorId],
   )
 
   const hideSocketWireRouteForPlacementDrop = useCallback(
@@ -110,7 +162,8 @@ export function usePlanWireEditing({
     insertPlanWireWaypoint,
     movePlanWireWaypoint,
     removePlanWireWaypoint,
-    reorderPlanWirePlacement,
+    drawPlanWire,
+    removeManualOtherPlanWiresFromOrigin,
     hideSocketWireRouteForPlacementDrop,
   }
 }

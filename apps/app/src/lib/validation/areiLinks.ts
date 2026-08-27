@@ -60,6 +60,10 @@ const VALIDATION_AREI_LINKS: Record<string, ValidationAreiLink> = {
     path: '/issues/protection',
     hash: 'main-rcd',
   },
+  'be.areibook1.2025.backup-supply-rcd': {
+    path: '/issues/protection',
+    hash: 'main-rcd',
+  },
   'be.areibook1.2025.board-global-isolation': {
     path: '/issues/protection',
     hash: 'protection-checks',

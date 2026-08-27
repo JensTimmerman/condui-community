@@ -425,11 +425,11 @@
     "newProjectCooldownLocalWarning": "Your free cloud slot is cooling down until {{date}}. This project will be created locally.",
     "createFailedTitle": "Could not create project",
     "createFailedMessage": "Something went wrong. Please try again.",
-    "registrationRequiredCreateTitle": "Account needed",
-    "registrationRequiredCreateMessage": "Create a free account to make your own projects. The demo project remains available without an account.",
-    "registrationRequiredCreateWithLocalProjects": "Create a free account to make new projects. Your existing local projects stay on this device and will be available after registration.",
-    "registrationRequiredActionMessage": "Create a free account to create, import, and organize projects. The demo project remains available without an account.",
-    "registrationRequiredActionWithLocalProjects": "Create a free account to create, import, and organize projects. Your existing local projects stay on this device and will be available after registration.",
+    "registrationRequiredCreateTitle": "Register to create a project",
+    "registrationRequiredCreateMessage": "New projects require a free account. You can still open the demo project without registering.",
+    "registrationRequiredCreateWithLocalProjects": "New projects require a free account. Your existing local projects remain available on this device and will be moved to your account after registration.",
+    "registrationRequiredActionMessage": "Register to create, import, and organize projects. You can still open the demo project without registering.",
+    "registrationRequiredActionWithLocalProjects": "Register to create, import, and organize projects. Your existing local projects remain available on this device and will be moved to your account after registration.",
     "registrationRequiredCreateCta": "Register",
     "moveToLocal": "Move to local",
     "openingTitle": "Loading…",
@@ -1630,6 +1630,11 @@
           "details": "Under recent AREI revisions, the main residual current device at the origin of the installation must be at least type A (sensitive to pulsating DC). Replace AC-only devices with type A, F or B."
         }
       },
+      "backupSupplyRcdCompliance": {
+        "message": "Backup supply has no equivalent RCD protection",
+        "details": "The backup path needs an RCD or RCBO with a configured sensitivity of at most 300 mA and a nominal current of at least 40 A.",
+        "remediation": "Add a compliant RCD or RCBO on the backup path between the inverter or changeover and the backed-up panel."
+      },
       "panelHasGlobalIsolation": {
         "message": "Panel {{panelName}} has no device that disconnects all active conductors",
         "details": "Every distribution board must be disconnectable by a scheidingsinrichting that disconnects all active conductors, either locally in the panel or via an upstream feeder device."
@@ -1845,6 +1850,9 @@
     "categoryPanels": "Distribution boards",
     "categoryWires": "Wires",
     "wireLengthTotal": "{{length}} total",
+    "wireLengthEstimate": "Rough plan estimate: {{length}}",
+    "wireLengthEstimateShort": "est. {{length}}",
+    "wireLengthEstimateHint": "Drawn or calibrated plan: straight-line distance ×2; +3 m for each floor change.",
     "devicesCount": "devices",
     "typesCount": "types",
     "exportCsv": "Export to CSV",
@@ -1996,7 +2004,8 @@
     "gridFeed": "Grid feed",
     "backupFeed": "Backup feed",
     "gridMarker": "Grid",
-    "backupMarker": "Backup"
+    "backupMarker": "Backup",
+    "switchableBackupMarker": "Backup/Grid"
   },
   "wallProperties": {
     "title": "Wall properties",

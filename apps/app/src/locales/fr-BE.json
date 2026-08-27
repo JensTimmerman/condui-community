@@ -425,11 +425,11 @@
     "newProjectCooldownLocalWarning": "Votre emplacement cloud gratuit est en pause jusqu'au {{date}}. Ce projet sera créé en local.",
     "createFailedTitle": "Impossible de créer le projet",
     "createFailedMessage": "Une erreur s'est produite. Veuillez réessayer.",
-    "registrationRequiredCreateTitle": "Compte requis",
-    "registrationRequiredCreateMessage": "Créez un compte gratuit pour créer vos propres projets. Le projet de démonstration reste disponible sans compte.",
-    "registrationRequiredCreateWithLocalProjects": "Créez un compte gratuit pour créer de nouveaux projets. Vos projets locaux restent sur cet appareil et seront disponibles après inscription.",
-    "registrationRequiredActionMessage": "Créez un compte gratuit pour créer, importer et organiser des projets. Le projet de démonstration reste disponible sans compte.",
-    "registrationRequiredActionWithLocalProjects": "Créez un compte gratuit pour créer, importer et organiser des projets. Vos projets locaux restent sur cet appareil et seront disponibles après inscription.",
+    "registrationRequiredCreateTitle": "Inscrivez-vous pour créer un projet",
+    "registrationRequiredCreateMessage": "Les nouveaux projets nécessitent un compte gratuit. Vous pouvez toujours ouvrir le projet de démonstration sans vous inscrire.",
+    "registrationRequiredCreateWithLocalProjects": "Les nouveaux projets nécessitent un compte gratuit. Vos projets locaux existants restent disponibles sur cet appareil et seront transférés vers votre compte après l'inscription.",
+    "registrationRequiredActionMessage": "Inscrivez-vous pour créer, importer et organiser des projets. Vous pouvez toujours ouvrir le projet de démonstration sans vous inscrire.",
+    "registrationRequiredActionWithLocalProjects": "Inscrivez-vous pour créer, importer et organiser des projets. Vos projets locaux existants restent disponibles sur cet appareil et seront transférés vers votre compte après l'inscription.",
     "registrationRequiredCreateCta": "S'inscrire",
     "moveToLocal": "Déplacer en local",
     "openingTitle": "Chargement…",
@@ -1625,6 +1625,11 @@
           "details": "Selon les dernières révisions du RGIE, le dispositif différentiel principal à l'origine de l'installation doit être au moins de type A (sensible au courant continu pulsé). Remplacez les appareils uniquement AC par des appareils de type A, F ou B."
         }
       },
+      "backupSupplyRcdCompliance": {
+        "message": "L'alimentation de secours ne dispose pas d'une protection différentielle équivalente",
+        "details": "Le chemin de secours nécessite un différentiel ou un disjoncteur différentiel avec une sensibilité configurée d'au plus 300 mA et un courant nominal d'au moins 40 A.",
+        "remediation": "Ajoutez un différentiel ou un disjoncteur différentiel conforme sur le chemin de secours entre l'onduleur ou l'inverseur et le tableau alimenté."
+      },
       "panelHasGlobalIsolation": {
         "message": "Le tableau {{panelName}} n'a pas d'appareil qui coupe tous les conducteurs actifs",
         "details": "Chaque tableau de distribution doit pouvoir être isolé par un dispositif de sectionnement coupant tous les conducteurs actifs, localement dans le tableau ou en amont sur son alimentation."
@@ -1827,6 +1832,9 @@
     "categoryPanels": "Tableaux",
     "categoryWires": "Câbles",
     "wireLengthTotal": "{{length}} au total",
+    "wireLengthEstimate": "Estimation approximative basée sur le plan : {{length}}",
+    "wireLengthEstimateShort": "estim. {{length}}",
+    "wireLengthEstimateHint": "Plan dessiné ou étalonné : distance à vol d’oiseau ×2 ; +3 m à chaque changement d’étage.",
     "devicesCount": "dispositifs",
     "typesCount": "types",
     "exportCsv": "Exporter en CSV",
@@ -1978,7 +1986,8 @@
     "gridFeed": "Alimentation réseau",
     "backupFeed": "Alimentation de secours",
     "gridMarker": "Réseau",
-    "backupMarker": "Secours"
+    "backupMarker": "Secours",
+    "switchableBackupMarker": "Secours/Réseau"
   },
   "wallProperties": {
     "title": "Propriétés du mur",

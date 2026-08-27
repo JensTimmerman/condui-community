@@ -38,6 +38,7 @@ import {
 } from '@/lib/panel/panelBusSections'
 import { PANEL_BUS_FEED_GAP } from '@/lib/panel/panelBusFeedPreview'
 import { getDirectConverterChangeoverInsertIndex } from '@/lib/supplyAssembly/directConverterBackupUpgrade'
+import { getSymbolById } from '@/lib/symbols'
 import { getSecondaryBusSectionBoundaryX } from './mainBusSectionBoundary'
 
 function getProtectionBusSectionIdForLayoutNode(panel: Panel, node: LayoutNode): string {
@@ -90,6 +91,8 @@ export type DropTargetType =
 export interface SymbolVisual {
   type: 'symbol'
   symbolId: string
+  /** Clockwise artwork rotation from the symbol library's upright orientation. */
+  rotationDeg?: number
   label?: string
   opacity?: number
   /** Whether this endpoint is the final symbol on its horizontal branch. */
@@ -189,6 +192,10 @@ export interface LayoutNode {
   children: LayoutNode[]
   /** Nested child X positions on secondary bus nodes (insertion logic metadata). */
   nestedChildXs?: number[]
+  /** Horizontal mirror axis for a left-to-right supply layout. Present on its panel root. */
+  horizontalMirrorAxisX?: number
+  /** Whole detached frame or only the supply assembly of an ordinary panel. */
+  horizontalMirrorScope?: 'panel' | 'supply'
 }
 
 /**
@@ -222,6 +229,8 @@ import {
   getPanelDiagramId,
   hasPanelAttachmentOnSecondaryBus,
   isPanelOnlySubPanelFeeder,
+  mirrorDetachedSupplyPanelLayoutHorizontally,
+  mirrorInlineSupplyPanelLayoutHorizontally,
 } from './bottomUpLayout'
 
 /** Minimum vertical segment length on sub-panel incoming feeder (matches virtual MCB anchor math). */
@@ -275,12 +284,153 @@ function protectionTypeToSymbolId(type?: string): string {
 }
 
 export function buildLayoutTree(layout: BottomUpLayoutResult): LayoutTree {
-  const panelNodes: LayoutNode[] = layout.panels.map((panelLayout) => buildPanelNode(panelLayout))
+  const panelNodes: LayoutNode[] = layout.panels.map((panelLayout) =>
+    buildPanelNodeForVisualDirection(panelLayout)
+  )
 
   return {
     panels: panelNodes,
     totalWidth: layout.totalWidth,
     totalHeight: layout.totalHeight,
+  }
+}
+
+function layoutNodeUsesAnchorX(node: LayoutNode): boolean {
+  return (
+    (node.visual?.type === 'label' && node.visual.align === 'center') ||
+    node.type === 'supply' ||
+    node.type === 'ground' ||
+    node.type === 'rcd' ||
+    node.type === 'mcb' ||
+    node.type === 'endpoint' ||
+    node.type === 'trunkDevice'
+  )
+}
+
+/** Mirror one positioned scene node while leaving its text and symbol artwork readable. */
+function mirrorLayoutNodeSelfHorizontally(
+  node: LayoutNode,
+  axisX: number,
+  mirrorSymbolRotation = false
+): void {
+  node.bounds.x = layoutNodeUsesAnchorX(node)
+    ? axisX * 2 - node.bounds.x
+    : axisX * 2 - node.bounds.x - node.bounds.width
+
+  if (node.visual?.type === 'label') {
+    if (node.visual.align === 'left') node.visual.align = 'right'
+    else if (node.visual.align === 'right') node.visual.align = 'left'
+  } else if (node.visual?.type === 'symbol') {
+    if (mirrorSymbolRotation && node.visual.rotationDeg != null) {
+      node.visual.rotationDeg = -node.visual.rotationDeg
+    }
+    if (node.visual.mirrorHorizontally != null) {
+      node.visual.mirrorHorizontally = !node.visual.mirrorHorizontally
+    }
+    const oldMinimumLeftX = node.visual.bottomLabelMinimumLeftX
+    const oldMaximumRightX = node.visual.bottomLabelMaximumRightX
+    node.visual.bottomLabelMinimumLeftX =
+      oldMaximumRightX == null ? undefined : axisX * 2 - oldMaximumRightX
+    node.visual.bottomLabelMaximumRightX =
+      oldMinimumLeftX == null ? undefined : axisX * 2 - oldMinimumLeftX
+  }
+
+  if (node.nestedChildXs) {
+    node.nestedChildXs = node.nestedChildXs.map((x) => axisX * 2 - x)
+  }
+}
+
+/** Mirror positioned scene nodes while leaving their text and symbol artwork readable. */
+export function mirrorLayoutNodeHorizontally(
+  node: LayoutNode,
+  axisX: number,
+  mirrorSymbolRotation = false
+): void {
+  mirrorLayoutNodeSelfHorizontally(node, axisX, mirrorSymbolRotation)
+  node.children.forEach((child) =>
+    mirrorLayoutNodeHorizontally(child, axisX, mirrorSymbolRotation)
+  )
+}
+
+function isSupplyAssemblyLayoutNode(node: LayoutNode): boolean {
+  return (
+    node.type === 'supply' ||
+    node.type === 'ground' ||
+    node.id.startsWith('supplyTrunkDevice-') ||
+    node.id.startsWith('groundTrunkDevice-') ||
+    node.id.startsWith('supply-wire-') ||
+    node.id.startsWith('supply-changeover-') ||
+    node.id.startsWith('supply-direct-converter-') ||
+    node.id === 'supply-continuation-label' ||
+    node.id.startsWith('feed-output-')
+  )
+}
+
+function isConverterBackupCircuitRoot(node: LayoutNode): boolean {
+  if (node.type !== 'mcb' && node.type !== 'rcd') return false
+  const protection = node.domainRef as ProtectionDevice | undefined
+  return (
+    protection?.circuits?.some((circuit) => circuit.supplySource?.kind === 'converter-backup') ===
+    true
+  )
+}
+
+export function mirrorSupplyAssemblyLayoutNodesHorizontally(
+  node: LayoutNode,
+  axisX: number,
+  converterBackupCircuitIds?: Set<string>,
+  mirrorSymbolRotation = false
+): void {
+  const backupCircuitIds =
+    converterBackupCircuitIds ??
+    (node.type === 'panel'
+      ? new Set(
+          ((node.domainRef as Panel | undefined)?.protections ?? []).flatMap((protection) =>
+            (protection.circuits ?? [])
+              .filter((circuit) => circuit.supplySource?.kind === 'converter-backup')
+              .map((circuit) => circuit.id)
+          )
+        )
+      : new Set<string>())
+  if (isConverterBackupCircuitRoot(node)) {
+    mirrorLayoutNodeHorizontally(node, axisX, mirrorSymbolRotation)
+    return
+  }
+  if (
+    isSupplyAssemblyLayoutNode(node) ||
+    (node.id.startsWith('label-') && backupCircuitIds.has(node.id.slice('label-'.length)))
+  ) {
+    mirrorLayoutNodeSelfHorizontally(node, axisX, mirrorSymbolRotation)
+  }
+  node.children.forEach((child) =>
+    mirrorSupplyAssemblyLayoutNodesHorizontally(
+      child,
+      axisX,
+      backupCircuitIds,
+      mirrorSymbolRotation
+    )
+  )
+}
+
+function buildPanelNodeForVisualDirection(panelLayout: BottomUpPanelLayout): LayoutNode {
+  if (panelLayout.supplyFlowDirection !== 'left-to-right') return buildPanelNode(panelLayout)
+
+  const scope = panelLayout.frameRole === 'supply' ? 'panel' : 'supply'
+  const axisX = panelLayout.supplyMirrorAxisX ?? panelLayout.frame.x + panelLayout.frame.width / 2
+  const mirrorPanelLayout =
+    scope === 'panel'
+      ? mirrorDetachedSupplyPanelLayoutHorizontally
+      : mirrorInlineSupplyPanelLayoutHorizontally
+  mirrorPanelLayout(panelLayout)
+  try {
+    const panelNode = buildPanelNode(panelLayout)
+    if (scope === 'panel') mirrorLayoutNodeHorizontally(panelNode, axisX)
+    else mirrorSupplyAssemblyLayoutNodesHorizontally(panelNode, axisX)
+    panelNode.horizontalMirrorAxisX = axisX
+    panelNode.horizontalMirrorScope = scope
+    return panelNode
+  } finally {
+    mirrorPanelLayout(panelLayout)
   }
 }
 
@@ -351,6 +501,15 @@ function buildPanelNode(panelLayout: BottomUpPanelLayout): LayoutNode {
       (sd) => sd.device.id === stdElement.trunkDeviceId
     )
     if (supplyDeviceData) {
+      const supplyDevice = supplyDeviceData.device
+      const isHorizontalSupplyDevice = !(
+        supplyDevice.supplyPath === 'converter-grid' &&
+        supplyDevice.converterGridPlacement === 'input-leg'
+      )
+      const rotatesProtectionArtwork =
+        isHorizontalSupplyDevice &&
+        supplyDevice.type === 'protection' &&
+        getSymbolById(supplyDevice.symbol)?.category !== 'switches'
       children.push({
         id: stdElement.id,
         type: 'trunkDevice',
@@ -364,8 +523,9 @@ function buildPanelNode(panelLayout: BottomUpPanelLayout): LayoutNode {
         domainRef: supplyDeviceData.device,
         visual: {
           type: 'symbol',
-          symbolId: supplyDeviceData.device.symbol || 'energy_meter',
-          label: supplyDeviceData.device.label,
+          symbolId: supplyDevice.symbol || 'energy_meter',
+          label: supplyDevice.label,
+          rotationDeg: rotatesProtectionArtwork ? 90 : undefined,
         },
         hitZone: {
           // Branch devices keep their own insertion lane. The converter itself remains
@@ -763,23 +923,19 @@ function buildMainBusNode(
   if (supply && mainBusElement.position) {
     const pad = 10
     const supplyDevicesSorted = [...(panelLayout.supplyDevices ?? [])]
-      .filter(
-        ({ device }) => {
-          if (
-            device.supplyPath === 'converter-branch' &&
-            device.converterGridInputConnected === false
-          ) {
-            return false
-          }
-          return (
-            panelLayout.supplyChangeoverBranches ||
-            !panelLayout.supplyConverterBranch ||
-            !['converter-grid', 'converter-dc', 'converter-dc-top'].includes(
-              device.supplyPath ?? ''
-            )
-          )
+      .filter(({ device }) => {
+        if (
+          device.supplyPath === 'converter-branch' &&
+          device.converterGridInputConnected === false
+        ) {
+          return false
         }
-      )
+        return (
+          panelLayout.supplyChangeoverBranches ||
+          !panelLayout.supplyConverterBranch ||
+          !['converter-grid', 'converter-dc', 'converter-dc-top'].includes(device.supplyPath ?? '')
+        )
+      })
       .sort((a, b) => a.x - b.x)
     const hasSupplyDevices = supplyDevicesSorted.length > 0
 
@@ -1249,9 +1405,7 @@ function buildMainBusNode(
             previousX,
             candidate.x,
             changeoverBranches.upperY,
-            candidate.device.supplyPath === 'backup'
-              ? changeover.feedIndex
-              : candidate.feedIndex,
+            candidate.device.supplyPath === 'backup' ? changeover.feedIndex : candidate.feedIndex,
             'root',
             'supplyBackupOutputWire'
           )
@@ -1303,7 +1457,7 @@ function buildMainBusNode(
       // Modular changeovers expose their own lane-aware AC hit zones above. The direct-converter
       // AC zones describe different sections and must not overlap those changeover targets.
       const backup = panelLayout.supplyConverterBackup
-      if (!changeoverBranches && backup && !backup.circuitId && backup.x2 > backup.x1) {
+      if (!changeoverBranches && backup && backup.x2 > backup.x1) {
         children.unshift({
           id: `supply-direct-converter-backup-slot-${panelLayout.panel.id}`,
           type: 'wire',
@@ -1483,8 +1637,7 @@ function buildMainBusNode(
       )
       if ((dcDevices.length > 0 || dcTopDevices.length > 0) && converterBranch.dcTopY != null) {
         if (dcTopDevices.length === 0) {
-          const emptyTopDropY =
-            converter.y - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 - 10
+          const emptyTopDropY = converter.y - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 - 10
           pushDcInsertionSegment(
             'top',
             0,
@@ -2277,6 +2430,7 @@ function buildMcbNode(
       type: 'symbol',
       symbolId: protectionSymbolId,
       label: circuitLayout.protection.label,
+      rotationDeg: isHorizontalConverterBackup ? 90 : undefined,
     },
     hitZone: {
       type: 'protection',
@@ -2515,7 +2669,7 @@ function buildBranchNode(
   // Bounds include full horizontal wire: from trunk to end of branch (so drop on wire = circuit)
   const pad = 10
   const wireLeft = Math.min(branch.trunkX, branch.branchX)
-  const wireRight = branch.branchX + branch.branchWidth
+  const wireRight = Math.max(branch.trunkX, branch.branchX + branch.branchWidth)
   const wireTop = branch.branchY - pad
   const wireHeight = pad * 2
 

@@ -26,6 +26,8 @@ import type {
   PlanWiringModel,
   PlanWiringVisibility,
 } from '@/types/schema'
+import { getAllSupplyTrunkDevices } from '@/lib/feedTopology'
+import { findMainPanel } from '@/lib/panel/panelTree'
 
 type PlanWiringProject = ProjectWithOptionalV2Electrical &
   ProjectWithOptionalV2Building &
@@ -108,11 +110,7 @@ function endpointIsLight(endpoint: Endpoint): boolean {
 }
 
 export function endpointCanStartPlanWire(endpoint: Endpoint | null | undefined): boolean {
-  if (!endpoint) return false
-  const symbol = endpointSymbol(endpoint)
-  return Boolean(
-    symbol && (SOCKET_SYMBOLS.has(symbol) || LIGHT_SYMBOLS.has(symbol) || SWITCH_SYMBOLS.has(symbol))
-  )
+  return Boolean(endpoint)
 }
 
 export function getPlanWireKind(from: Endpoint, to: Endpoint): PlanWireKind {
@@ -234,7 +232,9 @@ function buildRoutesForCircuit(
       if (!from || !to) continue
       if (!placementsShareFloor(floorId, from, to)) continue
       const kind = getPlanWireKind(from.endpoint, to.endpoint)
-      if (kind === 'sockets') continue
+      // Lighting and socket spans are the only default plan wiring. Every other
+      // electrical connection is an explicit user-drawn trace.
+      if (kind === 'sockets' || kind === 'other') continue
       if (!includeKinds.has(kind)) continue
       routes.push(routeFromPair(panel, circuit, sequence.branchId, floorId, from, to))
     }
@@ -327,6 +327,173 @@ function findCircuitForPlacements(
     if (nested) return nested
   }
   return null
+}
+
+type PlacementCircuitMatch = {
+  panel: Panel
+  circuit: Circuit
+  branchId: string | undefined
+  endpoint: EndpointPlacement
+  trunkDeviceId?: string
+  isSupplyDevice?: boolean
+}
+
+function findCircuitMatchForPlacement(
+  project: PlanWiringProject,
+  panels: Panel[],
+  floorId: string,
+  placementId: string
+): PlacementCircuitMatch | null {
+  for (const panel of panels) {
+    const circuits = [
+      ...panel.circuits,
+      ...panel.protections.flatMap((protection) => protection.circuits ?? []),
+    ]
+    for (const circuit of circuits) {
+      for (const endpoint of circuit.endpoints) {
+        const placement = placementsOnFloor(endpoint, floorId).find(
+          (candidate) => candidate.id === placementId
+        )
+        if (!placement) continue
+        const branch = circuit.branches?.find((candidate) =>
+          candidate.endpointIds.includes(endpoint.id)
+        )
+        return { panel, circuit, branchId: branch?.id, endpoint: { endpoint, placement } }
+      }
+    }
+    const nested = findCircuitMatchForPlacement(project, panel.subPanels ?? [], floorId, placementId)
+    if (nested) return nested
+  }
+  const mainPanel = findMainPanel(panels)
+  if (!mainPanel) return null
+  for (const device of getAllSupplyTrunkDevices(project)) {
+    const placement = device.placements?.find(
+      (candidate) => candidate.floorId === floorId && candidate.id === placementId
+    )
+    if (!placement) continue
+    return {
+      panel: mainPanel,
+      circuit: { id: `supply:${mainPanel.id}`, code: 'SUPPLY', kind: 'other', cable: { kind: 'XVB', conductors: 2, sectionMm2: 1 }, endpoints: [] },
+      branchId: undefined,
+      endpoint: {
+        endpoint: { id: device.id, type: 'fixed_appliance', label: device.label, symbol: device.symbol, placements: device.placements ?? [] },
+        placement,
+      },
+      trunkDeviceId: device.id,
+      isSupplyDevice: true,
+    }
+  }
+  return null
+}
+
+function panelHasElectricalPathTo(panels: Panel[], sourcePanelId: string, targetPanelId: string): boolean {
+  const findPanel = (candidates: Panel[]): Panel | undefined => {
+    for (const panel of candidates) {
+      if (panel.id === sourcePanelId) return panel
+      const nested = findPanel(panel.subPanels ?? [])
+      if (nested) return nested
+    }
+    return undefined
+  }
+  const source = findPanel(panels)
+  if (!source) return false
+  if (source.id === targetPanelId) return true
+
+  const visit = (panel: Panel): boolean => {
+    for (const child of panel.subPanels ?? []) {
+      const isFedByThisPanel = panel.protections.some(
+        (protection) => protection.subPanelId === child.id
+      )
+      if (!isFedByThisPanel) continue
+      if (child.id === targetPanelId || visit(child)) return true
+    }
+    return false
+  }
+
+  return visit(source)
+}
+
+function isCircuitEntryEndpoint(match: PlacementCircuitMatch): boolean {
+  const endpointIds =
+    match.circuit.branches && match.circuit.branches.length > 0
+      ? match.circuit.branches.map((branch) => branch.endpointIds[0]).filter(Boolean)
+      : [match.circuit.endpoints[0]?.id]
+  return endpointIds.includes(match.endpoint.endpoint.id)
+}
+
+function isImmediateCircuitSuccessor(
+  source: PlacementCircuitMatch,
+  target: PlacementCircuitMatch
+): boolean {
+  if (source.circuit.id !== target.circuit.id) return false
+  const endpointIds =
+    source.circuit.branches && source.circuit.branches.length > 0
+      ? source.circuit.branches.find((branch) => branch.id === source.branchId)?.endpointIds
+      : source.circuit.endpoints.map((endpoint) => endpoint.id)
+  if (!endpointIds) return false
+  const sourceIndex = endpointIds.indexOf(source.endpoint.endpoint.id)
+  return sourceIndex >= 0 && endpointIds[sourceIndex + 1] === target.endpoint.endpoint.id
+}
+
+/**
+ * Build an explicit situation-plan wire for non-default connections. Plan wires are
+ * undirected: either end may be dragged first. A panel is electrically adjacent to
+ * immediate circuit-entry endpoints in its own or a downstream board. Protection
+ * devices remain part of that path even when they have no plan placement; a later
+ * endpoint in a branch is not directly connected to the panel.
+ */
+export function buildManualOtherPlanWireRoute(
+  project: PlanWiringProject,
+  floorId: string,
+  sourcePlacementId: string,
+  targetPlacementId: string
+): PlanWireRoute | null {
+  if (sourcePlacementId === targetPlacementId) return null
+  const panels = getElectricalPanelsFromProject(project)
+  const source = findCircuitMatchForPlacement(project, panels, floorId, sourcePlacementId)
+  const target = findCircuitMatchForPlacement(project, panels, floorId, targetPlacementId)
+  if (!source || !target) return null
+  if (getPlanWireKind(source.endpoint.endpoint, target.endpoint.endpoint) !== 'other') return null
+
+  const isDirectPanelConnection = (
+    panelSide: PlacementCircuitMatch,
+    otherSide: PlacementCircuitMatch
+  ) => {
+    const panelId =
+      panelSide.endpoint.endpoint.symbol === 'panel_distribution'
+        ? panelSide.endpoint.endpoint.panelId ?? panelSide.panel.id
+        : null
+    return Boolean(
+      panelId &&
+        panelHasElectricalPathTo(panels, panelId, otherSide.panel.id) &&
+        isCircuitEntryEndpoint(otherSide)
+    )
+  }
+  const hasElectricalPath =
+    isDirectPanelConnection(source, target) ||
+    isDirectPanelConnection(target, source) ||
+    isImmediateCircuitSuccessor(source, target) ||
+    isImmediateCircuitSuccessor(target, source) ||
+    (source.isSupplyDevice === true && target.isSupplyDevice === true) ||
+    (source.isSupplyDevice === true && target.endpoint.endpoint.symbol === 'panel_distribution') ||
+    (target.isSupplyDevice === true && source.endpoint.endpoint.symbol === 'panel_distribution')
+  if (!hasElectricalPath) return null
+
+  const route: PlanWireRoute = {
+    ...routeFromPair(
+      target.panel,
+      target.circuit,
+      target.branchId,
+      floorId,
+      source.endpoint,
+      target.endpoint,
+      'manual'
+    ),
+    kind: 'other',
+  }
+  if (source.trunkDeviceId) route.from.trunkDeviceId = source.trunkDeviceId
+  if (target.trunkDeviceId) route.to.trunkDeviceId = target.trunkDeviceId
+  return route
 }
 
 function collectIncomingFeederCounts(routes: PlanWireRoute[]): Map<string, number> {
@@ -843,6 +1010,9 @@ function normalizePlanWireEndpointRef(
   floorId: string,
   index: PlanWiringIndex
 ): PlanWireRoute['from'] | null {
+  // Supply assemblies keep their physical devices outside circuit endpoints.
+  // The device id plus placement id is the stable anchor for these manual traces.
+  if (ref.trunkDeviceId) return { ...ref, endpointId: ref.trunkDeviceId }
   if (!index.endpointIds.has(ref.endpointId)) return null
   if (!ref.placementId) return { endpointId: ref.endpointId }
   const placement = index.placementById.get(ref.placementId)
@@ -912,6 +1082,11 @@ function manualPlanWireRouteIsStillLegal(project: PlanWiringProject, route: Plan
   const fromPlacementId = route.from.placementId
   const toPlacementId = route.to.placementId
   if (!fromPlacementId || !toPlacementId) return true
+  if (route.kind === 'other') {
+    return Boolean(
+      buildManualOtherPlanWireRoute(project, route.floorId, fromPlacementId, toPlacementId)
+    )
+  }
   if (route.kind !== 'lighting-control') return true
   const rebuilt = buildManualPlanWireRoutesForPlacementMove(
     project,

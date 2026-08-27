@@ -26,6 +26,11 @@ import { DOMOTICA_MAX_ENDPOINT_OUTPUTS, DOMOTICA_MIN_ENDPOINT_OUTPUTS } from '@/
 /** Options for findDropTarget / findDropTargetWithDebug (all optional). */
 export interface FindDropTargetOptions {
   /**
+   * Accept any direct-converter AC wire as the single canonical modular-changeover slot.
+   * This is deliberately opt-in so other symbols retain their normal wire semantics.
+   */
+  normalizeDirectConverterChangeoverDrop?: boolean
+  /**
    * While placing a protection, treat the body of a protection already attached
    * to a secondary bus as the deterministic slot immediately after that item.
    * The dedicated circuit-nest zone above it remains available for deeper nesting.
@@ -288,11 +293,13 @@ const SECONDARY_BUS_PREVIEW_DOT_RADIUS = 8
 function findDirectConverterChangeoverSlotInPanel(
   panelNode: LayoutNode,
   position: Point,
-  ctx: WalkContext
+  ctx: WalkContext,
+  expandAcrossConverterAcPaths = false
 ): DropTarget | null {
-  const visit = (node: LayoutNode): DropTarget | null => {
-    if (node.hitZone?.supplyConverterChangeoverSlot && isPointInCore(node, position)) {
-      return {
+  let canonicalTarget: DropTarget | null = null
+  const findCanonical = (node: LayoutNode): void => {
+    if (node.hitZone?.supplyConverterChangeoverSlot) {
+      canonicalTarget = {
         type: 'supplyWire',
         panelId: node.hitZone.supplyPanelId ?? ctx.panelId,
         diagramId: ctx.diagramId,
@@ -301,13 +308,22 @@ function findDirectConverterChangeoverSlotInPanel(
         supplyConverterChangeoverSlot: true,
       }
     }
-    for (const child of node.children) {
-      const result = visit(child)
-      if (result) return result
-    }
-    return null
+    node.children.forEach(findCanonical)
   }
-  return visit(panelNode)
+  findCanonical(panelNode)
+  if (!canonicalTarget) return null
+
+  const isCanonicalHit = (node: LayoutNode) =>
+    node.hitZone?.supplyConverterChangeoverSlot && isPointInCore(node, position)
+  const matchesExpandedAcPath = (node: LayoutNode) =>
+    expandAcrossConverterAcPaths &&
+    (node.hitZone?.type === 'supplyConverterGridWire' ||
+      node.hitZone?.type === 'supplyConverterBackupWire') &&
+    isPointInCore(node, position)
+  const matches = (node: LayoutNode): boolean =>
+    isCanonicalHit(node) || matchesExpandedAcPath(node) || node.children.some(matches)
+
+  return matches(panelNode) ? canonicalTarget : null
 }
 
 /**
@@ -470,7 +486,8 @@ export function findDropTarget(
   const directChangeoverSlot = findDirectConverterChangeoverSlotInPanel(
     panelNode,
     position,
-    ctx
+    ctx,
+    options?.normalizeDirectConverterChangeoverDrop
   )
   if (directChangeoverSlot) return directChangeoverSlot
 
@@ -608,7 +625,8 @@ export function findDropTargetWithDebug(
   const directChangeoverSlot = findDirectConverterChangeoverSlotInPanel(
     panelNode,
     position,
-    ctx
+    ctx,
+    options?.normalizeDirectConverterChangeoverDrop
   )
   if (directChangeoverSlot) {
     return { target: directChangeoverSlot, debug: { panelId: panelNode.domainId, path: debugPath } }

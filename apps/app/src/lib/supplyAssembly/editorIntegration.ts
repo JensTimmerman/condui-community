@@ -696,8 +696,12 @@ export function attachDirectConverterBackupCircuit(
   )
   const protectionNodeId = `converter-backup-protection-${protection.id}`
   const handoffNodeId = `converter-backup-handoff-${circuit.id}`
+  const trunkDevices = [...(circuit.trunkDevices ?? [])].sort(
+    (left, right) => left.trunkPosition - right.trunkPosition
+  )
+  const serialNodeIds = [protectionNodeId, ...trunkDevices.map((device) => device.id)]
   const nextNodes = assembly.nodes
-    .filter((node) => node.id !== protectionNodeId && node.id !== handoffNodeId)
+    .filter((node) => !serialNodeIds.includes(node.id) && node.id !== handoffNodeId)
     .map((node) => ({
       ...node,
       properties: { ...node.properties },
@@ -730,6 +734,7 @@ export function attachDirectConverterBackupCircuit(
         port('load', 'serial-load-side', conductors, 'passive'),
       ],
     },
+    ...trunkDevices.map((device) => supplyAcBranchNode(device, conductors)),
     {
       id: handoffNodeId,
       kind: 'panel-handoff',
@@ -746,24 +751,40 @@ export function attachDirectConverterBackupCircuit(
   ) {
     nextConverterNode.ports.push(port('backup', 'inverter-backup-ac', conductors, 'source'))
   }
-  const connectionIds = new Set([
-    `${converter.id}-to-${protectionNodeId}`,
-    `${protectionNodeId}-to-${handoffNodeId}`,
-  ])
+  const connectionIds = new Set<string>()
+  let previousNodeId = converter.id
+  let previousPortId = 'backup'
+  for (const nodeId of serialNodeIds) {
+    connectionIds.add(`${previousNodeId}-to-${nodeId}`)
+    previousNodeId = nodeId
+    previousPortId = 'load'
+  }
+  connectionIds.add(`${previousNodeId}-to-${handoffNodeId}`)
+  const serialChainNodeIds = new Set([...serialNodeIds, handoffNodeId])
   const nextConnections = assembly.connections.filter(
-    (candidate) => !connectionIds.has(candidate.id)
+    (candidate) =>
+      !connectionIds.has(candidate.id) &&
+      !candidate.endpoints.some((endpoint) => serialChainNodeIds.has(endpoint.nodeId))
   )
+  previousNodeId = converter.id
+  previousPortId = 'backup'
+  serialNodeIds.forEach((nodeId, index) => {
+    nextConnections.push(
+      connection(
+        `${previousNodeId}-to-${nodeId}`,
+        [previousNodeId, previousPortId],
+        [nodeId, 'source'],
+        index === 0 ? 'inverter-backup-ac' : 'load-ac',
+        conductors
+      )
+    )
+    previousNodeId = nodeId
+    previousPortId = 'load'
+  })
   nextConnections.push(
     connection(
-      `${converter.id}-to-${protectionNodeId}`,
-      [converter.id, 'backup'],
-      [protectionNodeId, 'source'],
-      'inverter-backup-ac',
-      conductors
-    ),
-    connection(
-      `${protectionNodeId}-to-${handoffNodeId}`,
-      [protectionNodeId, 'load'],
+      `${previousNodeId}-to-${handoffNodeId}`,
+      [previousNodeId, previousPortId],
       [handoffNodeId, 'in'],
       'load-ac',
       conductors

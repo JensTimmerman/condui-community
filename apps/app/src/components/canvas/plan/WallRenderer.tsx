@@ -46,6 +46,7 @@ import { SegmentMeasurementOverlay } from './SegmentMeasurementOverlay'
 import { MergedWallVolumeShape } from './MergedWallVolumeShape'
 import { getOpeningRenderMetrics } from '@/lib/plan/openingPlanScale'
 import { getWallOutlineStrokeWidth } from '@/lib/plan/wallPlanScale'
+import type { DimensionDragModifiers } from '@/lib/plan/dimensionDragGesture'
 
 type WallPointerEvent = KonvaEventObject<MouseEvent | TouchEvent>
 type WallMouseEvent = KonvaEventObject<MouseEvent>
@@ -119,12 +120,18 @@ interface WallRendererProps {
   /** Wall colour overrides from settings — pass from a DOM ancestor (required under react-konva). */
   customWallColors?: ThemeWallColors
   onSegmentLengthCommit?: (wallId: string, segmentIndex: number, lengthCm: number) => void
+  onOpeningDistanceCommit?: (
+    wallId: string,
+    openingId: string,
+    side: 'start' | 'end',
+    lengthCm: number
+  ) => void
   onSegmentDimensionDrag?: (
     wallId: string,
     segmentIndex: number,
     delta: Point2,
     phase: 'start' | 'preview' | 'commit' | 'cancel',
-    precise: boolean
+    modifiers: DimensionDragModifiers
   ) => void
 }
 
@@ -175,6 +182,7 @@ function WallRendererInner({
   previewOpening = null,
   customWallColors,
   onSegmentLengthCommit,
+  onOpeningDistanceCommit,
   onSegmentDimensionDrag,
 }: WallRendererProps) {
   const touchPrimary = useTouchPrimaryDevice()
@@ -956,9 +964,7 @@ function WallRendererInner({
           hasSelectedSegments || (hasSelectedVertices && !allPointsSelected)
         const isHovered = hoveredWallId === wall.id
         const isInvalidToolHover =
-          curved &&
-          isHovered &&
-          getCurvedWallToolHoverFeedback(interactionMode) === 'invalid'
+          curved && isHovered && getCurvedWallToolHoverFeedback(interactionMode) === 'invalid'
         const thickness = getWallThickness(wall)
         const defaultBorderColor = isInvalidToolHover
           ? invalidWallToolHoverColor
@@ -1117,12 +1123,7 @@ function WallRendererInner({
           }
           return []
         })()
-        const solidIntervals = getWallSolidIntervals(
-          wall.points,
-          wallDoors,
-          wallWindows,
-          thickness
-        )
+        const solidIntervals = getWallSolidIntervals(wall.points, wallDoors, wallWindows, thickness)
         const totalLength = getWallTotalLength(wall.points)
         const brightSelectedSegmentIndices = (() => {
           const indices = new Set<number>()
@@ -1210,14 +1211,24 @@ function WallRendererInner({
               const key = `${leftNeighbor.toFixed(6)}:${bound.start.toFixed(6)}`
               if (!seen.has(key)) {
                 seen.add(key)
-                intervals.push({ startDistance: leftNeighbor, endDistance: bound.start })
+                intervals.push({
+                  startDistance: leftNeighbor,
+                  endDistance: bound.start,
+                  openingId: bound.id,
+                  openingSide: 'start',
+                })
               }
             }
             if (rightNeighbor != null && rightNeighbor - bound.end > epsilon) {
               const key = `${bound.end.toFixed(6)}:${rightNeighbor.toFixed(6)}`
               if (!seen.has(key)) {
                 seen.add(key)
-                intervals.push({ startDistance: bound.end, endDistance: rightNeighbor })
+                intervals.push({
+                  startDistance: bound.end,
+                  endDistance: rightNeighbor,
+                  openingId: bound.id,
+                  openingSide: 'end',
+                })
               }
             }
           }
@@ -1453,6 +1464,20 @@ function WallRendererInner({
                           onSegmentLengthCommit(wall.id, segmentIndex, lengthCm)
                       : undefined
                   }
+                  onOpeningDistanceCommit={
+                    onOpeningDistanceCommit
+                      ? (interval, lengthCm) => {
+                          if (interval.openingId && interval.openingSide) {
+                            onOpeningDistanceCommit(
+                              wall.id,
+                              interval.openingId,
+                              interval.openingSide,
+                              lengthCm
+                            )
+                          }
+                        }
+                      : undefined
+                  }
                   onSegmentDimensionDrag={
                     onSegmentDimensionDrag
                       ? (segmentIndex, delta, phase, precise) =>
@@ -1521,6 +1546,7 @@ function areEqual(prev: WallRendererProps, next: WallRendererProps): boolean {
     prev.wallsListening === next.wallsListening &&
     prev.previewOpening === next.previewOpening &&
     prev.onSegmentLengthCommit === next.onSegmentLengthCommit &&
+    prev.onOpeningDistanceCommit === next.onOpeningDistanceCommit &&
     prev.onSegmentDimensionDrag === next.onSegmentDimensionDrag
   )
 }

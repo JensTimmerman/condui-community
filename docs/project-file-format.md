@@ -165,6 +165,11 @@ trunk-mounted devices such as transformers, rectifiers, inverters, and DC-DC
 converters. A missing array remains valid and means that the device has no
 situation-plan instance.
 
+Ground-trunk earthing separators are physical pairs. Each paired separator record may
+carry the same optional `earthingSeparatorPairId`; editors select and delete the pair
+as one item. Older files without this field remain valid: consecutive unpaired
+earthing separators are interpreted as legacy pairs.
+
 When an older project contains a circuit endpoint or circuit trunk device with
 symbol `junction_box` and no placement, the editor creates a visible placement
 while loading. This compatibility repair uses the circuit's known floor when

@@ -138,9 +138,11 @@ export function SupplySymbol({ x, y, panelId }: SupplySymbolProps) {
       
       {voltageLabel && (
         <Text
-          x={SYMBOL_SIZE / 2 + 6}
+          x={-SYMBOL_SIZE / 2 - 126}
           y={-4}
+          width={120}
           text={voltageLabel}
+          align="right"
           fontSize={12}
           fontFamily={fontFamily}
           fill={textColor}

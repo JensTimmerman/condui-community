@@ -238,7 +238,7 @@ export function HardwareTallyPanelContent() {
       trackGoogleAnalyticsEvent('hardware_tally_select_item', {
         selection_type: detail.selection.type,
       })
-      const nextSelection: Selection = { type: detail.selection.type, ids: detail.selection.ids }
+      const nextSelection: Selection = { ...detail.selection }
       setSelection(nextSelection)
       focusSelectionOnCanvas(nextSelection, {
         preferredCanvas: detail.selection.type === 'protection' ? 'eendraad' : undefined,
@@ -248,8 +248,16 @@ export function HardwareTallyPanelContent() {
   )
 
   return (
-    <>
-      <div className="flex-1 overflow-y-auto p-2 space-y-2">
+    <div className="flex h-full min-h-0 flex-col">
+      <div
+        className="min-h-0 flex-1 overflow-y-auto p-2 space-y-2"
+        data-tally-scroll="true"
+        style={{
+          WebkitOverflowScrolling: 'touch',
+          overscrollBehaviorY: 'contain',
+          touchAction: 'pan-y',
+        }}
+      >
         {data.length === 0 ? (
           <p className="px-3 py-4 text-sm text-gray-500 dark:text-gray-400">{t('tally.empty')}</p>
         ) : (
@@ -281,7 +289,7 @@ export function HardwareTallyPanelContent() {
           <ExportCsvButton data={data} />
         </div>
       )}
-    </>
+    </div>
   )
 }
 

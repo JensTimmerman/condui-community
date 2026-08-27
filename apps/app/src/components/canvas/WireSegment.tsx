@@ -66,7 +66,12 @@ import {
   getVisiblePhaseAssignmentLabel,
   isPhaseAssignmentLabelVisible,
 } from '@/lib/wires/phaseAssignment'
-import { getBusFeedMarkerPosition } from '@/lib/layout/busFeedMarkerGeometry'
+import {
+  BUS_FEED_MARKER_LABEL_Y,
+  getBusFeedMarkerLabelLayout,
+  getBusFeedMarkerPosition,
+} from '@/lib/layout/busFeedMarkerGeometry'
+import { panelHasModularChangeover } from '@/lib/panel/panelFeedOrganization'
 import { orderWireSegmentsForRendering } from './wireRenderOrder'
 import { wireSegmentSelectsBusSection } from '@/lib/wires/wireSelectionTarget'
 import {
@@ -293,18 +298,17 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
     : isWireSelected
   const isThick = wireSegment.type === 'trunk' || isBusBar
   const lineWidth = isThick ? 6 : 2
-  // Square caps extend half a stroke beyond each supply segment. Orthogonal segments are
-  // separate Konva lines, so this closes their corners without rounding the visible joint.
-  const lineCap: 'butt' | 'round' | 'square' = isBusBar
-    ? 'round'
-    : wireSegment.isSupplyTrunk || wireSegment.supplyConnectionId
-      ? 'square'
-      : 'butt'
+  // Supply and circuit runs both stop exactly at their derived endpoints. Busbars retain
+  // rounded ends as a separate visual convention.
+  const lineCap: 'butt' | 'round' = isBusBar ? 'round' : 'butt'
   const lineColor = colors.wireColor
   const busFeedMarkerPosition = getBusFeedMarkerPosition(wireSegment)
+  const busFeedMarkerLabelLayout = getBusFeedMarkerLabelLayout(wireSegment)
   const busFeedMarkerLabel =
     wireSegment.busFeedKind === 'backup'
-      ? t('feedOrganization.backupMarker', 'Backup')
+      ? currentProject && panelHasModularChangeover(currentProject, wireSegment.panelId)
+        ? t('feedOrganization.switchableBackupMarker', 'Backup/Grid')
+        : t('feedOrganization.backupMarker', 'Backup')
       : t('feedOrganization.gridMarker', 'Grid')
 
   const selectedColor = colors.selectionColor
@@ -747,14 +751,14 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
             fallbackStroke={lineColor}
           />
           <KonvaText
-            x={-30}
-            y={14}
-            width={60}
+            x={busFeedMarkerLabelLayout.x}
+            y={BUS_FEED_MARKER_LABEL_Y}
+            width={busFeedMarkerLabelLayout.width}
             text={busFeedMarkerLabel}
             fontSize={7}
             fontFamily={fontFamily}
             fill={lineColor}
-            align="center"
+            align={busFeedMarkerLabelLayout.align}
             listening={false}
           />
         </Group>

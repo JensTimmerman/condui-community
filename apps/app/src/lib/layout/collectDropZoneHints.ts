@@ -797,6 +797,47 @@ function visitForHints(
 }
 
 /**
+ * The modular changeover has one electrical insertion point.  Its direct-converter
+ * AC wires are nevertheless all forgiving ways to reach that point: each marker
+ * shares the canonical slot's target data, so a drop can never choose a different
+ * topology merely because it landed on a different part of the drawing.
+ */
+function appendDirectChangeoverAreaHints(
+  layoutTree: LayoutTree,
+  hints: DropZoneHint[]
+): DropZoneHint[] {
+  const canonicalByPanel = new Map<string, DropZoneHint>()
+  for (const hint of hints) {
+    if (hint.targetType !== 'supplyWire' || !hint.match?.panelId) continue
+    canonicalByPanel.set(hint.match.panelId, hint)
+  }
+
+  const expanded: DropZoneHint[] = []
+  const visit = (node: LayoutNode, panelId: string) => {
+    const canonical = canonicalByPanel.get(panelId)
+    if (
+      canonical &&
+      (node.hitZone?.type === 'supplyConverterGridWire' ||
+        node.hitZone?.type === 'supplyConverterBackupWire')
+    ) {
+      const bounds = getHitZoneBounds(node, 'core')
+      expanded.push({
+        nodeId: `direct-changeover-area-${node.id}`,
+        x: (bounds.left + bounds.right) / 2,
+        y: (bounds.top + bounds.bottom) / 2,
+        targetType: 'supplyWire',
+        match: canonical.match,
+      })
+    }
+    node.children.forEach((child) => visit(child, panelId))
+  }
+  for (const panel of layoutTree.panels) {
+    visit(panel, panel.domainId ?? panel.id)
+  }
+  return [...hints, ...expanded]
+}
+
+/**
  * True when the cursor is already targeting this hint (hide it while hovering).
  */
 export function isDropZoneHintActive(
@@ -984,10 +1025,13 @@ export function collectDropZoneHints(
 
   appendTrunkTopSlotHints(symbol, project, layoutTree, trunkSegmentCounts, rawHints)
 
-  return [
+  const hints = [
     ...sameSymbolHints,
     ...dedupeSupplyWireHints(rawHints).filter((hint) =>
       canCreateSupplyTopologyFromDrop(symbol, hint.targetType)
     ),
   ]
+  return symbol.id === 'source_changeover'
+    ? appendDirectChangeoverAreaHints(layoutTree, hints)
+    : hints
 }

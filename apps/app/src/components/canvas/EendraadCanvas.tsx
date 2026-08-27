@@ -1816,6 +1816,9 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
               preferMainBusOverGroundWire: true,
               preferMainBusOverSupplyWire: Boolean(symbol.busFeedKind) || isProtectionPlacement,
               preferSecondaryBusForNestedProtection: isProtectionPlacement,
+              ...(symbol.id === 'source_changeover'
+                ? { normalizeDirectConverterChangeoverDrop: true }
+                : {}),
             }
       )
 

@@ -577,16 +577,38 @@ function addDirectConverterBackupCircuit(
   )
   const converter = supplyDevices.find((device) => device.supplyPath === 'converter-branch')
   if (!converter) return false
-  if (
-    panel.protections.some((protection) =>
-      (protection.circuits ?? []).some(
-        (circuit) =>
-          circuit.supplySource?.kind === 'converter-backup' &&
-          circuit.supplySource.converterId === converter.id
+  const existingBackup = findDirectConverterBackupProtection(project, panel.id, converter.id)
+  if (existingBackup) {
+    const symbol =
+      Object.entries(PROTECTION_SYMBOL_ID_TO_TYPE).find(
+        ([, candidate]) => candidate === protectionType
+      )?.[0] ?? 'mcb'
+    const trunkDevice: TrunkDevice = {
+      id: generateId(),
+      type: 'protection',
+      symbol: symbol as TrunkDevice['symbol'],
+      label: '',
+      trunkPosition: existingBackup.circuit.trunkDevices?.length ?? 0,
+      protectionType,
+      ...getDefaultTrunkDeviceProtectionProps(protectionType, getVoltagePolesConfig(project)),
+    }
+    callbacks.addTrunkDevice(existingBackup.circuit.id, trunkDevice)
+    const updatedCircuit = callbacks.getCircuitById(existingBackup.circuit.id)
+    const assembly = findAssemblyForDirectConverter(project, converter.id)
+    if (updatedCircuit && assembly) {
+      callbacks.replaceSupplyAssembly(
+        assembly.id,
+        attachDirectConverterBackupCircuit(
+          assembly,
+          converter,
+          existingBackup.protection,
+          updatedCircuit,
+          panel.id
+        )
       )
-    )
-  ) {
-    return false
+    }
+    callbacks.setSelection({ type: 'trunkDevice', ids: [trunkDevice.id] })
+    return true
   }
 
   const circuitId = generateId()
@@ -2365,14 +2387,20 @@ function addGroundTrunkDevice(
     return
   }
 
-  const trunkDevice: TrunkDevice = {
-    id: deviceId,
-    type: 'earthing_separator',
-    symbol: 'earthing_separator',
-    label: 'Aardingsonderbreker',
-    trunkPosition: insertIndex,
-  }
-  callbacks.addGroundTrunkDevice(trunkDevice, insertIndex)
+  const pairId = generateId()
+  ;[0, 1].forEach((offset) => {
+    callbacks.addGroundTrunkDevice(
+      {
+        id: offset === 0 ? deviceId : generateId(),
+        type: 'earthing_separator',
+        symbol: 'earthing_separator',
+        label: 'Aardingsonderbreker',
+        trunkPosition: insertIndex + offset,
+        earthingSeparatorPairId: pairId,
+      },
+      insertIndex + offset
+    )
+  })
 }
 
 /** First junction_panel label in the project (supply, ground, or any circuit), for prefilling a second panel. */

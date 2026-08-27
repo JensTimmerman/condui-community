@@ -7,7 +7,12 @@ import { logger } from '@/lib/logger'
  */
 
 import { generateId } from '@/utils'
-import type { LayoutNode, LayoutTree } from './layoutTree'
+import {
+  mirrorLayoutNodeHorizontally,
+  mirrorSupplyAssemblyLayoutNodesHorizontally,
+  type LayoutNode,
+  type LayoutTree,
+} from './layoutTree'
 import type {
   WireSegment,
   Circuit,
@@ -48,6 +53,7 @@ import {
   isPanelOnlySubPanelFeeder,
 } from './bottomUpLayout'
 import { applyWireInset } from './wireInsets'
+import { applyRotatedWireInset } from './rotatedWireInsets'
 import {
   DOMOTICA_BRANCH_LEAD,
   DOMOTICA_BOX_WIDTH,
@@ -177,10 +183,17 @@ function applyNodeWireInset(
   otherEnd: { x: number; y: number },
   node: LayoutNode
 ): { x: number; y: number } {
-  return applyWireInset(point, otherEnd, node.type, getNodeSymbolId(node), {
-    lightPointProps: getNodeLightPointProps(node),
-    motionDetectorProps: getNodeMotionDetectorProps(node),
-  })
+  return applyRotatedWireInset(
+    point,
+    otherEnd,
+    node.type,
+    getNodeSymbolId(node),
+    node.visual?.type === 'symbol' ? (node.visual.rotationDeg ?? 0) : 0,
+    {
+      lightPointProps: getNodeLightPointProps(node),
+      motionDetectorProps: getNodeMotionDetectorProps(node),
+    }
+  )
 }
 
 // Conversion components that are allowed to change electrical domain along a trunk
@@ -307,14 +320,49 @@ export function deriveWires(
     const panel = findPanelById(panels, panelNode.domainId)
     if (!panel) continue
 
-    const panelSegments = derivePanelWires(
-      panelNode,
-      panel,
-      panels,
-      installation,
-      supplyAssemblies,
-      resolveSupplyDeviceEnclosure
+    const mirrorAxisX = panelNode.horizontalMirrorAxisX
+    const mirrorScope = panelNode.horizontalMirrorScope ?? 'panel'
+    const converterBackupCircuitIds = new Set(
+      panel.protections.flatMap((protection) =>
+        (protection.circuits ?? [])
+          .filter((circuit) => circuit.supplySource?.kind === 'converter-backup')
+          .map((circuit) => circuit.id)
+      )
     )
+    const mirrorPanelNode = () => {
+      if (mirrorAxisX == null) return
+      if (mirrorScope === 'panel') mirrorLayoutNodeHorizontally(panelNode, mirrorAxisX, true)
+      else mirrorSupplyAssemblyLayoutNodesHorizontally(panelNode, mirrorAxisX, undefined, true)
+    }
+    mirrorPanelNode()
+    let panelSegments: WireSegment[]
+    try {
+      panelSegments = derivePanelWires(
+        panelNode,
+        panel,
+        panels,
+        installation,
+        supplyAssemblies,
+        resolveSupplyDeviceEnclosure
+      )
+    } finally {
+      mirrorPanelNode()
+    }
+    if (mirrorAxisX != null) {
+      panelSegments.forEach((segment) => {
+        const belongsToSupplyAssembly =
+          segment.isSupplyTrunk === true ||
+          segment.fromElementType === 'ground' ||
+          segment.supplySectionKey != null ||
+          segment.supplyConnectionId != null ||
+          segment.supplyAssemblyId != null ||
+          (segment.circuitId != null && converterBackupCircuitIds.has(segment.circuitId))
+        if (mirrorScope === 'panel' || belongsToSupplyAssembly) {
+          mirrorWireSegmentHorizontally(segment, mirrorAxisX)
+        }
+      })
+    }
+    alignInlineSplitBusRailsToFeedRisers(panelSegments, mirrorScope)
     const diagramId = panelNode.diagramId ?? panel.id
     panelSegments.forEach((segment) => {
       segment.diagramId = diagramId
@@ -323,6 +371,70 @@ export function deriveWires(
   }
 
   return segments
+}
+
+/**
+ * In a mirrored panel whose split feeds have no protections, the two short
+ * bus rails remain in the panel frame while their supply risers are mirrored
+ * with the lower assembly.  Centre each rendered rail on its own riser so the
+ * busbar, wire and grid/backup marker stay one visual unit.
+ */
+function alignInlineSplitBusRailsToFeedRisers(
+  segments: WireSegment[],
+  mirrorScope: 'panel' | 'supply'
+): void {
+  if (mirrorScope !== 'supply') return
+
+  const rails = segments.filter(
+    (segment) =>
+      segment.type === 'mainBus' &&
+      segment.showBusFeedMarker === true &&
+      segment.busSectionId != null
+  )
+  for (const rail of rails) {
+    const busY = rail.startPoint.y
+    const riser = segments.find(
+      (segment) =>
+        segment.type === 'vertical' &&
+        segment.isSupplyTrunk === true &&
+        segment.busSectionId === rail.busSectionId &&
+        (segment.startPoint.y === busY || segment.endPoint.y === busY)
+    )
+    if (!riser) continue
+
+    const riserPoint = riser.startPoint.y === busY ? riser.startPoint : riser.endPoint
+    const railCenterX = (rail.startPoint.x + rail.endPoint.x) / 2
+    const offsetX = riserPoint.x - railCenterX
+    rail.startPoint = { ...rail.startPoint, x: rail.startPoint.x + offsetX }
+    rail.endPoint = { ...rail.endPoint, x: rail.endPoint.x + offsetX }
+  }
+}
+
+function mirrorWireSegmentHorizontally(segment: WireSegment, axisX: number): void {
+  const mirrorX = (x: number) => axisX * 2 - x
+  // Adjacent segments may share a zero-inset waypoint. Replace point objects so that
+  // mirroring one segment cannot mirror its neighbor's endpoint a second time.
+  segment.startPoint = { ...segment.startPoint, x: mirrorX(segment.startPoint.x) }
+  segment.endPoint = { ...segment.endPoint, x: mirrorX(segment.endPoint.x) }
+  if (segment.phaseLabelAnchor) {
+    segment.phaseLabelAnchor = {
+      ...segment.phaseLabelAnchor,
+      x: mirrorX(segment.phaseLabelAnchor.x),
+    }
+  }
+  if (segment.wireLabelEndPoint) {
+    segment.wireLabelEndPoint = {
+      ...segment.wireLabelEndPoint,
+      x: mirrorX(segment.wireLabelEndPoint.x),
+    }
+  }
+  if (segment.supplySeparatorX != null) {
+    segment.supplySeparatorX = mirrorX(segment.supplySeparatorX)
+  }
+  if (segment.busFeedMarkerSide === 'left') segment.busFeedMarkerSide = 'right'
+  else if (segment.busFeedMarkerSide === 'right') segment.busFeedMarkerSide = 'left'
+  else if (segment.busFeedMarkerSide === 'below-left') segment.busFeedMarkerSide = 'below-right'
+  else if (segment.busFeedMarkerSide === 'below-right') segment.busFeedMarkerSide = 'below-left'
 }
 
 /**
@@ -864,13 +976,12 @@ function derivePanelWires(
             : 'grid'
           : undefined,
         showBusFeedMarker: isSupplyDiagram,
-        busFeedMarkerSide:
-          isSupplyDiagram
-            ? panel.busSections?.find((section) => section.id === entry.busSectionId)?.role ===
-              'backup'
-              ? 'below-right'
-              : 'below-left'
-            : undefined,
+        busFeedMarkerSide: isSupplyDiagram
+          ? panel.busSections?.find((section) => section.id === entry.busSectionId)?.role ===
+            'backup'
+            ? 'below-right'
+            : 'below-left'
+          : undefined,
         domain: DEFAULT_ELECTRICAL_DOMAIN,
         phaseAssignment:
           sectionPhaseState.assignment ??
@@ -913,12 +1024,15 @@ function derivePanelWires(
               ? 'backup'
               : 'grid'
             : undefined,
-        showBusFeedMarker: isSupplyDiagram,
-        busFeedMarkerSide:
-          isSupplyDiagram
+        showBusFeedMarker: isSupplyDiagram || usesInlineEmptySplitAssembly,
+        busFeedMarkerSide: isSupplyDiagram
+          ? section.role === 'backup'
+            ? 'below-right'
+            : 'below-left'
+          : usesInlineEmptySplitAssembly
             ? section.role === 'backup'
-              ? 'below-right'
-              : 'below-left'
+              ? 'below-left'
+              : 'below-right'
             : undefined,
         domain: DEFAULT_ELECTRICAL_DOMAIN,
         phaseAssignment:
@@ -985,12 +1099,14 @@ function derivePanelWires(
   const feedOutputWire = panelNode.children.find((child) =>
     child.id?.startsWith('feed-output-wire-')
   )
-  if (hasExplicitPanelBusSections(panel) && !isSupplyDiagram) {
+  if (
+    hasExplicitPanelBusSections(panel) &&
+    !isSupplyDiagram &&
+    !usesInlineEmptySplitAssembly
+  ) {
     for (const [index, run] of busRuns.entries()) {
       const section = panel.busSections?.find((candidate) => candidate.id === run.busSectionId)
-      const stubX = usesInlineEmptySplitAssembly
-        ? (run.startPoint.x + run.endPoint.x) / 2
-        : getLeftBiasedBusFeedStubX(run.startPoint.x, run.endPoint.x)
+      const stubX = getLeftBiasedBusFeedStubX(run.startPoint.x, run.endPoint.x)
       const forceStubPhaseLabel = isPhaseAssignmentLabelVisible(
         run.phaseAssignment,
         installation?.nominalVoltage.system
@@ -1005,9 +1121,6 @@ function derivePanelWires(
         busSectionId: run.busSectionId,
         busFeedKind: section?.role === 'backup' ? 'backup' : 'grid',
         showBusFeedMarker: true,
-        busFeedMarkerSide: usesInlineEmptySplitAssembly
-          ? 'stub-center'
-          : undefined,
         domain: DEFAULT_ELECTRICAL_DOMAIN,
         phaseAssignment: run.phaseAssignment,
         forcePhaseLabel: forceStubPhaseLabel,
@@ -1259,16 +1372,22 @@ function derivePanelWires(
     const pushConverterDcWires = (converterNode: LayoutNode) => {
       const converterX = converterNode.bounds.x
       const converterY = converterNode.bounds.y
+      const byDistanceFromConverter = (a: LayoutNode, b: LayoutNode) => {
+        const aDistance = (a.bounds.x - converterX) ** 2 + (a.bounds.y - converterY) ** 2
+        const bDistance = (b.bounds.x - converterX) ** 2 + (b.bounds.y - converterY) ** 2
+        if (aDistance !== bDistance) return aDistance - bDistance
+        return a.bounds.x - b.bounds.x
+      }
       const dcDeviceNodes = supplyTrunkDeviceNodes
         .filter(
           (node) => (node.domainRef as TrunkDevice | undefined)?.supplyPath === 'converter-dc'
         )
-        .sort((a, b) => a.bounds.x - b.bounds.x)
+        .sort(byDistanceFromConverter)
       const dcTopDeviceNodes = supplyTrunkDeviceNodes
         .filter(
           (node) => (node.domainRef as TrunkDevice | undefined)?.supplyPath === 'converter-dc-top'
         )
-        .sort((a, b) => a.bounds.x - b.bounds.x)
+        .sort(byDistanceFromConverter)
       const converterRight = applyNodeWireInset(
         { x: converterX, y: converterY },
         {
@@ -1494,13 +1613,14 @@ function derivePanelWires(
     // Assemblies may fan out to multiple main panels. Select the handoff that
     // targets the panel currently being rendered; using the first handoff made
     // every additional main panel inherit the original panel's wire path.
-    const handoffAssemblyNodeId = supplyAssembly?.loadHandoffs.find(
-      (handoff) =>
-        (handoff.target.kind === 'panel-input' ||
-          handoff.target.kind === 'panel-bus-input' ||
-          handoff.target.kind === 'circuit-input') &&
-        handoff.target.panelId === panel.id
-    )?.handoffNodeId ?? supplyAssembly?.nodes.find((node) => node.kind === 'panel-handoff')?.id
+    const handoffAssemblyNodeId =
+      supplyAssembly?.loadHandoffs.find(
+        (handoff) =>
+          (handoff.target.kind === 'panel-input' ||
+            handoff.target.kind === 'panel-bus-input' ||
+            handoff.target.kind === 'circuit-input') &&
+          handoff.target.panelId === panel.id
+      )?.handoffNodeId ?? supplyAssembly?.nodes.find((node) => node.kind === 'panel-handoff')?.id
     const currentPanelHandoffConnection = supplyAssembly?.connections.find((connection) =>
       connection.endpoints.some(({ nodeId }) => nodeId === handoffAssemblyNodeId)
     )

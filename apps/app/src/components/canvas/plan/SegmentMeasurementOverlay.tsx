@@ -9,6 +9,10 @@ import {
   type DistanceMeasurementInterval,
 } from '@/lib/plan/segmentMeasurements'
 import {
+  normalizeDimensionRotationDeg,
+  type DimensionDragModifiers,
+} from '@/lib/plan/dimensionDragGesture'
+import {
   clearFloorPlanDrawDimensionEditor,
   setFloorPlanDrawDimensionEditor,
 } from './floorPlanDrawDimensionEditorStore'
@@ -24,11 +28,12 @@ interface SegmentMeasurementOverlayProps {
   distanceIntervals?: DistanceMeasurementInterval[]
   editableSegmentIndices?: number[]
   onSegmentLengthCommit?: (segmentIndex: number, lengthCm: number) => void
+  onOpeningDistanceCommit?: (interval: DistanceMeasurementInterval, lengthCm: number) => void
   onSegmentDimensionDrag?: (
     segmentIndex: number,
     delta: { x: number; y: number },
     phase: 'start' | 'preview' | 'commit' | 'cancel',
-    precise: boolean
+    modifiers: DimensionDragModifiers
   ) => void
 }
 
@@ -50,7 +55,9 @@ interface DimensionDragState {
   didDrag: boolean
 }
 
-function getClientPoint(event: MouseEvent | TouchEvent | PointerEvent): { x: number; y: number } | null {
+function getClientPoint(
+  event: MouseEvent | TouchEvent | PointerEvent
+): { x: number; y: number } | null {
   if ('clientX' in event && Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
     return { x: event.clientX, y: event.clientY }
   }
@@ -61,6 +68,15 @@ function getClientPoint(event: MouseEvent | TouchEvent | PointerEvent): { x: num
 function getTrackedTouch(event: TouchEvent, identifier: number | null): Touch | null {
   const touches = [...Array.from(event.touches), ...Array.from(event.changedTouches)]
   return touches.find((touch) => identifier == null || touch.identifier === identifier) ?? null
+}
+
+function getDimensionDragModifiers(
+  event: MouseEvent | TouchEvent | PointerEvent
+): DimensionDragModifiers {
+  return {
+    precise: 'shiftKey' in event && event.shiftKey,
+    quantize: 'ctrlKey' in event && event.ctrlKey,
+  }
 }
 
 export function SegmentMeasurementOverlay({
@@ -74,11 +90,13 @@ export function SegmentMeasurementOverlay({
   distanceIntervals = [],
   editableSegmentIndices = [],
   onSegmentLengthCommit,
+  onOpeningDistanceCommit,
   onSegmentDimensionDrag,
 }: SegmentMeasurementOverlayProps) {
   const [editingSegmentIndex, setEditingSegmentIndex] = useState<number | null>(null)
   const [draftText, setDraftText] = useState('')
   const dimensionDragRef = useRef<DimensionDragState | null>(null)
+  const distanceLabelSideRef = useRef(new Map<string, -1 | 1>())
   const suppressDimensionEditUntilRef = useRef(0)
   const editableSegmentSet = useMemo(
     () => new Set(editableSegmentIndices),
@@ -86,14 +104,22 @@ export function SegmentMeasurementOverlay({
   )
 
   useEffect(() => {
-    if (editingSegmentIndex != null && !editableSegmentSet.has(editingSegmentIndex)) {
+    if (
+      editingSegmentIndex != null &&
+      editingSegmentIndex >= 0 &&
+      !editableSegmentSet.has(editingSegmentIndex)
+    ) {
       setEditingSegmentIndex(null)
       setDraftText('')
     }
   }, [editableSegmentSet, editingSegmentIndex])
 
   useEffect(() => {
-    if (editingSegmentIndex == null || !editableSegmentSet.has(editingSegmentIndex)) return
+    if (
+      editingSegmentIndex == null ||
+      (editingSegmentIndex >= 0 && !editableSegmentSet.has(editingSegmentIndex))
+    )
+      return
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target
       if (
@@ -132,8 +158,14 @@ export function SegmentMeasurementOverlay({
         event.preventDefault()
         event.stopImmediatePropagation()
         const valueCm = Number.parseFloat(draftText.replace(',', '.'))
-        if (Number.isFinite(valueCm) && valueCm > 0) {
-          onSegmentLengthCommit?.(editingSegmentIndex, valueCm)
+        if (Number.isFinite(valueCm) && (editingSegmentIndex < 0 ? valueCm >= 0 : valueCm > 0)) {
+          const distanceIndex = -100000 - editingSegmentIndex
+          const distanceInterval = distanceIntervals[distanceIndex]
+          if (distanceInterval) {
+            onOpeningDistanceCommit?.(distanceInterval, valueCm)
+          } else {
+            onSegmentLengthCommit?.(editingSegmentIndex, valueCm)
+          }
         }
         setEditingSegmentIndex(null)
         setDraftText('')
@@ -141,7 +173,14 @@ export function SegmentMeasurementOverlay({
     }
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [draftText, editableSegmentSet, editingSegmentIndex, onSegmentLengthCommit])
+  }, [
+    draftText,
+    editableSegmentSet,
+    editingSegmentIndex,
+    distanceIntervals,
+    onOpeningDistanceCommit,
+    onSegmentLengthCommit,
+  ])
 
   useEffect(() => {
     const updateDelta = (clientX: number, clientY: number, precise: boolean) => {
@@ -151,23 +190,19 @@ export function SegmentMeasurementOverlay({
       const totalRawY = clientY - drag.startClientY
       if (!drag.didDrag && Math.hypot(totalRawX, totalRawY) < 3) return null
       const sensitivity = precise ? 0.1 : 1
-      drag.effectiveDeltaX +=
-        ((clientX - drag.lastClientX) / Math.max(zoom, 1e-6)) * sensitivity
-      drag.effectiveDeltaY +=
-        ((clientY - drag.lastClientY) / Math.max(zoom, 1e-6)) * sensitivity
+      drag.effectiveDeltaX += ((clientX - drag.lastClientX) / Math.max(zoom, 1e-6)) * sensitivity
+      drag.effectiveDeltaY += ((clientY - drag.lastClientY) / Math.max(zoom, 1e-6)) * sensitivity
       drag.lastClientX = clientX
       drag.lastClientY = clientY
       drag.didDrag = true
       if (drag.axisLock == null) {
-        const parallel =
-          drag.effectiveDeltaX * drag.tangentX + drag.effectiveDeltaY * drag.tangentY
+        const parallel = drag.effectiveDeltaX * drag.tangentX + drag.effectiveDeltaY * drag.tangentY
         const perpendicular =
           drag.effectiveDeltaX * drag.normalX + drag.effectiveDeltaY * drag.normalY
         drag.axisLock = Math.abs(parallel) >= Math.abs(perpendicular) ? 'parallel' : 'perpendicular'
       }
       if (drag.axisLock === 'parallel') {
-        const parallel =
-          drag.effectiveDeltaX * drag.tangentX + drag.effectiveDeltaY * drag.tangentY
+        const parallel = drag.effectiveDeltaX * drag.tangentX + drag.effectiveDeltaY * drag.tangentY
         return {
           x: drag.tangentX * parallel,
           y: drag.tangentY * parallel,
@@ -192,18 +227,23 @@ export function SegmentMeasurementOverlay({
       const delta = updateDelta(event.clientX, event.clientY, event.shiftKey)
       if (!delta) return
       event.preventDefault()
-      onSegmentDimensionDrag?.(drag.segmentIndex, delta, 'preview', event.shiftKey)
+      onSegmentDimensionDrag?.(
+        drag.segmentIndex,
+        delta,
+        'preview',
+        getDimensionDragModifiers(event)
+      )
     }
     const finishDrag = (
       clientX: number,
       clientY: number,
-      precise: boolean,
+      modifiers: DimensionDragModifiers,
       cancelled: boolean
     ) => {
       const drag = dimensionDragRef.current
       if (!drag) return
       const delta = drag.didDrag
-        ? (updateDelta(clientX, clientY, precise) ?? {
+        ? (updateDelta(clientX, clientY, modifiers.precise) ?? {
             x: drag.effectiveDeltaX,
             y: drag.effectiveDeltaY,
           })
@@ -213,21 +253,21 @@ export function SegmentMeasurementOverlay({
         suppressDimensionEditUntilRef.current = Date.now() + 350
       }
       if (cancelled || !drag.didDrag) {
-        onSegmentDimensionDrag?.(drag.segmentIndex, delta, 'cancel', precise)
+        onSegmentDimensionDrag?.(drag.segmentIndex, delta, 'cancel', modifiers)
       } else {
-        onSegmentDimensionDrag?.(drag.segmentIndex, delta, 'commit', precise)
+        onSegmentDimensionDrag?.(drag.segmentIndex, delta, 'commit', modifiers)
       }
     }
     const handlePointerUp = (event: PointerEvent) => {
       const drag = dimensionDragRef.current
       if (!drag || drag.source !== 'pointer') return
       if (drag.didDrag) event.preventDefault()
-      finishDrag(event.clientX, event.clientY, event.shiftKey, false)
+      finishDrag(event.clientX, event.clientY, getDimensionDragModifiers(event), false)
     }
     const handlePointerCancel = (event: PointerEvent) => {
       const drag = dimensionDragRef.current
       if (!drag || drag.source !== 'pointer') return
-      finishDrag(event.clientX, event.clientY, event.shiftKey, true)
+      finishDrag(event.clientX, event.clientY, getDimensionDragModifiers(event), true)
     }
     const handleTouchMove = (event: TouchEvent) => {
       const drag = dimensionDragRef.current
@@ -237,7 +277,10 @@ export function SegmentMeasurementOverlay({
       const delta = updateDelta(touch.clientX, touch.clientY, false)
       if (!delta) return
       event.preventDefault()
-      onSegmentDimensionDrag?.(drag.segmentIndex, delta, 'preview', false)
+      onSegmentDimensionDrag?.(drag.segmentIndex, delta, 'preview', {
+        precise: false,
+        quantize: false,
+      })
     }
     const finishTouch = (event: TouchEvent, cancelled: boolean) => {
       const drag = dimensionDragRef.current
@@ -246,7 +289,7 @@ export function SegmentMeasurementOverlay({
       const clientX = touch?.clientX ?? drag.lastClientX
       const clientY = touch?.clientY ?? drag.lastClientY
       if (drag.didDrag) event.preventDefault()
-      finishDrag(clientX, clientY, false, cancelled)
+      finishDrag(clientX, clientY, { precise: false, quantize: false }, cancelled)
     }
     const handleTouchEnd = (event: TouchEvent) => finishTouch(event, false)
     const handleTouchCancel = (event: TouchEvent) => finishTouch(event, true)
@@ -287,6 +330,7 @@ export function SegmentMeasurementOverlay({
         intervals: distanceIntervals,
         pxPerMeter,
         extensionOffset,
+        normalSideByKey: distanceLabelSideRef.current,
       }),
     ],
     [distanceIntervals, extensionOffset, pxPerMeter, segmentIndices, wall.points]
@@ -312,7 +356,7 @@ export function SegmentMeasurementOverlay({
       ownerId: dimensionEditorOwnerId,
       fields: [
         {
-          id: `segment-${editingSegmentIndex}`,
+          id: guide.measurementId,
           anchor: guide.midpoint,
           placement: 'center',
           value: draftText || displayValue,
@@ -324,8 +368,12 @@ export function SegmentMeasurementOverlay({
       onChange: (_id, value) => setDraftText(value),
       onEnter: () => {
         const valueCm = Number.parseFloat(draftText.replace(',', '.'))
-        if (Number.isFinite(valueCm) && valueCm > 0) {
-          onSegmentLengthCommit?.(editingSegmentIndex, valueCm)
+        if (Number.isFinite(valueCm) && (guide.distanceInterval ? valueCm >= 0 : valueCm > 0)) {
+          if (guide.distanceInterval) {
+            onOpeningDistanceCommit?.(guide.distanceInterval, valueCm)
+          } else {
+            onSegmentLengthCommit?.(editingSegmentIndex, valueCm)
+          }
         }
         setEditingSegmentIndex(null)
         setDraftText('')
@@ -336,12 +384,12 @@ export function SegmentMeasurementOverlay({
         setDraftText('')
       },
     })
-
   }, [
     dimensionEditorOwnerId,
     draftText,
     editingSegmentIndex,
     guides,
+    onOpeningDistanceCommit,
     onSegmentLengthCommit,
   ])
 
@@ -354,25 +402,36 @@ export function SegmentMeasurementOverlay({
     <Group listening>
       {guides.map((guide, guideIndex) => {
         const extStartA = {
-          x: guide.start.x + (guide.offsetStart.x - guide.start.x) * (extensionStartOffset / extensionOffset),
-          y: guide.start.y + (guide.offsetStart.y - guide.start.y) * (extensionStartOffset / extensionOffset),
+          x:
+            guide.start.x +
+            (guide.offsetStart.x - guide.start.x) * (extensionStartOffset / extensionOffset),
+          y:
+            guide.start.y +
+            (guide.offsetStart.y - guide.start.y) * (extensionStartOffset / extensionOffset),
         }
         const extEndA = {
-          x: guide.end.x + (guide.offsetEnd.x - guide.end.x) * (extensionStartOffset / extensionOffset),
-          y: guide.end.y + (guide.offsetEnd.y - guide.end.y) * (extensionStartOffset / extensionOffset),
+          x:
+            guide.end.x +
+            (guide.offsetEnd.x - guide.end.x) * (extensionStartOffset / extensionOffset),
+          y:
+            guide.end.y +
+            (guide.offsetEnd.y - guide.end.y) * (extensionStartOffset / extensionOffset),
         }
 
-        let labelRotationDeg = (guide.angleRad * 180) / Math.PI
-        if (labelRotationDeg > 90 || labelRotationDeg < -90) {
-          labelRotationDeg += 180
-        }
+        const labelRotationDeg = normalizeDimensionRotationDeg((guide.angleRad * 180) / Math.PI)
 
-        const editable = guide.segmentIndex >= 0 && editableSegmentSet.has(guide.segmentIndex)
+        const editableSegment =
+          guide.segmentIndex >= 0 && editableSegmentSet.has(guide.segmentIndex)
+        const editableDistance =
+          guide.distanceInterval?.openingId != null &&
+          guide.distanceInterval.openingSide != null &&
+          onOpeningDistanceCommit != null
+        const editable = editableSegment || editableDistance
         const isEditing = editingSegmentIndex === guide.segmentIndex
         const displayLabel = isEditing && draftText ? `${draftText} cm` : guide.label
         const approxLabelWidth = Math.max(
           screenPxToCanvasUnits(zoom, 20, 12, 36),
-          displayLabel.length * fontSize * 0.58,
+          displayLabel.length * fontSize * 0.58
         )
         const visualBoxWidth = approxLabelWidth + labelGapPadding
         const visualBoxHeight = fontSize + labelGapPadding
@@ -381,9 +440,11 @@ export function SegmentMeasurementOverlay({
         const hitBoxHeight = Math.max(visualBoxHeight, touchTargetSize)
         const labelGap = approxLabelWidth + labelGapPadding * 2
         const dimensionLength = Math.sqrt(
-          (guide.offsetEnd.x - guide.offsetStart.x) ** 2 + (guide.offsetEnd.y - guide.offsetStart.y) ** 2,
+          (guide.offsetEnd.x - guide.offsetStart.x) ** 2 +
+            (guide.offsetEnd.y - guide.offsetStart.y) ** 2
         )
-        const canSplitDashedLine = dimensionLength > Math.max(minDashedLength, labelGap + dashUnit * 2)
+        const canSplitDashedLine =
+          dimensionLength > Math.max(minDashedLength, labelGap + dashUnit * 2)
 
         const segmentDir = {
           x: (guide.offsetEnd.x - guide.offsetStart.x) / Math.max(1e-6, dimensionLength),
@@ -413,7 +474,10 @@ export function SegmentMeasurementOverlay({
         }
 
         return (
-          <Group key={`segment-measure-${wall.id}-${guide.segmentIndex}-${guideIndex}`} listening={editable}>
+          <Group
+            key={`segment-measure-${wall.id}-${guide.segmentIndex}-${guideIndex}`}
+            listening={editable}
+          >
             <Line
               points={[extStartA.x, extStartA.y, guide.offsetStart.x, guide.offsetStart.y]}
               stroke={color}
@@ -446,7 +510,12 @@ export function SegmentMeasurementOverlay({
               </>
             ) : (
               <Line
-                points={[guide.offsetStart.x, guide.offsetStart.y, guide.offsetEnd.x, guide.offsetEnd.y]}
+                points={[
+                  guide.offsetStart.x,
+                  guide.offsetStart.y,
+                  guide.offsetEnd.x,
+                  guide.offsetEnd.y,
+                ]}
                 stroke={color}
                 strokeWidth={lineStroke}
                 dash={[dashUnit, dashUnit]}
@@ -467,7 +536,7 @@ export function SegmentMeasurementOverlay({
                   event.evt.preventDefault()
                 }
                 const clientPoint = getClientPoint(event.evt)
-                if (clientPoint && onSegmentDimensionDrag) {
+                if (guide.segmentIndex >= 0 && clientPoint && onSegmentDimensionDrag) {
                   dimensionDragRef.current = {
                     source: 'pointer',
                     touchIdentifier: null,
@@ -489,14 +558,14 @@ export function SegmentMeasurementOverlay({
                     guide.segmentIndex,
                     { x: 0, y: 0 },
                     'start',
-                    !!event.evt.shiftKey
+                    getDimensionDragModifiers(event.evt)
                   )
                 }
               }}
               onTouchStart={(event) => {
                 if (!editable || dimensionDragRef.current) return
                 const touch = event.evt.touches[0]
-                if (!touch || !onSegmentDimensionDrag) return
+                if (guide.segmentIndex < 0 || !touch || !onSegmentDimensionDrag) return
                 event.cancelBubble = true
                 event.evt.preventDefault()
                 dimensionDragRef.current = {
@@ -516,12 +585,10 @@ export function SegmentMeasurementOverlay({
                   axisLock: null,
                   didDrag: false,
                 }
-                onSegmentDimensionDrag(
-                  guide.segmentIndex,
-                  { x: 0, y: 0 },
-                  'start',
-                  false
-                )
+                onSegmentDimensionDrag(guide.segmentIndex, { x: 0, y: 0 }, 'start', {
+                  precise: false,
+                  quantize: false,
+                })
               }}
               onClick={(event) => {
                 if (!editable || !isPrimaryPlanActivationEvent(event.evt)) return
@@ -555,7 +622,9 @@ export function SegmentMeasurementOverlay({
                   height={visualBoxHeight}
                   fill={editableLabelFill}
                   stroke={color}
-                  strokeWidth={isEditing ? lineStroke * 1.75 : lineStroke}
+                  strokeWidth={
+                    isEditing ? lineStroke * 2.5 : screenPxToCanvasUnits(zoom, 3, 1.5, 5)
+                  }
                   cornerRadius={screenPxToCanvasUnits(zoom, 4, 2, 8)}
                 />
               )}

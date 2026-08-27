@@ -109,7 +109,6 @@ export default defineConfig({
       injectRegister: false,
       manifest: pwaManifest,
       includeAssets: [
-        'logos/Condui_favicon.svg',
         'fonts/Figtree/**/*',
         'fonts/OpenSans/**/*',
         'pwa/icon-192.png',

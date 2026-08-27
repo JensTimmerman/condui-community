@@ -58,6 +58,8 @@ interface ProtectionSymbolProps {
   protection: ProtectionDevice
   position: Point
   renderSymbol?: boolean
+  /** Artwork rotation resolved by the shared layout tree. */
+  symbolRotationDeg?: number
   /** If provided, drop target uses this (cursor) position instead of symbol position. */
   getCanvasPositionFromEvent?: (e: unknown) => Point | null
   onDragEnd: (newPos: Point) => boolean | void
@@ -70,6 +72,7 @@ export function ProtectionSymbol({
   protection,
   position,
   renderSymbol = true,
+  symbolRotationDeg,
   getCanvasPositionFromEvent,
   onDragEnd,
   onDragMove,
@@ -417,7 +420,7 @@ export function ProtectionSymbol({
             offsetX={isSurgeProtection ? surgeSymbolAnchor.x : SYMBOL_SIZE / 2}
             offsetY={isSurgeProtection ? surgeSymbolAnchor.y : SYMBOL_SIZE / 2}
             y={0}
-            rotation={isHorizontalConverterBackup ? -90 : 0}
+            rotation={symbolRotationDeg ?? (isHorizontalConverterBackup ? 90 : 0)}
             listening={false}
           />
 

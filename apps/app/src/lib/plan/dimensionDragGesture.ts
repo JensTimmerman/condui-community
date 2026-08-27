@@ -2,6 +2,26 @@ import type { Point2 } from '@/types/schema'
 
 export type DimensionDragMode = 'centered' | 'start' | 'end'
 
+export interface DimensionDragModifiers {
+  /** Shift: reduce pointer movement sensitivity. */
+  precise: boolean
+  /** Ctrl: quantize measurements to 10 cm increments. */
+  quantize: boolean
+}
+
+/** Keep a dimension label readable without putting its text upside down. */
+export function normalizeDimensionRotationDeg(angleDeg: number): number {
+  return ((((angleDeg + 90) % 180) + 180) % 180) - 90
+}
+
+/** Snap a canvas-space measurement to a positive increment while preserving a minimum. */
+export function snapDimensionValue(value: number, step: number, minimum = 0): number {
+  const safeMinimum = Math.max(0, minimum)
+  if (!Number.isFinite(value)) return safeMinimum
+  if (!Number.isFinite(step) || step <= 0) return Math.max(safeMinimum, value)
+  return Math.max(safeMinimum, Math.round(value / step) * step)
+}
+
 export interface DimensionDragResolution {
   mode: DimensionDragMode | null
   alongDelta: number

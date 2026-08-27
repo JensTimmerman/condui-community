@@ -425,11 +425,11 @@
     "newProjectCooldownLocalWarning": "Je gratis cloudslot is in afkoeling tot {{date}}. Dit project wordt lokaal aangemaakt.",
     "createFailedTitle": "Project aanmaken mislukt",
     "createFailedMessage": "Er ging iets mis. Probeer het opnieuw.",
-    "registrationRequiredCreateTitle": "Account nodig",
-    "registrationRequiredCreateMessage": "Maak een gratis account aan om eigen projecten te maken. Het demoproject blijft beschikbaar zonder account.",
-    "registrationRequiredCreateWithLocalProjects": "Maak een gratis account aan om nieuwe projecten te maken. Je bestaande lokale projecten blijven op dit toestel en zijn beschikbaar na registratie.",
-    "registrationRequiredActionMessage": "Maak een gratis account aan om projecten te maken, importeren en organiseren. Het demoproject blijft beschikbaar zonder account.",
-    "registrationRequiredActionWithLocalProjects": "Maak een gratis account aan om projecten te maken, importeren en organiseren. Je bestaande lokale projecten blijven op dit toestel en zijn beschikbaar na registratie.",
+    "registrationRequiredCreateTitle": "Registreer om een project te maken",
+    "registrationRequiredCreateMessage": "Nieuwe projecten vereisen een gratis account. Je kunt het demoproject blijven openen zonder registratie.",
+    "registrationRequiredCreateWithLocalProjects": "Nieuwe projecten vereisen een gratis account. Je bestaande lokale projecten blijven beschikbaar op dit toestel en worden na registratie naar je account verplaatst.",
+    "registrationRequiredActionMessage": "Registreer om projecten te maken, importeren en organiseren. Je kunt het demoproject blijven openen zonder registratie.",
+    "registrationRequiredActionWithLocalProjects": "Registreer om projecten te maken, importeren en organiseren. Je bestaande lokale projecten blijven beschikbaar op dit toestel en worden na registratie naar je account verplaatst.",
     "registrationRequiredCreateCta": "Registreren",
     "moveToLocal": "Naar lokaal verplaatsen",
     "openingTitle": "Laden…",
@@ -1633,6 +1633,11 @@
           "details": "Volgens de recente AREI-wijzigingen moet het hoofddifferentieel aan het begin van de installatie minstens type A zijn (gevoelig voor pulserende gelijkstroom). Vervang AC-only toestellen door type A, F of B."
         }
       },
+      "backupSupplyRcdCompliance": {
+        "message": "Back-upvoeding heeft geen gelijkwaardige differentieelbeveiliging",
+        "details": "Het back-uppad heeft een differentieel of differentieelautomaat nodig met een ingestelde gevoeligheid van maximaal 300 mA en een nominale stroom van minstens 40 A.",
+        "remediation": "Plaats een conform differentieel of differentieelautomaat op het back-uppad tussen de omvormer of omschakelaar en het gevoede bord."
+      },
       "panelHasGlobalIsolation": {
         "message": "Bord {{panelName}} heeft geen toestel dat alle actieve geleiders uitschakelt",
         "details": "Elk verdeelbord moet afschakelbaar zijn via een scheidingsinrichting die alle actieve geleiders uitschakelt, lokaal in het bord of stroomopwaarts via de voeding."
@@ -1848,6 +1853,9 @@
     "categoryPanels": "Borden",
     "categoryWires": "Draden",
     "wireLengthTotal": "{{length}} totaal",
+    "wireLengthEstimate": "Ruwe schatting op basis van het grondplan: {{length}}",
+    "wireLengthEstimateShort": "schatting {{length}}",
+    "wireLengthEstimateHint": "Getekend of gekalibreerd grondplan: hemelsbrede afstand ×2; +3 m bij elke verdiepingswissel.",
     "devicesCount": "toestellen",
     "typesCount": "types",
     "exportCsv": "Exporteren naar CSV",
@@ -1999,7 +2007,8 @@
     "gridFeed": "Netvoeding",
     "backupFeed": "Backupvoeding",
     "gridMarker": "Net",
-    "backupMarker": "Backup"
+    "backupMarker": "Backup",
+    "switchableBackupMarker": "Backup/Net"
   },
   "wallProperties": {
     "title": "Muureigenschappen",

@@ -18,8 +18,21 @@ import {
 } from '@/constants/canvasConstants'
 import { getThemeColor } from '@/lib/theme/colors'
 import { useBlinkingCaret, withDimensionCaret } from '@/hooks/useBlinkingCaret'
+import {
+  normalizeDimensionRotationDeg,
+  type DimensionDragModifiers,
+} from '@/lib/plan/dimensionDragGesture'
 
 type PlanCanvasInputEvent = KonvaEventObject<MouseEvent | TouchEvent | PointerEvent | DragEvent>
+
+function getDimensionDragModifiers(
+  event: MouseEvent | TouchEvent | PointerEvent | DragEvent
+): DimensionDragModifiers {
+  return {
+    precise: 'shiftKey' in event && event.shiftKey,
+    quantize: 'ctrlKey' in event && event.ctrlKey,
+  }
+}
 
 export type SelectedOpeningWidthEditorModel = {
   kind: 'door' | 'window'
@@ -214,9 +227,13 @@ type PlanOpeningWidthEditorProps = {
   getCanvasPointFromEvent: (event: PlanCanvasInputEvent) => Point2 | null
   isActive: boolean
   onActivate: () => void
-  onDimensionDragEnd: (pointer: Point2 | null) => void
-  onDimensionDragMove: (pointer: Point2) => void
-  onDimensionDragStart: (pointer: Point2, outwardNormal: Point2) => void
+  onDimensionDragEnd: (pointer: Point2 | null, modifiers: DimensionDragModifiers) => void
+  onDimensionDragMove: (pointer: Point2, modifiers: DimensionDragModifiers) => void
+  onDimensionDragStart: (
+    pointer: Point2,
+    outwardNormal: Point2,
+    modifiers: DimensionDragModifiers
+  ) => void
   opening: SelectedOpeningWidthEditorModel | null
   themeMode: 'light' | 'dark'
   valueText: string
@@ -268,10 +285,11 @@ export function PlanOpeningWidthEditor({
   const textWidth = Math.max(24 / zoom, label.length * approxCharWidth)
   const boxWidth = textWidth + paddingX * 2
   const boxHeight = fontSize + paddingY * 2
-  const boxX = anchor.x - boxWidth / 2
-  const boxY = anchor.y - boxHeight / 2
-  const strokeColor = isActive ? '#0284c7' : themeMode === 'dark' ? '#e5e7eb' : '#111827'
-  const textColor = isActive ? '#0284c7' : themeMode === 'dark' ? '#f9fafb' : '#111827'
+  const labelRotationDeg = normalizeDimensionRotationDeg(
+    (Math.atan2(tangent.y, tangent.x) * 180) / Math.PI
+  )
+  const strokeColor = '#0284c7'
+  const textColor = themeMode === 'dark' ? '#ffffff' : '#000000'
   const strokeWidth = screenPxToCanvasUnits(
     zoom,
     DRAW_TOOL_STROKE_PX,
@@ -287,16 +305,18 @@ export function PlanOpeningWidthEditor({
         const pointer = getCanvasPointFromEvent(event)
         if (!pointer) return
         didDragRef.current = true
-        onDimensionDragStart(pointer, outwardNormal)
+        onDimensionDragStart(pointer, outwardNormal, getDimensionDragModifiers(event.evt))
         event.target.position({ x: 0, y: 0 })
       }}
       onDragMove={(event) => {
         const pointer = getCanvasPointFromEvent(event)
-        if (pointer) onDimensionDragMove(pointer)
+        if (pointer) {
+          onDimensionDragMove(pointer, getDimensionDragModifiers(event.evt))
+        }
         event.target.position({ x: 0, y: 0 })
       }}
       onDragEnd={(event) => {
-        onDimensionDragEnd(getCanvasPointFromEvent(event))
+        onDimensionDragEnd(getCanvasPointFromEvent(event), getDimensionDragModifiers(event.evt))
         event.target.position({ x: 0, y: 0 })
       }}
       onPointerDown={(event) => {
@@ -316,28 +336,31 @@ export function PlanOpeningWidthEditor({
         onActivate()
       }}
     >
-      <Rect
-        x={boxX}
-        y={boxY}
-        width={boxWidth}
-        height={boxHeight}
-        fill={themeMode === 'dark' ? 'rgba(17,24,39,0.9)' : 'rgba(243,244,246,0.95)'}
-        stroke={strokeColor}
-        strokeWidth={strokeWidth}
-        cornerRadius={screenPxToCanvasUnits(zoom, 4, 2, 8)}
-      />
-      <Text
-        x={boxX}
-        y={boxY}
-        width={boxWidth}
-        height={boxHeight}
-        align="center"
-        verticalAlign="middle"
-        text={label}
-        fontSize={fontSize}
-        fontFamily={fontFamily}
-        fill={textColor}
-      />
+      <Group x={anchor.x} y={anchor.y} rotation={labelRotationDeg}>
+        <Rect
+          x={-boxWidth / 2}
+          y={-boxHeight / 2}
+          width={boxWidth}
+          height={boxHeight}
+          fill={themeMode === 'dark' ? 'rgba(17,24,39,0.95)' : 'rgba(255,255,255,0.95)'}
+          stroke={strokeColor}
+          strokeWidth={strokeWidth}
+          cornerRadius={screenPxToCanvasUnits(zoom, 4, 2, 8)}
+        />
+        <Text
+          x={-boxWidth / 2}
+          y={-boxHeight / 2}
+          width={boxWidth}
+          height={boxHeight}
+          align="center"
+          verticalAlign="middle"
+          text={label}
+          fontSize={fontSize}
+          fontFamily={fontFamily}
+          fontStyle="bold"
+          fill={textColor}
+        />
+      </Group>
     </Group>
   )
 }

@@ -926,6 +926,17 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
                 const backupOutputDevices = devices.filter(
                   (device) => device.supplyPath === 'backup-output'
                 )
+                // Devices after the selector are on its load side even though they are
+                // stored as ordinary serial devices. When reverting to a direct inverter
+                // feed, leaving those devices in the root feed silently reconnects them to
+                // the grid lane. Fold them into the restored inverter-backup circuit instead.
+                const loadSideSerialDevices = devices
+                  .slice(index + 1)
+                  .filter(
+                    (device) => device.supplyPath == null || device.supplyPath === 'serial'
+                  )
+                const backupBranchDevices = [...backupOutputDevices, ...loadSideSerialDevices]
+                  .sort((left, right) => left.trunkPosition - right.trunkPosition)
                 const backupConverter = devices.find(
                   (device) => device.supplyPath === 'backup' && device.symbol === 'inverter'
                 )
@@ -943,7 +954,7 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
                     ? restoreDirectConverterBackupProtectionFromTrunkDevices(
                         project,
                         backupConverter,
-                        backupOutputDevices
+                        backupBranchDevices
                       )
                     : null
                 if (downgraded && restoredBackup && owningPanel && backupConverter) {
@@ -955,7 +966,7 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
                     restoredBackup.circuit,
                     owningPanel.id
                   )
-                  backupOutputDevices.forEach((device) => removedIds.add(device.id))
+                  backupBranchDevices.forEach((device) => removedIds.add(device.id))
                 }
                 if (downgraded) {
                   downgradedGridOrder = [

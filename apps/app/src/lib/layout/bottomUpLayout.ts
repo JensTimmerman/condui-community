@@ -357,6 +357,50 @@ function getCircuitLineTopY(
   return Math.min(baseTopY, subPanelLineEndY)
 }
 
+/**
+ * A feeder note belongs above the secondary-panel symbol that caps its trunk.
+ * The symbol is attached after the initial circuit-note pass because its exact
+ * position can depend on nested-panel routing. Keep the note and frame in sync
+ * once that final position is known.
+ */
+function placeCircuitNoteAboveSecondaryPanel(
+  panelLayout: BottomUpPanelLayout,
+  circuitId: string,
+  panelSymbolY: number
+): void {
+  const note = panelLayout.circuitNotes?.find((candidate) => candidate.circuitId === circuitId)
+  if (!note) return
+
+  const paintBounds = getCircuitNotesPaintBounds(note.label, note.notesOrientation)
+  const noteTopBeforeMove = note.y + paintBounds.top
+  const panelTopY = panelSymbolY - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
+  const NOTE_TO_PANEL_GAP = 4
+  const desiredNoteY = panelTopY - NOTE_TO_PANEL_GAP - paintBounds.bottom
+
+  // Leave an already-higher note alone; it may have been lifted to make room
+  // for another note sharing the same trunk.
+  if (note.y <= desiredNoteY) return
+
+  note.y = desiredNoteY
+  const noteElement = panelLayout.elements.find(
+    (element) => element.id === `circuit-notes-${circuitId}`
+  )
+  if (noteElement) {
+    noteElement.position.y = desiredNoteY
+  }
+
+  // Preserve the frame's existing clearance above this label as it moves up.
+  // Without this, the canvas frame and exported scene can clip a long rotated
+  // note even though its anchor correctly clears the secondary panel.
+  const noteTopAfterMove = desiredNoteY + paintBounds.top
+  const existingTopClearance = Math.max(0, noteTopBeforeMove - panelLayout.frame.y)
+  const desiredFrameY = noteTopAfterMove - existingTopClearance
+  if (desiredFrameY < panelLayout.frame.y) {
+    panelLayout.frame.height += panelLayout.frame.y - desiredFrameY
+    panelLayout.frame.y = desiredFrameY
+  }
+}
+
 export interface BottomUpLayoutElement {
   id: string
   type:
@@ -415,6 +459,12 @@ export interface BottomUpPanelLayout {
   ownerPanelId?: string
   /** How the lower supply endpoint is represented in this frame. */
   supplyEndpointKind?: 'mains' | 'continuation'
+  /** Visual direction of the supply chain. */
+  supplyFlowDirection?: 'right-to-left' | 'left-to-right'
+  /** Stable axis used to mirror supply geometry without mirroring symbol artwork or text. */
+  supplyMirrorAxisX?: number
+  /** Horizontal room reserved during panel placement, applied to the frame after placement. */
+  supplyFrameLeftExpansion?: number
   elements: BottomUpLayoutElement[]
   /** Circuit notes labels for eendraad canvas + export overlay (single source of truth). */
   circuitNotes?: Array<{
@@ -510,6 +560,261 @@ export interface BottomUpPanelLayout {
     circuit: Circuit
     position: Point
   }
+}
+
+function mirrorPointX(x: number, axisX: number): number {
+  return axisX * 2 - x
+}
+
+function mirrorRectX(x: number, width: number, axisX: number): number {
+  return axisX * 2 - x - width
+}
+
+/**
+ * Mirror a detached supply frame's positioned geometry without mirroring text or symbol artwork.
+ *
+ * The supply topology and hit-zone builders still use their established right-to-left canonical
+ * coordinates. This involutive transform lets those builders temporarily return to canonical
+ * space while the public layout and rendered frame flow from left to right.
+ */
+export function mirrorDetachedSupplyPanelLayoutHorizontally(
+  panelLayout: BottomUpPanelLayout
+): void {
+  const axisX = panelLayout.frame.x + panelLayout.frame.width / 2
+  panelLayout.supplyMirrorAxisX = axisX
+
+  panelLayout.supplyFlowDirection =
+    panelLayout.supplyFlowDirection === 'left-to-right' ? 'right-to-left' : 'left-to-right'
+
+  panelLayout.elements.forEach((element) => {
+    if (
+      element.width != null &&
+      (element.type === 'mainBus' || element.type === 'branch' || element.type === 'trunk')
+    ) {
+      element.position.x = mirrorRectX(element.position.x, element.width, axisX)
+    } else {
+      element.position.x = mirrorPointX(element.position.x, axisX)
+    }
+    if (
+      element.type === 'endpoint' &&
+      panelLayout.circuits.some(
+        ({ circuit }) =>
+          circuit.id === element.circuitId && circuit.supplySource?.kind === 'converter-backup'
+      )
+    ) {
+      element.mirrorEndpointHorizontally = !element.mirrorEndpointHorizontally
+    }
+  })
+
+  panelLayout.branches.forEach((branch) => {
+    branch.trunkX = mirrorPointX(branch.trunkX, axisX)
+    branch.branchX = mirrorRectX(branch.branchX, branch.branchWidth, axisX)
+  })
+  panelLayout.trunks.forEach((trunk) => {
+    trunk.x = mirrorRectX(trunk.x, trunk.width, axisX)
+  })
+  panelLayout.mainBus.x = mirrorRectX(panelLayout.mainBus.x, panelLayout.mainBus.width, axisX)
+  panelLayout.supply.x = mirrorPointX(panelLayout.supply.x, axisX)
+  if (panelLayout.supplyBend) panelLayout.supplyBend.x = mirrorPointX(panelLayout.supplyBend.x, axisX)
+  if (panelLayout.ground) panelLayout.ground.x = mirrorPointX(panelLayout.ground.x, axisX)
+
+  panelLayout.supplyDevices?.forEach((device) => {
+    device.x = mirrorPointX(device.x, axisX)
+  })
+  panelLayout.groundDevices?.forEach((device) => {
+    device.x = mirrorPointX(device.x, axisX)
+  })
+  if (panelLayout.supplyChangeoverBranches) {
+    panelLayout.supplyChangeoverBranches.x = mirrorPointX(
+      panelLayout.supplyChangeoverBranches.x,
+      axisX
+    )
+    panelLayout.supplyChangeoverBranches.elbowX = mirrorPointX(
+      panelLayout.supplyChangeoverBranches.elbowX,
+      axisX
+    )
+    panelLayout.supplyChangeoverBranches.slotEndX = mirrorPointX(
+      panelLayout.supplyChangeoverBranches.slotEndX,
+      axisX
+    )
+  }
+  if (panelLayout.supplyConverterBranch) {
+    panelLayout.supplyConverterBranch.x = mirrorPointX(panelLayout.supplyConverterBranch.x, axisX)
+    panelLayout.supplyConverterBranch.dcEndX = mirrorPointX(
+      panelLayout.supplyConverterBranch.dcEndX,
+      axisX
+    )
+    if (panelLayout.supplyConverterBranch.dcTopEndX != null) {
+      panelLayout.supplyConverterBranch.dcTopEndX = mirrorPointX(
+        panelLayout.supplyConverterBranch.dcTopEndX,
+        axisX
+      )
+    }
+  }
+  if (panelLayout.supplyConverterBackup) {
+    const { x1, x2 } = panelLayout.supplyConverterBackup
+    panelLayout.supplyConverterBackup.x1 = mirrorPointX(x2, axisX)
+    panelLayout.supplyConverterBackup.x2 = mirrorPointX(x1, axisX)
+  }
+  if (panelLayout.feedOutput) {
+    panelLayout.feedOutput.x = mirrorPointX(panelLayout.feedOutput.x, axisX)
+  }
+
+  panelLayout.circuits.forEach((circuit) => {
+    const protectionAnchorOffset = getProtectionAnchorOffset(circuit.leftReserve)
+    circuit.x =
+      mirrorPointX(circuit.x + protectionAnchorOffset, axisX) - protectionAnchorOffset
+  })
+  panelLayout.circuitNotes?.forEach((note) => {
+    note.x = mirrorPointX(note.x, axisX)
+  })
+  panelLayout.layoutBlocks?.forEach((block) => {
+    // The information block is a readable document control, not electrical
+    // topology. Keep its established bottom-right frame anchor.
+    if (block.kind !== 'info-block') block.x = mirrorRectX(block.x, block.width, axisX)
+  })
+  if (panelLayout.parentMcb) {
+    panelLayout.parentMcb.position.x = mirrorPointX(panelLayout.parentMcb.position.x, axisX)
+  }
+}
+
+/** Mirror only the lower supply/earthing assembly of an ordinary panel frame. */
+export function mirrorInlineSupplyPanelLayoutHorizontally(
+  panelLayout: BottomUpPanelLayout
+): void {
+  const axisX =
+    panelLayout.supplyMirrorAxisX ??
+    (panelLayout.supply.x + (panelLayout.supplyBend?.x ?? panelLayout.mainBus.x)) / 2
+  panelLayout.supplyMirrorAxisX = axisX
+  panelLayout.supplyFlowDirection =
+    panelLayout.supplyFlowDirection === 'left-to-right' ? 'right-to-left' : 'left-to-right'
+
+  const isSupplyElement = (element: BottomUpLayoutElement) =>
+    element.type === 'supply' ||
+    element.type === 'ground' ||
+    (element.type === 'trunkDevice' &&
+      (element.id.startsWith('supplyTrunkDevice-') ||
+        element.id.startsWith('groundTrunkDevice-'))) ||
+    element.id === 'supply-continuation-label' ||
+    element.id === 'feed-output-label' ||
+    (element.circuitId != null &&
+      panelLayout.circuits.some(
+        ({ circuit }) =>
+          circuit.id === element.circuitId && circuit.supplySource?.kind === 'converter-backup'
+      ))
+
+  panelLayout.elements.forEach((element) => {
+    if (isSupplyElement(element)) element.position.x = mirrorPointX(element.position.x, axisX)
+  })
+  panelLayout.supply.x = mirrorPointX(panelLayout.supply.x, axisX)
+  if (panelLayout.supplyBend) panelLayout.supplyBend.x = mirrorPointX(panelLayout.supplyBend.x, axisX)
+  if (panelLayout.ground) panelLayout.ground.x = mirrorPointX(panelLayout.ground.x, axisX)
+  panelLayout.supplyDevices?.forEach((device) => {
+    device.x = mirrorPointX(device.x, axisX)
+  })
+  panelLayout.groundDevices?.forEach((device) => {
+    device.x = mirrorPointX(device.x, axisX)
+  })
+  if (panelLayout.supplyChangeoverBranches) {
+    panelLayout.supplyChangeoverBranches.x = mirrorPointX(
+      panelLayout.supplyChangeoverBranches.x,
+      axisX
+    )
+    panelLayout.supplyChangeoverBranches.elbowX = mirrorPointX(
+      panelLayout.supplyChangeoverBranches.elbowX,
+      axisX
+    )
+    panelLayout.supplyChangeoverBranches.slotEndX = mirrorPointX(
+      panelLayout.supplyChangeoverBranches.slotEndX,
+      axisX
+    )
+  }
+  if (panelLayout.supplyConverterBranch) {
+    panelLayout.supplyConverterBranch.x = mirrorPointX(panelLayout.supplyConverterBranch.x, axisX)
+    panelLayout.supplyConverterBranch.dcEndX = mirrorPointX(
+      panelLayout.supplyConverterBranch.dcEndX,
+      axisX
+    )
+    if (panelLayout.supplyConverterBranch.dcTopEndX != null) {
+      panelLayout.supplyConverterBranch.dcTopEndX = mirrorPointX(
+        panelLayout.supplyConverterBranch.dcTopEndX,
+        axisX
+      )
+    }
+  }
+  if (panelLayout.supplyConverterBackup) {
+    const { x1, x2 } = panelLayout.supplyConverterBackup
+    panelLayout.supplyConverterBackup.x1 = mirrorPointX(x2, axisX)
+    panelLayout.supplyConverterBackup.x2 = mirrorPointX(x1, axisX)
+  }
+  panelLayout.circuits.forEach((circuitLayout) => {
+    if (circuitLayout.circuit.supplySource?.kind !== 'converter-backup') return
+    const protectionAnchorOffset = getProtectionAnchorOffset(circuitLayout.leftReserve)
+    circuitLayout.x =
+      mirrorPointX(circuitLayout.x + protectionAnchorOffset, axisX) - protectionAnchorOffset
+  })
+  panelLayout.branches.forEach((branch) => {
+    const circuit = panelLayout.circuits.find(
+      ({ circuit }) => circuit.id === branch.circuitId
+    )?.circuit
+    if (circuit?.supplySource?.kind !== 'converter-backup') return
+    branch.trunkX = mirrorPointX(branch.trunkX, axisX)
+    branch.branchX = mirrorRectX(branch.branchX, branch.branchWidth, axisX)
+  })
+  panelLayout.trunks.forEach((trunk) => {
+    if (!trunk.circuits.some((circuit) => circuit.supplySource?.kind === 'converter-backup')) {
+      return
+    }
+    trunk.x = mirrorRectX(trunk.x, trunk.width, axisX)
+  })
+  panelLayout.circuitNotes?.forEach((note) => {
+    const circuit = panelLayout.circuits.find(
+      ({ circuit }) => circuit.id === note.circuitId
+    )?.circuit
+    if (circuit?.supplySource?.kind === 'converter-backup') {
+      note.x = mirrorPointX(note.x, axisX)
+    }
+  })
+  panelLayout.layoutBlocks?.forEach((block) => {
+    if (block.kind === 'supply-assembly') block.x = mirrorRectX(block.x, block.width, axisX)
+  })
+}
+
+function reflowDetachedSupplyInfoBlockAfterMirror(panelLayout: BottomUpPanelLayout): void {
+  const infoBlock = panelLayout.layoutBlocks?.find((block) => block.kind === 'info-block')
+  if (!infoBlock) return
+  const obstacles = (panelLayout.layoutBlocks ?? []).filter((block) => block !== infoBlock)
+  const arrangement = arrangeBottomRightBlock({
+    frameLeft: panelLayout.frame.x,
+    frameTop: panelLayout.frame.y,
+    initialFrameRight: panelLayout.frame.x + panelLayout.frame.width,
+    initialFrameBottom: panelLayout.frame.y + panelLayout.frame.height,
+    frameMargin: INFO_BLOCK_FRAME_MARGIN,
+    blockWidth: infoBlock.width,
+    blockHeight: infoBlock.height,
+    obstacles,
+    clearance: 10,
+    // Mirroring moves the electrical assembly into the former empty pocket.
+    // Preserve the document block's bottom-right convention by adding a row.
+    preferBelow: true,
+  })
+  infoBlock.x = arrangement.block.x
+  infoBlock.y = arrangement.block.y
+  panelLayout.frame.height = arrangement.frameBottom - panelLayout.frame.y
+}
+
+function expandPanelFrameLeftForMirroredSupply(panelLayout: BottomUpPanelLayout): void {
+  const mirroredSupplyLeft = Math.min(
+    ...((panelLayout.layoutBlocks ?? [])
+      .filter((block) => block.kind === 'supply-assembly')
+      .map((block) => block.x)),
+    panelLayout.supply.x - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
+  )
+  const requiredFrameLeft = mirroredSupplyLeft - 20
+  if (requiredFrameLeft >= panelLayout.frame.x) return
+  const expansion = panelLayout.frame.x - requiredFrameLeft
+  panelLayout.supplyFrameLeftExpansion = expansion
+  panelLayout.frame.width += expansion
 }
 
 export function getPanelDiagramId(panelLayout: BottomUpPanelLayout): string {
@@ -635,6 +940,7 @@ function applyShiftToPanelLayout(panelLayout: BottomUpPanelLayout, dx: number, d
 
   panelLayout.frame.x += dx
   panelLayout.frame.y += dy
+  if (panelLayout.supplyMirrorAxisX != null) panelLayout.supplyMirrorAxisX += dx
 
   panelLayout.elements.forEach((el) => {
     el.position.x += dx
@@ -2332,7 +2638,11 @@ function calculateBottomUpPanelLayout(
     // Compact panel-only handoff frames use the bus stubs themselves as the
     // supply indicator. Repeating the generic "Voeding" label there makes the
     // two stub markers look like a third feed and collides with their labels.
-    if (options.supplyEndpointKind === 'continuation' && !usesCompactPanelMainBus) {
+    if (
+      options.supplyEndpointKind === 'continuation' &&
+      !usesCompactPanelMainBus &&
+      !hasExplicitPanelBusSections(panel)
+    ) {
       elements.push({
         id: 'supply-continuation-label',
         type: 'label',
@@ -4161,26 +4471,37 @@ export function calculateBottomUpLayout(
       }
     )
 
+    if (
+      !isSubPanel &&
+      !suppressInlineSupplyTopology &&
+      panelLayout.supplyEndpointKind !== 'continuation'
+    ) {
+      mirrorInlineSupplyPanelLayoutHorizontally(panelLayout)
+      reflowDetachedSupplyInfoBlockAfterMirror(panelLayout)
+      expandPanelFrameLeftForMirroredSupply(panelLayout)
+    }
+
     if (detachSupply) {
       const supplyDiagramPanel = clonePanelForDiagramRole(flatPanel.panel, 'supply')
-      detachedSupplyLayouts.push(
-        calculateBottomUpPanelLayout(
-          supplyDiagramPanel,
-          manualOverrides,
-          { x: 0, y: 0 },
-          null,
-          installation,
-          panels,
-          {
-            showInspectionAgencyInInfoBlock,
-            diagramId: `${flatPanel.panel.id}--supply`,
-            ownerPanelId: flatPanel.panel.id,
-            frameRole: 'supply',
-            supplyEndpointKind: 'mains',
-            feedOutput: true,
-          }
-        )
+      const detachedSupplyLayout = calculateBottomUpPanelLayout(
+        supplyDiagramPanel,
+        manualOverrides,
+        { x: 0, y: 0 },
+        null,
+        installation,
+        panels,
+        {
+          showInspectionAgencyInInfoBlock,
+          diagramId: `${flatPanel.panel.id}--supply`,
+          ownerPanelId: flatPanel.panel.id,
+          frameRole: 'supply',
+          supplyEndpointKind: 'mains',
+          feedOutput: true,
+        }
       )
+      mirrorDetachedSupplyPanelLayoutHorizontally(detachedSupplyLayout)
+      reflowDetachedSupplyInfoBlockAfterMirror(detachedSupplyLayout)
+      detachedSupplyLayouts.push(detachedSupplyLayout)
     }
 
     const upstreamProtectionLabel = (parentMcbInfo?.protection.label ?? '').trim()
@@ -4287,6 +4608,11 @@ export function calculateBottomUpLayout(
       currentX += layout.frame.width + PANEL_SPACING
     }
   }
+
+  panelLayouts.forEach((layout) => {
+    if (!layout.supplyFrameLeftExpansion) return
+    layout.frame.x -= layout.supplyFrameLeftExpansion
+  })
 
   const framesOverlap = (
     left: { x: number; y: number; width: number; height: number },
@@ -4428,6 +4754,8 @@ export function calculateBottomUpLayout(
                 : (nestedPanelOnlyFeederY ??
                   sourcePanelEndpointY ??
                   getCircuitLineTopY(circuitBranches, mcbY, true))
+
+            placeCircuitNoteAboveSecondaryPanel(mainPanelLayout, circuit.id, symbolY)
 
             mainPanelLayout.elements.push({
               id: `subpanel-symbol-${link.protection.id}`,

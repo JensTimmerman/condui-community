@@ -46,6 +46,7 @@ import { MultiplierBadge } from './MultiplierBadge'
 import { useCanvasPanOrClickGesture } from './CanvasPanOrClickGesture'
 import { DomainMarker } from './DomainMarker'
 import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
+import { getEarthingSeparatorPairIds } from '@/lib/eendraad/earthingSeparatorPairs'
 import {
   getPhaseAssignmentLabel,
   phaseAssignmentDiffersFromInstallation,
@@ -88,8 +89,13 @@ interface TrunkDeviceSymbolProps {
   position: Point
   /** Other devices on this supply lane, used to keep metadata cards apart. */
   supplyDevicePositions?: Array<{ device: TrunkDevice; x: number; y: number }>
+  /** Left-to-right supply layouts are solved in canonical space, then mirrored back. */
+  supplyMirrorAxisX?: number
+  supplyPanelId?: string
   /** If true, symbol is on a horizontal wire (supply trunk). Default: vertical trunk. */
   isHorizontal?: boolean
+  /** Artwork rotation resolved by the shared layout tree. */
+  symbolRotationDeg?: number
   /** Show the device's own label on the left for special vertical feeder contexts. */
   showDeviceLabelLeft?: boolean
   /** Split a wide residual-current line to avoid adjacent supply-label collisions. */
@@ -176,7 +182,10 @@ export function TrunkDeviceSymbol({
   device,
   position,
   supplyDevicePositions,
+  supplyMirrorAxisX,
+  supplyPanelId,
   isHorizontal,
+  symbolRotationDeg,
   showDeviceLabelLeft = false,
   splitProtectionResidualLine = false,
   protectionLabelPosition,
@@ -200,7 +209,9 @@ export function TrunkDeviceSymbol({
   const fontFamily = useCanvasFontFamily()
   const isPreviewSelected = useIsPreviewSelected('trunkDevice', device.id)
   const [processedImage, setProcessedImage] = useState<HTMLImageElement | null>(null)
-  const [converterDiagonalImage, setConverterDiagonalImage] = useState<HTMLImageElement | null>(null)
+  const [converterDiagonalImage, setConverterDiagonalImage] = useState<HTMLImageElement | null>(
+    null
+  )
   const [converterAcImage, setConverterAcImage] = useState<HTMLImageElement | null>(null)
   const [converterDcImage, setConverterDcImage] = useState<HTMLImageElement | null>(null)
   const [isHovered, setIsHovered] = useState(false)
@@ -268,7 +279,7 @@ export function TrunkDeviceSymbol({
     ? getConverterArtworkLayout(
         device.symbol === 'inverter' ? 'DC' : 'AC',
         device.symbol === 'inverter' ? 'AC' : 'DC',
-        converterConnectionDomains,
+        converterConnectionDomains
       )
     : null
   const hasConnectedTopWire =
@@ -363,9 +374,13 @@ export function TrunkDeviceSymbol({
     peerCount: metadataCalloutPeerCount,
   })
   const metadataCalloutGroup = useMemo(() => {
-    const peerPositions = supplyDevicePositions?.length
+    const renderedPeerPositions = supplyDevicePositions?.length
       ? supplyDevicePositions
       : [{ device, x: position.x, y: position.y }]
+    const peerPositions = renderedPeerPositions.map((peer) => ({
+      ...peer,
+      x: supplyMirrorAxisX == null ? peer.x : supplyMirrorAxisX * 2 - peer.x,
+    }))
     const peers = peerPositions.filter(
       ({ device: peer }) =>
         isSupplyMetadataDevice(peer) &&
@@ -402,12 +417,59 @@ export function TrunkDeviceSymbol({
         },
       ]
     })
-    return getSupplyMetadataCalloutGroupPlacements({
+    const canonicalPlacements = getSupplyMetadataCalloutGroupPlacements({
       items,
-      segments: wireSegments,
+      segments: wireSegments
+        .filter((segment) => supplyPanelId == null || segment.panelId === supplyPanelId)
+        .map((segment) =>
+          supplyMirrorAxisX == null
+            ? segment
+            : {
+                ...segment,
+                startPoint: {
+                  ...segment.startPoint,
+                  x: supplyMirrorAxisX * 2 - segment.startPoint.x,
+                },
+                endPoint: {
+                  ...segment.endPoint,
+                  x: supplyMirrorAxisX * 2 - segment.endPoint.x,
+                },
+              }
+        ),
       symbolRects,
     })
-  }, [device, fontFamily, position.x, position.y, supplyDevicePositions, wireSegments])
+    if (supplyMirrorAxisX == null) return canonicalPlacements
+
+    return new Map(
+      [...canonicalPlacements].map(([id, placement]) => {
+        const renderedSymbolX = supplyMirrorAxisX * 2 - placement.symbolPosition.x
+        const renderedCardLeft = supplyMirrorAxisX * 2 - placement.rect.right
+        return [
+          id,
+          {
+            ...placement,
+            symbolPosition: { ...placement.symbolPosition, x: renderedSymbolX },
+            x: renderedCardLeft - renderedSymbolX,
+            rect: {
+              left: renderedCardLeft,
+              top: placement.rect.top,
+              right: supplyMirrorAxisX * 2 - placement.rect.left,
+              bottom: placement.rect.bottom,
+            },
+          },
+        ]
+      })
+    )
+  }, [
+    device,
+    fontFamily,
+    position.x,
+    position.y,
+    supplyDevicePositions,
+    supplyMirrorAxisX,
+    supplyPanelId,
+    wireSegments,
+  ])
   const useMetadataCallout =
     isSupplyMetadataDevice(device) && isHorizontal === true && metadataCalloutGroup.has(device.id)
   const metadataCalloutVisualLineCount = useMemo(
@@ -473,6 +535,7 @@ export function TrunkDeviceSymbol({
     symbolWidth: renderedSymbolSize.width,
     symbolHeight: renderedSymbolSize.height,
     placementKind: metadataCalloutPlacementKind,
+    mirrorHorizontally: supplyMirrorAxisX != null,
   })
 
   const certificationSideLabelExtraOffset = useMemo(
@@ -505,7 +568,9 @@ export function TrunkDeviceSymbol({
       [CONVERTER_ARTWORK_PATHS.DC, setConverterDcImage],
     ] as const
     for (const [path, setter] of paths) {
-      loadProcessedSymbol(path, isDark).then(setter).catch(() => setter(null))
+      loadProcessedSymbol(path, isDark)
+        .then(setter)
+        .catch(() => setter(null))
     }
   }, [isDirectionalConverter, isDark])
 
@@ -568,17 +633,30 @@ export function TrunkDeviceSymbol({
         return
       }
 
+      const currentProject = useProjectStore.getState().currentProject
+      const pairedIds = currentProject
+        ? getEarthingSeparatorPairIds(
+            getElectricalInstallationFromProject(currentProject)?.groundTrunkDevices,
+            device.id
+          )
+        : [device.id]
       if (e.evt.shiftKey) {
         const { selection } = useUIStore.getState()
-        if (selection.type === 'trunkDevice' && !selection.ids.includes(device.id)) {
-          setSelection({ type: 'trunkDevice', ids: [...selection.ids, device.id] })
+        if (
+          selection.type === 'trunkDevice' &&
+          !pairedIds.every((id) => selection.ids.includes(id))
+        ) {
+          setSelection({ type: 'trunkDevice', ids: [...new Set([...selection.ids, ...pairedIds])] })
         } else if (selection.type !== 'trunkDevice') {
-          setSelection({ type: 'trunkDevice', ids: [device.id] })
+          setSelection({ type: 'trunkDevice', ids: pairedIds })
         }
       } else if (e.evt.altKey || e.evt.ctrlKey || e.evt.metaKey) {
         const { selection } = useUIStore.getState()
-        if (selection.type === 'trunkDevice' && selection.ids.includes(device.id)) {
-          const newIds = selection.ids.filter((id) => id !== device.id)
+        if (
+          selection.type === 'trunkDevice' &&
+          pairedIds.some((id) => selection.ids.includes(id))
+        ) {
+          const newIds = selection.ids.filter((id) => !pairedIds.includes(id))
           if (newIds.length === 0) {
             useUIStore.getState().clearSelection()
           } else {
@@ -586,7 +664,7 @@ export function TrunkDeviceSymbol({
           }
         }
       } else {
-        setSelection({ type: 'trunkDevice', ids: [device.id] })
+        setSelection({ type: 'trunkDevice', ids: pairedIds })
       }
     },
     [device.id, setSelection]
@@ -594,6 +672,10 @@ export function TrunkDeviceSymbol({
   const metadataCalloutGestureHandlers = useCanvasPanOrClickGesture((event) => handleClick(event))
 
   const rotateForHorizontal = isHorizontal && isProtection && !isInlineSwitch
+  const rotateMirroredChangeover =
+    isHorizontal === true && device.symbol === 'source_changeover' && supplyMirrorAxisX != null
+  const renderedSymbolRotationDeg =
+    symbolRotationDeg ?? (rotateMirroredChangeover ? 180 : rotateForHorizontal ? 90 : 0)
   const protectionLabelSource = isInlineSwitch
     ? {
         ...device,
@@ -632,7 +714,7 @@ export function TrunkDeviceSymbol({
       renderedSymbolSize.width,
       renderedSymbolSize.height,
       converterIconMargin,
-      converterIconSize,
+      converterIconSize
     )
   }
   const converterAcPosition = converterArtworkImagePosition('AC')
@@ -712,7 +794,7 @@ export function TrunkDeviceSymbol({
         height={renderedSymbolSize.height}
         offsetX={isSurgeProtection ? surgeSymbolAnchor.x : renderedSymbolSize.width / 2}
         offsetY={isSurgeProtection ? surgeSymbolAnchor.y : renderedSymbolSize.height / 2}
-        rotation={rotateForHorizontal ? -90 : 0}
+        rotation={renderedSymbolRotationDeg}
         listening={false}
       />
       {isDirectionalConverter && converterDiagonalImage && converterArtworkLayout && (
@@ -757,11 +839,19 @@ export function TrunkDeviceSymbol({
         isSymbolLabelVisible(device.symbolLabelDisplay, 'changeoverPort1Label', true) &&
         (device.changeoverProps?.port1Label ?? '1').trim().length > 0 && (
           <Text
-            x={renderedSymbolSize.width / 2 - 162}
-            y={-(renderedSymbolSize.height * 7) / 24 - 11}
+            x={
+              rotateMirroredChangeover
+                ? -renderedSymbolSize.width / 2 + 2
+                : renderedSymbolSize.width / 2 - 162
+            }
+            y={
+              rotateMirroredChangeover
+                ? (renderedSymbolSize.height * 7) / 24 + 2
+                : -(renderedSymbolSize.height * 7) / 24 - 11
+            }
             width={160}
             text={device.changeoverProps?.port1Label ?? '1'}
-            align="right"
+            align={rotateMirroredChangeover ? 'left' : 'right'}
             fontSize={8}
             fontFamily={fontFamily}
             fill={getSecondaryTextColor(isDark ?? false)}
@@ -772,11 +862,19 @@ export function TrunkDeviceSymbol({
         isSymbolLabelVisible(device.symbolLabelDisplay, 'changeoverPort2Label', true) &&
         (device.changeoverProps?.port2Label ?? '2').trim().length > 0 && (
           <Text
-            x={renderedSymbolSize.width / 2 - 162}
-            y={(renderedSymbolSize.height * 7) / 24 + 2}
+            x={
+              rotateMirroredChangeover
+                ? -renderedSymbolSize.width / 2 + 2
+                : renderedSymbolSize.width / 2 - 162
+            }
+            y={
+              rotateMirroredChangeover
+                ? -(renderedSymbolSize.height * 7) / 24 - 11
+                : (renderedSymbolSize.height * 7) / 24 + 2
+            }
             width={160}
             text={device.changeoverProps?.port2Label ?? '2'}
-            align="right"
+            align={rotateMirroredChangeover ? 'left' : 'right'}
             fontSize={8}
             fontFamily={fontFamily}
             fill={getSecondaryTextColor(isDark ?? false)}
@@ -907,7 +1005,7 @@ export function TrunkDeviceSymbol({
           height={SYMBOL_SIZE}
           offsetX={SYMBOL_SIZE / 2}
           offsetY={isHorizontal ? SYMBOL_SIZE / 2 : SYMBOL_SIZE / 2}
-          rotation={rotateForHorizontal ? -90 : 0}
+          rotation={renderedSymbolRotationDeg}
           listening={false}
         />
       )}
@@ -918,7 +1016,7 @@ export function TrunkDeviceSymbol({
           height={SYMBOL_SIZE}
           offsetX={SYMBOL_SIZE / 2}
           offsetY={isHorizontal ? SYMBOL_SIZE / 2 : SYMBOL_SIZE / 2}
-          rotation={rotateForHorizontal ? -90 : 0}
+          rotation={renderedSymbolRotationDeg}
           listening={false}
         />
       )}
@@ -929,7 +1027,7 @@ export function TrunkDeviceSymbol({
           height={SYMBOL_SIZE}
           offsetX={SYMBOL_SIZE / 2}
           offsetY={isHorizontal ? SYMBOL_SIZE / 2 : SYMBOL_SIZE / 2}
-          rotation={rotateForHorizontal ? -90 : 0}
+          rotation={renderedSymbolRotationDeg}
           listening={false}
         />
       )}

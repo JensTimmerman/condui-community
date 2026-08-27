@@ -185,6 +185,9 @@ const RenderNode = memo(function RenderNode({
             <ProtectionSymbol
               protection={protection}
               position={{ x: node.bounds.x, y: node.bounds.y }}
+              symbolRotationDeg={
+                node.visual?.type === 'symbol' ? node.visual.rotationDeg : undefined
+              }
               getCanvasPositionFromEvent={getCanvasPositionFromEvent}
               onDragEnd={
                 onElementDragEnd
@@ -437,7 +440,14 @@ const RenderNode = memo(function RenderNode({
           device={trunkDevice}
           position={{ x: node.bounds.x, y: node.bounds.y }}
           supplyDevicePositions={panelLayout?.supplyDevices}
+          supplyMirrorAxisX={
+            panelLayout?.supplyFlowDirection === 'left-to-right'
+              ? (panelLayout.supplyMirrorAxisX ?? panelLayout.frame.x + panelLayout.frame.width / 2)
+              : undefined
+          }
+          supplyPanelId={panelLayout?.panel.id}
           isHorizontal={isSupplyTrunkDevice && !isVerticalSupplyBranchDevice}
+          symbolRotationDeg={node.visual?.type === 'symbol' ? node.visual.rotationDeg : undefined}
           protectionLabelPosition={isVerticalSupplyBranchDevice ? 'right' : undefined}
           showDeviceLabelLeft={isSubPanelSupplyTrunkDevice}
           splitProtectionResidualLine={
@@ -548,9 +558,7 @@ function CircuitNotesLabel({ node }: { node: LayoutNode }) {
   const colors = useThemeColors()
   const fontFamily = useCanvasFontFamily()
   const textColor = colors.secondaryText
-  const notesText = normalizeCircuitNotesText(
-    node.visual?.type === 'label' ? node.visual.text : ''
-  )
+  const notesText = normalizeCircuitNotesText(node.visual?.type === 'label' ? node.visual.text : '')
   const orientation =
     node.visual?.type === 'label' ? (node.visual.notesOrientation ?? 'horizontal') : 'horizontal'
   const notesVisible = node.visual?.type === 'label' ? node.visual.notesVisible !== false : true
@@ -572,12 +580,7 @@ function CircuitNotesLabel({ node }: { node: LayoutNode }) {
     fontSize,
     estimateCircuitNotesWidth(notesText, fontFamily, fontSize)
   )
-  const blockHeight = estimateCircuitNotesBlockHeight(
-    notesText,
-    fontFamily,
-    fontSize,
-    lineHeight
-  )
+  const blockHeight = estimateCircuitNotesBlockHeight(notesText, fontFamily, fontSize, lineHeight)
   let rotation = 0
 
   if (isVertical) {

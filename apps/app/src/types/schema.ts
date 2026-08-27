@@ -494,6 +494,8 @@ export interface TrunkDevice {
   type: TrunkDeviceType
   symbol: SymbolKey
   label: string
+  /** Shared identity for the two physical symbols of one earthing separator. */
+  earthingSeparatorPairId?: string
   /** Physical panel-canvas mounting for supply devices; independent from electrical feed ownership. */
   panelMounting?:
     | { kind: 'grid' }
@@ -1088,6 +1090,8 @@ export type PlanWireSource = 'auto' | 'manual'
 
 export interface PlanWireEndpointRef {
   endpointId: string
+  /** Supply/circuit trunk-device anchor. `endpointId` remains its stable compatibility id. */
+  trunkDeviceId?: string
   placementId?: string
 }
 

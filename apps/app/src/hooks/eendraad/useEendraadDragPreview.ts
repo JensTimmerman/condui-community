@@ -126,6 +126,9 @@ export function useEendraadDragPreview(
               preferMainBusOverGroundWire: true,
               preferMainBusOverSupplyWire: prefersMainBus,
               preferSecondaryBusForNestedProtection: isProtectionPlacement,
+              ...(symbol.id === 'source_changeover'
+                ? { normalizeDirectConverterChangeoverDrop: true }
+                : {}),
             }
       )
 

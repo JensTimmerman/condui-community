@@ -37,6 +37,12 @@ export function getWireLengthLabel(wire: WireSegment, t?: WireTranslateFn): stri
 export function isHardwareTallyWireSegment(segment: WireSegment): boolean {
   if (segment.type === 'mainBus' || segment.type === 'secondaryBus') return false
   if (segment.supplyMergedIntoBusDrop) return false
+  // The short bus-to-protection stub is drawn with the panel-bus minimum
+  // cable. It is internal distribution, not the circuit cable to install.
+  if (segment.toElementType === 'protection') return false
+  // A protection-to-secondary-bus link is internal panel distribution, not an
+  // installed cable run. The incoming secondary-panel bus stub is the same.
+  if (segment.toElementType === 'secondaryBus' || segment.isSubPanelSupply) return false
   return true
 }
 

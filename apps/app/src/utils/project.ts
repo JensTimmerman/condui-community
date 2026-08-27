@@ -64,11 +64,10 @@ export const DEFAULT_EENDRAAD_INSTALLATION_OPTIONS = {
 export function ensureDefaultEarthingSeparators(installation: Installation): boolean {
   const devices = installation.groundTrunkDevices ?? []
   const existingCount = devices.filter((device) => device.type === 'earthing_separator').length
-  if (existingCount >= 2) return false
-
   const earthingLabel = i18n.t('symbols.earthing_separator', { defaultValue: 'PE' })
   let nextPosition =
     devices.reduce((max, device) => Math.max(max, device.trunkPosition ?? -1), -1) + 1
+  let changed = false
 
   for (let index = existingCount; index < 2; index += 1) {
     devices.push({
@@ -79,9 +78,18 @@ export function ensureDefaultEarthingSeparators(installation: Installation): boo
       trunkPosition: nextPosition,
     })
     nextPosition += 1
+    changed = true
+  }
+  const separators = devices.filter((device) => device.type === 'earthing_separator')
+  if (separators.length >= 2 && !separators.slice(0, 2).some((device) => device.earthingSeparatorPairId)) {
+    const pairId = generateId()
+    separators.slice(0, 2).forEach((device) => {
+      device.earthingSeparatorPairId = pairId
+    })
+    changed = true
   }
   installation.groundTrunkDevices = devices
-  return true
+  return changed
 }
 
 /** Default installation used when none is provided to createEmptyProject. */

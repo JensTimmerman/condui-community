@@ -57,6 +57,24 @@ export const beAreiBook1_2025: RulePack = {
       tags: ['supply', 'cable', 'overcurrent', 'protection'],
     },
     {
+      id: 'be.areibook1.2025.backup-supply-rcd',
+      title: 'RCD on backup supply path',
+      severity: 'error',
+      appliesTo: ['subgraph'],
+      checks: [{ name: 'backupSupplyRcdCompliance' }],
+      message: 'validation.rules.be.areibook1.2025.backup-supply-rcd.message',
+      details: 'validation.rules.be.areibook1.2025.backup-supply-rcd.details',
+      remediation: 'validation.rules.be.areibook1.2025.backup-supply-rcd.remediation',
+      citations: [
+        {
+          code: 'AREI',
+          title: 'Algemeen Reglement op de Elektrische Installaties',
+          section: '§ 5.3.5.3(a)',
+        },
+      ],
+      tags: ['rcd', 'supply', 'backup'],
+    },
+    {
       id: 'be.areibook1.2025.diagram-sitplan-consistency',
       title: 'Diagram/sitplan consistency - circuit point ID',
       severity: 'error',

@@ -8,6 +8,7 @@ import {
   validateOffGridSupplyAssembly,
   type LiveAcPhase,
   type OffGridSupplyAssembly,
+  type SupplyNode,
 } from '@/lib/supplyAssembly'
 import type { Offender } from '../types'
 import {
@@ -21,9 +22,11 @@ import {
   type WireSegment,
 } from './common'
 import { getMaxProtectionRatingForSection } from '@/lib/validation/circuitCableSection'
+import { isHouseholdInstallation } from '@/lib/installationProfile'
 import { registerPrimitive } from './registry'
 
 const SUPPLY_PATH_RULE_ID = 'be.areibook1.2025.supply-mode-paths'
+const BACKUP_SUPPLY_RCD_RULE_ID = 'be.areibook1.2025.backup-supply-rcd'
 const SUPPLY_CONDUCTOR_PROTECTION_RULE_ID =
   'be.areibook1.2025.supply-conductor-protection-coordination'
 
@@ -53,6 +56,70 @@ function findAssembly(context: CheckContext): OffGridSupplyAssembly | undefined 
 
 function isLivePhase(value: string): value is LiveAcPhase {
   return value === 'L1' || value === 'L2' || value === 'L3'
+}
+
+function isCompliantMainGradeRcd(device: {
+  type?: string
+  protectionType?: string
+  sensitivityMa?: number
+  ratingA?: number
+  supplyPath?: string
+}): boolean {
+  return (
+    (device.type === 'RCD' ||
+      device.type === 'RCBO' ||
+      device.protectionType === 'RCD' ||
+      device.protectionType === 'RCBO') &&
+    device.sensitivityMa != null &&
+    device.sensitivityMa <= 300 &&
+    (device.ratingA == null || device.ratingA >= 40) &&
+    !device.supplyPath?.includes('grid')
+  )
+}
+
+/**
+ * A panel's root-feed layout can own protections drawn after a supply-assembly
+ * changeover. They are electrically downstream of the backup input even though
+ * they are not duplicated as assembly graph nodes.
+ */
+function hasCompliantRootFeedBackupRcd(
+  assembly: OffGridSupplyAssembly,
+  installation: NonNullable<ReturnType<typeof getElectricalInstallationFromProject>>,
+  handoffId: string,
+  backupConnectionIds: ReadonlySet<string>
+): boolean {
+  const handoff = assembly.loadHandoffs.find((candidate) => candidate.id === handoffId)
+  if (!handoff) return false
+  const target = handoff.target
+  const panelId =
+    target.kind === 'root-feed'
+      ? installation.feedTopology?.rootFeeds.find(
+          (feed) => feed.id === target.rootFeedId
+        )?.panelId
+      : target.panelId
+  if (!panelId) return false
+  const backupPathNodeIds = new Set(
+    assembly.connections
+      .filter((connection) => backupConnectionIds.has(connection.id))
+      .flatMap((connection) => connection.endpoints.map((endpoint) => endpoint.nodeId))
+  )
+  const changeoverIds = new Set(
+    assembly.nodes
+      .filter(
+        (node) => node.kind === 'changeover-switch' && backupPathNodeIds.has(node.id)
+      )
+      .flatMap((node) => [node.id, node.deviceId].filter((id): id is string => !!id))
+  )
+  if (changeoverIds.size === 0) return false
+
+  return (installation.feedTopology?.rootFeeds ?? [])
+    .filter((feed) => feed.panelId === panelId)
+    .some((feed) => {
+      const trunkDevices = feed.trunkDevices ?? []
+      const changeoverIndex = trunkDevices.findIndex((device) => changeoverIds.has(device.id))
+      if (changeoverIndex < 0) return false
+      return trunkDevices.slice(changeoverIndex + 1).some(isCompliantMainGradeRcd)
+    })
 }
 
 function supplyModePaths(context: CheckContext): Issue[] {
@@ -121,6 +188,93 @@ function supplyModePaths(context: CheckContext): Issue[] {
       tags: ['supply', 'backup', 'topology', 'phase'],
     }
   })
+}
+
+/**
+ * A backup path reaching a panel through either a changeover or a direct inverter
+ * output needs its own main-grade residual-current protection.
+ */
+function backupSupplyRcdCompliance(context: CheckContext): Issue[] {
+  const assembly = findAssembly(context)
+  const installation = getElectricalInstallationFromProject(context.project)
+  if (!assembly || !installation || !isHouseholdInstallation(installation)) return []
+  if (installation.address.country && installation.address.country !== 'BE') return []
+  if (validateOffGridSupplyAssembly(assembly).status === 'invalid') return []
+
+  const presentPhases = getInstallationPhases(installation.nominalVoltage.system).filter(
+    isLivePhase
+  )
+  const pathsByHandoff = new Map<string, ReturnType<typeof deriveHandoffPhaseSupplyPaths>>()
+  for (const path of deriveHandoffPhaseSupplyPaths(assembly, presentPhases)) {
+    if (path.backupConnectionIds.length === 0) continue
+    const paths = pathsByHandoff.get(path.handoffId) ?? []
+    paths.push(path)
+    pathsByHandoff.set(path.handoffId, paths)
+  }
+
+  const terminalConnectionIds = new Set<string>()
+  for (const [handoffId, paths] of pathsByHandoff) {
+    const connectionIds = new Set(paths.flatMap((path) => path.backupConnectionIds))
+    const nodeIds = new Set(
+      assembly.connections
+        .filter((connection) => connectionIds.has(connection.id))
+        .flatMap((connection) => connection.endpoints.map((endpoint) => endpoint.nodeId))
+    )
+    const rcdsOnBackupPath = assembly.nodes.filter(
+      (node): node is Extract<SupplyNode, { kind: 'protection' }> =>
+        nodeIds.has(node.id) &&
+        node.kind === 'protection' &&
+        (node.properties.type === 'RCD' || node.properties.type === 'RCBO')
+    )
+    const hasCompliantRcd =
+      rcdsOnBackupPath.some((node) => isCompliantMainGradeRcd(node.properties)) ||
+      hasCompliantRootFeedBackupRcd(assembly, installation, handoffId, connectionIds)
+    if (hasCompliantRcd) continue
+
+    for (const path of paths) {
+      const terminalConnectionId = path.backupConnectionIds[path.backupConnectionIds.length - 1]
+      if (terminalConnectionId) terminalConnectionIds.add(terminalConnectionId)
+    }
+  }
+  if (terminalConnectionIds.size === 0) return []
+
+  // One message keeps related backup feeds from producing identical cards. Each
+  // offender remains the final run into its bus, so the card focuses the wires
+  // where the missing protection must be added.
+  const offenders: Offender[] = Array.from(terminalConnectionIds).map((id) => ({
+      kind: 'segment',
+      id,
+      viewHint: 'eendraad',
+  }))
+
+  return [{
+    id: `${BACKUP_SUPPLY_RCD_RULE_ID}:subgraph:${assembly.id}`,
+    ruleId: BACKUP_SUPPLY_RCD_RULE_ID,
+    severity: 'error',
+    jurisdiction: installation.address.country || 'BE',
+    rulesetVersion: '2025',
+    scope: context.scope,
+    offenders,
+    message: i18n.t('validation.primitives.backupSupplyRcdCompliance.message', {
+      defaultValue: 'Backup supply has no equivalent RCD protection',
+    }),
+    details: i18n.t('validation.primitives.backupSupplyRcdCompliance.details', {
+      defaultValue:
+        'The backup path needs an RCD or RCBO with a configured sensitivity of at most 300 mA and a nominal current of at least 40 A.',
+    }),
+    remediation: i18n.t('validation.primitives.backupSupplyRcdCompliance.remediation', {
+      defaultValue:
+        'Add a compliant RCD or RCBO on the backup path between the inverter or changeover and the backed-up panel.',
+    }),
+    citations: [
+      {
+        code: 'AREI',
+        title: 'Algemeen Reglement op de Elektrische Installaties',
+        section: '§ 5.3.5.3(a)',
+      },
+    ],
+    tags: ['rcd', 'supply', 'backup'],
+  }]
 }
 
 function supplyConductorProtectionCoordination(context: CheckContext): Issue[] {
@@ -389,4 +543,5 @@ function supplyConductorProtectionCoordination(context: CheckContext): Issue[] {
 }
 
 registerPrimitive('supplyModePaths', supplyModePaths)
+registerPrimitive('backupSupplyRcdCompliance', backupSupplyRcdCompliance)
 registerPrimitive('supplyConductorProtectionCoordination', supplyConductorProtectionCoordination)

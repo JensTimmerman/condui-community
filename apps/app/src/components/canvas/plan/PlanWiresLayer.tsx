@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Circle, Group, Line, Path } from 'react-konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
-import type { Endpoint, PlanWireRoute, PlanWireRouteStyle, Point2 } from '@/types/schema'
+import type { Endpoint, PlanWireRoute, PlanWireRouteStyle, Point2, TrunkDevice } from '@/types/schema'
 import { applyWireInset } from '@/lib/layout/wireInsets'
 import {
   PLAN_WIRE_DASH,
@@ -25,6 +25,7 @@ interface PlanWiresLayerProps {
   routeStyle: PlanWireRouteStyle
   theme: ThemeMode
   getEndpointById: (id: string) => Endpoint | undefined
+  getTrunkDeviceById?: (id: string) => TrunkDevice | undefined
   placementPositionOverrides?: Map<string, Point2>
   active: boolean
   /** Map viewport client coords to plan space (accounts for pan/zoom on the content layer). */
@@ -38,15 +39,19 @@ function resolveEndpointAnchor(
   routeEnd: PlanWireRoute['from'],
   floorId: string,
   getEndpointById: (id: string) => Endpoint | undefined,
+  getTrunkDeviceById?: (id: string) => TrunkDevice | undefined,
   placementPositionOverrides?: Map<string, Point2>
 ): { point: Point2; nodeType: string; symbolId: string | undefined } | null {
   const endpoint = getEndpointById(routeEnd.endpointId)
+  const trunkDevice = routeEnd.trunkDeviceId ? getTrunkDeviceById?.(routeEnd.trunkDeviceId) : undefined
   const placement =
     endpoint?.placements.find((candidate) => candidate.id === routeEnd.placementId) ??
-    endpoint?.placements.find((candidate) => candidate.floorId === floorId)
+    endpoint?.placements.find((candidate) => candidate.floorId === floorId) ??
+    trunkDevice?.placements?.find((candidate) => candidate.id === routeEnd.placementId) ??
+    trunkDevice?.placements?.find((candidate) => candidate.floorId === floorId)
   if (!placement) return null
-  const nodeType = endpoint?.type ?? 'endpoint'
-  const symbolId = endpoint?.symbol
+  const nodeType = endpoint?.type ?? trunkDevice?.type ?? 'endpoint'
+  const symbolId = endpoint?.symbol ?? trunkDevice?.symbol
   if (placement?.id) {
     const override = placementPositionOverrides?.get(placement.id)
     if (override) return { point: override, nodeType, symbolId }
@@ -311,6 +316,7 @@ export function PlanWiresLayer({
   routeStyle,
   theme,
   getEndpointById,
+  getTrunkDeviceById,
   placementPositionOverrides,
   active,
   clientToPlan,
@@ -377,12 +383,14 @@ export function PlanWiresLayer({
           route.from,
           route.floorId,
           getEndpointById,
+          getTrunkDeviceById,
           placementPositionOverrides
         )
         const endAnchor = resolveEndpointAnchor(
           route.to,
           route.floorId,
           getEndpointById,
+          getTrunkDeviceById,
           placementPositionOverrides
         )
         if (!startAnchor || !endAnchor) return null

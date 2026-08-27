@@ -30,7 +30,9 @@ import { getOneWireSegmentsFromProject } from '@/lib/projectV2/annotations'
 import { getValidationAreiUrl } from '@/lib/validation/areiLinks'
 import { useSettingsStore } from '@/stores/settingsStore'
 import {
+  getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
+  getSupplyAssembliesFromProject,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { findPanelById } from '@/lib/panel/panelTree'
@@ -754,12 +756,82 @@ function ValidationIssuesDialog({
               offenderSegmentIds.has(segment.supplySectionKey))) &&
           isVisibleWireSegment(segment)
       )
+      const backupSupplyRcdSegments =
+        issue.ruleId === 'be.areibook1.2025.backup-supply-rcd'
+          ? eendraadWireSegments.filter(
+              (segment) =>
+                segment.supplyConnectionId != null &&
+                offenderSegmentIds.has(segment.supplyConnectionId) &&
+                isVisibleWireSegment(segment)
+            )
+          : []
+      if (issue.ruleId === 'be.areibook1.2025.backup-supply-rcd' && currentProject) {
+        const assembly = getSupplyAssembliesFromProject(currentProject).find(
+          (candidate) => candidate.id === issue.scope.id
+        )
+        const backupPanelIds = new Set<string>()
+        const backupCircuitIds = new Set<string>()
+        for (const handoff of assembly?.loadHandoffs ?? []) {
+          const connection = assembly?.connections.find(
+            (candidate) =>
+              offenderSegmentIds.has(candidate.id) &&
+              candidate.endpoints.some((endpoint) => endpoint.nodeId === handoff.handoffNodeId)
+          )
+          if (!connection) continue
+          const target = handoff.target
+          if (target.kind === 'circuit-input') {
+            backupPanelIds.add(target.panelId)
+            backupCircuitIds.add(target.circuitId)
+          } else if (target.kind === 'panel-input' || target.kind === 'panel-bus-input') {
+            backupPanelIds.add(target.panelId)
+          } else if (target.kind === 'root-feed') {
+            const panelId = getElectricalInstallationFromProject(currentProject)?.feedTopology?.rootFeeds.find(
+              (feed) => feed.id === target.rootFeedId
+            )?.panelId
+            if (panelId) backupPanelIds.add(panelId)
+          }
+        }
+        const visibleBackupBusSegments = eendraadWireSegments.filter(
+          (segment) =>
+            isVisibleWireSegment(segment) &&
+            segment.busFeedKind === 'backup' &&
+            segment.panelId != null &&
+            backupPanelIds.has(segment.panelId)
+        )
+        const visibleBackupCircuitSegments = eendraadWireSegments.filter(
+          (segment) =>
+            isVisibleWireSegment(segment) &&
+            segment.circuitId != null &&
+            backupCircuitIds.has(segment.circuitId)
+        )
+        const visibleBackupCircuitOutputs = visibleBackupCircuitSegments.filter(
+          (segment) => segment.fromElementType === 'protection'
+        )
+        const visibleBackupPanelFeedSegments = eendraadWireSegments.filter(
+          (segment) =>
+            isVisibleWireSegment(segment) &&
+            segment.supplyWireRole === 'downstream' &&
+            segment.panelId != null &&
+            backupPanelIds.has(segment.panelId)
+        )
+        if (backupSupplyRcdSegments.length > 0) {
+          buildWireSelectionFromSegments(backupSupplyRcdSegments)
+        } else if (visibleBackupCircuitOutputs.length > 0) {
+          buildWireSelectionFromSegments(visibleBackupCircuitOutputs)
+        } else if (visibleBackupCircuitSegments.length > 0) {
+          buildWireSelectionFromSegments(visibleBackupCircuitSegments)
+        } else if (visibleBackupBusSegments.length > 0) {
+          buildWireSelectionFromSegments(visibleBackupBusSegments)
+        } else if (visibleBackupPanelFeedSegments.length > 0) {
+          buildWireSelectionFromSegments(visibleBackupPanelFeedSegments)
+        }
+      }
       const root =
         exactLive ??
         (offenderCircuitId
           ? pickRootCircuitSegment(offenderCircuitId, eendraadWireSegments)
           : undefined)
-      if (root) buildWireSelectionFromSegments([root])
+      if (!selectionType && root) buildWireSelectionFromSegments([root])
     }
 
     if (!selectionType) {
