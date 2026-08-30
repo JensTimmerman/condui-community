@@ -4,7 +4,7 @@ import {
   getInstallationPhases,
 } from '@/lib/wires/phaseAssignment'
 import type { AcPhase, CircuitPhaseAssignment, Installation, TrunkDevice } from '@/types/schema'
-import { getSupplyInverterMultiplier } from '@/utils/inverterMultipliers'
+import { getSupplyInverterMultiplier } from '@/lib/supplyAssembly/inverterMultipliers'
 
 export function getDefaultSupplyConverterAcPhaseAssignment(
   system: Installation['nominalVoltage']['system']

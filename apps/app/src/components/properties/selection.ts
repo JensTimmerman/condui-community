@@ -346,6 +346,7 @@ function panelTitleForTrunkDevice(device: TrunkDevice | undefined, t: TFunction)
   if (device.type === 'energy_meter') return pt('symbols.energy_meter', 'Energy meter')
   if (device.symbol === 'solar_panel') return pt('symbols.solar_panel', 'Solar panel')
   if (device.symbol === 'battery') return pt('symbols.battery', 'Battery')
+  if (device.symbol === 'dc_bus') return pt('symbols.dc_bus', 'DC busbar')
   if (device.type === 'conversion') {
     if (device.symbol === 'transformer') return pt('symbols.transformer', 'Transformer')
     if (device.symbol === 'rectifier') return pt('symbols.rectifier', 'Rectifier')

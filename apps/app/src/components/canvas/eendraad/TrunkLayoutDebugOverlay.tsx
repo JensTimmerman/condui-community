@@ -9,6 +9,11 @@ import { LAYOUT_CONSTANTS } from '@/lib/layout/bottomUpLayout'
 import { getCircuitNotesPaintBounds } from '@/lib/layout/circuitNoteMetrics'
 import type { OneWireLayoutBlockKind } from '@/lib/layout/oneWireBlockLayout'
 import { getBusFeedMarkerPaintBounds } from '@/lib/layout/busFeedMarkerGeometry'
+import {
+  getCircuitConverterDcConnectionCount,
+  getCircuitConverterOutputRowY,
+  supportsCircuitConverterDcConnections,
+} from '@/lib/layout/circuitConverterGeometry'
 import type { WireSegment } from '@/types/schema'
 import { useSettingsStore } from '@/stores/settingsStore'
 
@@ -83,6 +88,24 @@ function buildDebugBox(
     if (!element.circuitId || !circuitIds.has(element.circuitId)) continue
     minY = Math.min(minY, element.position.y - LAYOUT_CONSTANTS.SYMBOL_SIZE)
     maxY = Math.max(maxY, element.position.y + LAYOUT_CONSTANTS.SYMBOL_SIZE)
+    if (element.type === 'trunkDevice' && element.trunkDeviceId) {
+      const circuit = panelLayout.circuits.find(
+        (candidate) => candidate.circuit.id === element.circuitId
+      )?.circuit
+      const device = circuit?.trunkDevices?.find(
+        (candidate) => candidate.id === element.trunkDeviceId
+      )
+      if (supportsCircuitConverterDcConnections(device)) {
+        const count = getCircuitConverterDcConnectionCount(device)
+        minY = Math.min(
+          minY,
+          ...Array.from({ length: count }, (_, connectionIndex) =>
+            getCircuitConverterOutputRowY(device!, element.position.y, connectionIndex) -
+            LAYOUT_CONSTANTS.SYMBOL_SIZE
+          )
+        )
+      }
+    }
   }
   for (const note of panelLayout.circuitNotes ?? []) {
     if (!circuitIds.has(note.circuitId) || note.notesVisible === false) continue
@@ -198,6 +221,8 @@ export function TrunkLayoutDebugOverlay({ layout, wireSegments }: TrunkLayoutDeb
         return '#f97316'
       case 'secondary-feed':
         return '#eab308'
+      case 'converter-metadata':
+        return '#ec4899'
       case 'info-block':
         return '#3b82f6'
     }

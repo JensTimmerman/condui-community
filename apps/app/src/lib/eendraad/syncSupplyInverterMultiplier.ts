@@ -6,7 +6,7 @@ import { generateId } from '@/utils'
 import {
   getSupplyDeviceSerialNumbers,
   supportsSupplyDeviceMultiplier,
-} from '@/utils/inverterMultipliers'
+} from '@/lib/supplyAssembly/inverterMultipliers'
 import {
   getDefaultSupplyConverterAcPhaseAssignment,
   getSupplyInverterUnitPhaseAssignments,
@@ -127,4 +127,7 @@ export function createSyncSupplyInverterMultiplierDeps(): SyncSupplyInverterMult
   }
 }
 
-export { getSupplyDeviceMultiplier, getSupplyInverterMultiplier } from '@/utils/inverterMultipliers'
+export {
+  getSupplyDeviceMultiplier,
+  getSupplyInverterMultiplier,
+} from '@/lib/supplyAssembly/inverterMultipliers'

@@ -39,12 +39,15 @@ import {
 import {
   buildPanelDiagramHeaderLines,
   buildPanelNumberIndexById,
+  buildSupplyDiagramHeaderLines,
   findParentPanel,
   PANEL_DIAGRAM_HEADER_LINE_HEIGHT,
   PANEL_FRAME_HEADER_TOP_INSET,
 } from '@/lib/panel/panelDiagramLabels'
 import type { BottomUpPanelLayout } from '@/lib/layout/bottomUpLayout'
 import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
+import { panelHasBackupOutput } from '@/lib/panel/panelFeedOrganization'
+import { findPanelById } from '@/lib/panel/panelTree'
 
 const HEADER_LINE_HEIGHT = PANEL_DIAGRAM_HEADER_LINE_HEIGHT
 const TITLE_FONT_SIZE = 14
@@ -80,30 +83,41 @@ export function PanelFrame({ panelLayout, children }: PanelFrameProps) {
   const frameStrokeWidth = 4
 
   const headerLines = useMemo(() => {
+    const rootPanels = currentProject ? getElectricalPanelsFromProject(currentProject) : []
+    const ownerPanel =
+      (currentProject &&
+        findPanelById(rootPanels, panelLayout.ownerPanelId ?? panelLayout.panel.id)) ||
+      panelLayout.panel
+    const backupFeedActive =
+      currentProject != null && panelHasBackupOutput(currentProject, ownerPanel.id)
     if (isVirtualSupplyFrame) {
-      return [
-        {
-          text: t('canvas.supplyFrame.title', 'Supply'),
-          variant: 'title' as const,
-        },
-      ]
+      if (!currentProject) {
+        return [{ text: t('canvas.supplyFrame.title', 'Supply'), variant: 'title' as const }]
+      }
+      return buildSupplyDiagramHeaderLines(currentProject, ownerPanel, t, {
+        advancedLabelsEnabled: advancedPanelLabels,
+        backupFeedActive,
+      })
     }
     if (!currentProject) {
       return [{ text: panelLayout.panel.name, variant: 'title' as const }]
     }
-    const numberIndexById = buildPanelNumberIndexById(
-      getElectricalPanelsFromProject(currentProject)
-    )
-    const parentPanel = findParentPanel(
-      getElectricalPanelsFromProject(currentProject),
-      panelLayout.panel.id
-    )
+    const numberIndexById = buildPanelNumberIndexById(rootPanels)
+    const parentPanel = findParentPanel(rootPanels, panelLayout.panel.id)
     return buildPanelDiagramHeaderLines(currentProject, panelLayout.panel, t, {
       advancedLabelsEnabled: advancedPanelLabels,
       parentPanel,
       numberIndexById,
+      backupFeedActive,
     })
-  }, [advancedPanelLabels, currentProject, isVirtualSupplyFrame, panelLayout.panel, t])
+  }, [
+    advancedPanelLabels,
+    currentProject,
+    isVirtualSupplyFrame,
+    panelLayout.ownerPanelId,
+    panelLayout.panel,
+    t,
+  ])
 
   const { x: fx, y: fy, width: fw, height: fh } = panelLayout.frame
   const borderHitCanvas = getFrameBorderHitThicknessCanvas(canvasZoom)

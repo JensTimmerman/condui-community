@@ -119,6 +119,60 @@ function MixedCheckbox({
   )
 }
 
+function MixedTextField({
+  label,
+  shared,
+  onCommit,
+}: {
+  label: string
+  shared: SharedValue<string>
+  onCommit: (value: string) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div>
+      <label className={labelClass}>{label}</label>
+      <DebouncedTextInput
+        value={shared.mixed ? '' : (shared.value ?? '')}
+        placeholder={shared.mixed ? t('properties.mixedValue', 'Mixed') : ''}
+        onCommit={onCommit}
+        className={`${selectClass} ${shared.mixed ? 'placeholder:italic' : ''}`}
+      />
+    </div>
+  )
+}
+
+function MixedNumberField({
+  label,
+  shared,
+  step,
+  onCommit,
+}: {
+  label: string
+  shared: SharedValue<number | undefined>
+  step?: number
+  onCommit: (value: number | undefined) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div>
+      <label className={labelClass}>{label}</label>
+      <DebouncedTextInput
+        type="number"
+        min="0"
+        step={String(step ?? 1)}
+        value={shared.mixed ? '' : String(shared.value ?? '')}
+        placeholder={shared.mixed ? t('properties.mixedValue', 'Mixed') : ''}
+        onCommit={(value) => {
+          const parsed = value === '' ? undefined : Number(value)
+          onCommit(Number.isFinite(parsed as number) ? parsed : undefined)
+        }}
+        className={`${selectClass} ${shared.mixed ? 'placeholder:italic' : ''}`}
+      />
+    </div>
+  )
+}
+
 function BatchHeader({ count }: { count: number }) {
   const { t } = useTranslation()
   return (
@@ -416,12 +470,20 @@ function EndpointMultiEditor({ endpoints }: { endpoints: Endpoint[] }) {
   const shared = <T,>(read: (item: Endpoint) => T) => resolveSharedValue(endpoints.map(read))
   const first = endpoints[0]!
   const patchNested = <
-    K extends 'socketProps' | 'lightPointProps' | 'fixedApplianceProps' | 'hvacProps',
+    K extends
+      | 'socketProps'
+      | 'lightPointProps'
+      | 'fixedApplianceProps'
+      | 'hvacProps'
+      | 'solarPanelProps'
+      | 'batteryProps',
   >(
     item: Endpoint,
     key: K,
     patch: Partial<NonNullable<Endpoint[K]>>
   ) => ({ [key]: { ...(item[key] ?? {}), ...patch } }) as Partial<Endpoint>
+  const allSolarPanels = endpoints.every((item) => item.symbol === 'solar_panel')
+  const allBatteries = endpoints.every((item) => item.symbol === 'battery')
   return (
     <div className="space-y-4">
       <BatchHeader count={endpoints.length} />
@@ -668,6 +730,89 @@ function EndpointMultiEditor({ endpoints }: { endpoints: Endpoint[] }) {
             />
           </div>
         </>
+      )}
+      {allSolarPanels && (
+        <div className="space-y-2 border-t border-gray-200 pt-2 dark:border-gray-700">
+          <MixedNumberField
+            label={t('endpoints.solarPanel.wattage', 'Wattage (W)')}
+            shared={shared((item) => item.solarPanelProps?.wattageW ?? 1000)}
+            onCommit={(value) =>
+              apply((item) => patchNested(item, 'solarPanelProps', { wattageW: value }))
+            }
+          />
+          <MixedNumberField
+            label={t('endpoints.solarPanel.voltage', 'Voltage (V)')}
+            shared={shared((item) => item.solarPanelProps?.voltageV)}
+            onCommit={(value) =>
+              apply((item) => patchNested(item, 'solarPanelProps', { voltageV: value }))
+            }
+          />
+          <MixedTextField
+            label={t('endpoints.certification.brand', 'Brand')}
+            shared={shared((item) => item.solarPanelProps?.brand ?? '')}
+            onCommit={(value) =>
+              apply((item) =>
+                patchNested(item, 'solarPanelProps', { brand: value, synergrid: undefined })
+              )
+            }
+          />
+          <MixedTextField
+            label={t('endpoints.certification.model', 'Model')}
+            shared={shared((item) => item.solarPanelProps?.model ?? '')}
+            onCommit={(value) =>
+              apply((item) =>
+                patchNested(item, 'solarPanelProps', { model: value, synergrid: undefined })
+              )
+            }
+          />
+        </div>
+      )}
+      {allBatteries && (
+        <div className="space-y-2 border-t border-gray-200 pt-2 dark:border-gray-700">
+          <MixedNumberField
+            label={t('endpoints.battery.voltage', 'Voltage (V)')}
+            shared={shared((item) => item.batteryProps?.voltageV ?? 48)}
+            onCommit={(value) =>
+              apply((item) => patchNested(item, 'batteryProps', { voltageV: value }))
+            }
+          />
+          <MixedNumberField
+            label={t('endpoints.battery.capacity', 'Capacity (kWh)')}
+            shared={shared((item) => item.batteryProps?.capacityKWh ?? 5)}
+            step={0.1}
+            onCommit={(value) =>
+              apply((item) => patchNested(item, 'batteryProps', { capacityKWh: value }))
+            }
+          />
+          <MixedTextField
+            label={t('endpoints.certification.brand', 'Brand')}
+            shared={shared((item) => item.batteryProps?.brand ?? '')}
+            onCommit={(value) =>
+              apply((item) =>
+                patchNested(item, 'batteryProps', { brand: value, synergrid: undefined })
+              )
+            }
+          />
+          <MixedTextField
+            label={t('endpoints.certification.model', 'Model')}
+            shared={shared((item) => item.batteryProps?.model ?? '')}
+            onCommit={(value) =>
+              apply((item) =>
+                patchNested(item, 'batteryProps', { model: value, synergrid: undefined })
+              )
+            }
+          />
+          <MixedNumberField
+            label={t('endpoints.battery.powerKw', 'Power (kW)')}
+            shared={shared((item) => item.batteryProps?.powerKw)}
+            step={0.1}
+            onCommit={(value) =>
+              apply((item) =>
+                patchNested(item, 'batteryProps', { powerKw: value, synergrid: undefined })
+              )
+            }
+          />
+        </div>
       )}
       <div>
         <label className={labelClass}>{t('endpoints.notes', 'Notes')}</label>

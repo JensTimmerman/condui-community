@@ -40,7 +40,11 @@ export interface EendraadAltDragDuplicateDeps {
   findDropTarget: (tree: LayoutTree, position: Point) => { target: DropTarget }
   t: TFunction
   addCircuit: (panelId: string, circuit: Circuit, protectionId?: string) => void
-  addEndpoint: (circuitId: string, endpoint: Endpoint, insertAfterEndpointId?: string | null) => void
+  addEndpoint: (
+    circuitId: string,
+    endpoint: Endpoint,
+    insertAfterEndpointId?: string | null
+  ) => void
   addPlacement: (endpointId: string, placement: Placement) => void
   updateCircuit: (circuitId: string, updates: Partial<Circuit>) => void
   setSelection: (sel: Selection) => void
@@ -51,7 +55,7 @@ export interface EendraadAltDragDuplicateDeps {
 function augmentDropTargetWithWireDomain(
   rawTarget: DropTarget,
   position: Point,
-  wireSegments: WireSegmentForDrop[],
+  wireSegments: WireSegmentForDrop[]
 ): DropTarget {
   let dropTarget = rawTarget
   if (
@@ -61,10 +65,10 @@ function augmentDropTargetWithWireDomain(
     typeof rawTarget.circuitTrunkSegmentIndex !== 'number'
   ) {
     const panelWires = wireSegments.filter(
-      (ws) => ws.panelId === rawTarget.panelId && ws.circuitId === rawTarget.circuitId,
+      (ws) => ws.panelId === rawTarget.panelId && ws.circuitId === rawTarget.circuitId
     )
     const verticalCandidates = panelWires.filter(
-      (ws) => ws.type === 'vertical' && ws.startPoint.x === ws.endPoint.x,
+      (ws) => ws.type === 'vertical' && ws.startPoint.x === ws.endPoint.x
     )
     const hitVertical = verticalCandidates.find((ws) => {
       const x = ws.startPoint.x
@@ -87,7 +91,7 @@ function augmentDropTargetWithWireDomain(
 export function runEendraadEndpointAltDragDuplicate(
   sourceEndpointId: string,
   position: Point,
-  deps: EendraadAltDragDuplicateDeps,
+  deps: EendraadAltDragDuplicateDeps
 ): boolean {
   const store = useProjectStore.getState()
   const sourceEndpoint = store.getEndpointById(sourceEndpointId)
@@ -101,9 +105,7 @@ export function runEendraadEndpointAltDragDuplicate(
 
   let dropTarget = augmentDropTargetWithWireDomain(rawTarget, position, deps.wireSegments)
 
-  const targetEndpoint = dropTarget.endpointId
-    ? store.getEndpointById(dropTarget.endpointId)
-    : null
+  const targetEndpoint = dropTarget.endpointId ? store.getEndpointById(dropTarget.endpointId) : null
   if (
     sourceEndpoint.domoticaChildProps &&
     !dropTarget.domoticaOutput &&
@@ -118,62 +120,70 @@ export function runEendraadEndpointAltDragDuplicate(
   const createdEndpointIds: string[] = []
   let dropRejected = false
 
-  executeDropBehavior(symbolMeta as Parameters<typeof executeDropBehavior>[0], dropTarget, deps.project, deps.t, {
-    addPanel: store.addPanel,
-    addProtection: store.addProtection,
-    addCircuit: deps.addCircuit,
-    addCircuitToProtection: store.addCircuitToProtection,
-    addPlacement: deps.addPlacement,
-    setSelection: deps.setSelection,
-    getFloorById: deps.getFloorById,
-    updateFloor: store.updateFloor,
-    getCircuitById: (circuitId) => store.getCircuitById(circuitId) || null,
-    getProtectionById: deps.getProtectionById,
-    addTrunkDevice: store.addTrunkDevice,
-    addSupplyTrunkDevice: store.addSupplyTrunkDevice,
-    addGroundTrunkDevice: store.addGroundTrunkDevice,
-    ensureJunctionPanelPlacementForLabel: store.ensureJunctionPanelPlacementForLabel,
-    updateCircuit: deps.updateCircuit,
-    updateProtection: store.updateProtection,
-    updateInstallation: store.updateInstallation,
-    addSupplyAssembly: store.addSupplyAssembly,
-    replaceSupplyAssembly: store.replaceSupplyAssembly,
-    moveCircuitOnMainBus: store.moveCircuitOnMainBus,
-    moveCircuitToSecondaryBus: store.moveCircuitToSecondaryBus,
-    deleteEndpoint: store.deleteEndpoint,
-    addEendraadNote: store.addEendraadNote,
-    addEndpoint: (circuitId, endpoint, insertAfterEndpointId) => {
-      const latestSource = store.getEndpointById(sourceEndpointId) ?? sourceEndpoint
-      const clonedSource = JSON.parse(JSON.stringify(latestSource)) as Endpoint
-      const isDomoticaChildDrop = !!endpoint.domoticaChildProps
-      const merged: Endpoint = {
-        ...clonedSource,
-        ...endpoint,
-        placements: [],
-        domoticaChildProps: endpoint.domoticaChildProps,
-        id: endpoint.id,
-      }
-      if (!isDomoticaChildDrop) {
-        delete (merged as { label?: string }).label
-      }
-      store.addEndpoint(circuitId, merged, insertAfterEndpointId)
-      createdEndpointIds.push(merged.id)
-      deps.setSelection({ type: 'endpoint', ids: [merged.id] })
+  executeDropBehavior(
+    symbolMeta as Parameters<typeof executeDropBehavior>[0],
+    dropTarget,
+    deps.project,
+    deps.t,
+    {
+      addPanel: store.addPanel,
+      addProtection: store.addProtection,
+      addCircuit: deps.addCircuit,
+      addCircuitToProtection: store.addCircuitToProtection,
+      addPlacement: deps.addPlacement,
+      setSelection: deps.setSelection,
+      getFloorById: deps.getFloorById,
+      updateFloor: store.updateFloor,
+      getCircuitById: (circuitId) => store.getCircuitById(circuitId) || null,
+      getProtectionById: deps.getProtectionById,
+      addTrunkDevice: store.addTrunkDevice,
+      addSupplyTrunkDevice: store.addSupplyTrunkDevice,
+      addGroundTrunkDevice: store.addGroundTrunkDevice,
+      ensureJunctionPanelPlacementForLabel: store.ensureJunctionPanelPlacementForLabel,
+      updateCircuit: deps.updateCircuit,
+      updateProtection: store.updateProtection,
+      updateInstallation: store.updateInstallation,
+      addSupplyAssembly: store.addSupplyAssembly,
+      replaceSupplyAssembly: store.replaceSupplyAssembly,
+      moveCircuitOnMainBus: store.moveCircuitOnMainBus,
+      moveCircuitToSecondaryBus: store.moveCircuitToSecondaryBus,
+      deleteEndpoint: store.deleteEndpoint,
+      addEendraadNote: store.addEendraadNote,
+      addEndpoint: (circuitId, endpoint, insertAfterEndpointId, branchOpts) => {
+        const latestSource = store.getEndpointById(sourceEndpointId) ?? sourceEndpoint
+        const clonedSource = JSON.parse(JSON.stringify(latestSource)) as Endpoint
+        const isDomoticaChildDrop = !!endpoint.domoticaChildProps
+        const merged: Endpoint = {
+          ...clonedSource,
+          ...endpoint,
+          placements: [],
+          domoticaChildProps: endpoint.domoticaChildProps,
+          converterDcConnection: endpoint.converterDcConnection,
+          id: endpoint.id,
+        }
+        if (!isDomoticaChildDrop) {
+          delete (merged as { label?: string }).label
+        }
+        store.addEndpoint(circuitId, merged, insertAfterEndpointId, branchOpts)
+        createdEndpointIds.push(merged.id)
+        deps.setSelection({ type: 'endpoint', ids: [merged.id] })
+      },
+      onDropRejected: (message) => {
+        dropRejected = true
+        useDialogStore.getState().openDialog({
+          type: 'info',
+          title: deps.t('wires.domainMismatchTitle', { defaultValue: 'Cannot connect here' }),
+          message,
+          confirmLabel: deps.t('common.ok', { defaultValue: 'OK' }),
+          variant: 'warning',
+        })
+      },
     },
-    onDropRejected: (message) => {
-      dropRejected = true
-      useDialogStore.getState().openDialog({
-        type: 'info',
-        title: deps.t('wires.domainMismatchTitle', { defaultValue: 'Cannot connect here' }),
-        message,
-        confirmLabel: deps.t('common.ok', { defaultValue: 'OK' }),
-        variant: 'warning',
-      })
-    },
-  }, {
-    canvas: 'eendraad',
-    placementMethod: 'alt_drag_duplicate',
-  })
+    {
+      canvas: 'eendraad',
+      placementMethod: 'alt_drag_duplicate',
+    }
+  )
 
   if (dropRejected || createdEndpointIds.length === 0) return false
 
@@ -190,7 +200,7 @@ export function runEendraadEndpointAltDragDuplicate(
         viewportLayout: ui.viewportLayout,
         planCanvasViewportPx: ui.planCanvasViewportPx,
         planView: ui.planView,
-      },
+      }
     )
   }
 
@@ -201,7 +211,7 @@ export function runEendraadEndpointAltDragDuplicate(
 export function protectionDropTargetHitsSource(
   sourceProtectionId: string,
   target: DropTarget | null | undefined,
-  getProtectionById: (id: string) => ProtectionDevice | null | undefined,
+  getProtectionById: (id: string) => ProtectionDevice | null | undefined
 ): boolean {
   if (!target || !sourceProtectionId) return false
   if (target.protectionId === sourceProtectionId) return true
@@ -237,7 +247,7 @@ export function resolveProtectionDropTargetForPosition(
   getPanelById: (panelId: string) => Panel | undefined,
   sourceProtectionId?: string,
   getProtectionById?: (id: string) => ProtectionDevice | null | undefined,
-  options?: { nestOnRcd?: boolean },
+  options?: { nestOnRcd?: boolean }
 ): DropTarget | null {
   let { target } = findDropTarget(layoutTree, position)
   if (!target?.panelId) return null
@@ -260,8 +270,7 @@ export function resolveProtectionDropTargetForPosition(
             protection.circuits?.some((circuit) => circuit.id === target.circuitId)
         )
       : undefined)
-  const isRcdTarget =
-    targetProtection?.type === 'RCD' || targetProtection?.type === 'RCBO'
+  const isRcdTarget = targetProtection?.type === 'RCD' || targetProtection?.type === 'RCBO'
   if (options?.nestOnRcd && isRcdTarget) {
     const anchorCircuit = targetProtection.circuits?.[0]
     if (!anchorCircuit) return null
@@ -280,7 +289,7 @@ export function resolveProtectionDropTargetForPosition(
     if (panel) {
       const mainBusItemsNorm = getMainBusItemsWithIndices(panel)
       const idx = mainBusItemsNorm.findIndex(
-        (item) => item.type === 'protection' && item.id === protectionId,
+        (item) => item.type === 'protection' && item.id === protectionId
       )
       if (idx >= 0) {
         target = {
@@ -318,9 +327,9 @@ export function repositionDuplicatedProtectionToDropTarget(
     panelId: string,
     parentCircuitId: string,
     circuitId: string,
-    insertIndex: number,
+    insertIndex: number
   ) => void,
-  options?: { skipMainBus?: boolean },
+  options?: { skipMainBus?: boolean }
 ): void {
   if (
     !options?.skipMainBus &&
@@ -339,7 +348,7 @@ export function repositionDuplicatedProtectionToDropTarget(
     const currentIndex = order.findIndex(
       (item) =>
         (item.type === 'protection' && item.id === newProtectionId) ||
-        (item.type === 'circuit' && item.id === circuitId),
+        (item.type === 'circuit' && item.id === circuitId)
     )
     if (currentIndex < 0) return
 
@@ -370,7 +379,7 @@ export function repositionDuplicatedProtectionToDropTarget(
         dropTarget.panelId,
         dropTarget.circuitId,
         newCircuitId,
-        dropTarget.secondaryBusInsertIndex,
+        dropTarget.secondaryBusInsertIndex
       )
     }
   }

@@ -1070,17 +1070,25 @@ export function reconcileDirectConverterDcDevices(
         kind: 'dc-bus',
         symbol: device.symbol,
         label: device.label,
-        properties: {},
-        ports: [dcPort('dc', 'dc-bus', 'bidirectional', 2)],
+        properties:
+          device.type === 'dc_bus'
+            ? {
+                ratedCurrentA: device.dcBusProps?.ratedCurrentA,
+                ratedVoltageV: device.dcBusProps?.ratedVoltageV,
+              }
+            : {},
+        ports: [
+          dcPort('dc', 'dc-bus', 'bidirectional', device.type === 'dc_bus' ? 'many' : 2),
+        ],
       }
     }),
   ]
   const dcConnections: SupplyConnection[] = []
   for (const supplyPath of ['converter-dc', 'converter-dc-top'] as const) {
     let previous: [string, string] = [converter.id, 'dc']
-    dcDevices
-      .filter((device) => device.supplyPath === supplyPath)
-      .forEach((device, index) => {
+    const laneDevices = dcDevices.filter((device) => device.supplyPath === supplyPath)
+    const serialDevices = laneDevices.filter((device) => !device.supplyDcBusId)
+    serialDevices.forEach((device, index) => {
         const pathRole =
           device.symbol === 'solar_panel'
             ? 'solar-dc'
@@ -1097,6 +1105,38 @@ export function reconcileDirectConverterDcDevices(
         )
         previous = [device.id, 'dc']
       })
+    for (const bus of serialDevices.filter((device) => device.type === 'dc_bus')) {
+      const busBranchGroups = new Map<string, TrunkDevice[]>()
+      laneDevices
+        .filter((device) => device.supplyDcBusId === bus.id)
+        .forEach((device) => {
+          const branchId = device.supplyDcBusBranchId ?? device.id
+          const group = busBranchGroups.get(branchId) ?? []
+          group.push(device)
+          busBranchGroups.set(branchId, group)
+        })
+      const branchEntries = [...busBranchGroups.entries()]
+      branchEntries.forEach(([branchId, devices]) => {
+        let branchPrevious: [string, string] = [bus.id, 'dc']
+        devices.forEach((device, index) => {
+          const pathRole =
+            device.symbol === 'solar_panel'
+              ? 'solar-dc'
+              : device.symbol === 'battery'
+                ? 'battery-dc'
+                : 'dc-bus'
+          dcConnections.push(
+            dcConnection(
+              `${converter.id}-${supplyPath}-bus-${bus.id}-${branchId}-${index}-${device.id}`,
+              branchPrevious,
+              [device.id, 'dc'],
+              pathRole
+            )
+          )
+          branchPrevious = [device.id, 'dc']
+        })
+      })
+    }
   }
   const previousDcConnections = assembly.connections
   assembly.connections = preserveConnectionWireProperties(previousDcConnections, [

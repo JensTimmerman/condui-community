@@ -8,6 +8,8 @@ import type {
   SymbolKey,
   TrunkDevice,
 } from '@/types/schema'
+import { getMainBusOrder, isCircuitNestedUnderPanelBus } from '@/lib/panel/mainBusOrder'
+export { getMainBusOrder, isCircuitNestedUnderPanelBus } from '@/lib/panel/mainBusOrder'
 import { getModuleWidthInCols } from '@/components/canvas/panel/panelGridLayout'
 import { getDefaultTrunkDeviceProtectionProps } from '@/lib/protectionDefaults'
 import { findParentCircuitInfo } from '@/lib/eendraad/findParentCircuitInfo'
@@ -18,56 +20,14 @@ import {
 } from '@/lib/projectV2/electrical'
 import { collectCircuits, walkPanels } from '@/lib/panel/panelTree'
 
-/**
- * True if this circuit id appears in another row's `subCircuitIds` (panel direct circuit or any
- * protection's circuit) — i.e. it is on a secondary bus, not the main bus bar.
- */
-export function isCircuitNestedUnderPanelBus(panel: Panel, circuitId: string): boolean {
-  for (const directCircuit of panel.circuits ?? []) {
-    if (directCircuit.code === 'PANEL') continue
-    if (directCircuit.subCircuitIds?.includes(circuitId)) return true
-  }
-  for (const otherPr of panel.protections ?? []) {
-    for (const otherCircuit of otherPr.circuits ?? []) {
-      if (otherCircuit.subCircuitIds?.includes(circuitId)) return true
-    }
-  }
-  return false
-}
-
-/**
- * The circuit on `prot` that attaches the row to the main bus — first non-nested circuit, if any.
- * Using only `circuits[0]` mis-classifies rows whose first circuit is a nested tap but a later
- * circuit is the actual bus connection (then eject / insert index walks miss the ancestor and fall
- * back to the end of the bus).
- */
-function getProtectionMainBusAttachmentCircuit(panel: Panel, prot: ProtectionDevice): Circuit | undefined {
-  return (prot.circuits ?? []).find((c) => !isCircuitNestedUnderPanelBus(panel, c.id))
-}
-
-/**
- * Main-bus item order (non-nested `panel.circuits` + non-nested protections), matching layout and drag order.
- * Shared with projectStore bus moves and automatic naming.
- */
-export function getMainBusOrder(panel: Panel): Array<{ type: 'circuit' | 'protection'; id: string }> {
-  const items: Array<{ type: 'circuit' | 'protection'; id: string; index: number }> = []
-  const seenProtectionIds = new Set<string>()
-  panel.circuits.forEach((c, i) => {
-    if (c.code !== 'PANEL' && !isCircuitNestedUnderPanelBus(panel, c.id)) {
-      items.push({ type: 'circuit', id: c.id, index: i })
-    }
-  })
-  panel.protections?.forEach((prot, i) => {
-    const attach = getProtectionMainBusAttachmentCircuit(panel, prot)
-    if (attach) {
-      // Corrupt state: same protection id must not occupy multiple main-bus slots (burns letters).
-      if (seenProtectionIds.has(prot.id)) return
-      seenProtectionIds.add(prot.id)
-      items.push({ type: 'protection', id: prot.id, index: i })
-    }
-  })
-  items.sort((a, b) => a.index - b.index)
-  return items.map(({ type, id }) => ({ type, id }))
+/** First non-nested circuit that attaches a protection row to the main bus. */
+function getProtectionMainBusAttachmentCircuit(
+  panel: Panel,
+  protection: ProtectionDevice,
+): Circuit | undefined {
+  return (protection.circuits ?? []).find(
+    (circuit) => !isCircuitNestedUnderPanelBus(panel, circuit.id),
+  )
 }
 
 /**

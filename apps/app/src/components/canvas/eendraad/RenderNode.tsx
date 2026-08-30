@@ -36,6 +36,7 @@ import type { Point } from '@/types/ui'
 import { getSupplyProtectionLabelCollisionInfo } from '@/lib/eendraad/supplyProtectionLabelCollisions'
 import { findPanelDistributionEndpointInCircuit } from '@/lib/eendraad/panelSupplyLink'
 import { countPanelCircuits } from '@/utils/plan/placementHelpers'
+import { isVerticalSupplyDevice } from '@/lib/layout/supplyDeviceOrientation'
 
 function isPanelOnlySubPanelFeeder(
   protection: ProtectionDevice,
@@ -176,8 +177,9 @@ const RenderNode = memo(function RenderNode({
       const targetPanel =
         protection.subPanelId && getPanelById ? getPanelById(protection.subPanelId) : undefined
       const renderProtectionSymbol = !(
-        (node.id.includes('-nest-') || protection.directPanelFeeder === true) &&
-        isPanelOnlySubPanelFeeder(protection, node.circuitIdForWires, targetPanel)
+        protection.directDcBusFeeder === true ||
+        ((node.id.includes('-nest-') || protection.directPanelFeeder === true) &&
+          isPanelOnlySubPanelFeeder(protection, node.circuitIdForWires, targetPanel))
       )
       return (
         <Group key={node.id}>
@@ -209,7 +211,8 @@ const RenderNode = memo(function RenderNode({
           )}
           {!renderProtectionSymbol &&
             !node.id.includes('-nest-') &&
-            !protection.directPanelFeeder && (
+            !protection.directPanelFeeder &&
+            !protection.directDcBusFeeder && (
               <ProtectionSymbol
                 protection={protection}
                 position={{ x: node.bounds.x, y: node.bounds.y }}
@@ -417,6 +420,10 @@ const RenderNode = memo(function RenderNode({
           bottomLabelMaximumRightX={
             node.visual?.type === 'symbol' ? node.visual.bottomLabelMaximumRightX : undefined
           }
+          metadataCallout={node.visual?.type === 'symbol' ? node.visual.metadataCallout : undefined}
+          metadataLabelSuppressed={
+            node.visual?.type === 'symbol' ? node.visual.suppressMetadataLabel : undefined
+          }
         />
       )
     }
@@ -425,54 +432,77 @@ const RenderNode = memo(function RenderNode({
       // Trunk device symbol (energy meter, protection, etc.)
       if (!node.domainRef) return null
       const trunkDevice = node.domainRef as unknown as TrunkDevice
-      // Supply trunk devices have IDs starting with 'supplyTrunkDevice-' and are on horizontal wire
+      // Supply trunk devices can sit on the assembly rail or on upright converter/DC-bus risers.
       const isSupplyTrunkDevice = node.id?.startsWith('supplyTrunkDevice-')
       const isVerticalSupplyBranchDevice =
-        isSupplyTrunkDevice &&
-        trunkDevice.supplyPath === 'converter-grid' &&
-        trunkDevice.converterGridPlacement === 'input-leg'
+        isSupplyTrunkDevice && isVerticalSupplyDevice(trunkDevice)
       const isSubPanelSupplyTrunkDevice = node.id?.startsWith('subpanelSupplyTrunkDevice-')
       const isGroundTrunkDevice = node.id?.startsWith('groundTrunkDevice-')
       const isDraggableTrunkDevice = !isGroundTrunkDevice
       return (
-        <TrunkDeviceSymbol
-          key={node.id}
-          device={trunkDevice}
-          position={{ x: node.bounds.x, y: node.bounds.y }}
-          supplyDevicePositions={panelLayout?.supplyDevices}
-          supplyMirrorAxisX={
-            panelLayout?.supplyFlowDirection === 'left-to-right'
-              ? (panelLayout.supplyMirrorAxisX ?? panelLayout.frame.x + panelLayout.frame.width / 2)
-              : undefined
-          }
-          supplyPanelId={panelLayout?.panel.id}
-          isHorizontal={isSupplyTrunkDevice && !isVerticalSupplyBranchDevice}
-          symbolRotationDeg={node.visual?.type === 'symbol' ? node.visual.rotationDeg : undefined}
-          protectionLabelPosition={isVerticalSupplyBranchDevice ? 'right' : undefined}
-          showDeviceLabelLeft={isSubPanelSupplyTrunkDevice}
-          splitProtectionResidualLine={
-            isSupplyTrunkDevice && resolvedSupplyProtectionCollisionIds.has(node.id)
-          }
-          getCanvasPositionFromEvent={getCanvasPositionFromEvent}
-          onDragMove={
-            isDraggableTrunkDevice && onElementDragMove
-              ? (p) => onElementDragMove(trunkDevice.id, 'trunkDevice', p)
-              : undefined
-          }
-          onDragStart={
-            isDraggableTrunkDevice && onElementDragStart
-              ? (altKey, nativeEvt) =>
-                  onElementDragStart(trunkDevice.id, 'trunkDevice', altKey, nativeEvt)
-              : undefined
-          }
-          shouldSuppressKonvaDragEnd={shouldSuppressKonvaDragEnd}
-          onDragEnd={
-            isDraggableTrunkDevice && onElementDragEnd
-              ? (p) => onElementDragEnd(trunkDevice.id, 'trunkDevice', p)
-              : undefined
-          }
-          draggableCircuitTrunk={isDraggableTrunkDevice}
-        />
+        <>
+          <TrunkDeviceSymbol
+            key={node.id}
+            device={trunkDevice}
+            position={{ x: node.bounds.x, y: node.bounds.y }}
+            circuitConverterAnchor={node.connectionAnchor}
+            dcBusWidth={trunkDevice.type === 'dc_bus' ? node.bounds.width : undefined}
+            metadataCallout={
+              node.visual?.type === 'symbol' ? node.visual.metadataCallout : undefined
+            }
+            supplyDevicePositions={panelLayout?.supplyDevices}
+            supplyMirrorAxisX={
+              panelLayout?.supplyFlowDirection === 'left-to-right'
+                ? (panelLayout.supplyMirrorAxisX ??
+                  panelLayout.frame.x + panelLayout.frame.width / 2)
+                : undefined
+            }
+            supplyPanelId={panelLayout?.panel.id}
+            isHorizontal={isSupplyTrunkDevice && !isVerticalSupplyBranchDevice}
+            symbolRotationDeg={node.visual?.type === 'symbol' ? node.visual.rotationDeg : undefined}
+            protectionLabelPosition={isVerticalSupplyBranchDevice ? 'right' : undefined}
+            showDeviceLabelLeft={isSubPanelSupplyTrunkDevice}
+            splitProtectionResidualLine={
+              isSupplyTrunkDevice && resolvedSupplyProtectionCollisionIds.has(node.id)
+            }
+            getCanvasPositionFromEvent={getCanvasPositionFromEvent}
+            onDragMove={
+              isDraggableTrunkDevice && onElementDragMove
+                ? (p) => onElementDragMove(trunkDevice.id, 'trunkDevice', p)
+                : undefined
+            }
+            onDragStart={
+              isDraggableTrunkDevice && onElementDragStart
+                ? (altKey, nativeEvt) =>
+                    onElementDragStart(trunkDevice.id, 'trunkDevice', altKey, nativeEvt)
+                : undefined
+            }
+            shouldSuppressKonvaDragEnd={shouldSuppressKonvaDragEnd}
+            onDragEnd={
+              isDraggableTrunkDevice && onElementDragEnd
+                ? (p) => onElementDragEnd(trunkDevice.id, 'trunkDevice', p)
+                : undefined
+            }
+            draggableCircuitTrunk={isDraggableTrunkDevice}
+          />
+          {node.children.map((child, index) => (
+            <RenderNode
+              key={`${child.id}-${index}`}
+              node={child}
+              panelLayout={panelLayout}
+              allEndpoints={allEndpoints}
+              getProtectionById={getProtectionById}
+              getPanelById={getPanelById}
+              supplyProtectionCollisionIds={resolvedSupplyProtectionCollisionIds}
+              onElementDragStart={onElementDragStart}
+              onElementDragMove={onElementDragMove}
+              onElementDragEnd={onElementDragEnd}
+              shouldSuppressKonvaDragEnd={shouldSuppressKonvaDragEnd}
+              onGroundDragEnd={onGroundDragEnd}
+              getCanvasPositionFromEvent={getCanvasPositionFromEvent}
+            />
+          ))}
+        </>
       )
     }
 

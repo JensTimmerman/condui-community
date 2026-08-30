@@ -7,7 +7,7 @@ import { dropBehaviors } from '@/handlers/eendraad/dropBehaviors'
 import { PROTECTION_SYMBOL_IDS } from '@/lib/protectionKind'
 import { getCircuitBranches } from '@/lib/layout/endpointChains'
 import { getEndpointTypeFromSymbol } from '@/utils'
-import type { SymbolMetadata } from '@/lib/symbols'
+import { symbolSupportsWireDomain, type SymbolMetadata } from '@/lib/symbols'
 import type { DropTarget } from '@/lib/layout/findDropTarget'
 import { getHitZoneBounds } from '@/lib/layout/findDropTarget'
 import type { LayoutNode, LayoutTree } from '@/lib/layout/layoutTree'
@@ -33,12 +33,17 @@ export interface DropZoneHintMatch {
   supplyFeedScope?: 'shared' | 'root'
   supplyDeviceInsertIndex?: number
   supplyConverterDcBranch?: 'right' | 'top'
+  supplyConverterDcConnectionIndex?: number
   converterGridPlacement?: 'inline' | 'input-leg'
   circuitId?: string
   mainBusInsertIndex?: number
   secondaryBusInsertIndex?: number
   /** Vertical trunk insertion slot (aligns with DropTarget.circuitTrunkSegmentIndex). */
   circuitTrunkSegmentIndex?: number
+  converterDcConnection?: { converterId: string; connectionIndex: number }
+  dcBusId?: string
+  supplyDcBusId?: string
+  supplyDcBusBranchId?: string
 }
 
 export interface DropZoneHint {
@@ -67,15 +72,46 @@ export interface DropZoneHintRelocation {
     feedScope: 'shared' | 'root'
     index: number
     supplyPath?: TrunkDevice['supplyPath']
+    supplyConverterDcConnectionIndex?: number
     converterGridPlacement?: TrunkDevice['converterGridPlacement']
+    /** The dragged device owns a DC distribution subtree, rather than belonging to one. */
+    dcBusRoot?: boolean
   }
   circuitTrunk?: {
     circuitId: string
     index: number
+    converterDcConnection?: TrunkDevice['converterDcConnection']
+    dcBusRoot?: boolean
   }
   protectionBus?:
     | { kind: 'main'; panelId: string; index: number }
     | { kind: 'secondary'; panelId: string; parentCircuitId: string; index: number }
+}
+
+/** Keep relocation markers within the topology the dragged object can actually preserve. */
+export function isRelocationDropZoneHintCompatible(
+  hint: DropZoneHint,
+  relocation: DropZoneHintRelocation | null | undefined
+): boolean {
+  if (!relocation) return true
+
+  if (relocation.supply?.dcBusRoot) {
+    return (
+      hint.targetType === 'supplyConverterDcWire' &&
+      !hint.match?.supplyDcBusId &&
+      (!relocation.supply.panelId || hint.match?.panelId === relocation.supply.panelId)
+    )
+  }
+
+  if (relocation.circuitTrunk?.dcBusRoot) {
+    return (
+      hint.targetType === 'circuit' &&
+      hint.match?.circuitId === relocation.circuitTrunk.circuitId &&
+      !!hint.match.converterDcConnection
+    )
+  }
+
+  return true
 }
 
 function supplyHintMatchesSourceLane(
@@ -86,7 +122,9 @@ function supplyHintMatchesSourceLane(
   if (path === 'converter-dc' || path === 'converter-dc-top') {
     return (
       hint.targetType === 'supplyConverterDcWire' &&
-      hint.match?.supplyConverterDcBranch === (path === 'converter-dc-top' ? 'top' : 'right')
+      hint.match?.supplyConverterDcBranch === (path === 'converter-dc-top' ? 'top' : 'right') &&
+      (hint.match?.supplyConverterDcConnectionIndex ?? (path === 'converter-dc-top' ? 1 : 0)) ===
+        (supply.supplyConverterDcConnectionIndex ?? (path === 'converter-dc-top' ? 1 : 0))
     )
   }
   if (path === 'converter-grid') {
@@ -97,9 +135,7 @@ function supplyHintMatchesSourceLane(
     )
   }
   if (path === 'backup-output') {
-    return (
-      hint.targetType === 'supplyBackupWire' || hint.targetType === 'supplyBackupOutputWire'
-    )
+    return hint.targetType === 'supplyBackupWire' || hint.targetType === 'supplyBackupOutputWire'
   }
   if (path === 'changeover-grid') return hint.targetType === 'supplyChangeoverGridWire'
   return hint.targetType === 'supplyWire'
@@ -145,19 +181,19 @@ export function isRelocationNoOpDropZoneHint(
   if (protectionBus.kind === 'main') {
     return Boolean(
       hint.targetType === 'mainBus' &&
-        hint.match?.panelId === protectionBus.panelId &&
-        typeof hint.match.mainBusInsertIndex === 'number' &&
-        (hint.match.mainBusInsertIndex === protectionBus.index ||
-          hint.match.mainBusInsertIndex === protectionBus.index + 1)
+      hint.match?.panelId === protectionBus.panelId &&
+      typeof hint.match.mainBusInsertIndex === 'number' &&
+      (hint.match.mainBusInsertIndex === protectionBus.index ||
+        hint.match.mainBusInsertIndex === protectionBus.index + 1)
     )
   }
   return Boolean(
     hint.targetType === 'circuit' &&
-      hint.match?.panelId === protectionBus.panelId &&
-      hint.match.circuitId === protectionBus.parentCircuitId &&
-      typeof hint.match.secondaryBusInsertIndex === 'number' &&
-      (hint.match.secondaryBusInsertIndex === protectionBus.index ||
-        hint.match.secondaryBusInsertIndex === protectionBus.index + 1)
+    hint.match?.panelId === protectionBus.panelId &&
+    hint.match.circuitId === protectionBus.parentCircuitId &&
+    typeof hint.match.secondaryBusInsertIndex === 'number' &&
+    (hint.match.secondaryBusInsertIndex === protectionBus.index ||
+      hint.match.secondaryBusInsertIndex === protectionBus.index + 1)
   )
 }
 
@@ -381,6 +417,7 @@ function appendTrunkTopSlotHints(
 }
 
 function hintAnchor(node: LayoutNode): { x: number; y: number } {
+  if (node.hitZone?.dropHintAnchor) return node.hitZone.dropHintAnchor
   const bounds = getHitZoneBounds(node, 'core')
   if (node.id?.startsWith('circuit-nest-') || node.id?.startsWith('circuit-trunk-')) {
     // For the topmost trunk segment (index 0) used as an endpoint "add branch" hint,
@@ -414,6 +451,9 @@ function shouldSkipContainerNode(node: LayoutNode): boolean {
     return hasChildMatching(node, (c) => c.id?.startsWith('main-bus-segment-') === true)
   }
   if (node.type === 'secondaryBus') {
+    return hasChildMatching(node, (c) => c.id?.startsWith('secondary-bus-segment-') === true)
+  }
+  if (node.type === 'trunkDevice' && node.hitZone?.dcBusId) {
     return hasChildMatching(node, (c) => c.id?.startsWith('secondary-bus-segment-') === true)
   }
   return false
@@ -475,7 +515,10 @@ function buildHintMatch(
       supplyFeedScope: node.hitZone?.supplyFeedScope ?? 'shared',
       supplyDeviceInsertIndex: node.hitZone?.supplyInsertIndex,
       supplyConverterDcBranch: node.hitZone?.supplyConverterDcBranch,
+      supplyConverterDcConnectionIndex: node.hitZone?.supplyConverterDcConnectionIndex,
       converterGridPlacement: node.hitZone?.converterGridPlacement,
+      supplyDcBusId: node.hitZone?.supplyDcBusId,
+      supplyDcBusBranchId: node.hitZone?.supplyDcBusBranchId,
     }
   }
   if (hitType === 'mainBus' || hitType === 'circuit' || hitType === 'rcd') {
@@ -484,9 +527,9 @@ function buildHintMatch(
     return {
       panelId: ctx.panelId,
       circuitId: ctx.circuitId,
-      ...(mainBusMatch
-        ? { mainBusInsertIndex: Number.parseInt(mainBusMatch[1]!, 10) }
-        : {}),
+      converterDcConnection: node.hitZone?.converterDcConnection,
+      dcBusId: node.hitZone?.dcBusId,
+      ...(mainBusMatch ? { mainBusInsertIndex: Number.parseInt(mainBusMatch[1]!, 10) } : {}),
       ...(secondaryBusMatch
         ? { secondaryBusInsertIndex: Number.parseInt(secondaryBusMatch[1]!, 10) }
         : {}),
@@ -544,6 +587,9 @@ function shouldIncludeHintNode(
 ): boolean {
   if (shouldSkipContainerNode(node)) return false
   if (node.hitZone?.type !== hitType) return false
+  if (node.hitZone.converterDcConnection && !symbolSupportsWireDomain(symbol.id, 'DC')) {
+    return false
+  }
 
   if (hitType === 'supplyWire') {
     if (symbol.id === 'source_changeover' && node.hitZone?.supplyFeedScope !== 'root') {
@@ -596,6 +642,15 @@ function shouldIncludeHintNode(
   }
 
   if (isProtectionDragSymbol(symbol)) {
+    // Converter DC outputs are intentionally endpoint/device lanes, not protected
+    // circuit trunks. A protection becomes valid only after an explicit DC bus
+    // creates an outgoing branch for it.
+    if (
+      (hitType === 'supplyConverterDcWire' && !node.hitZone?.supplyDcBusId) ||
+      (node.hitZone?.converterDcConnection && !node.hitZone?.dcBusId)
+    ) {
+      return false
+    }
     if (hitType === 'protection') return false
     if (node.type === 'mcb' || node.type === 'rcd') return false
     if (hitType === 'circuit') {
@@ -609,6 +664,7 @@ function shouldIncludeHintNode(
       }
       if (node.id?.startsWith('circuit-nest-')) return true
       if (node.id?.startsWith('secondary-bus-segment-')) {
+        if (node.hitZone?.dcBusId) return true
         return (circuit?.subCircuitIds?.length ?? 0) >= 2
       }
       return false
@@ -618,7 +674,7 @@ function shouldIncludeHintNode(
   if (isEndpointDragSymbol(symbol)) {
     if (hitType === 'protection') return false
     if (node.type === 'mcb' || node.type === 'rcd') return false
-    if (node.id?.startsWith('secondary-bus-segment-')) return false
+    if (node.id?.startsWith('secondary-bus-segment-') && !node.hitZone?.dcBusId) return false
     if (node.id?.startsWith('circuit-nest-')) return false
     if (node.type === 'trunkDevice') return false
 
@@ -636,7 +692,7 @@ function shouldIncludeHintNode(
       }
       return isLastCircuitTrunkSegment(node.id, trunkSegmentCounts)
     }
-    if (hitType === 'circuit' && node.type !== 'branch') return false
+    if (hitType === 'circuit' && node.type !== 'branch' && !node.hitZone?.dcBusId) return false
     if (hitType === 'circuit' && node.type === 'branch') {
       // Domotica output wires have their own hints; skip the horizontal lead-in branch wire.
       const hasDomoticaParent = node.children.some(
@@ -731,7 +787,7 @@ function visitForHints(
 ): void {
   const nextCtx = accumulateHintContext(node, ctx)
 
-  if (node.hitZone?.type && validTargets.has(node.hitZone.type)) {
+  if (node.hitZone?.type && !node.hitZone.suppressDropHint && validTargets.has(node.hitZone.type)) {
     if (
       shouldIncludeHintNode(
         node,
@@ -745,11 +801,7 @@ function visitForHints(
     ) {
       let { x, y } = hintAnchor(node)
       const trunkParsed = node.id ? parseCircuitTrunkSegmentId(node.id) : null
-      if (
-        isProtectionDragSymbol(symbol) &&
-        trunkParsed?.segmentIndex === 0 &&
-        nextCtx.circuitId
-      ) {
+      if (isProtectionDragSymbol(symbol) && trunkParsed?.segmentIndex === 0 && nextCtx.circuitId) {
         // The lower protection ball sits just above the owning protection, well
         // below the endpoint branches. The upper circuit-nest ball remains above
         // the branches, making the two insertion directions explicit.
@@ -858,6 +910,16 @@ export function isDropZoneHintActive(
     )
   }
 
+  if (dropTarget.type === 'supplyConverterDcWire' && hint.match) {
+    return (
+      dropTarget.panelId === hint.match.panelId &&
+      dropTarget.supplyDcBusId === hint.match.supplyDcBusId &&
+      dropTarget.supplyDcBusBranchId === hint.match.supplyDcBusBranchId &&
+      (dropTarget.supplyConverterDcConnectionIndex ?? 0) ===
+        (hint.match.supplyConverterDcConnectionIndex ?? 0)
+    )
+  }
+
   if (
     dropTarget.type === 'circuit' &&
     hint.match?.circuitId &&
@@ -876,6 +938,16 @@ export function isDropZoneHintActive(
     typeof dropTarget.circuitTrunkSegmentIndex === 'number'
   ) {
     return dropTarget.circuitTrunkSegmentIndex === hint.match.circuitTrunkSegmentIndex
+  }
+
+  if (
+    dropTarget.type === 'circuit' &&
+    hint.match?.dcBusId &&
+    dropTarget.dcBusId === hint.match.dcBusId &&
+    typeof hint.match.secondaryBusInsertIndex === 'number' &&
+    typeof dropTarget.secondaryBusInsertIndex === 'number'
+  ) {
+    return dropTarget.secondaryBusInsertIndex === hint.match.secondaryBusInsertIndex
   }
 
   return false
@@ -898,6 +970,15 @@ function isHintCompatibleWithDropTarget(hint: DropZoneHint, dropTarget: DropTarg
     return false
   }
   if (
+    match.converterDcConnection &&
+    dropTarget.converterDcConnection &&
+    (match.converterDcConnection.converterId !== dropTarget.converterDcConnection.converterId ||
+      match.converterDcConnection.connectionIndex !==
+        dropTarget.converterDcConnection.connectionIndex)
+  ) {
+    return false
+  }
+  if (
     typeof match.supplyDeviceInsertIndex === 'number' &&
     typeof dropTarget.supplyDeviceInsertIndex === 'number' &&
     match.supplyDeviceInsertIndex !== dropTarget.supplyDeviceInsertIndex
@@ -908,6 +989,28 @@ function isHintCompatibleWithDropTarget(hint: DropZoneHint, dropTarget: DropTarg
     match.supplyFeedScope &&
     dropTarget.supplyFeedScope &&
     match.supplyFeedScope !== dropTarget.supplyFeedScope
+  ) {
+    return false
+  }
+  if (
+    typeof match.supplyConverterDcConnectionIndex === 'number' &&
+    typeof dropTarget.supplyConverterDcConnectionIndex === 'number' &&
+    match.supplyConverterDcConnectionIndex !== dropTarget.supplyConverterDcConnectionIndex
+  ) {
+    return false
+  }
+  if (match.dcBusId && dropTarget.dcBusId && match.dcBusId !== dropTarget.dcBusId) return false
+  if (
+    match.supplyDcBusId &&
+    dropTarget.supplyDcBusId &&
+    match.supplyDcBusId !== dropTarget.supplyDcBusId
+  ) {
+    return false
+  }
+  if (
+    typeof match.secondaryBusInsertIndex === 'number' &&
+    typeof dropTarget.secondaryBusInsertIndex === 'number' &&
+    match.secondaryBusInsertIndex !== dropTarget.secondaryBusInsertIndex
   ) {
     return false
   }

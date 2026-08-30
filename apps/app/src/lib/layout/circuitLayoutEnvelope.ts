@@ -6,12 +6,23 @@ import { measureSymbolLabelTextWidth } from '@/lib/symbolLabelTextWidth'
 import { isSymbolLabelVisible } from '@/lib/symbolLabels'
 import type { Circuit, Endpoint, ProtectionDevice, TrunkDevice } from '@/types/schema'
 import { getEndpointMultiplier } from '@/utils/endpointMultipliers'
-import { getSupplyDeviceMultiplier } from '@/utils/inverterMultipliers'
+import { getSupplyDeviceMultiplier } from '@/lib/supplyAssembly/inverterMultipliers'
 import { calculateBranchWidth, getEndpointXOffsets } from './bottomUpBranchWidths'
 import { getCircuitBranches } from './endpointChains'
+import { getCircuitNotesPaintBounds } from './circuitNoteMetrics'
 import {
-  getCircuitNotesPaintBounds,
-} from './circuitNoteMetrics'
+  CIRCUIT_CONVERTER_BLOCK_SIZE,
+  CIRCUIT_CONVERTER_OUTPUT_BRANCH_LEAD,
+  getCircuitConverterDcConnectionCount,
+  getCircuitConverterPrimaryBranch,
+  getCircuitConverterPrimaryEndpointIds,
+  isCircuitConverterDcChild,
+  supportsCircuitConverterDcConnections,
+} from './circuitConverterGeometry'
+import {
+  getCircuitConverterMetadataCallouts,
+  type CircuitConverterMetadataCallout,
+} from './circuitConverterMetadataCallouts'
 
 export interface HorizontalEnvelope {
   /** Painted extent left of the circuit trunk anchor. */
@@ -35,6 +46,9 @@ export interface CircuitEnvelopeConfig {
   spdProtectionLabelOffset: number
   protectionTechnicalLabelOffset: number
   secondaryBusPanelColumnWidth: number
+  secondaryBusExtension: number
+  dcBusMinWidth: number
+  dcBusBranchLeadIn: number
   nestedGutter: number
   circuitNotesOrientation: 'horizontal' | 'vertical'
 }
@@ -119,7 +133,8 @@ function getEndpointEnvelope(
   endpoint: Endpoint,
   anchorX: number,
   isBranchEnd: boolean,
-  symbolSize: number
+  symbolSize: number,
+  includeInlineMetadata = true
 ): HorizontalEnvelope {
   const halfSymbol = symbolSize / 2
   const socketExtra =
@@ -141,6 +156,8 @@ function getEndpointEnvelope(
       groupCenterX + halfSymbol + 3 + multiplierWidth
     )
   }
+
+  if (!includeInlineMetadata) return envelope
 
   const labelLines = getEndpointLabelLines(endpoint)
   const labelWidth = Math.max(
@@ -168,7 +185,13 @@ function getBranchLabel(circuit: Circuit, branchIndex: number, endpoints: Endpoi
 
 function getBranchesEnvelope(circuit: Circuit, config: CircuitEnvelopeConfig): HorizontalEnvelope {
   let envelope: HorizontalEnvelope = { left: 0, right: 0 }
-  const branches = getCircuitBranches(circuit)
+  const primaryEndpointIds = getCircuitConverterPrimaryEndpointIds(circuit)
+  const branches = getCircuitBranches(circuit).filter(
+    (endpoints) =>
+      !endpoints.some(
+        (endpoint) => isCircuitConverterDcChild(endpoint) || primaryEndpointIds.has(endpoint.id)
+      )
+  )
 
   branches.forEach((endpoints, branchIndex) => {
     const branchWidth = calculateBranchWidth(
@@ -209,9 +232,30 @@ function getBranchesEnvelope(circuit: Circuit, config: CircuitEnvelopeConfig): H
   return envelope
 }
 
-function getTrunkDeviceEnvelope(device: TrunkDevice, symbolSize: number): HorizontalEnvelope {
+function getTrunkDeviceEnvelope(
+  device: TrunkDevice,
+  config: CircuitEnvelopeConfig,
+  includeInlineMetadata = true
+): HorizontalEnvelope {
+  const symbolSize = config.symbolSize
   const halfSymbol = symbolSize / 2
-  let envelope: HorizontalEnvelope = { left: -halfSymbol, right: halfSymbol }
+  if (device.type === 'dc_bus') {
+    const labelWidth = device.label?.trim()
+      ? estimateTextWidth(device.label.trim(), TRUNK_DEVICE_LABEL_FONT_SIZE)
+      : 0
+    return {
+      // The shared DC domain marker and the generous pointer target sit just
+      // outside the electrical attachment at the left end of the rail.
+      left: -20,
+      right: Math.max(config.dcBusMinWidth, labelWidth),
+    }
+  }
+  const connectionCount = getCircuitConverterDcConnectionCount(device)
+  const bodyRight =
+    supportsCircuitConverterDcConnections(device) && connectionCount > 1
+      ? (connectionCount - 1) * CIRCUIT_CONVERTER_BLOCK_SIZE + halfSymbol
+      : halfSymbol
+  let envelope: HorizontalEnvelope = { left: -halfSymbol, right: bodyRight }
   const labelLines =
     device.type === 'protection'
       ? getProtectionOneWireLabelLines(device).map((line) => line.text)
@@ -227,11 +271,11 @@ function getTrunkDeviceEnvelope(device: TrunkDevice, symbolSize: number): Horizo
     0,
     ...labelLines.map((line) => estimateTextWidth(line, TRUNK_DEVICE_LABEL_FONT_SIZE))
   )
-  if (labelWidth > 0) {
+  if (includeInlineMetadata && labelWidth > 0) {
     envelope = unionEnvelope(
       envelope,
       envelope.left,
-      halfSymbol + LABEL_OFFSET_FROM_SYMBOL + labelWidth
+      bodyRight + LABEL_OFFSET_FROM_SYMBOL + labelWidth
     )
   }
 
@@ -241,6 +285,121 @@ function getTrunkDeviceEnvelope(device: TrunkDevice, symbolSize: number): Horizo
       envelope,
       envelope.left,
       halfSymbol + 3 + estimateTextWidth(`${multiplier}×`, 10)
+    )
+  }
+  return envelope
+}
+
+function getConverterLinkedDeviceOffset(
+  circuit: Circuit,
+  device: TrunkDevice,
+  config: CircuitEnvelopeConfig
+): number {
+  const connection = device.converterDcConnection
+  if (!connection) return 0
+  const converter = (circuit.trunkDevices ?? []).find(
+    (candidate) => candidate.id === connection.converterId
+  )
+  if (!converter || !supportsCircuitConverterDcConnections(converter)) return 0
+
+  const primaryIds = new Set(
+    getCircuitConverterPrimaryBranch(circuit, converter)?.endpointIds ?? []
+  )
+  const endpoints = circuit.endpoints.filter((endpoint) =>
+    connection.connectionIndex === 0
+      ? primaryIds.has(endpoint.id)
+      : endpoint.converterDcConnection?.converterId === converter.id &&
+        endpoint.converterDcConnection.connectionIndex === connection.connectionIndex
+  )
+  const linkedDevices = (circuit.trunkDevices ?? []).filter(
+    (candidate) =>
+      candidate.converterDcConnection?.converterId === converter.id &&
+      candidate.converterDcConnection.connectionIndex === connection.connectionIndex
+  )
+  const deviceIndex = linkedDevices.findIndex((candidate) => candidate.id === device.id)
+  const portX = connection.connectionIndex * CIRCUIT_CONVERTER_BLOCK_SIZE
+  const chainLength = linkedDevices.length + endpoints.length
+  if (chainLength === 1 || deviceIndex < 0) return portX
+  return portX + CIRCUIT_CONVERTER_OUTPUT_BRANCH_LEAD + deviceIndex * config.endpointSpacing
+}
+
+function getConverterDcChildrenEnvelope(
+  circuit: Circuit,
+  device: TrunkDevice,
+  config: CircuitEnvelopeConfig,
+  metadataCallouts: Map<string, CircuitConverterMetadataCallout>
+): HorizontalEnvelope | null {
+  if (!supportsCircuitConverterDcConnections(device)) return null
+  let envelope: HorizontalEnvelope | null = null
+  const count = getCircuitConverterDcConnectionCount(device)
+  const framedTargetIds = new Set(
+    [...metadataCallouts.values()].flatMap((callout) => callout.sharedTargetIds)
+  )
+  const primaryIds = new Set(getCircuitConverterPrimaryBranch(circuit, device)?.endpointIds ?? [])
+  for (let connectionIndex = 0; connectionIndex < count; connectionIndex++) {
+    const endpoints = circuit.endpoints.filter((endpoint) =>
+      connectionIndex === 0
+        ? primaryIds.has(endpoint.id)
+        : endpoint.converterDcConnection?.converterId === device.id &&
+          endpoint.converterDcConnection.connectionIndex === connectionIndex
+    )
+    const linkedDevices = (circuit.trunkDevices ?? []).filter(
+      (candidate) =>
+        candidate.converterDcConnection?.converterId === device.id &&
+        candidate.converterDcConnection.connectionIndex === connectionIndex
+    )
+    const portX = connectionIndex * CIRCUIT_CONVERTER_BLOCK_SIZE
+    const offsets = getEndpointXOffsets(
+      endpoints,
+      CIRCUIT_CONVERTER_OUTPUT_BRANCH_LEAD,
+      config.endpointSpacing,
+      config.applianceAfterSocketGap
+    )
+    const chainLength = linkedDevices.length + endpoints.length
+    const isSingleEndpoint = linkedDevices.length === 0 && endpoints.length === 1
+    const itemX = (index: number) =>
+      chainLength === 1
+        ? portX
+        : portX + CIRCUIT_CONVERTER_OUTPUT_BRANCH_LEAD + index * config.endpointSpacing
+    const rowRight =
+      chainLength === 0
+        ? portX + CIRCUIT_CONVERTER_OUTPUT_BRANCH_LEAD
+        : chainLength === 1
+          ? portX
+          : itemX(chainLength - 1)
+    envelope = unionEnvelope(envelope ?? { left: portX, right: portX }, portX, rowRight)
+    endpoints.forEach((endpoint, endpointIndex) => {
+      const endpointEnvelope = getEndpointEnvelope(
+        endpoint,
+        linkedDevices.length > 0
+          ? itemX(linkedDevices.length + endpointIndex)
+          : isSingleEndpoint
+            ? portX
+            : portX + (offsets[endpointIndex] ?? CIRCUIT_CONVERTER_OUTPUT_BRANCH_LEAD),
+        endpointIndex === endpoints.length - 1,
+        config.symbolSize,
+        !framedTargetIds.has(endpoint.id)
+      )
+      envelope = unionEnvelope(envelope!, endpointEnvelope.left, endpointEnvelope.right)
+    })
+    const endpointIds = new Set(endpoints.map((endpoint) => endpoint.id))
+    const branchLabel = (circuit.branches ?? [])
+      .find((branch) => branch.endpointIds.some((endpointId) => endpointIds.has(endpointId)))
+      ?.label?.trim()
+    if (branchLabel) {
+      const labelRight = -BRANCH_LABEL_RIGHT_OFFSET
+      envelope = unionEnvelope(
+        envelope!,
+        labelRight - estimateCircuitLabelWidth(branchLabel) - LABEL_SAFETY,
+        labelRight
+      )
+    }
+  }
+  for (const callout of metadataCallouts.values()) {
+    envelope = unionEnvelope(
+      envelope ?? { left: callout.rect.left, right: callout.rect.right },
+      callout.rect.left,
+      callout.rect.right
     )
   }
   return envelope
@@ -271,8 +430,32 @@ export function measureCircuitLayoutEnvelope(
   envelope = unionEnvelope(envelope, branchEnvelope.left, branchEnvelope.right)
 
   for (const device of circuit.trunkDevices ?? []) {
-    const deviceEnvelope = getTrunkDeviceEnvelope(device, config.symbolSize)
-    envelope = unionEnvelope(envelope, deviceEnvelope.left, deviceEnvelope.right)
+    const metadataCallouts = supportsCircuitConverterDcConnections(device)
+      ? getCircuitConverterMetadataCallouts({
+          circuit,
+          device,
+          anchor: { x: 0, y: 0 },
+          symbolSize: config.symbolSize,
+          endpointSpacing: config.endpointSpacing,
+          applianceAfterSocketGap: config.applianceAfterSocketGap,
+        })
+      : new Map<string, CircuitConverterMetadataCallout>()
+    const deviceEnvelope = getTrunkDeviceEnvelope(device, config, !metadataCallouts.has(device.id))
+    const deviceOffset = getConverterLinkedDeviceOffset(circuit, device, config)
+    envelope = unionEnvelope(
+      envelope,
+      deviceOffset + deviceEnvelope.left,
+      deviceOffset + deviceEnvelope.right
+    )
+    const dcChildrenEnvelope = getConverterDcChildrenEnvelope(
+      circuit,
+      device,
+      config,
+      metadataCallouts
+    )
+    if (dcChildrenEnvelope) {
+      envelope = unionEnvelope(envelope, dcChildrenEnvelope.left, dcChildrenEnvelope.right)
+    }
   }
 
   const notesEnvelope = getCircuitNotesEnvelope(circuit, config.circuitNotesOrientation)
@@ -284,7 +467,46 @@ export function measureCircuitLayoutEnvelope(
     .map((id) => circuitMap.get(id))
     .filter((candidate): candidate is Circuit => candidate !== undefined)
   const nestedAnchorOffsets = new Map<string, number>()
-  if (nestedCircuits.length === 1) {
+  const dcBusDevice = (circuit.trunkDevices ?? []).find((device) => device.type === 'dc_bus')
+  if (dcBusDevice && nestedCircuits.length > 0) {
+    const orderedBusCircuitIds = dcBusDevice.dcBusProps?.branchCircuitIds ?? []
+    const orderedChildren = [
+      ...orderedBusCircuitIds
+        .map((id) => nestedCircuits.find((child) => child.id === id))
+        .filter((child): child is Circuit => !!child),
+      ...nestedCircuits.filter((child) => !orderedBusCircuitIds.includes(child.id)),
+    ]
+    const busOffset = getConverterLinkedDeviceOffset(circuit, dcBusDevice, config)
+    let anchorOffset = busOffset + config.dcBusBranchLeadIn
+    let previousRight: number | null = null
+    orderedChildren.forEach((child) => {
+      const childEnvelope = measureCircuitLayoutEnvelope(
+        child,
+        circuitMap,
+        protectionByCircuitId,
+        config,
+        hasPanelAttachment,
+        memo
+      )
+      if (previousRight != null) {
+        anchorOffset = previousRight + config.nestedGutter - childEnvelope.left
+      }
+      nestedAnchorOffsets.set(child.id, anchorOffset)
+      envelope = unionEnvelope(
+        envelope,
+        anchorOffset + childEnvelope.left,
+        anchorOffset + childEnvelope.right
+      )
+      previousRight = anchorOffset + childEnvelope.right
+    })
+    const railRight = Math.max(
+      busOffset + config.dcBusMinWidth,
+      ...[...nestedAnchorOffsets.values()].map(
+        (childAnchor) => childAnchor + config.secondaryBusExtension
+      )
+    )
+    envelope = unionEnvelope(envelope, busOffset - 20, railRight)
+  } else if (nestedCircuits.length === 1) {
     const child = nestedCircuits[0]!
     const childEnvelope = measureCircuitLayoutEnvelope(
       child,

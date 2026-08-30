@@ -96,6 +96,9 @@
     "unavailableTitle": "Installation pas encore disponible",
     "unavailableMessage": "Ce navigateur ne propose pas encore l'installation. Continuez à utiliser l'app dans Chrome ou Edge, ou installez via le menu du navigateur lorsqu'il apparaît."
   },
+  "viewer": {
+    "propertiesReadOnly": "Vue en lecture seule. Les coordonnées et adresses sensibles sont masquées."
+  },
   "tutorial": {
     "title": "Tutoriel",
     "description": "Une courte visite de l'éditeur pour être efficace rapidement.",
@@ -385,6 +388,21 @@
     "hideInspectionAgencyInInfoBlock": "Masquer dans les cartouches des schémas",
     "created": "Créé",
     "updated": "Mis à jour",
+    "templates": "Modèles",
+    "createTemplate": "Créer un modèle",
+    "useTemplate": "Utiliser",
+    "fromTemplate": "Depuis un modèle",
+    "chooseTemplate": "Choisissez un modèle",
+    "emptyProject": "Projet vide",
+    "templateDescription": "Description",
+    "templateDescriptionPlaceholder": "p. ex. modèle de rénovation d'appartement",
+    "downloadTemplate": "Télécharger le modèle",
+    "deleteTemplate": "Supprimer le modèle",
+    "deleteTemplateConfirmTitle": "Supprimer le modèle ?",
+    "deleteTemplateConfirmMessage": "Supprimer « {{name}} » ? Les projets créés à partir de ce modèle ne seront pas affectés.",
+    "templateCreateFailed": "Le modèle n’a pas pu être créé.",
+    "templateUseFailed": "Le projet n’a pas pu être créé à partir de ce modèle.",
+    "templateDeleteFailed": "Le modèle n’a pas pu être supprimé.",
     "recent": "Récents",
     "recentProjects": "Projets récents",
     "notificationBadgeTooltip": "Nouvelles notifications du projet",
@@ -488,11 +506,14 @@
     "distribution": "Tableau de distribution",
     "mainPanel": "Tableau principal",
     "secondaryPanel": "Tableau {{number}}",
+    "diagramLabels": "Libellés du schéma",
     "panelNumbering": "Numérotation des tableaux",
     "panelNumberingHint": "Ajoute B01, B02, … dans l'ordre depuis le tableau principal vers les sous-tableaux sur le schéma unifilaire.",
     "panelNetTypeLabels": "Type de réseau sur le schéma",
     "panelNetTypeLabelsHint": "Ajoute l'alimentation, la tension et la liaison à la terre dans l'en-tête du schéma lorsqu'un système de liaison à la terre est défini.",
     "earthingSystemLabel": "Schéma de liaison à la terre",
+    "earthingSystemGridLabel": "Schéma de liaison à la terre (réseau)",
+    "earthingSystemBackupLabel": "Schéma de liaison à la terre (secours)",
     "earthingSystemCustom": "Valeur personnalisée — plus synchronisée avec le tableau principal tant qu'elle ne correspond pas à nouveau.",
     "earthingSystem": {
       "none": "Aucun",
@@ -507,7 +528,9 @@
     "diagramNetMain": "Réseau : {{net}} – {{frequency}} Hz",
     "diagramNetSecondary": "Réseau : {{net}} – {{frequency}} Hz – {{earthing}}",
     "diagramNetWithEarthing": "Réseau : {{net}} – {{earthing}}",
-    "diagramEarthingSystem": "Schéma de liaison à la terre : {{earthing}}"
+    "diagramEarthingSystem": "Schéma de liaison à la terre : {{earthing}}",
+    "diagramEarthingSystemGrid": "Schéma de liaison à la terre (réseau) : {{earthing}}",
+    "diagramEarthingSystemBackup": "Schéma de liaison à la terre (secours) : {{earthing}}"
   },
   "panel": {
     "deleteConfirmTitle": "Supprimer le(s) tableau(x) ?",
@@ -1139,6 +1162,7 @@
     "dc_dc_converter": "Convertisseur DC-DC",
     "solar_panel": "Panneau solaire",
     "battery": "Batterie",
+    "dc_bus": "Jeu de barres CC",
     "mcb": "Disjoncteur",
     "rcd": "Disjoncteur différentiel",
     "rcbo": "Disjoncteur différentiel combiné",
@@ -1736,7 +1760,12 @@
     "pointOverrideCount": "{{count}} point(s) surchargent ce comportement.",
     "mixedPointModes": "Valeurs mixtes",
     "drawUpArrows": "Afficher les flèches de montée",
-    "invertUpArrow": "Inverser le sens des flèches"
+    "invertUpArrow": "Inverser le sens des flèches",
+    "upArrowDirection": "Flèche de montée",
+    "upArrowDirectionLeft": "Gauche",
+    "upArrowDirectionRight": "Droite",
+    "invertSpiralDirection": "Inverser le sens de la spirale",
+    "spiralSweepDegrees": "Arc de la spirale"
   },
   "contextMenu": {
     "addElement": "Ajouter un élément",
@@ -1950,6 +1979,8 @@
     "port1": "Port 1",
     "port2": "Port 2",
     "converterPhases": "Phases CA",
+    "converterDcConnections": "Connexions CC",
+    "converterTopDcConnections": "Connexions CC supérieures",
     "inverterUnit": "Onduleur",
     "nameLabelOnDiagramHint": "Si affiché, apparaît au-dessus du symbole sur le fil d'alimentation horizontal."
   },

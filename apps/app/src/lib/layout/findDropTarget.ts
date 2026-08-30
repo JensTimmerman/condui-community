@@ -22,6 +22,7 @@ import type { LayoutNode, LayoutTree } from './layoutTree'
 import type { Endpoint, ProtectionDevice } from '@/types/schema'
 import type { Point } from '@/types/ui'
 import { DOMOTICA_MAX_ENDPOINT_OUTPUTS, DOMOTICA_MIN_ENDPOINT_OUTPUTS } from '@/lib/domoticaLayout'
+import { isVerticalSupplyDevice } from './supplyDeviceOrientation'
 
 /** Options for findDropTarget / findDropTargetWithDebug (all optional). */
 export interface FindDropTargetOptions {
@@ -91,6 +92,11 @@ export interface DropTarget {
   supplyFeedScope?: 'shared' | 'root'
   /** Which physical DC branch of a hybrid supply converter is targeted. */
   supplyConverterDcBranch?: 'right' | 'top'
+  supplyConverterDcConnectionIndex?: number
+  /** Supply DC bus under the pointer. */
+  supplyDcBusId?: string
+  /** Existing branch on the supply DC bus under the pointer. */
+  supplyDcBusBranchId?: string
   /** Geometry selected on the converter grid-input path. */
   converterGridPlacement?: 'inline' | 'input-leg'
   /** True only on the direct converter's load-side junction slot. */
@@ -121,6 +127,10 @@ export interface DropTarget {
   domoticaOutput?: { group: 'control' | 'endpoint'; index: number; expands?: boolean }
   /** Intent when dropping on/after an existing domotica child endpoint. */
   domoticaChildDropIntent?: 'replace' | 'insertAfter'
+  /** Widened ordinary circuit-trunk converter DC connection under the pointer. */
+  converterDcConnection?: { converterId: string; connectionIndex: number }
+  /** Selectable DC bus under the pointer. */
+  dcBusId?: string
 }
 
 export interface DebugStep {
@@ -433,9 +443,7 @@ function findPendingSecondaryBusDropInPanel(
       const nestedProtections = node.children.filter(
         (child) => child.type === 'mcb' && !!child.circuitIdForWires
       )
-      const nestNode = node.children.find((child) =>
-        child.id?.startsWith('circuit-nest-')
-      )
+      const nestNode = node.children.find((child) => child.id?.startsWith('circuit-nest-'))
       if (nestedProtections.length === 1 && nestNode) {
         const bounds = getHitZoneBounds(nestNode, 'core')
         const anchorX = (bounds.left + bounds.right) / 2
@@ -466,6 +474,45 @@ function findPendingSecondaryBusDropInPanel(
   return visit(panelNode)
 }
 
+/**
+ * Preview balls are explicit placement controls. Resolve their own anchors
+ * before overlapping structural wires so a compact converter stub cannot be
+ * stolen by a nearby supply or ground hit zone.
+ */
+function findExplicitDropHintTargetInPanel(
+  panelNode: LayoutNode,
+  position: Point,
+  ctx: WalkContext
+): DropTarget | null {
+  const radius = 10
+  const best: {
+    current: { target: DropTarget; distanceSquared: number } | null
+  } = { current: null }
+
+  const visit = (node: LayoutNode, nodeCtx: WalkContext) => {
+    const anchor = node.hitZone?.dropHintAnchor
+    if (anchor && node.hitZone?.type) {
+      const dx = position.x - anchor.x
+      const dy = position.y - anchor.y
+      const distanceSquared = dx * dx + dy * dy
+      if (
+        distanceSquared <= radius * radius &&
+        (!best.current || distanceSquared < best.current.distanceSquared)
+      ) {
+        best.current = {
+          target: buildDropTarget(node, nodeCtx, position),
+          distanceSquared,
+        }
+      }
+    }
+    const childCtx = accumulateContext(node, nodeCtx)
+    node.children.forEach((child) => visit(child, childCtx))
+  }
+
+  visit(panelNode, ctx)
+  return best.current?.target ?? null
+}
+
 // ─── Main entry point ────────────────────────────────────────────────────────
 
 /**
@@ -483,6 +530,8 @@ export function findDropTarget(
   }
 
   const ctx: WalkContext = { panelId: panelNode.domainId, diagramId: panelNode.diagramId }
+  const explicitDropHint = findExplicitDropHintTargetInPanel(panelNode, position, ctx)
+  if (explicitDropHint) return explicitDropHint
   const directChangeoverSlot = findDirectConverterChangeoverSlotInPanel(
     panelNode,
     position,
@@ -1196,6 +1245,9 @@ function accumulateContext(node: LayoutNode, ctx: WalkContext): WalkContext {
   if (node.type === 'secondaryBus') {
     return { ...ctx, secondaryBusNode: node }
   }
+  if (node.type === 'trunkDevice' && node.hitZone?.dcBusId) {
+    return { ...ctx, secondaryBusNode: node }
+  }
 
   return ctx
 }
@@ -1222,6 +1274,9 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
       target.endpointId = node.domainId
       target.circuitId = ctx.circuitId // Inherited from parent MCB
       const endpointRef = node.domainRef as Endpoint | undefined
+      if (endpointRef?.converterDcConnection) {
+        target.converterDcConnection = endpointRef.converterDcConnection
+      }
       const isDomoticaParent =
         endpointRef?.symbol === 'domotica' && !endpointRef?.domoticaChildProps
       // Dropping on the domotica module body: treat as drop on first output branch
@@ -1342,10 +1397,7 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
           .map((child) => child.circuitIdForWires!)
         if (directNestedCircuitIds.length === 1) {
           target.insertBeforeNestedCircuitId = directNestedCircuitIds[0]
-        } else if (
-          directNestedCircuitIds.length === 0 &&
-          node.id?.startsWith('circuit-nest-')
-        ) {
+        } else if (directNestedCircuitIds.length === 0 && node.id?.startsWith('circuit-nest-')) {
           // The nest zone is the continuation above the circuit's existing endpoint
           // branches/trunk devices. A protection dropped here belongs after that
           // content; drops on the lower trunk wire keep the wrapping behaviour.
@@ -1450,12 +1502,14 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
   ) {
     target.supplyFeedScope = node.hitZone?.supplyFeedScope
     target.supplyConverterDcBranch = node.hitZone?.supplyConverterDcBranch
+    target.supplyConverterDcConnectionIndex = node.hitZone?.supplyConverterDcConnectionIndex
+    target.supplyDcBusId = node.hitZone?.supplyDcBusId
+    target.supplyDcBusBranchId = node.hitZone?.supplyDcBusBranchId
     target.converterGridPlacement = node.hitZone?.converterGridPlacement
     target.supplyConverterChangeoverSlot = node.hitZone?.supplyConverterChangeoverSlot
     if (node.type === 'trunkDevice' && typeof node.hitZone?.supplyInsertIndex === 'number') {
       target.supplyDeviceInsertIndex =
-        target.type === 'supplyConverterGridWire' &&
-          target.converterGridPlacement === 'input-leg'
+        isVerticalSupplyDevice(node.domainRef as import('@/types/schema').TrunkDevice)
           ? position.y < node.bounds.y
             ? node.hitZone.supplyInsertIndex + 1
             : node.hitZone.supplyInsertIndex
@@ -1481,6 +1535,14 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
       index: node.hitZone.outputIndex,
       expands: node.hitZone.outputExpands,
     }
+  }
+  if (node.hitZone?.converterDcConnection) {
+    target.converterDcConnection = node.hitZone.converterDcConnection
+    target.wireDomain = 'DC'
+  }
+  if (node.hitZone?.dcBusId) {
+    target.dcBusId = node.hitZone.dcBusId
+    target.wireDomain = 'DC'
   }
 
   return target

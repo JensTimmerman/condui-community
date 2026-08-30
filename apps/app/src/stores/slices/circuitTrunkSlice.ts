@@ -97,6 +97,55 @@ function removeConverterBackupDependents(panels: Panel[], converterId: string): 
   return removedIds
 }
 
+function removeDcBusBranches(panels: Panel[], _busId: string, branchCircuitIds: string[]): string[] {
+  const removedCircuitIds = new Set<string>()
+  const removedMemberIds = new Set<string>()
+  const pending = [...branchCircuitIds]
+  while (pending.length > 0) {
+    const circuitId = pending.pop()!
+    if (removedCircuitIds.has(circuitId)) continue
+    removedCircuitIds.add(circuitId)
+    for (const panel of panels) {
+      const found = findCircuitById(panel, circuitId)
+      if (!found) continue
+      removedMemberIds.add(circuitId)
+      found.circuit.endpoints.forEach((endpoint) => removedMemberIds.add(endpoint.id))
+      found.circuit.trunkDevices?.forEach((device) => removedMemberIds.add(device.id))
+      pending.push(...(found.circuit.subCircuitIds ?? []))
+      break
+    }
+  }
+
+  const visit = (panel: Panel) => {
+    panel.circuits = panel.circuits.filter((circuit) => !removedCircuitIds.has(circuit.id))
+    for (let index = panel.protections.length - 1; index >= 0; index--) {
+      const protection = panel.protections[index]!
+      const owned = protection.circuits ?? []
+      const hasRemovedCircuit = owned.some((circuit) => removedCircuitIds.has(circuit.id))
+      if (hasRemovedCircuit) {
+        removedMemberIds.add(protection.id)
+        panel.protections.splice(index, 1)
+      } else {
+        protection.circuits = owned.filter((circuit) => !removedCircuitIds.has(circuit.id))
+      }
+    }
+    for (const circuit of getAllCircuits(panel)) {
+      if (circuit.subCircuitIds) {
+        circuit.subCircuitIds = circuit.subCircuitIds.filter((id) => !removedCircuitIds.has(id))
+      }
+      for (const device of circuit.trunkDevices ?? []) {
+        if (!device.dcBusProps?.branchCircuitIds) continue
+        device.dcBusProps.branchCircuitIds = device.dcBusProps.branchCircuitIds.filter(
+          (id) => !removedCircuitIds.has(id)
+        )
+      }
+    }
+    panel.subPanels.forEach(visit)
+  }
+  panels.forEach(visit)
+  return [...removedMemberIds]
+}
+
 export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
     // Circuit actions
     addCircuit: (panelId, circuit, protectionId) =>
@@ -455,6 +504,46 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
               const index = result.circuit.trunkDevices.findIndex((d) => d.id === deviceId)
               if (index !== -1) {
                 const [removed] = result.circuit.trunkDevices.splice(index, 1)
+                const linkedDevices =
+                  removed?.type === 'conversion'
+                    ? result.circuit.trunkDevices.filter(
+                        (device) => device.converterDcConnection?.converterId === deviceId
+                      )
+                    : []
+                if (linkedDevices.length > 0) {
+                  const linkedIds = new Set(linkedDevices.map((device) => device.id))
+                  result.circuit.trunkDevices = result.circuit.trunkDevices.filter(
+                    (device) => !linkedIds.has(device.id)
+                  )
+                }
+                const removedBusDevices = [removed, ...linkedDevices].filter(
+                  (device): device is NonNullable<typeof device> => device?.type === 'dc_bus'
+                )
+                const dcBusRemovedIds = removedBusDevices.flatMap((bus) =>
+                  removeDcBusBranches(
+                    panels,
+                    bus.id,
+                    bus.dcBusProps?.branchCircuitIds ?? []
+                  )
+                )
+                const removedEmptyDcBranchIds =
+                  result.circuit.dcBusSource?.busId &&
+                  !('symbol' in result.parent) &&
+                  result.parent.directDcBusFeeder === true &&
+                  result.circuit.endpoints.length === 0 &&
+                  (result.circuit.trunkDevices?.length ?? 0) === 0 &&
+                  (result.circuit.subCircuitIds?.length ?? 0) === 0
+                    ? removeDcBusBranches(
+                        panels,
+                        result.circuit.dcBusSource.busId,
+                        [result.circuit.id]
+                      )
+                    : []
+                for (const endpoint of result.circuit.endpoints) {
+                  if (endpoint.converterDcConnection?.converterId === deviceId) {
+                    delete endpoint.converterDcConnection
+                  }
+                }
                 if (removed?.type === 'junction_panel') {
                   removedLabel = removed.label
                 }
@@ -465,7 +554,14 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
                   circuitId,
                 }
                 cleanupPanelGridSlotsForDevice(panels, deviceRef)
-                pruneEendraadFrames(project, { removedMemberIds: [deviceId] })
+                pruneEendraadFrames(project, {
+                  removedMemberIds: [
+                    deviceId,
+                    ...linkedDevices.map((device) => device.id),
+                    ...dcBusRemovedIds,
+                    ...removedEmptyDcBranchIds,
+                  ],
+                })
                 state.isDirty = true
                 break
               }
@@ -921,6 +1017,11 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
               const owningPanel = findPanelOwningSupplyDevice(project, deviceId)
               const target = devices[index]
               const removedIds = new Set([deviceId])
+              if (target?.type === 'dc_bus') {
+                devices.forEach((device) => {
+                  if (device.supplyDcBusId === target.id) removedIds.add(device.id)
+                })
+              }
               let downgradedGridOrder: string[] | undefined
               if (target?.symbol === 'source_changeover') {
                 const backupOutputDevices = devices.filter(

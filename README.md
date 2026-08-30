@@ -28,6 +28,9 @@ The interface is available in Dutch, French, and English.
 Condui Community is deliberately local. Managed storage, synchronization, multi-user collaboration,
 sharing, server-backed project history, and hosted integrations are not included.
 
+Project templates are a hosted Condui feature and are not included in Community. Community projects
+start from an empty local project or an imported project archive.
+
 PDF exports contain the rendered document only. They do not contain an embedded editable Condui
 project. Download and back up the project archive separately if you want to edit the project later.
 

@@ -1012,7 +1012,7 @@ export function HierarchyPanelCanvas({
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('contextmenu', handleContextMenu, true)
     }
-  }, [resetHierarchyRewireState, rewireMode])
+  }, [containerRef, resetHierarchyRewireState, rewireMode])
 
   const handleHierarchyRewireDragStart = useCallback(
     (surface: HierarchySurface, ref: PanelGridModuleRef) => {

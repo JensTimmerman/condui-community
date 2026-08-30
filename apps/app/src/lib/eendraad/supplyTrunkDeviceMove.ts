@@ -13,6 +13,10 @@ import type { BottomUpPanelLayout } from '@/lib/layout/bottomUpLayout'
 import { getPanelDiagramId } from '@/lib/layout/bottomUpLayout'
 import { getSupplyEnclosureBoundaryCenter } from '@/lib/layout/supplyEnclosureBoundaryGeometry'
 import {
+  getSupplyConverterDcConnectionIndex,
+  getSupplyConverterDcPath,
+} from '@/lib/supplyAssembly/converterDcConnections'
+import {
   moveSupplyDeviceToEnclosureAutomatically,
   resolveSupplyDeviceMounting,
 } from '@/lib/panel/auxiliarySupplyEnclosures'
@@ -37,7 +41,12 @@ export interface SupplyTrunkDeviceMoveResult {
 function supplyDeviceMatchesTargetLane(device: TrunkDevice, target: DropTarget): boolean {
   const path = device.supplyPath
   if (target.type === 'supplyConverterDcWire') {
-    return path === (target.supplyConverterDcBranch === 'top' ? 'converter-dc-top' : 'converter-dc')
+    const targetConnectionIndex =
+      target.supplyConverterDcConnectionIndex ?? (target.supplyConverterDcBranch === 'top' ? 1 : 0)
+    return (
+      path === getSupplyConverterDcPath(targetConnectionIndex) &&
+      getSupplyConverterDcConnectionIndex(device) === targetConnectionIndex
+    )
   }
   if (target.type === 'supplyConverterGridWire') {
     return path === 'converter-grid' || path === 'backup' || path === 'converter-branch'
@@ -171,7 +180,13 @@ export function isSupplyTrunkDeviceDropTarget(device: TrunkDevice, target: DropT
       device.type === 'energy_meter' &&
       SUPPLY_METER_TARGETS.has(target.type)) ||
     (!isDcBranchDevice && device.type !== 'protection' && target.type === 'supplyWire')
-  if (!validTarget || device.supplyPath === 'backup') return false
+  if (
+    !validTarget ||
+    device.supplyPath === 'backup' ||
+    (device.type === 'dc_bus' && !!target.supplyDcBusId)
+  ) {
+    return false
+  }
 
   const targetScope = target.supplyFeedScope ?? 'shared'
   if (targetScope === 'root' && !target.panelId) return false
@@ -220,6 +235,7 @@ export function moveSupplyTrunkDeviceAtDropTarget(
   if (!source || !device) return null
 
   if (!isSupplyTrunkDeviceDropTarget(device, target)) return null
+  if (device.type === 'dc_bus' && source.panelId !== target.panelId) return null
 
   const targetScope = target.supplyFeedScope ?? 'shared'
 
@@ -233,11 +249,19 @@ export function moveSupplyTrunkDeviceAtDropTarget(
       ? sharedDevices
       : (targetRootFeed!.trunkDevices ?? (targetRootFeed!.trunkDevices = []))
   const sameContainer = source.devices === targetDevices
+  const movingEntries = source.devices
+    .map((item, index) => ({ item, index }))
+    .filter(
+      ({ item }) =>
+        item.id === device.id || (device.type === 'dc_bus' && item.supplyDcBusId === device.id)
+    )
+  const movingDevices = movingEntries.map(({ item }) => item)
   const targetSupplyPath: TrunkDevice['supplyPath'] =
     target.type === 'supplyConverterDcWire'
-      ? target.supplyConverterDcBranch === 'top'
-        ? 'converter-dc-top'
-        : 'converter-dc'
+      ? getSupplyConverterDcPath(
+          target.supplyConverterDcConnectionIndex ??
+            (target.supplyConverterDcBranch === 'top' ? 1 : 0)
+        )
       : device.type === 'protection' || device.type === 'energy_meter'
         ? target.type === 'supplyBackupOutputWire' || target.type === 'supplyBackupWire'
           ? 'backup-output'
@@ -247,19 +271,26 @@ export function moveSupplyTrunkDeviceAtDropTarget(
               ? 'converter-grid'
               : 'serial'
         : device.supplyPath
-  let insertIndex = clamp(
+  const requestedInsertIndex = clamp(
     target.supplyDeviceInsertIndex ?? targetDevices.length,
     0,
     targetDevices.length
   )
-  if (sameContainer && insertIndex > sourceIndex) insertIndex -= 1
+  let insertIndex = requestedInsertIndex
+  if (sameContainer) {
+    insertIndex -= movingEntries.filter(({ index }) => index < requestedInsertIndex).length
+  }
+  const originalGroupIndex = movingEntries[0]?.index ?? sourceIndex
   if (
     sameContainer &&
-    insertIndex === sourceIndex &&
+    insertIndex === originalGroupIndex &&
     (device.supplyPath ?? 'serial') === (targetSupplyPath ?? 'serial') &&
+    (target.type !== 'supplyConverterDcWire' ||
+      getSupplyConverterDcConnectionIndex(device) ===
+        (target.supplyConverterDcConnectionIndex ??
+          (target.supplyConverterDcBranch === 'top' ? 1 : 0))) &&
     (targetSupplyPath !== 'converter-grid' ||
-      (device.converterGridPlacement ?? 'inline') ===
-        (target.converterGridPlacement ?? 'inline'))
+      (device.converterGridPlacement ?? 'inline') === (target.converterGridPlacement ?? 'inline'))
   ) {
     if (
       targetMounting &&
@@ -275,16 +306,27 @@ export function moveSupplyTrunkDeviceAtDropTarget(
     return { device, sourcePanelId: source.panelId, targetPanelId: target.panelId }
   }
 
-  source.devices.splice(sourceIndex, 1)
-  device.supplyPath = targetSupplyPath
-  if (targetSupplyPath === 'converter-grid') {
-    device.converterGridPlacement = target.converterGridPlacement ?? 'inline'
-  } else {
-    delete device.converterGridPlacement
+  for (const { index } of [...movingEntries].sort((a, b) => b.index - a.index)) {
+    source.devices.splice(index, 1)
+  }
+  for (const movingDevice of movingDevices) {
+    movingDevice.supplyPath = targetSupplyPath
+    if (target.type === 'supplyConverterDcWire') {
+      movingDevice.supplyConverterDcConnectionIndex =
+        target.supplyConverterDcConnectionIndex ??
+        (target.supplyConverterDcBranch === 'top' ? 1 : 0)
+    } else {
+      delete movingDevice.supplyConverterDcConnectionIndex
+    }
+    if (targetSupplyPath === 'converter-grid') {
+      movingDevice.converterGridPlacement = target.converterGridPlacement ?? 'inline'
+    } else {
+      delete movingDevice.converterGridPlacement
+    }
   }
 
   const safeInsertIndex = clamp(insertIndex, 0, targetDevices.length)
-  targetDevices.splice(safeInsertIndex, 0, device)
+  targetDevices.splice(safeInsertIndex, 0, ...movingDevices)
   source.devices.forEach((item, index) => {
     item.trunkPosition = index
   })

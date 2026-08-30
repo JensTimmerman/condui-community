@@ -321,7 +321,7 @@ export function runDuplicateProtectionLeft(
       const newCircuitId = generateId()
       const newCode = takeNextAlphabeticCode()
       const newCircuit = cloneCircuitContent(sourceCircuit, maps, newCircuitId, newCode)
-      wireClonedSubCircuitIds(sourceCircuit, newCircuit, maps.circuit)
+      wireClonedSubCircuitIds(sourceCircuit, newCircuit, maps)
       clonedCircuits.set(oldCircuitId, newCircuit)
     }
 

@@ -82,6 +82,7 @@ export const symbolTooltipsEn = {
   rectifier: 'Rectifier from AC to DC.',
   inverter: 'Inverter from DC to AC. Suitable for solar panels and batteries.',
   dc_dc_converter: 'DC-DC converter, suitable for direct use between solar panels and batteries.',
+  dc_bus: 'DC distribution busbar for branching DC circuits.',
   solar_panel: 'PV string or solar panel on DC.',
   battery: 'Battery storage on DC.',
   note: 'Free note or label on the diagram.',

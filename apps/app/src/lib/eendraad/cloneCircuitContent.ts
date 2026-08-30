@@ -17,10 +17,7 @@ function cloneEndpointContent(source: Endpoint, newId: string): Endpoint {
   clone.id = newId
   clone.placements =
     source.placements?.length > 0
-      ? clonePlacementsForDuplicate(
-          source.placements,
-          clonePlacementsOptionsForEndpoint(source),
-        )
+      ? clonePlacementsForDuplicate(source.placements, clonePlacementsOptionsForEndpoint(source))
       : []
   clone.controlledEndpointIds = undefined
   if (clone.domoticaProps) {
@@ -41,7 +38,7 @@ export function cloneCircuitContent(
   source: Circuit,
   maps: CircuitCloneIdMaps,
   newCircuitId: string,
-  newCode: string,
+  newCode: string
 ): Circuit {
   maps.circuit.set(source.id, newCircuitId)
 
@@ -58,6 +55,18 @@ export function cloneCircuitContent(
     maps.trunkDevice.set(td.id, newTdId)
     return { ...JSON.parse(JSON.stringify(td)), id: newTdId }
   })
+  for (const device of newTrunkDevices ?? []) {
+    if (!device.converterDcConnection) continue
+    const converterId = maps.trunkDevice.get(device.converterDcConnection.converterId)
+    if (converterId) device.converterDcConnection.converterId = converterId
+    else delete device.converterDcConnection
+  }
+  for (const endpoint of newEndpoints) {
+    if (!endpoint.converterDcConnection) continue
+    const converterId = maps.trunkDevice.get(endpoint.converterDcConnection.converterId)
+    if (converterId) endpoint.converterDcConnection.converterId = converterId
+    else delete endpoint.converterDcConnection
+  }
 
   let newBranches: Branch[] | undefined
   if (source.branches?.length) {
@@ -125,19 +134,33 @@ function remapSectionWireOverrides(circuit: Circuit, maps: CircuitCloneIdMaps): 
 export function wireClonedSubCircuitIds(
   source: Circuit,
   clone: Circuit,
-  circuitIdMap: Map<string, string>,
+  maps: CircuitCloneIdMaps
 ): void {
   if (!source.subCircuitIds?.length) {
     delete clone.subCircuitIds
-    return
+  } else {
+    const next = source.subCircuitIds
+      .map((id) => maps.circuit.get(id))
+      .filter((id): id is string => !!id)
+    clone.subCircuitIds = next.length > 0 ? next : undefined
   }
-  const next = source.subCircuitIds
-    .map((id) => circuitIdMap.get(id))
-    .filter((id): id is string => !!id)
-  clone.subCircuitIds = next.length > 0 ? next : undefined
+  if (clone.dcBusSource) {
+    const busId = maps.trunkDevice.get(clone.dcBusSource.busId)
+    if (busId) clone.dcBusSource.busId = busId
+    else delete clone.dcBusSource
+  }
+  for (const device of clone.trunkDevices ?? []) {
+    if (!device.dcBusProps?.branchCircuitIds) continue
+    device.dcBusProps.branchCircuitIds = device.dcBusProps.branchCircuitIds
+      .map((id) => maps.circuit.get(id))
+      .filter((id): id is string => !!id)
+  }
 }
 
-export function findCircuitOnPanel(panel: { circuits: Circuit[]; protections: { circuits?: Circuit[] }[] }, circuitId: string): Circuit | undefined {
+export function findCircuitOnPanel(
+  panel: { circuits: Circuit[]; protections: { circuits?: Circuit[] }[] },
+  circuitId: string
+): Circuit | undefined {
   for (const c of panel.circuits) {
     if (c.id === circuitId) return c
   }

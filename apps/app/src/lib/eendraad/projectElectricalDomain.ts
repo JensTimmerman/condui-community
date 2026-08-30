@@ -636,6 +636,56 @@ export function removePanelGridDuplicateRefsInProject(project: ElectricalDomainP
   return changed
 }
 
+/**
+ * Remove saved panel-grid references to protection rows that no longer exist anywhere in the
+ * project. Older rotating-switch deletes could leave these behind, which reserved an empty
+ * module position after reopening the project.
+ */
+export function pruneStalePanelGridProtectionReferencesInProject(
+  project: ElectricalDomainProject
+): boolean {
+  const liveProtectionKeys = new Set<string>()
+  const collectProtectionKeys = (panel: Panel) => {
+    for (const protection of panel.protections) {
+      liveProtectionKeys.add(panelGridModuleRefKey({ kind: 'protection', id: protection.id }))
+    }
+    for (const subPanel of panel.subPanels ?? []) collectProtectionKeys(subPanel)
+  }
+  const panels = getElectricalPanelsFromProject(project)
+  for (const panel of panels) collectProtectionKeys(panel)
+
+  let changed = false
+  const isLiveProtectionKey = (key: string) =>
+    !key.startsWith('protection:') || liveProtectionKeys.has(key)
+  const visit = (panel: Panel) => {
+    if (panel.gridView) {
+      const pruneSlots = (slots: PanelGridSlot[] | undefined): PanelGridSlot[] => {
+        const next = (slots ?? []).filter(
+          (slot) =>
+            slot.module.kind !== 'protection' ||
+            liveProtectionKeys.has(panelGridModuleRefKey(slot.module))
+        )
+        if (next.length !== (slots ?? []).length) changed = true
+        return next
+      }
+      const pruneKeys = (keys: string[] | undefined): string[] | undefined => {
+        if (!keys) return undefined
+        const next = keys.filter(isLiveProtectionKey)
+        if (next.length !== keys.length) changed = true
+        return next.length > 0 ? next : undefined
+      }
+
+      panel.gridView.slots = pruneSlots(panel.gridView.slots)
+      panel.gridView.supplyPanelSlots = pruneSlots(panel.gridView.supplyPanelSlots)
+      panel.gridView.hiddenModuleKeys = pruneKeys(panel.gridView.hiddenModuleKeys)
+      panel.gridView.shownModuleKeys = pruneKeys(panel.gridView.shownModuleKeys)
+    }
+    for (const subPanel of panel.subPanels ?? []) visit(subPanel)
+  }
+  for (const panel of panels) visit(panel)
+  return changed
+}
+
 /** Drop panel-grid slots whose module no longer exists on this panel (e.g. after subtree cross-panel move). */
 export function prunePanelGridSlotsForUnresolvedModules(panel: Panel): void {
   if (!panel.gridView) return
@@ -968,13 +1018,14 @@ export function trunkDeviceCanAppearInPanelGrid(device: TrunkDevice): boolean {
     device.type === 'protection' ||
     device.type === 'energy_meter' ||
     device.type === 'conversion' ||
-    device.type === 'changeover'
+    device.type === 'changeover' ||
+    device.type === 'dc_bus'
   )
 }
 
 /** Structural direct-panel feeder carriers are topology-only, never physical DIN modules. */
 export function protectionCanAppearInPanelGrid(protection: ProtectionDevice): boolean {
-  return protection.directPanelFeeder !== true
+  return protection.directPanelFeeder !== true && protection.directDcBusFeeder !== true
 }
 
 /** Build the ordered list of all modules that are eligible for the panel grid. */

@@ -96,6 +96,9 @@
     "unavailableTitle": "Install not available yet",
     "unavailableMessage": "This browser has not offered install yet. Keep using the app in Chrome or Edge, or use the browser menu to install when it appears."
   },
+  "viewer": {
+    "propertiesReadOnly": "Read-only view. Sensitive contact and address fields are hidden."
+  },
   "tutorial": {
     "title": "Tutorial",
     "description": "A short walkthrough of the editor so you can get productive quickly.",
@@ -385,6 +388,21 @@
     "hideInspectionAgencyInInfoBlock": "Hide in drawing info blocks",
     "created": "Created",
     "updated": "Updated",
+    "templates": "Templates",
+    "createTemplate": "Create template",
+    "useTemplate": "Use",
+    "fromTemplate": "From template",
+    "chooseTemplate": "Choose a template",
+    "emptyProject": "Empty project",
+    "templateDescription": "Description",
+    "templateDescriptionPlaceholder": "e.g. Apartment renovation starter",
+    "downloadTemplate": "Download template",
+    "deleteTemplate": "Delete template",
+    "deleteTemplateConfirmTitle": "Delete template?",
+    "deleteTemplateConfirmMessage": "Delete \"{{name}}\"? Projects created from it are not affected.",
+    "templateCreateFailed": "Template could not be created.",
+    "templateUseFailed": "Project could not be created from this template.",
+    "templateDeleteFailed": "Template could not be deleted.",
     "recent": "Recent",
     "recentProjects": "Recent Projects",
     "notificationBadgeTooltip": "New project notifications",
@@ -488,11 +506,14 @@
     "distribution": "Distribution board",
     "mainPanel": "Main distribution board",
     "secondaryPanel": "Distribution board {{number}}",
+    "diagramLabels": "Diagram labels",
     "panelNumbering": "Panel numbering",
     "panelNumberingHint": "Adds B01, B02, … in order from the main panel through sub-panels on the one-wire diagram.",
     "panelNetTypeLabels": "Net type on diagram",
     "panelNetTypeLabelsHint": "Adds supply, voltage, and earthing lines on the one-wire panel header when an earthing system is set.",
     "earthingSystemLabel": "Earthing system",
+    "earthingSystemGridLabel": "Earthing system (grid)",
+    "earthingSystemBackupLabel": "Earthing system (backup)",
     "earthingSystemCustom": "Custom value — no longer synced with the main panel until set to the same system again.",
     "earthingSystem": {
       "none": "None",
@@ -507,7 +528,9 @@
     "diagramNetMain": "Net: {{net}} – {{frequency}} Hz",
     "diagramNetSecondary": "Net: {{net}} – {{frequency}} Hz – {{earthing}}",
     "diagramNetWithEarthing": "Net: {{net}} – {{earthing}}",
-    "diagramEarthingSystem": "Earthing system: {{earthing}}"
+    "diagramEarthingSystem": "Earthing system: {{earthing}}",
+    "diagramEarthingSystemGrid": "Earthing system (grid): {{earthing}}",
+    "diagramEarthingSystemBackup": "Earthing system (backup): {{earthing}}"
   },
   "panel": {
     "deleteConfirmTitle": "Delete Panel(s)?",
@@ -1142,6 +1165,7 @@
     "dc_dc_converter": "DC-DC Converter",
     "solar_panel": "Solar panel",
     "battery": "Battery",
+    "dc_bus": "DC busbar",
     "mcb": "MCB (Circuit Breaker)",
     "rcd": "RCD (Residual Current Device)",
     "rcbo": "RCBO (Combined)",
@@ -1754,7 +1778,12 @@
     "pointOverrideCount": "{{count}} point(s) override this behavior.",
     "mixedPointModes": "Mixed values",
     "drawUpArrows": "Draw up arrows",
-    "invertUpArrow": "Invert arrow direction"
+    "invertUpArrow": "Invert arrow direction",
+    "upArrowDirection": "Ascent arrow",
+    "upArrowDirectionLeft": "Left",
+    "upArrowDirectionRight": "Right",
+    "invertSpiralDirection": "Invert spiral direction",
+    "spiralSweepDegrees": "Spiral sweep"
   },
   "floorSelection": {
     "selectFloor": "Select floor",
@@ -1968,6 +1997,8 @@
     "port1": "Port 1",
     "port2": "Port 2",
     "converterPhases": "AC phases",
+    "converterDcConnections": "DC connections",
+    "converterTopDcConnections": "Top DC connections",
     "inverterUnit": "Inverter",
     "nameLabelOnDiagramHint": "When shown, appears above the symbol on the horizontal supply wire."
   },

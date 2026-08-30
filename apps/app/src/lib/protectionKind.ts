@@ -1,7 +1,7 @@
 /**
  * Classification helpers for protection symbols and types.
- * Rotating switches (draaischakelaar) can be placed like any protection but do not
- * count as functional protection in validation or hardware tally.
+ * Rotating switches and SPDs can be placed like protection devices but do not
+ * satisfy generic circuit-protection requirements in validation or hardware tallies.
  */
 import type { ProtectionType, SymbolKey, TrunkDevice } from '@/types/schema'
 
@@ -54,7 +54,7 @@ export function protectionTypeToSymbolKey(pt: ProtectionType): SymbolKey | undef
 
 /** True when the protection type participates in AREI validation as a protective device. */
 export function isFunctionalProtectionType(type: ProtectionType | undefined): boolean {
-  return type != null && type !== 'ROTATING_SWITCH'
+  return type != null && type !== 'ROTATING_SWITCH' && type !== 'SPD'
 }
 
 /** True for protection symbols that are add-ons on an existing circuit trunk. */

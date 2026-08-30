@@ -1,4 +1,5 @@
 import type {
+  CadReferenceV1,
   Door,
   Floor,
   ImportedPlanAsset,
@@ -104,17 +105,15 @@ function floorToV2(floor: Floor): FloorV2 {
   }
 }
 
-function floorV2ToCompatibility(
-  floor: Floor | FloorV2,
-  document?: ProjectWithOptionalV2Building
-): Floor {
-  if ('layers' in floor || 'floorPlan' in floor) {
-    return floor as Floor
-  }
-  const v2Floor = floor as FloorV2
+function resolvePlanImportAssetForV2Floor(
+  v2Floor: FloorV2,
+  document?: ProjectWithOptionalV2Building,
+): ImportedPlanAsset | undefined {
+  if (!v2Floor.planAssetId) return undefined
+
   const sourceAsset = document?.assets?.find((asset) => asset.id === v2Floor.planAssetId)
   const processedAsset = document?.assets?.find(
-    (asset) => asset.id === v2Floor.processedPlanAssetId
+    (asset) => asset.id === v2Floor.processedPlanAssetId,
   )
   const sourceDataUrl =
     sourceAsset?.dataUrl && sourceAsset.dataUrl !== sourceAsset.id
@@ -124,44 +123,53 @@ function floorV2ToCompatibility(
     processedAsset?.dataUrl && processedAsset.dataUrl !== processedAsset.id
       ? processedAsset.dataUrl
       : undefined
+  const primaryAsset = sourceAsset ?? processedAsset
+  const legacy = primaryAsset?.legacy
 
-  let planImportAsset: ImportedPlanAsset | undefined
-  if (v2Floor.planAssetId) {
-    const primaryAsset = sourceAsset ?? processedAsset
-    const legacy = primaryAsset?.legacy
-    planImportAsset = {
-      ...(legacy ?? {
-        id: v2Floor.planAssetId,
-        kind:
-          primaryAsset?.kind === 'floorplan-vector'
-            ? 'pdf-vector'
-            : primaryAsset?.kind === 'floorplan-processed'
-              ? 'pdf-raster'
-              : 'raster',
-        width: primaryAsset?.width ?? processedAsset?.width ?? 0,
-        height: primaryAsset?.height ?? processedAsset?.height ?? 0,
-      }),
+  return {
+    ...(legacy ?? {
       id: v2Floor.planAssetId,
-      sourceName: primaryAsset?.sourceName ?? legacy?.sourceName,
-      pageIndex: primaryAsset?.pageIndex ?? legacy?.pageIndex,
-      pageCount: primaryAsset?.pageCount ?? legacy?.pageCount,
-      width: primaryAsset?.width ?? legacy?.width ?? processedAsset?.width ?? 0,
-      height: primaryAsset?.height ?? legacy?.height ?? processedAsset?.height ?? 0,
-      dataUrl: sourceDataUrl,
-      processedDataUrl,
-      svgContent: sourceAsset?.svgContent ?? legacy?.svgContent,
-      crop: primaryAsset?.crop ?? legacy?.crop,
-      darkModeAware: primaryAsset?.darkModeAware ?? legacy?.darkModeAware,
-    }
+      kind:
+        primaryAsset?.kind === 'floorplan-vector'
+          ? 'pdf-vector'
+          : primaryAsset?.kind === 'floorplan-processed'
+            ? 'pdf-raster'
+            : 'raster',
+      width: primaryAsset?.width ?? processedAsset?.width ?? 0,
+      height: primaryAsset?.height ?? processedAsset?.height ?? 0,
+    }),
+    id: v2Floor.planAssetId,
+    sourceName: primaryAsset?.sourceName ?? legacy?.sourceName,
+    pageIndex: primaryAsset?.pageIndex ?? legacy?.pageIndex,
+    pageCount: primaryAsset?.pageCount ?? legacy?.pageCount,
+    width: primaryAsset?.width ?? legacy?.width ?? processedAsset?.width ?? 0,
+    height: primaryAsset?.height ?? legacy?.height ?? processedAsset?.height ?? 0,
+    dataUrl: sourceDataUrl,
+    processedDataUrl,
+    svgContent: sourceAsset?.svgContent ?? legacy?.svgContent,
+    crop: primaryAsset?.crop ?? legacy?.crop,
+    darkModeAware: primaryAsset?.darkModeAware ?? legacy?.darkModeAware,
+    cadReference: legacy?.cadReference,
   }
+}
+
+function floorV2ToCompatibility(
+  floor: Floor | FloorV2,
+  document?: ProjectWithOptionalV2Building
+): Floor {
+  if ('layers' in floor || 'floorPlan' in floor) {
+    return floor as Floor
+  }
+  const v2Floor = floor as FloorV2
+  const planImportAsset = resolvePlanImportAssetForV2Floor(v2Floor, document)
 
   const compatibilityFloor: Floor = {
     id: v2Floor.id,
     name: v2Floor.name,
     layers: ['electrical'],
     scale: v2Floor.scale,
-    planAsset: sourceDataUrl,
-    planAssetProcessed: processedDataUrl,
+    planAsset: planImportAsset?.dataUrl,
+    planAssetProcessed: planImportAsset?.processedDataUrl,
     planImportAsset,
     planImageOffset: v2Floor.planImageOffset,
     planImageOpacity: v2Floor.planImageOpacity,
@@ -192,7 +200,7 @@ function assetsFromFloor(floor: Floor): AssetModelV2[] {
     assets.push({
       id: floor.planImportAsset.id,
       kind:
-        floor.planImportAsset.kind === 'pdf-vector'
+        floor.planImportAsset.kind === 'cad-vector' || floor.planImportAsset.kind === 'pdf-vector'
           ? 'floorplan-vector'
           : floor.planImportAsset.kind === 'pdf-raster'
             ? 'floorplan-processed'
@@ -627,6 +635,30 @@ export function getBuildingFloorIdsFromProject(document: ProjectWithOptionalV2Bu
   return getBuildingFloorsFromProject(document).map((floor) => floor.id)
 }
 
+export function getBuildingFloorById(
+  document: ProjectWithOptionalV2Building,
+  floorId: string,
+): FloorV2 | undefined {
+  return document.building?.floors?.find((floor) => floor.id === floorId)
+}
+
+/** Resolve the persisted plan import asset for a native building floor. */
+export function getPlanImportAssetForBuildingFloor(
+  document: ProjectWithOptionalV2Building,
+  floorId: string,
+): ImportedPlanAsset | undefined {
+  const v2Floor = getBuildingFloorById(document, floorId)
+  if (!v2Floor) return undefined
+  return resolvePlanImportAssetForV2Floor(v2Floor, document)
+}
+
+export function getCadReferenceForBuildingFloor(
+  document: ProjectWithOptionalV2Building,
+  floorId: string,
+): CadReferenceV1 | undefined {
+  return getPlanImportAssetForBuildingFloor(document, floorId)?.cadReference
+}
+
 export function getBuildingFloorsFromProject(
   document: ProjectWithOptionalV2Building
 ): Array<Floor | FloorV2> {
@@ -642,9 +674,7 @@ export function getCompatibilityFloorsFromProject(
   if (Array.isArray(document.floors)) {
     return document.floors
   }
-  return getBuildingFloorsFromProject(document).map((floor) =>
-    floorV2ToCompatibility(floor, document)
-  )
+  return (document.building?.floors ?? []).map((floor) => floorV2ToCompatibility(floor, document))
 }
 
 export function getMutableCompatibilityFloorsForProject(

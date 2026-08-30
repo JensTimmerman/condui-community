@@ -79,6 +79,9 @@ export function getEndpointTypeFromSymbol(symbol: SymbolMetadata): EndpointType 
     return 'fixed_appliance'
   }
 
+  // DC busbars are selectable trunk/topology devices, never endpoint symbols.
+  if (id === 'dc_bus') return null
+
   // Domotica
   if (id === 'domotica') {
     return 'domotica'

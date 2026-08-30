@@ -82,6 +82,7 @@ export const symbolTooltipsFrBE = {
   rectifier: 'Redresseur de courant alternatif vers continu.',
   inverter: 'Onduleur de courant continu vers alternatif. Adapté aux panneaux solaires et batteries.',
   dc_dc_converter: 'Convertisseur DC-DC, utilisable directement entre panneaux solaires et batteries.',
+  dc_bus: 'Jeu de barres CC pour distribuer des circuits en courant continu.',
   solar_panel: 'Chaîne PV ou panneau solaire en courant continu.',
   battery: 'Stockage batterie en courant continu.',
   note: 'Note libre ou étiquette sur le schéma.',

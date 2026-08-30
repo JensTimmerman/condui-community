@@ -77,7 +77,7 @@
     "open": "Menu",
     "backToMain": "Terug naar start",
     "versions": "Versies",
-    "exportPdf": "Exporteren naar PDF",
+    "exportPdf": "PDF exporteren",
     "reExportPdf": "Her-exporteer PDF",
     "validation": "Validatie",
     "exportProject": "Project downloaden",
@@ -95,6 +95,9 @@
     "iosInstructions": "Tik op Delen in Safari en kies “Voeg toe aan beginscherm”.",
     "unavailableTitle": "Installeren nog niet beschikbaar",
     "unavailableMessage": "Deze browser biedt installatie nog niet aan. Gebruik de app verder in Chrome of Edge, of installeer via het browsermenu zodra dat verschijnt."
+  },
+  "viewer": {
+    "propertiesReadOnly": "Alleen-lezen. Gevoelige contact- en adresgegevens zijn verborgen."
   },
   "tutorial": {
     "title": "Tutorial",
@@ -385,6 +388,21 @@
     "hideInspectionAgencyInInfoBlock": "Verbergen in infoblokken van schema's",
     "created": "Aangemaakt",
     "updated": "Bijgewerkt",
+    "templates": "Sjablonen/templates",
+    "createTemplate": "Sjabloon/template maken",
+    "useTemplate": "Gebruiken",
+    "fromTemplate": "Vanuit sjabloon/template",
+    "chooseTemplate": "Kies een sjabloon/template",
+    "emptyProject": "Leeg project",
+    "templateDescription": "Beschrijving",
+    "templateDescriptionPlaceholder": "bv. Startproject appartementsrenovatie",
+    "downloadTemplate": "Sjabloon/template downloaden",
+    "deleteTemplate": "Sjabloon/template verwijderen",
+    "deleteTemplateConfirmTitle": "Sjabloon/template verwijderen?",
+    "deleteTemplateConfirmMessage": "\"{{name}}\" verwijderen? Projecten die ermee zijn gemaakt, blijven behouden.",
+    "templateCreateFailed": "Het sjabloon/template kon niet worden gemaakt.",
+    "templateUseFailed": "Het project kon niet vanuit dit sjabloon/template worden gemaakt.",
+    "templateDeleteFailed": "Het sjabloon/template kon niet worden verwijderd.",
     "recent": "Recent",
     "recentProjects": "Recente projecten",
     "notificationBadgeTooltip": "Nieuwe projectmeldingen",
@@ -488,11 +506,14 @@
     "distribution": "Verdeelbord",
     "mainPanel": "Hoofdbord",
     "secondaryPanel": "Bord {{number}}",
+    "diagramLabels": "Schemabenamingen",
     "panelNumbering": "Bordnummering",
     "panelNumberingHint": "Voegt B01, B02, … toe in volgorde vanaf het hoofdbord door de onderborden op het eendraadschema.",
     "panelNetTypeLabels": "Nettype op schema",
     "panelNetTypeLabelsHint": "Voegt voeding, spanning en aardverbinding toe in de kop van het eendraadschema wanneer een aardverbindingssysteem is ingesteld.",
     "earthingSystemLabel": "Aardverbindingssysteem",
+    "earthingSystemGridLabel": "Aardingssysteem (net)",
+    "earthingSystemBackupLabel": "Aardingssysteem (backup)",
     "earthingSystemCustom": "Eigen waarde — niet meer gesynchroniseerd met het hoofdbord tot u hetzelfde systeem opnieuw instelt.",
     "earthingSystem": {
       "none": "Geen",
@@ -507,7 +528,9 @@
     "diagramNetMain": "Net: {{net}} – {{frequency}} Hz",
     "diagramNetSecondary": "Net: {{net}} – {{frequency}} Hz – {{earthing}}",
     "diagramNetWithEarthing": "Net: {{net}} – {{earthing}}",
-    "diagramEarthingSystem": "Aardverbindingssysteem: {{earthing}}"
+    "diagramEarthingSystem": "Aardverbindingssysteem: {{earthing}}",
+    "diagramEarthingSystemGrid": "Aardingssysteem (net): {{earthing}}",
+    "diagramEarthingSystemBackup": "Aardingssysteem (backup): {{earthing}}"
   },
   "panel": {
     "deleteConfirmTitle": "Bord(en) verwijderen?",
@@ -1145,6 +1168,7 @@
     "dc_dc_converter": "DC-DC-omzetter",
     "solar_panel": "Zonnepaneel",
     "battery": "Batterij",
+    "dc_bus": "DC-rail",
     "mcb": "Automaat",
     "rcd": "Differentieelschakelaar",
     "rcbo": "Differentieelautomaat",
@@ -1757,7 +1781,12 @@
     "pointOverrideCount": "{{count}} punt(en) overschrijven dit gedrag.",
     "mixedPointModes": "Gemengde waarden",
     "drawUpArrows": "Pijlen voor stijgrichting tonen",
-    "invertUpArrow": "Pijlrichting omkeren"
+    "invertUpArrow": "Pijlrichting omkeren",
+    "upArrowDirection": "Stijgpijl",
+    "upArrowDirectionLeft": "Links",
+    "upArrowDirectionRight": "Rechts",
+    "invertSpiralDirection": "Spiraalrichting omkeren",
+    "spiralSweepDegrees": "Spiraalboog"
   },
   "contextMenu": {
     "addElement": "Element toevoegen",
@@ -1971,6 +2000,8 @@
     "port1": "Poort 1",
     "port2": "Poort 2",
     "converterPhases": "AC-fasen",
+    "converterDcConnections": "DC-aansluitingen",
+    "converterTopDcConnections": "DC-aansluitingen bovenaan",
     "inverterUnit": "Omvormer",
     "nameLabelOnDiagramHint": "Indien zichtbaar: verschijnt boven het symbool op de horizontale voedingsdraad."
   },

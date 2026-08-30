@@ -7,7 +7,7 @@ import type {
   SharedFeedPath,
   TrunkDevice,
 } from '@/types/schema'
-import { generateId } from '@/utils'
+import { nanoid } from 'nanoid'
 import {
   getElectricalInstallationFromProject,
   getElectricalPanelsFromProject,
@@ -191,7 +191,7 @@ export function ensureInstallationFeedTopology(installation: Installation, panel
     return topology
   }
 
-  const connectorId = generateId()
+  const connectorId = nanoid(16)
   const topology: FeedTopology = {
     version: 1,
     rootConnector: {

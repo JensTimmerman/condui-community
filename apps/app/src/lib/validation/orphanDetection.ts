@@ -63,7 +63,6 @@ import {
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { collectCircuits, findPanelById } from '@/lib/panel/panelTree'
-import { isFunctionalProtectionType } from '@/lib/protectionKind'
 import { hasExplicitPanelBusSections } from '@/lib/panel/panelBusSections'
 import { panelHasBackupOutput } from '@/lib/panel/panelFeedOrganization'
 
@@ -213,12 +212,14 @@ function buildCircuitMap(panel: Panel): Map<string, Circuit> {
   return map
 }
 
-function hasDirectProtectionForCircuit(panel: Panel, circuitId: string): boolean {
+/**
+ * Structural circuit ownership is broader than electrical protection. A rotating switch can
+ * deliberately start a trunk even though it does not count as functional protection for AREI
+ * validation or hardware tallies.
+ */
+function hasDirectCircuitOwner(panel: Panel, circuitId: string): boolean {
   for (const protection of panel.protections) {
-    if (
-      isFunctionalProtectionType(protection.type) &&
-      protection.circuits?.some((circuit) => circuit.id === circuitId)
-    ) {
+    if (protection.circuits?.some((circuit) => circuit.id === circuitId)) {
       return true
     }
   }
@@ -644,7 +645,7 @@ export function detectPanelOrphans(project: OrphanDetectionProject, panelId: str
     ).length
     if (
       circuit.code !== 'PANEL' &&
-      !hasDirectProtectionForCircuit(currentPanel, circuit.id)
+      !hasDirectCircuitOwner(currentPanel, circuit.id)
     ) {
       report.circuitMissingProtection.push({
         circuitId: circuit.id,

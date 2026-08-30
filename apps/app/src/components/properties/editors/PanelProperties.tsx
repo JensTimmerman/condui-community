@@ -7,6 +7,7 @@ import { useProjectStore, type ProjectState } from '@/stores/projectStore'
 import type { Panel } from '@/types/schema'
 import { useEditionFeatureAvailability } from '@/hooks/useEditionFeatureAvailability'
 import { findMainPanel } from '@/lib/panel/panelTree'
+import { panelHasBackupOutput } from '@/lib/panel/panelFeedOrganization'
 import {
   panelEarthingFollowsMain,
   resolveEffectiveEarthingSystem,
@@ -56,6 +57,8 @@ export function PanelProperties({
     : undefined
   const panelNumberingEnabled = !!installation?.panelNumberingEnabled
   const panelNetTypeLabelsEnabled = !!installation?.panelNetTypeLabelsEnabled
+  const hasBackupFeed =
+    currentProject != null && panel != null && panelHasBackupOutput(currentProject, panel.id)
   const mainPanel = currentProject
     ? findMainPanel(getElectricalPanelsFromProject(currentProject))
     : null
@@ -258,9 +261,12 @@ export function PanelProperties({
           </p>
 
           {panelNetTypeLabelsEnabled ? (
-            <div>
+            <div className="space-y-3">
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                {t('panels.earthingSystemLabel', 'Earthing system')}
+                {t(
+                  hasBackupFeed ? 'panels.earthingSystemGridLabel' : 'panels.earthingSystemLabel',
+                  hasBackupFeed ? 'Earthing system (grid)' : 'Earthing system'
+                )}
               </label>
               <CustomDropdown
                 value={earthingValue}
@@ -273,6 +279,26 @@ export function PanelProperties({
                 options={earthingOptions}
                 className={selectClass}
               />
+              {hasBackupFeed ? (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    {t('panels.earthingSystemBackupLabel', 'Earthing system (backup)')}
+                  </label>
+                  <CustomDropdown
+                    value={panel.backupEarthingSystem ?? ''}
+                    onChange={(nextValue) =>
+                      onUpdate(panelId, {
+                        backupEarthingSystem:
+                          nextValue === ''
+                            ? undefined
+                            : (nextValue as Panel['backupEarthingSystem']),
+                      })
+                    }
+                    options={earthingOptions}
+                    className={selectClass}
+                  />
+                </div>
+              ) : null}
               {panel.id !== mainPanel?.id && !earthingSyncedWithMain ? (
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                   {t(

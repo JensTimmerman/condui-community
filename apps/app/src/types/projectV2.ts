@@ -59,6 +59,8 @@ export interface ProjectV2Meta {
   name: string
   createdAt: string
   updatedAt: string
+  /** Historical snapshot retained when this independent project was seeded from a cloud template. */
+  origin?: ProjectTemplateOriginV2
   locale?: string
   yearOfConstruction?: number
   installDateColors?: Project['project']['installDateColors']
@@ -73,6 +75,14 @@ export interface ProjectV2Meta {
   showInspectionAgencyInInfoBlock?: Project['project']['showInspectionAgencyInInfoBlock']
   installerOverride?: Project['project']['installerOverride']
   importSources?: Project['project']['importSources']
+}
+
+export interface ProjectTemplateOriginV2 {
+  kind: 'template'
+  templateId: string
+  templateName: string
+  templateRevisionId: string
+  seededAt: string
 }
 
 export type GeographicCrsV2 = 'EPSG:4326'

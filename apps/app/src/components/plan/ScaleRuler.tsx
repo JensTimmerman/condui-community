@@ -4,6 +4,10 @@ import type { Point2 } from '@/types/schema'
 import FloatingDistanceInput from './FloatingDistanceInput'
 import { computePlanImportFitScale } from './planImportViewport'
 
+const MAGNIFIER_ZOOM = 2
+const MAGNIFIER_DIAMETER_PX = 144
+const MAGNIFIER_EDGE_GAP_PX = 8
+
 interface ScaleRulerProps {
   imageDataUrl: string
   onScaleComplete: (reference: { p1: Point2; p2: Point2; meters: number }) => void
@@ -41,6 +45,7 @@ function ScaleRuler({
   const [scale, setScale] = useState(1)
   const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null)
   const [imageLoaded, setImageLoaded] = useState(false)
+  const imageRef = useRef<HTMLImageElement | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const lastEmittedRef = useRef<string | null>(null)
   const lastAppliedInitialRef = useRef<string | null>(null)
@@ -103,13 +108,24 @@ function ScaleRuler({
 
   // Load image and set up canvas
   useEffect(() => {
+    imageRef.current = null
+    setImageLoaded(false)
+    setImageSize(null)
+    let cancelled = false
     const img = new Image()
     img.onload = () => {
+      if (cancelled) return
+      imageRef.current = img
       setImageSize({ width: img.width, height: img.height })
       setImageLoaded(true)
       autoCreatedForImageRef.current = null
     }
     img.src = imageDataUrl
+
+    return () => {
+      cancelled = true
+      if (imageRef.current === img) imageRef.current = null
+    }
   }, [imageDataUrl])
 
   useEffect(() => {
@@ -188,58 +204,116 @@ function ScaleRuler({
     const canvas = canvasRef.current
     const ctx = canvas.getContext('2d')
     if (!ctx) return
+    const img = imageRef.current
+    if (!img) return
 
-    const img = new Image()
-    img.onload = () => {
-      canvas.width = img.width * scale
-      canvas.height = img.height * scale
+    canvas.width = img.width * scale
+    canvas.height = img.height * scale
 
-      ctx.clearRect(0, 0, canvas.width, canvas.height)
-      
-      // Draw image
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+    // Draw image
+    ctx.save()
+    if (invertPreview) {
+      ctx.filter = 'invert(1)'
+    }
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+    ctx.restore()
+
+    // Draw ruler line if we have points (including preview while dragging)
+    const displayEndPoint = endPoint || tempEndPoint
+    if (startPoint && displayEndPoint) {
+      const x1 = startPoint.x * scale
+      const y1 = startPoint.y * scale
+      const x2 = displayEndPoint.x * scale
+      const y2 = displayEndPoint.y * scale
+
+      // Draw line
+      ctx.strokeStyle = '#0284c7'
+      ctx.lineWidth = 3
+      ctx.beginPath()
+      ctx.moveTo(x1, y1)
+      ctx.lineTo(x2, y2)
+      ctx.stroke()
+
+      // Draw start point
+      ctx.fillStyle = '#0284c7'
+      ctx.beginPath()
+      ctx.arc(x1, y1, draggingHandle === 'start' ? 8 : 6, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.strokeStyle = '#ffffff'
+      ctx.lineWidth = 2
+      ctx.stroke()
+
+      // Draw end point
+      ctx.fillStyle = '#0284c7'
+      ctx.beginPath()
+      ctx.arc(x2, y2, draggingHandle === 'end' ? 8 : 6, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.strokeStyle = '#ffffff'
+      ctx.lineWidth = 2
+      ctx.stroke()
+    }
+
+    // Show a 2× inspection lens only while a scale handle is being moved. The
+    // lens changes what is shown, not the point-to-cursor mapping.
+    const magnifierPoint = draggingHandle === 'start'
+      ? startPoint
+      : draggingHandle === 'end'
+        ? endPoint
+        : null
+    if (magnifierPoint) {
+      const canvasRect = canvas.getBoundingClientRect()
+      const canvasToClientX = canvasRect.width > 0 ? canvas.width / canvasRect.width : 1
+      const canvasToClientY = canvasRect.height > 0 ? canvas.height / canvasRect.height : 1
+      const lensWidth = MAGNIFIER_DIAMETER_PX * canvasToClientX
+      const lensHeight = MAGNIFIER_DIAMETER_PX * canvasToClientY
+      const radiusX = lensWidth / 2
+      const radiusY = lensHeight / 2
+      const pointX = magnifierPoint.x * scale
+      const pointY = magnifierPoint.y * scale
+      const edgeGapX = MAGNIFIER_EDGE_GAP_PX * canvasToClientX
+      const edgeGapY = MAGNIFIER_EDGE_GAP_PX * canvasToClientY
+      const lensCenterX = Math.max(radiusX + edgeGapX, Math.min(canvas.width - radiusX - edgeGapX, pointX))
+      const lensCenterY = Math.max(radiusY + edgeGapY, Math.min(canvas.height - radiusY - edgeGapY, pointY))
+      const sourceWidth = Math.min(img.width, lensWidth / MAGNIFIER_ZOOM / scale)
+      const sourceHeight = Math.min(img.height, lensHeight / MAGNIFIER_ZOOM / scale)
+      const sourceX = Math.max(0, Math.min(img.width - sourceWidth, magnifierPoint.x - sourceWidth / 2))
+      const sourceY = Math.max(0, Math.min(img.height - sourceHeight, magnifierPoint.y - sourceHeight / 2))
+      const destinationX = lensCenterX - radiusX
+      const destinationY = lensCenterY - radiusY
+
       ctx.save()
+      ctx.beginPath()
+      ctx.ellipse(lensCenterX, lensCenterY, radiusX, radiusY, 0, 0, Math.PI * 2)
+      ctx.clip()
       if (invertPreview) {
         ctx.filter = 'invert(1)'
       }
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+      ctx.drawImage(img, sourceX, sourceY, sourceWidth, sourceHeight, destinationX, destinationY, lensWidth, lensHeight)
       ctx.restore()
-      
-      // Draw ruler line if we have points (including preview while dragging)
-      const displayEndPoint = endPoint || tempEndPoint
-      if (startPoint && displayEndPoint) {
-        const x1 = startPoint.x * scale
-        const y1 = startPoint.y * scale
-        const x2 = displayEndPoint.x * scale
-        const y2 = displayEndPoint.y * scale
-        
-        // Draw line
-        ctx.strokeStyle = '#0284c7'
-        ctx.lineWidth = 3
-        ctx.beginPath()
-        ctx.moveTo(x1, y1)
-        ctx.lineTo(x2, y2)
-        ctx.stroke()
-        
-        // Draw start point (larger if being dragged)
-        ctx.fillStyle = draggingHandle === 'start' ? '#0284c7' : '#0284c7'
-        ctx.beginPath()
-        ctx.arc(x1, y1, draggingHandle === 'start' ? 8 : 6, 0, Math.PI * 2)
-        ctx.fill()
-        ctx.strokeStyle = '#ffffff'
-        ctx.lineWidth = 2
-        ctx.stroke()
-        
-        // Draw end point (larger if being dragged)
-        ctx.fillStyle = draggingHandle === 'end' ? '#0284c7' : '#0284c7'
-        ctx.beginPath()
-        ctx.arc(x2, y2, draggingHandle === 'end' ? 8 : 6, 0, Math.PI * 2)
-        ctx.fill()
-        ctx.strokeStyle = '#ffffff'
-        ctx.lineWidth = 2
-        ctx.stroke()
-      }
+
+      // Mark the exact point being dragged inside the lens.
+      const markerX = destinationX + (magnifierPoint.x - sourceX) * scale * MAGNIFIER_ZOOM
+      const markerY = destinationY + (magnifierPoint.y - sourceY) * scale * MAGNIFIER_ZOOM
+      ctx.save()
+      ctx.globalCompositeOperation = 'difference'
+      ctx.strokeStyle = '#ffffff'
+      ctx.lineWidth = Math.max(2, 2 * canvasToClientX)
+      ctx.beginPath()
+      ctx.moveTo(markerX - 10 * canvasToClientX, markerY)
+      ctx.lineTo(markerX + 10 * canvasToClientX, markerY)
+      ctx.moveTo(markerX, markerY - 10 * canvasToClientY)
+      ctx.lineTo(markerX, markerY + 10 * canvasToClientY)
+      ctx.stroke()
+      ctx.restore()
+
+      ctx.strokeStyle = '#0284c7'
+      ctx.lineWidth = Math.max(3, 3 * canvasToClientX)
+      ctx.beginPath()
+      ctx.ellipse(lensCenterX, lensCenterY, radiusX, radiusY, 0, 0, Math.PI * 2)
+      ctx.stroke()
     }
-    img.src = imageDataUrl
   }, [imageDataUrl, imageSize, scale, startPoint, endPoint, tempEndPoint, imageLoaded, isDrawing, draggingHandle, invertPreview])
 
   // Check if point is near a handle

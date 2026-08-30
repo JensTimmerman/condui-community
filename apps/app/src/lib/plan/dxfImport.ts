@@ -1,9 +1,21 @@
 import { APP_SERVER_API_PATHS, fetchAppServerApi } from '@/lib/appServerApi'
 import type { PdfImportPageCandidate } from '@/lib/plan/pdfImport'
+import {
+  buildCadImportPipelineContext,
+  type CadImportPipelineContext,
+} from '@/lib/plan/cadReferenceBuilder'
+import type { CadMetadataHeader } from '@/lib/plan/cadCoordinateTransform'
 
 const MAX_VECTOR_SVG_LENGTH = 12_000_000
 const TARGET_LONG_EDGE_PX = 2400
 const MIN_LONG_EDGE_PX = 1200
+
+export interface CadParseResult {
+  fileName: string
+  pages: PdfImportPageCandidate[]
+  warnings: string[]
+  cadImportPipeline?: CadImportPipelineContext
+}
 
 function parseViewBox(svg: SVGSVGElement): { x: number; y: number; width: number; height: number } | null {
   const raw = svg.getAttribute('viewBox')
@@ -31,7 +43,7 @@ function parseViewBox(svg: SVGSVGElement): { x: number; y: number; width: number
   return null
 }
 
-function normalizeCadSvgForImport(svgContent: string): {
+export function normalizeCadSvgForImport(svgContent: string): {
   svgContent: string
   width: number
   height: number
@@ -144,11 +156,22 @@ function buildCadScaleReference(
   }
 }
 
-export async function parseCadFile(file: File, kind: 'dxf' | 'dwg'): Promise<{
-  fileName: string
-  pages: PdfImportPageCandidate[]
-  warnings: string[]
-}> {
+function normalizeCadMetadata(raw: unknown): CadMetadataHeader {
+  if (!raw || typeof raw !== 'object') return {}
+  const value = raw as Record<string, unknown>
+  return {
+    insunits: value.insunits,
+    measurement: value.measurement,
+    extmin: value.extmin as CadMetadataHeader['extmin'],
+    extmax: value.extmax as CadMetadataHeader['extmax'],
+  }
+}
+
+export async function parseCadFile(
+  file: File,
+  kind: 'dxf' | 'dwg',
+  options?: { cadImportSessionId?: string },
+): Promise<CadParseResult> {
   const formData = new FormData()
   formData.append('file', file, file.name || `upload.${kind}`)
 
@@ -173,6 +196,7 @@ export async function parseCadFile(file: File, kind: 'dxf' | 'dwg'): Promise<{
     throw new Error(`${kind.toUpperCase()} SVG payload too large (${Math.round(rawSvgContent.length / 1024)} KB).`)
   }
 
+  const cadMetadata = normalizeCadMetadata(payload?.cadMetadata)
   const normalized = normalizeCadSvgForImport(rawSvgContent)
   const warnings = Array.isArray(payload.warnings)
     ? payload.warnings.map((warning: unknown) => String(warning))
@@ -180,12 +204,24 @@ export async function parseCadFile(file: File, kind: 'dxf' | 'dwg'): Promise<{
   warnings.push(...normalized.warnings)
   const svgContent = normalized.svgContent
   const previewDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgContent)}`
-  const scaleMetersPerPixel = getCadMetersPerPixel(payload?.cadMetadata, normalized.displayScale, normalized)
+  const scaleMetersPerPixel = getCadMetersPerPixel(cadMetadata, normalized.displayScale, normalized)
   const scaleReference = buildCadScaleReference(
     normalized.width,
     normalized.height,
     scaleMetersPerPixel,
   )
+
+  const cadImportPipeline = buildCadImportPipelineContext({
+    sourceKind: kind,
+    sourceFileName: file.name || `upload.${kind}`,
+    rawSvgContent,
+    normalizedWidth: normalized.width,
+    normalizedHeight: normalized.height,
+    displayScale: normalized.displayScale,
+    cadMetadata,
+    cadImportSessionId: options?.cadImportSessionId ?? crypto.randomUUID(),
+    fileSizeBytes: file.size,
+  }) ?? undefined
 
   return {
     fileName: file.name,
@@ -204,6 +240,7 @@ export async function parseCadFile(file: File, kind: 'dxf' | 'dwg'): Promise<{
       },
     ],
     warnings,
+    cadImportPipeline,
   }
 }
 
@@ -242,10 +279,10 @@ export async function parseSvgFile(file: File): Promise<{
   }
 }
 
-export function parseDxfFile(file: File) {
-  return parseCadFile(file, 'dxf')
+export function parseDxfFile(file: File, options?: { cadImportSessionId?: string }) {
+  return parseCadFile(file, 'dxf', options)
 }
 
-export function parseDwgFile(file: File) {
-  return parseCadFile(file, 'dwg')
+export function parseDwgFile(file: File, options?: { cadImportSessionId?: string }) {
+  return parseCadFile(file, 'dwg', options)
 }

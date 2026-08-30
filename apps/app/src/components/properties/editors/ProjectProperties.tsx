@@ -24,6 +24,7 @@ import { NominalVoltageSystemPicker } from '../NominalVoltageSystemPicker'
 import { useEditionFeatureAvailability } from '@/hooks/useEditionFeatureAvailability'
 import { resolveInstallationProfile } from '@/lib/installationProfile'
 
+
 const ADDRESS_AUTOCOMPLETE_DEBOUNCE_MS = 650
 
 type Project = NonNullable<ProjectState['currentProject']>
@@ -166,11 +167,13 @@ export function ProjectProperties({
   updateProject: applyProjectUpdate,
   updateInstallation: applyInstallationUpdate,
   readOnly = false,
+  isTemplate = false,
 }: {
   project: Project | null
   updateProject: (updates: Partial<Project['project']>) => void
   updateInstallation: (updates: Partial<Installation>) => void
   readOnly?: boolean
+  isTemplate?: boolean
 }) {
   const { t } = useTranslation()
   const {
@@ -237,6 +240,7 @@ export function ProjectProperties({
   const [installationExpanded, setInstallationExpanded] = useState(hasInstallationData)
   const [inspectionExpanded, setInspectionExpanded] = useState(hasInspectionAgencyData)
   const [inspectionAgencyPickerOpen, setInspectionAgencyPickerOpen] = useState(false)
+  
   const applyInspectionAgencyEntry = useCallback(
     (entry: InspectionAgencyCatalogEntry) => {
       updateProject({ inspectionAgency: inspectionAgencyContactFromEntry(entry) })
@@ -250,6 +254,8 @@ export function ProjectProperties({
     if (hasInstallationData) setInstallationExpanded(true)
     if (hasInspectionAgencyData) setInspectionExpanded(true)
   }, [hasCustomerData, hasInstallationData, hasInspectionAgencyData])
+
+  
 
   if (!project || !installation) {
     return (
@@ -270,7 +276,7 @@ export function ProjectProperties({
           className="w-full px-3 py-2 flex items-center justify-between text-left"
         >
           <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-            {t('project.customer', 'Customer')}
+            {isTemplate ? t('project.template', 'Template') : t('project.customer', 'Customer')}
           </span>
           <ChevronDown
             className={`h-4 w-4 text-gray-500 transition-transform ${customerExpanded ? 'rotate-180' : ''}`}
@@ -304,6 +310,9 @@ export function ProjectProperties({
                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
               />
             </div>
+            {}
+            {!isTemplate && (
+              <>
             <div>
               <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
                 {t('project.yearOfConstruction', 'Year of construction')}
@@ -525,6 +534,8 @@ export function ProjectProperties({
                 />
               </div>
             </div>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -626,7 +637,8 @@ export function ProjectProperties({
                 </div>
               </div>
             </div>
-            <div>
+            {!isTemplate && (
+              <div>
               <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
                 {t('project.meterEanCode', 'Meter EAN code')}
               </label>
@@ -641,12 +653,14 @@ export function ProjectProperties({
                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
                 placeholder={t('project.meterEanCodePlaceholder', 'e.g. 5412345678901234')}
               />
-            </div>
+              </div>
+            )}
           </div>
         )}
       </div>
 
       {/* Inspection agency metadata (collapsed by default when empty) */}
+      {!isTemplate && (
       <div className="border border-gray-200 dark:border-gray-700 rounded-md">
         <button
           type="button"
@@ -956,8 +970,10 @@ export function ProjectProperties({
           </div>
         )}
       </div>
+      )}
 
       {/* Notes */}
+      {!isTemplate && (
       <div>
         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
           {t('installation.notes', 'Notes')}
@@ -971,6 +987,7 @@ export function ProjectProperties({
           placeholder={t('installation.notes', 'Notes')}
         />
       </div>
+      )}
     </div>
   )
 }

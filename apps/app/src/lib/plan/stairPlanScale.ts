@@ -38,3 +38,7 @@ export function stairCentimetersToCanvasUnits(
   if (!Number.isFinite(pxPerMeter) || pxPerMeter <= 0) return centimeters
   return (centimeters / 100) * pxPerMeter
 }
+
+export function isSpiralStair(stair: { points?: unknown }): boolean {
+  return Array.isArray(stair.points) && stair.points.length === 1
+}

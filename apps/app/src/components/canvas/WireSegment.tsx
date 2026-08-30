@@ -73,7 +73,10 @@ import {
 } from '@/lib/layout/busFeedMarkerGeometry'
 import { panelHasModularChangeover } from '@/lib/panel/panelFeedOrganization'
 import { orderWireSegmentsForRendering } from './wireRenderOrder'
-import { wireSegmentSelectsBusSection } from '@/lib/wires/wireSelectionTarget'
+import {
+  isPrimaryWireSelection,
+  wireSegmentSelectsBusSection,
+} from '@/lib/wires/wireSelectionTarget'
 import {
   getSupplyWireDecorationOwnerIds,
   hasStableSupplyWireDecorationIdentity,
@@ -399,6 +402,9 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
   const handleClick = useCallback(
     (e: unknown) => {
       const event = e as WireSegmentPointerEvent
+      const button = 'button' in event.evt ? event.evt.button : undefined
+      if (!isPrimaryWireSelection(button)) return
+
       if (selectsBusSection) {
         if (!wireSegment.busSectionId) return
         event.cancelBubble = true

@@ -27,6 +27,7 @@ import {
 } from '@/lib/eendraad/mainBusOrder'
 import {
   applyAutomaticEendraadNamingAllPanelsInProject,
+  cleanupPanelGridSlotsForDevice,
   clearStaleAutoModuleWidthForModuleRef,
   deleteLinkedSubPanelsIfOrphaned,
   ensureLinkedSubPanelsHaveOwnPanelEndpoint,
@@ -39,6 +40,7 @@ import {
   maybeApplyAutomaticEendraadNamingForPanel,
   migrateSubCircuitContentToParent,
   prunePanelGridSlotsForUnresolvedModules,
+  pruneStalePanelGridProtectionReferencesInProject,
   rewirePromotedIncomingProtectionGridRef,
   removePanelGridDuplicateRefs,
   rewirePanelGridProtectionModuleId,
@@ -349,6 +351,11 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
             if (affectedPanelId) {
               maybeApplyAutomaticEendraadNamingForPanel(state.currentProject, affectedPanelId)
             }
+            // Protection rows are selectable panel-grid modules. Remove their persisted slot and
+            // visibility references with the row so a deleted structural device cannot leave a
+            // blank module position behind.
+            cleanupPanelGridSlotsForDevice(panels, { kind: 'protection', id })
+            pruneStalePanelGridProtectionReferencesInProject(state.currentProject)
             pruneEendraadFrames(state.currentProject, { removedMemberIds: [id] })
             return
           }
@@ -420,6 +427,10 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
         if (linkedSubPanelIds.size > 0 && !options?.preserveLinkedPanels) {
           deleteLinkedSubPanelsIfOrphaned(state.currentProject, linkedSubPanelIds)
         }
+        for (const id of idsSet) {
+          cleanupPanelGridSlotsForDevice(panels, { kind: 'protection', id })
+        }
+        pruneStalePanelGridProtectionReferencesInProject(state.currentProject)
         pruneEendraadFrames(state.currentProject, { removedMemberIds: ids })
         state.isDirty = true
         applyAutomaticEendraadNamingAllPanelsInProject(state.currentProject)

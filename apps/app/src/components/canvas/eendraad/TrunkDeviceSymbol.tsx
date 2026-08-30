@@ -1,8 +1,25 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ZOOM_100 } from '@/constants/canvasConstants'
+import {
+  HOVER_OUTLINE_DASH_PX,
+  HOVER_OUTLINE_DASH_PX_MAX,
+  HOVER_OUTLINE_DASH_PX_MIN,
+  HOVER_OUTLINE_STROKE_PX,
+  HOVER_OUTLINE_STROKE_PX_MAX,
+  HOVER_OUTLINE_STROKE_PX_MIN,
+  WIRE_SELECTION_EXTRA_PX,
+  WIRE_SELECTION_EXTRA_PX_MAX,
+  WIRE_SELECTION_EXTRA_PX_MIN,
+  ZOOM_100,
+  screenPxToCanvasUnits,
+} from '@/constants/canvasConstants'
 import { Group, Image, Line, Rect, Text } from 'react-konva'
-import { getSwitchSymbolPaths, getSymbolById, TRANSFORMER_OVERLAY_PATHS } from '@/lib/symbols'
+import {
+  getDomainForSymbol,
+  getSwitchSymbolPaths,
+  getSymbolById,
+  TRANSFORMER_OVERLAY_PATHS,
+} from '@/lib/symbols'
 import { SYMBOL_EXPORT_ATTR_SVG_PATH, loadProcessedSymbol } from '@/lib/symbolImage'
 import {
   getSurgeProtectionBodyBounds,
@@ -13,7 +30,13 @@ import {
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useProjectStore } from '@/stores/projectStore'
 import { useUIStore } from '@/stores/uiStore'
-import { useHoverIncludes, useSetSelection, useTrunkDeviceSelected } from '@/editions/community/communityHooks'
+import {
+  useClearHover,
+  useHoverIncludes,
+  useSetHover,
+  useSetSelection,
+  useTrunkDeviceSelected,
+} from '@/editions/community/communityHooks'
 import { useIsPreviewSelected } from '@/contexts/SelectionPreviewContext'
 import { useCanvasFontFamily, useEffectiveCanvasZoom, useTouchPrimaryDevice } from '@/editions/community/communityHooks'
 import { SymbolTextLabels } from './SymbolTextLabels'
@@ -40,7 +63,7 @@ import { getVisibleConversionLabelParts } from '@/lib/conversionLabels'
 import { isSymbolLabelVisible } from '@/lib/symbolLabels'
 import type { SymbolLabelPosition, TrunkDevice } from '@/types/schema'
 import type { Point } from '@/types/ui'
-import { getSupplyDeviceMultiplier } from '@/utils/inverterMultipliers'
+import { getSupplyDeviceMultiplier } from '@/lib/supplyAssembly/inverterMultipliers'
 import { openSupplyDeviceAddMoreDialog } from '@/components/endpoints/AddMoreCountDialog'
 import { MultiplierBadge } from './MultiplierBadge'
 import { useCanvasPanOrClickGesture } from './CanvasPanOrClickGesture'
@@ -65,12 +88,28 @@ import { countSymbolLabelVisualLines } from '@/lib/symbolLabelMetrics'
 import { measureSymbolLabelTextWidth } from '@/lib/symbolLabelTextWidth'
 import {
   getSupplyMetadataCalloutGroupPlacements,
+  getSupplyMetadataCalloutClusters,
   getSupplyMetadataCalloutLeaderPoints,
   getSupplyMetadataCalloutPlacement,
   getSupplyMetadataCalloutPlacementKind,
-  shouldUseSupplyMetadataCallout,
-  SUPPLY_METADATA_CALLOUT_MIN_WIDTH,
+  getSupplyMetadataSharedLeaderPointSets,
+  shouldUseSupplyDeviceMetadataCallout,
 } from '@/lib/supplyMetadataCallout'
+import { resolveTrunkDeviceMetadataCalloutSelection } from '@/lib/ui/metadataCalloutSelection'
+import {
+  applyMetadataCalloutMultiplier,
+  getMetadataCalloutWidth,
+} from '@/lib/metadataCalloutGrouping'
+import {
+  getCircuitConverterDcConnectionCount,
+  getSupplyConverterBodyGeometry,
+  supportsCircuitConverterDcConnections,
+} from '@/lib/layout/circuitConverterGeometry'
+import {
+  clampConverterDcConnectionCount,
+  resizeConverterDcConnections,
+} from '@/lib/eendraad/resizeConverterDcConnections'
+import { isVerticalSupplyDevice } from '@/lib/layout/supplyDeviceOrientation'
 
 type EendraadPointerEvent = {
   cancelBubble: boolean
@@ -84,9 +123,26 @@ type EendraadPointerEvent = {
 }
 type WindowWithEendraTapSuppression = Window & { __eendraSuppressNextElementTap?: boolean }
 
+const CONVERTER_RESIZE_OUTLINE_PADDING = 4
+const CONVERTER_RESIZE_HANDLE_WIDTH = 6
+const CONVERTER_RESIZE_HANDLE_HIT_WIDTH = 14
+
 interface TrunkDeviceSymbolProps {
   device: TrunkDevice
   position: Point
+  /** Original circuit-trunk anchor when a widened converter's painted center shifts right. */
+  circuitConverterAnchor?: Point
+  /** Painted width of a selectable DC busbar. */
+  dcBusWidth?: number
+  /** Circuit-level collision-solved metadata frame for a widened converter. */
+  metadataCallout?: {
+    x: number
+    y: number
+    width: number
+    height: number
+    leaderPoints: [number, number, number, number]
+    targetIds?: string[]
+  }
   /** Other devices on this supply lane, used to keep metadata cards apart. */
   supplyDevicePositions?: Array<{ device: TrunkDevice; x: number; y: number }>
   /** Left-to-right supply layouts are solved in canonical space, then mirrored back. */
@@ -113,6 +169,9 @@ interface TrunkDeviceSymbolProps {
 }
 
 const SUPPLY_METADATA_FONT_SIZE = 8
+const CONVERTER_ARTWORK_VIEWBOX_SIZE = 48
+const CONVERTER_ARTWORK_EDGE = 5.3
+const CONVERTER_ARTWORK_STROKE = 2
 
 function isSupplyMetadataDevice(device: TrunkDevice): boolean {
   // DC-DC devices can carry long model/charger notes even when they do not have
@@ -126,8 +185,7 @@ function isSupplyMetadataDevice(device: TrunkDevice): boolean {
   )
 }
 
-function getSupplyMetadataLinesForDevice(device: TrunkDevice): string[] {
-  const multiplier = getSupplyDeviceMultiplier(device)
+function getSupplyMetadataLinesForDevice(device: TrunkDevice, multiplier = 1): string[] {
   const certificationParts = getVisibleCertificationLabelParts(device)
   const conversionParts =
     device.type === 'conversion' || device.symbol === 'solar_panel' || device.symbol === 'battery'
@@ -139,17 +197,14 @@ function getSupplyMetadataLinesForDevice(device: TrunkDevice): string[] {
     notesText.length > 0 &&
     isSymbolLabelVisible(device.symbolLabelDisplay, 'trunkDeviceNotes', true)
 
-  return [
-    ...certificationParts.map((part) => ({
-      key: part.key,
-      text:
-        part.key === 'certificationModel' && multiplier > 1
-          ? `${multiplier}× ${part.text}`
-          : part.text,
-    })),
-    ...conversionParts,
-    ...(showNotes ? [{ key: 'trunkDeviceNotes', text: notesText }] : []),
-  ].map((item) => item.text)
+  return applyMetadataCalloutMultiplier(
+    [
+      ...conversionParts,
+      ...certificationParts,
+      ...(showNotes ? [{ key: 'trunkDeviceNotes', text: notesText }] : []),
+    ],
+    multiplier
+  ).map((item) => item.text)
 }
 
 function getSupplyMetadataCardSize(
@@ -161,14 +216,8 @@ function getSupplyMetadataCardSize(
     0
   )
   return {
-    width: Math.min(
-      260,
-      Math.max(
-        SUPPLY_METADATA_CALLOUT_MIN_WIDTH,
-        ...lines.map((line) =>
-          measureSymbolLabelTextWidth(line, fontFamily, SUPPLY_METADATA_FONT_SIZE)
-        )
-      ) + 10
+    width: getMetadataCalloutWidth(
+      lines.map((line) => measureSymbolLabelTextWidth(line, fontFamily, SUPPLY_METADATA_FONT_SIZE))
     ),
     height: visualLineCount * 10 + 10,
   }
@@ -181,6 +230,9 @@ function getSupplyMetadataCardSize(
 export function TrunkDeviceSymbol({
   device,
   position,
+  circuitConverterAnchor,
+  dcBusWidth,
+  metadataCallout,
   supplyDevicePositions,
   supplyMirrorAxisX,
   supplyPanelId,
@@ -197,6 +249,8 @@ export function TrunkDeviceSymbol({
   draggableCircuitTrunk = false,
 }: TrunkDeviceSymbolProps) {
   const setSelection = useSetSelection()
+  const setHover = useSetHover()
+  const clearHover = useClearHover()
   const { t } = useTranslation()
   const isSelected = useTrunkDeviceSelected(device)
   const canDragTrunk = useUIStore(
@@ -215,6 +269,10 @@ export function TrunkDeviceSymbol({
   const [converterAcImage, setConverterAcImage] = useState<HTMLImageElement | null>(null)
   const [converterDcImage, setConverterDcImage] = useState<HTMLImageElement | null>(null)
   const [isHovered, setIsHovered] = useState(false)
+  const [converterResizePreviewCount, setConverterResizePreviewCount] = useState<number | null>(
+    null
+  )
+  const converterResizeCountRef = useRef<number | null>(null)
   const [transformerSafetyImage, setTransformerSafetyImage] = useState<HTMLImageElement | null>(
     null
   )
@@ -239,7 +297,9 @@ export function TrunkDeviceSymbol({
     device.symbol === 'rectifier' ||
     device.symbol === 'inverter' ||
     device.symbol === 'dc_dc_converter'
-  const isDirectionalConverter = isDirectionalConverterSymbol(device.symbol)
+  const isDirectionalConverter =
+    isDirectionalConverterSymbol(device.symbol) ||
+    (!!circuitConverterAnchor && device.symbol === 'dc_dc_converter')
   const converterAcPhaseAssignment =
     isConversionSymbol && phaseSystem
       ? getSupplyConverterAcPhaseAssignment(device, phaseSystem)
@@ -262,10 +322,7 @@ export function TrunkDeviceSymbol({
       ? CONVERTER_ARTWORK_PATHS.base
       : (switchSymbolPaths?.basePath ?? symbol?.svgPath)
   const nameLabelText = (device.label ?? '').trim()
-  const isVerticalSupplyProtection =
-    isProtection &&
-    device.supplyPath === 'converter-grid' &&
-    device.converterGridPlacement === 'input-leg'
+  const isVerticalSupplyProtection = isProtection && isVerticalSupplyDevice(device)
   const showSupplyProtectionNameLabel =
     (isHorizontal === true || isVerticalSupplyProtection) &&
     (isProtection || device.symbol === 'source_changeover') &&
@@ -273,14 +330,22 @@ export function TrunkDeviceSymbol({
     isSymbolLabelVisible(device.symbolLabelDisplay, 'supplyProtectionNameLabel', true)
   const wireSegments = useEendraadWireSegments()
   const converterConnectionDomains = isDirectionalConverter
-    ? getConverterConnectionDomains(wireSegments, device.id, position, SYMBOL_SIZE)
+    ? getConverterConnectionDomains(
+        wireSegments,
+        device.id,
+        circuitConverterAnchor ?? position,
+        SYMBOL_SIZE
+      )
     : {}
   const converterArtworkLayout = isDirectionalConverter
-    ? getConverterArtworkLayout(
-        device.symbol === 'inverter' ? 'DC' : 'AC',
-        device.symbol === 'inverter' ? 'AC' : 'DC',
-        converterConnectionDomains
-      )
+    ? (() => {
+        const domains = getDomainForSymbol(device.symbol)
+        return getConverterArtworkLayout(
+          domains.inputDomain === 'DC' ? 'DC' : 'AC',
+          domains.outputDomain === 'DC' ? 'DC' : 'AC',
+          converterConnectionDomains
+        )
+      })()
     : null
   const hasConnectedTopWire =
     isConversionSymbol &&
@@ -338,27 +403,11 @@ export function TrunkDeviceSymbol({
   )
   const metadataCalloutItems = useMemo(
     () => [
-      ...certificationLabelParts.map((part) => ({
-        key: part.key,
-        text:
-          part.key === 'certificationModel' && supplyDeviceMultiplier > 1
-            ? `${supplyDeviceMultiplier}× ${part.text}`
-            : part.text,
-      })),
       ...conversionLabelParts.map((part) => ({ key: part.key, text: part.text })),
+      ...certificationLabelParts.map((part) => ({ key: part.key, text: part.text })),
       ...(showNotesLabel ? [{ key: 'trunkDeviceNotes' as const, text: notesText }] : []),
     ],
-    [
-      certificationLabelParts,
-      conversionLabelParts,
-      notesText,
-      showNotesLabel,
-      supplyDeviceMultiplier,
-    ]
-  )
-  const metadataCalloutLines = useMemo(
-    () => metadataCalloutItems.map((item) => item.text),
-    [metadataCalloutItems]
+    [certificationLabelParts, conversionLabelParts, notesText, showNotesLabel]
   )
   const metadataCalloutPeerCount = (
     supplyDevicePositions?.length
@@ -373,14 +422,22 @@ export function TrunkDeviceSymbol({
     symbol: device.symbol,
     peerCount: metadataCalloutPeerCount,
   })
-  const metadataCalloutGroup = useMemo(() => {
+  const metadataCalloutLayout = useMemo(() => {
     const renderedPeerPositions = supplyDevicePositions?.length
       ? supplyDevicePositions
       : [{ device, x: position.x, y: position.y }]
-    const peerPositions = renderedPeerPositions.map((peer) => ({
-      ...peer,
-      x: supplyMirrorAxisX == null ? peer.x : supplyMirrorAxisX * 2 - peer.x,
-    }))
+    const peerPositions = renderedPeerPositions.map((peer) => {
+      const isScalableSupplyConverter =
+        supportsCircuitConverterDcConnections(peer.device) &&
+        (peer.device.supplyPath === 'converter-branch' || peer.device.supplyPath === 'backup')
+      const visualX = isScalableSupplyConverter
+        ? getSupplyConverterBodyGeometry(peer.device, { x: peer.x, y: peer.y }).center.x
+        : peer.x
+      return {
+        ...peer,
+        x: supplyMirrorAxisX == null ? visualX : supplyMirrorAxisX * 2 - visualX,
+      }
+    })
     const peers = peerPositions.filter(
       ({ device: peer }) =>
         isSupplyMetadataDevice(peer) &&
@@ -388,26 +445,56 @@ export function TrunkDeviceSymbol({
     )
     const hasLongPeer = peers.some(({ device: peer }) => {
       const lines = getSupplyMetadataLinesForDevice(peer)
-      return (
-        lines.length > 0 && shouldUseSupplyMetadataCallout(lines, getSupplyDeviceMultiplier(peer))
-      )
+      return shouldUseSupplyDeviceMetadataCallout(peer, lines, getSupplyDeviceMultiplier(peer))
     })
-    if (!hasLongPeer) return new Map()
+    const clusters = getSupplyMetadataCalloutClusters(
+      peers.map(({ device: peer }) => ({
+        device: peer,
+        lines: getSupplyMetadataLinesForDevice(peer),
+      }))
+    )
+    if (!hasLongPeer) {
+      return {
+        placements: new Map<
+          string,
+          ReturnType<typeof getSupplyMetadataCalloutGroupPlacements> extends Map<
+            string,
+            infer Placement
+          >
+            ? Placement
+            : never
+        >(),
+        clusters,
+      }
+    }
 
-    const symbolRects = peers.map(({ x, y }) => ({
-      left: x - SYMBOL_SIZE / 2 - 4,
-      top: y - SYMBOL_SIZE / 2 - 4,
-      right: x + SYMBOL_SIZE / 2 + 4,
-      bottom: y + SYMBOL_SIZE / 2 + 4,
-    }))
+    const symbolRects = peers.map(({ device: peer, x, y }) => {
+      const width = supportsCircuitConverterDcConnections(peer)
+        ? SYMBOL_SIZE * getCircuitConverterDcConnectionCount(peer)
+        : SYMBOL_SIZE
+      return {
+        left: x - width / 2 - 4,
+        top: y - SYMBOL_SIZE / 2 - 4,
+        right: x + width / 2 + 4,
+        bottom: y + SYMBOL_SIZE / 2 + 4,
+      }
+    })
     const items = peers.flatMap(({ device: peer, x, y }) => {
-      const lines = getSupplyMetadataLinesForDevice(peer)
+      const cluster = clusters.get(peer.id)
+      const lines = getSupplyMetadataLinesForDevice(peer, cluster?.totalMultiplier)
       if (lines.length === 0) return []
+      if (cluster && cluster.representativeId !== peer.id) return []
+      const clusterPeers = cluster
+        ? peers.filter(({ device: candidate }) => cluster.targetIds.includes(candidate.id))
+        : [{ device: peer, x, y }]
+      const clusterX =
+        clusterPeers.reduce((total, candidate) => total + candidate.x, 0) / clusterPeers.length
+      const clusterY = Math.min(...clusterPeers.map((candidate) => candidate.y))
       const { width, height } = getSupplyMetadataCardSize(lines, fontFamily)
       return [
         {
           id: peer.id,
-          symbolPosition: { x, y },
+          symbolPosition: { x: clusterX, y: clusterY },
           width,
           height,
           placement: getSupplyMetadataCalloutPlacementKind({
@@ -437,29 +524,59 @@ export function TrunkDeviceSymbol({
               }
         ),
       symbolRects,
+      // Supply assemblies are mirrored for rendering. A canonical right-side
+      // nudge becomes the visually preferable left-side placement.
+      packRows: supplyMirrorAxisX == null,
+      preferRightNudges: supplyMirrorAxisX != null,
     })
-    if (supplyMirrorAxisX == null) return canonicalPlacements
-
-    return new Map(
-      [...canonicalPlacements].map(([id, placement]) => {
-        const renderedSymbolX = supplyMirrorAxisX * 2 - placement.symbolPosition.x
-        const renderedCardLeft = supplyMirrorAxisX * 2 - placement.rect.right
-        return [
-          id,
-          {
-            ...placement,
-            symbolPosition: { ...placement.symbolPosition, x: renderedSymbolX },
-            x: renderedCardLeft - renderedSymbolX,
-            rect: {
-              left: renderedCardLeft,
-              top: placement.rect.top,
-              right: supplyMirrorAxisX * 2 - placement.rect.left,
-              bottom: placement.rect.bottom,
-            },
-          },
-        ]
-      })
+    const representativePositionById = new Map(
+      peers.map((peer) => [peer.device.id, { x: peer.x, y: peer.y }])
     )
+    if (supplyMirrorAxisX == null) {
+      return {
+        placements: new Map(
+          [...canonicalPlacements].map(([id, placement]) => {
+            const representative = representativePositionById.get(id) ?? placement.symbolPosition
+            return [
+              id,
+              {
+                ...placement,
+                symbolPosition: representative,
+                x: placement.rect.left - representative.x,
+                y: placement.rect.top - representative.y,
+              },
+            ]
+          })
+        ),
+        clusters,
+      }
+    }
+
+    return {
+      placements: new Map(
+        [...canonicalPlacements].map(([id, placement]) => {
+          const representative = representativePositionById.get(id) ?? placement.symbolPosition
+          const renderedSymbolX = supplyMirrorAxisX * 2 - representative.x
+          const renderedCardLeft = supplyMirrorAxisX * 2 - placement.rect.right
+          return [
+            id,
+            {
+              ...placement,
+              symbolPosition: { x: renderedSymbolX, y: representative.y },
+              x: renderedCardLeft - renderedSymbolX,
+              y: placement.rect.top - representative.y,
+              rect: {
+                left: renderedCardLeft,
+                top: placement.rect.top,
+                right: supplyMirrorAxisX * 2 - placement.rect.left,
+                bottom: placement.rect.bottom,
+              },
+            },
+          ]
+        })
+      ),
+      clusters,
+    }
   }, [
     device,
     fontFamily,
@@ -470,26 +587,50 @@ export function TrunkDeviceSymbol({
     supplyPanelId,
     wireSegments,
   ])
+  const metadataCalloutGroup = metadataCalloutLayout.placements
+  const metadataCalloutCluster = metadataCalloutLayout.clusters.get(device.id)
+  const isSharedMetadataRepresentative =
+    metadataCalloutCluster?.representativeId === device.id &&
+    metadataCalloutCluster.targetIds.length > 1
+  const isSharedMetadataMember =
+    metadataCalloutCluster != null && metadataCalloutCluster.targetIds.length > 1
+  const renderedMetadataCalloutItems = useMemo(
+    () =>
+      applyMetadataCalloutMultiplier(
+        metadataCalloutItems,
+        metadataCalloutCluster?.totalMultiplier ?? supplyDeviceMultiplier
+      ),
+    [metadataCalloutCluster?.totalMultiplier, metadataCalloutItems, supplyDeviceMultiplier]
+  )
+  const renderedMetadataCalloutLines = useMemo(
+    () => renderedMetadataCalloutItems.map((item) => item.text),
+    [renderedMetadataCalloutItems]
+  )
   const useMetadataCallout =
-    isSupplyMetadataDevice(device) && isHorizontal === true && metadataCalloutGroup.has(device.id)
+    metadataCallout != null ||
+    (isSupplyMetadataDevice(device) &&
+      isHorizontal === true &&
+      metadataCalloutGroup.has(device.id) &&
+      (!isSharedMetadataMember || isSharedMetadataRepresentative))
   const metadataCalloutVisualLineCount = useMemo(
     () =>
-      metadataCalloutLines.reduce((total, line) => total + countSymbolLabelVisualLines(line), 0),
-    [metadataCalloutLines]
+      renderedMetadataCalloutLines.reduce(
+        (total, line) => total + countSymbolLabelVisualLines(line),
+        0
+      ),
+    [renderedMetadataCalloutLines]
   )
   const metadataCalloutWidth = useMemo(
     () =>
-      Math.min(
-        260,
-        Math.max(
-          SUPPLY_METADATA_CALLOUT_MIN_WIDTH,
-          ...metadataCalloutLines.map((line) => measureSymbolLabelTextWidth(line, fontFamily, 8))
-        ) + 10
+      metadataCallout?.width ??
+      getMetadataCalloutWidth(
+        renderedMetadataCalloutLines.map((line) => measureSymbolLabelTextWidth(line, fontFamily, 8))
       ),
-    [fontFamily, metadataCalloutLines]
+    [fontFamily, metadataCallout?.width, renderedMetadataCalloutLines]
   )
-  const metadataCalloutHeight = metadataCalloutVisualLineCount * 10 + 10
+  const metadataCalloutHeight = metadataCallout?.height ?? metadataCalloutVisualLineCount * 10 + 10
   const metadataCalloutPlacement = useMemo(() => {
+    if (metadataCallout) return { x: metadataCallout.x, y: metadataCallout.y }
     const groupPlacement = metadataCalloutGroup.get(device.id)
     if (groupPlacement) return { x: groupPlacement.x, y: groupPlacement.y }
     return getSupplyMetadataCalloutPlacement({
@@ -502,13 +643,34 @@ export function TrunkDeviceSymbol({
   }, [
     device.id,
     metadataCalloutHeight,
+    metadataCallout,
     metadataCalloutGroup,
     metadataCalloutPlacementKind,
     metadataCalloutWidth,
     position,
     wireSegments,
   ])
+  const circuitConverterConnectionCount =
+    circuitConverterAnchor && supportsCircuitConverterDcConnections(device)
+      ? getCircuitConverterDcConnectionCount(device)
+      : 1
+  const isSupplyConverterResize =
+    supportsCircuitConverterDcConnections(device) &&
+    isHorizontal === true &&
+    (device.supplyPath === 'converter-branch' || device.supplyPath === 'backup')
+  const isOrdinaryConverterResize =
+    supportsCircuitConverterDcConnections(device) &&
+    circuitConverterAnchor != null &&
+    !isSupplyConverterResize
+  const converterResizeDirection = isSupplyConverterResize
+    ? 'left'
+    : isOrdinaryConverterResize
+      ? 'right'
+      : undefined
   const renderedSymbolSize = useMemo(() => {
+    if (circuitConverterConnectionCount > 1) {
+      return { width: SYMBOL_SIZE * circuitConverterConnectionCount, height: SYMBOL_SIZE }
+    }
     if (!processedImage || !isDomoticaDevice) {
       return { width: SYMBOL_SIZE, height: SYMBOL_SIZE }
     }
@@ -527,16 +689,59 @@ export function TrunkDeviceSymbol({
       width: SYMBOL_SIZE * (imgWidth / imgHeight),
       height: SYMBOL_SIZE,
     }
-  }, [isDomoticaDevice, processedImage])
-  const metadataCalloutLeaderPoints = getSupplyMetadataCalloutLeaderPoints({
-    placement: metadataCalloutPlacement,
-    width: metadataCalloutWidth,
-    height: metadataCalloutHeight,
-    symbolWidth: renderedSymbolSize.width,
-    symbolHeight: renderedSymbolSize.height,
-    placementKind: metadataCalloutPlacementKind,
-    mirrorHorizontally: supplyMirrorAxisX != null,
-  })
+  }, [circuitConverterConnectionCount, isDomoticaDevice, processedImage])
+  const metadataCalloutLeaderPoints =
+    metadataCallout?.leaderPoints ??
+    getSupplyMetadataCalloutLeaderPoints({
+      placement: metadataCalloutPlacement,
+      width: metadataCalloutWidth,
+      height: metadataCalloutHeight,
+      symbolWidth: renderedSymbolSize.width,
+      symbolHeight: renderedSymbolSize.height,
+      placementKind: metadataCalloutPlacementKind,
+      mirrorHorizontally: supplyMirrorAxisX != null,
+    })
+  const metadataCalloutTargetIds =
+    metadataCallout?.targetIds ??
+    (isSharedMetadataRepresentative ? metadataCalloutCluster?.targetIds : undefined)
+  const metadataCalloutLeaderPointSets = useMemo(() => {
+    if (!isSharedMetadataRepresentative || !metadataCalloutTargetIds?.length) {
+      return [metadataCalloutLeaderPoints]
+    }
+    const renderedPeers = supplyDevicePositions?.length
+      ? supplyDevicePositions
+      : [{ device, x: position.x, y: position.y }]
+    const targets = metadataCalloutTargetIds.flatMap((targetId) => {
+      const target = renderedPeers.find(({ device: peer }) => peer.id === targetId)
+      if (!target) return []
+      return [
+        {
+          position: { x: target.x - position.x, y: target.y - position.y },
+          width: supportsCircuitConverterDcConnections(target.device)
+            ? SYMBOL_SIZE * getCircuitConverterDcConnectionCount(target.device)
+            : SYMBOL_SIZE,
+          height: SYMBOL_SIZE,
+        },
+      ]
+    })
+    return getSupplyMetadataSharedLeaderPointSets({
+      placement: metadataCalloutPlacement,
+      width: metadataCalloutWidth,
+      height: metadataCalloutHeight,
+      targets,
+    })
+  }, [
+    device,
+    isSharedMetadataRepresentative,
+    metadataCalloutHeight,
+    metadataCalloutLeaderPoints,
+    metadataCalloutPlacement,
+    metadataCalloutTargetIds,
+    metadataCalloutWidth,
+    position.x,
+    position.y,
+    supplyDevicePositions,
+  ])
 
   const certificationSideLabelExtraOffset = useMemo(
     () =>
@@ -669,7 +874,55 @@ export function TrunkDeviceSymbol({
     },
     [device.id, setSelection]
   )
-  const metadataCalloutGestureHandlers = useCanvasPanOrClickGesture((event) => handleClick(event))
+  const handleMetadataCalloutClick = useCallback(
+    (event: unknown) => {
+      if (!metadataCalloutTargetIds?.length) {
+        handleClick(event)
+        return
+      }
+      const e = event as EendraadPointerEvent
+      e.cancelBubble = true
+      if (e.evt.button != null && e.evt.button !== 0) return
+      const { selection } = useUIStore.getState()
+      setSelection(
+        resolveTrunkDeviceMetadataCalloutSelection(selection, metadataCalloutTargetIds, {
+          extend: !!e.evt.shiftKey,
+          toggle: !!(e.evt.altKey || e.evt.ctrlKey || e.evt.metaKey),
+        })
+      )
+    },
+    [handleClick, metadataCalloutTargetIds, setSelection]
+  )
+  const metadataCalloutGestureHandlers = useCanvasPanOrClickGesture(handleMetadataCalloutClick)
+  const handleMetadataCalloutMouseEnter = useCallback(
+    (event: unknown) => {
+      const e = event as EendraadPointerEvent
+      e.cancelBubble = true
+      if (metadataCalloutTargetIds?.length) {
+        setHover({ type: 'trunkDevice', ids: metadataCalloutTargetIds })
+      }
+    },
+    [metadataCalloutTargetIds, setHover]
+  )
+  const handleMetadataCalloutMouseLeave = useCallback(
+    (event: unknown) => {
+      const e = event as EendraadPointerEvent
+      e.cancelBubble = true
+      const { hover } = useUIStore.getState()
+      if (
+        metadataCalloutTargetIds?.length &&
+        hover.type === 'trunkDevice' &&
+        metadataCalloutTargetIds.every((id) => hover.ids.includes(id))
+      ) {
+        clearHover()
+      }
+    },
+    [clearHover, metadataCalloutTargetIds]
+  )
+  const stopMetadataCalloutClickBubble = useCallback((event: unknown) => {
+    const pointerEvent = event as EendraadPointerEvent
+    pointerEvent.cancelBubble = true
+  }, [])
 
   const rotateForHorizontal = isHorizontal && isProtection && !isInlineSwitch
   const rotateMirroredChangeover =
@@ -719,10 +972,159 @@ export function TrunkDeviceSymbol({
   }
   const converterAcPosition = converterArtworkImagePosition('AC')
   const converterDcPosition = converterArtworkImagePosition('DC')
-
-  if (!symbol || !processedImage) return null
+  const dcDcConverterPositions =
+    isDirectionalConverter && device.symbol === 'dc_dc_converter'
+      ? (['bottom-left', 'top-right'] as const).map((corner) =>
+          getConverterCornerPosition(
+            corner,
+            renderedSymbolSize.width,
+            renderedSymbolSize.height,
+            converterIconMargin,
+            converterIconSize
+          )
+        )
+      : []
+  const isWideCircuitConverter = circuitConverterConnectionCount > 1
+  const currentConverterWidth = circuitConverterConnectionCount * SYMBOL_SIZE
+  const previewConverterWidth =
+    (converterResizePreviewCount ?? circuitConverterConnectionCount) * SYMBOL_SIZE
+  const converterFixedEdge =
+    converterResizeDirection === 'left' ? currentConverterWidth / 2 : -currentConverterWidth / 2
+  const converterResizeEdge =
+    converterResizeDirection === 'left'
+      ? converterFixedEdge - previewConverterWidth
+      : converterFixedEdge + previewConverterWidth
+  const converterResizeDirectionSign = converterResizeDirection === 'left' ? -1 : 1
+  const converterResizeHandleEdge =
+    converterResizeEdge + converterResizeDirectionSign * CONVERTER_RESIZE_OUTLINE_PADDING
+  const wideConverterArtworkInset =
+    (CONVERTER_ARTWORK_EDGE / CONVERTER_ARTWORK_VIEWBOX_SIZE) * SYMBOL_SIZE
+  const wideConverterArtworkStroke =
+    (CONVERTER_ARTWORK_STROKE / CONVERTER_ARTWORK_VIEWBOX_SIZE) * SYMBOL_SIZE
+  const wideConverterArtworkColor = getSymbolColor(theme?.mode === 'dark')
+  const wideConverterArtworkLeft = -renderedSymbolSize.width / 2 + wideConverterArtworkInset
+  const wideConverterArtworkRight = renderedSymbolSize.width / 2 - wideConverterArtworkInset
+  const wideConverterArtworkTop = -renderedSymbolSize.height / 2 + wideConverterArtworkInset
+  const wideConverterArtworkBottom = renderedSymbolSize.height / 2 - wideConverterArtworkInset
 
   const isHoveredAny = isHovered || isHoveredFromBreadcrumb
+
+  if (device.type === 'dc_bus' || device.symbol === 'dc_bus') {
+    const busWidth = Math.max(48, dcBusWidth ?? 48)
+    const busStartX = -busWidth / 2
+    const busEndX = busStartX + busWidth
+    const busLineWidth = 5
+    const busSelectionStroke =
+      busLineWidth +
+      screenPxToCanvasUnits(
+        canvasZoom,
+        WIRE_SELECTION_EXTRA_PX,
+        WIRE_SELECTION_EXTRA_PX_MIN,
+        WIRE_SELECTION_EXTRA_PX_MAX
+      )
+    const busHoverStroke = screenPxToCanvasUnits(
+      canvasZoom,
+      HOVER_OUTLINE_STROKE_PX,
+      HOVER_OUTLINE_STROKE_PX_MIN,
+      HOVER_OUTLINE_STROKE_PX_MAX
+    )
+    const busHoverDash = screenPxToCanvasUnits(
+      canvasZoom,
+      HOVER_OUTLINE_DASH_PX,
+      HOVER_OUTLINE_DASH_PX_MIN,
+      HOVER_OUTLINE_DASH_PX_MAX
+    )
+    const busColor =
+      isSelected || isPreviewSelected ? SELECTION_COLOR : getSymbolColor(theme?.mode === 'dark')
+    return (
+      <Group
+        name={`trunkDevice-${device.id}`}
+        x={position.x}
+        y={position.y}
+        draggable={canDragTrunk}
+        onClick={handleClick}
+        onTap={handleClick}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        onDragStart={
+          canDragTrunk && onDragStart
+            ? (event) => {
+                const nativeEvent = event.evt as MouseEvent
+                if (onDragStart(!!nativeEvent.altKey, nativeEvent)) event.target.stopDrag()
+              }
+            : undefined
+        }
+        onDragMove={
+          canDragTrunk && onDragMove
+            ? (event) =>
+                onDragMove(
+                  getCanvasPositionFromEvent?.(event) ?? {
+                    x: event.target.x(),
+                    y: event.target.y(),
+                  }
+                )
+            : undefined
+        }
+        onDragEnd={
+          canDragTrunk && onDragEnd
+            ? (event) => {
+                if (shouldSuppressKonvaDragEnd?.()) return
+                onDragEnd(
+                  getCanvasPositionFromEvent?.(event) ?? {
+                    x: event.target.x(),
+                    y: event.target.y(),
+                  }
+                )
+                event.target.position({ x: position.x, y: position.y })
+              }
+            : undefined
+        }
+      >
+        {/* Match ordinary busbars: a narrow line-shaped target, not the entire surrounding box. */}
+        <Line
+          points={[busStartX, 0, busEndX, 0]}
+          stroke="transparent"
+          strokeWidth={Math.max(busLineWidth + 10, 10)}
+          lineCap="round"
+        />
+        <Line
+          points={[busStartX, 0, busEndX, 0]}
+          stroke={busColor}
+          strokeWidth={isSelected || isPreviewSelected ? busSelectionStroke : busLineWidth}
+          lineCap="round"
+          listening={false}
+        />
+        {isHoveredAny && !isSelected && !isPreviewSelected && (
+          <Line
+            points={[busStartX, 0, busEndX, 0]}
+            stroke={SELECTION_COLOR}
+            strokeWidth={busHoverStroke}
+            dash={[busHoverDash, busHoverDash]}
+            lineCap="round"
+            listening={false}
+          />
+        )}
+        <DomainMarker
+          domain="DC"
+          x={busStartX - 10}
+          y={0}
+          color={getSecondaryTextColor(theme?.mode === 'dark')}
+        />
+        {!!device.label?.trim() && (
+          <Text
+            x={busStartX}
+            y={8}
+            text={device.label}
+            fontFamily={fontFamily}
+            fontSize={10}
+            fill={getTextColor(theme?.mode === 'dark')}
+          />
+        )}
+      </Group>
+    )
+  }
+
+  if (!symbol || !processedImage) return null
 
   return (
     <Group
@@ -777,27 +1179,73 @@ export function TrunkDeviceSymbol({
         />
       ) : (
         <Rect
-          {...getTouchAwareHitAreaProps(
-            ENDPOINT_OUTLINE_SIZE,
-            canvasZoom,
-            isSelected,
-            touchPrimary
-          )}
+          {...(isWideCircuitConverter
+            ? {
+                x: -renderedSymbolSize.width / 2 - (touchPrimary ? 7 : 4),
+                y: -renderedSymbolSize.height / 2 - (touchPrimary ? 7 : 4),
+                width: renderedSymbolSize.width + (touchPrimary ? 14 : 8),
+                height: renderedSymbolSize.height + (touchPrimary ? 14 : 8),
+                fill: 'transparent',
+              }
+            : getTouchAwareHitAreaProps(
+                ENDPOINT_OUTLINE_SIZE,
+                canvasZoom,
+                isSelected,
+                touchPrimary
+              ))}
         />
       )}
 
       {/* Symbol image — offsetY by orientation; protection on horizontal trunk rotated 90° left */}
-      <Image
-        image={processedImage}
-        {...{ [SYMBOL_EXPORT_ATTR_SVG_PATH]: renderedSymbolPath }}
-        width={renderedSymbolSize.width}
-        height={renderedSymbolSize.height}
-        offsetX={isSurgeProtection ? surgeSymbolAnchor.x : renderedSymbolSize.width / 2}
-        offsetY={isSurgeProtection ? surgeSymbolAnchor.y : renderedSymbolSize.height / 2}
-        rotation={renderedSymbolRotationDeg}
-        listening={false}
-      />
-      {isDirectionalConverter && converterDiagonalImage && converterArtworkLayout && (
+      {isWideCircuitConverter ? (
+        <Rect
+          x={wideConverterArtworkLeft}
+          y={wideConverterArtworkTop}
+          width={wideConverterArtworkRight - wideConverterArtworkLeft}
+          height={wideConverterArtworkBottom - wideConverterArtworkTop}
+          cornerRadius={(1.3 / CONVERTER_ARTWORK_VIEWBOX_SIZE) * SYMBOL_SIZE}
+          fill="transparent"
+          stroke={wideConverterArtworkColor}
+          strokeWidth={wideConverterArtworkStroke}
+          lineJoin="round"
+          listening={false}
+        />
+      ) : (
+        <Image
+          image={processedImage}
+          {...{ [SYMBOL_EXPORT_ATTR_SVG_PATH]: renderedSymbolPath }}
+          width={renderedSymbolSize.width}
+          height={renderedSymbolSize.height}
+          offsetX={isSurgeProtection ? surgeSymbolAnchor.x : renderedSymbolSize.width / 2}
+          offsetY={isSurgeProtection ? surgeSymbolAnchor.y : renderedSymbolSize.height / 2}
+          rotation={renderedSymbolRotationDeg}
+          listening={false}
+        />
+      )}
+      {isWideCircuitConverter && converterArtworkLayout ? (
+        <Line
+          points={
+            converterArtworkLayout.diagonal === 'top-left-to-bottom-right'
+              ? [
+                  wideConverterArtworkLeft,
+                  wideConverterArtworkTop,
+                  wideConverterArtworkRight,
+                  wideConverterArtworkBottom,
+                ]
+              : [
+                  wideConverterArtworkLeft,
+                  wideConverterArtworkBottom,
+                  wideConverterArtworkRight,
+                  wideConverterArtworkTop,
+                ]
+          }
+          stroke={wideConverterArtworkColor}
+          strokeWidth={wideConverterArtworkStroke}
+          lineCap="round"
+          lineJoin="round"
+          listening={false}
+        />
+      ) : isDirectionalConverter && converterDiagonalImage && converterArtworkLayout ? (
         <Image
           image={converterDiagonalImage}
           {...{ [SYMBOL_EXPORT_ATTR_SVG_PATH]: CONVERTER_ARTWORK_PATHS.diagonal }}
@@ -808,7 +1256,7 @@ export function TrunkDeviceSymbol({
           scaleX={converterArtworkLayout.diagonal === 'top-left-to-bottom-right' ? -1 : 1}
           listening={false}
         />
-      )}
+      ) : null}
       {isDirectionalConverter && converterAcImage && converterAcPosition && (
         <Image
           image={converterAcImage}
@@ -822,18 +1270,118 @@ export function TrunkDeviceSymbol({
           listening={false}
         />
       )}
-      {isDirectionalConverter && converterDcImage && converterDcPosition && (
-        <Image
-          image={converterDcImage}
-          {...{ [SYMBOL_EXPORT_ATTR_SVG_PATH]: CONVERTER_ARTWORK_PATHS.DC }}
-          width={converterIconSize}
-          height={converterIconSize}
-          offsetX={converterIconSize / 2}
-          offsetY={converterIconSize / 2}
-          x={converterDcPosition.x}
-          y={converterDcPosition.y}
-          listening={false}
-        />
+      {isDirectionalConverter &&
+        converterDcImage &&
+        converterDcPosition &&
+        device.symbol !== 'dc_dc_converter' && (
+          <Image
+            image={converterDcImage}
+            {...{ [SYMBOL_EXPORT_ATTR_SVG_PATH]: CONVERTER_ARTWORK_PATHS.DC }}
+            width={converterIconSize}
+            height={converterIconSize}
+            offsetX={converterIconSize / 2}
+            offsetY={converterIconSize / 2}
+            x={converterDcPosition.x}
+            y={converterDcPosition.y}
+            listening={false}
+          />
+        )}
+      {converterDcImage &&
+        dcDcConverterPositions.map((iconPosition, index) => (
+          <Image
+            key={`dc-dc-domain-${index}`}
+            image={converterDcImage}
+            {...{ [SYMBOL_EXPORT_ATTR_SVG_PATH]: CONVERTER_ARTWORK_PATHS.DC }}
+            width={converterIconSize}
+            height={converterIconSize}
+            offsetX={converterIconSize / 2}
+            offsetY={converterIconSize / 2}
+            x={iconPosition.x}
+            y={iconPosition.y}
+            listening={false}
+          />
+        ))}
+      {isSelected && converterResizeDirection && (
+        <>
+          {converterResizePreviewCount != null &&
+            converterResizePreviewCount !== circuitConverterConnectionCount && (
+              <Rect
+                x={
+                  converterResizeDirection === 'left'
+                    ? converterFixedEdge - previewConverterWidth
+                    : converterFixedEdge
+                }
+                y={-renderedSymbolSize.height / 2}
+                width={previewConverterWidth}
+                height={renderedSymbolSize.height}
+                stroke="#0284c7"
+                strokeWidth={1}
+                dash={[3, 2]}
+                listening={false}
+              />
+            )}
+          <Rect
+            x={converterResizeHandleEdge - CONVERTER_RESIZE_HANDLE_HIT_WIDTH / 2}
+            y={-renderedSymbolSize.height / 2}
+            width={CONVERTER_RESIZE_HANDLE_HIT_WIDTH}
+            height={renderedSymbolSize.height}
+            fill="transparent"
+            draggable
+            onMouseDown={(event) => {
+              event.cancelBubble = true
+            }}
+            onClick={(event) => {
+              event.cancelBubble = true
+            }}
+            onTap={(event) => {
+              event.cancelBubble = true
+            }}
+            onDragStart={(event) => {
+              event.cancelBubble = true
+              converterResizeCountRef.current = circuitConverterConnectionCount
+              setConverterResizePreviewCount(circuitConverterConnectionCount)
+            }}
+            onDragMove={(event) => {
+              event.cancelBubble = true
+              const handleCenter = event.target.x() + CONVERTER_RESIZE_HANDLE_HIT_WIDTH / 2
+              const bodyEdgeAtPointer =
+                handleCenter - converterResizeDirectionSign * CONVERTER_RESIZE_OUTLINE_PADDING
+              const requestedWidth =
+                converterResizeDirection === 'left'
+                  ? converterFixedEdge - bodyEdgeAtPointer
+                  : bodyEdgeAtPointer - converterFixedEdge
+              const nextCount = clampConverterDcConnectionCount(requestedWidth / SYMBOL_SIZE)
+              converterResizeCountRef.current = nextCount
+              setConverterResizePreviewCount(nextCount)
+              const snappedWidth = nextCount * SYMBOL_SIZE
+              const snappedEdge =
+                converterResizeDirection === 'left'
+                  ? converterFixedEdge - snappedWidth
+                  : converterFixedEdge + snappedWidth
+              const snappedHandleEdge =
+                snappedEdge + converterResizeDirectionSign * CONVERTER_RESIZE_OUTLINE_PADDING
+              event.target.x(snappedHandleEdge - CONVERTER_RESIZE_HANDLE_HIT_WIDTH / 2)
+              event.target.y(-renderedSymbolSize.height / 2)
+            }}
+            onDragEnd={(event) => {
+              event.cancelBubble = true
+              const nextCount = converterResizeCountRef.current ?? circuitConverterConnectionCount
+              converterResizeCountRef.current = null
+              setConverterResizePreviewCount(null)
+              if (nextCount !== circuitConverterConnectionCount) {
+                resizeConverterDcConnections(device.id, nextCount)
+              }
+            }}
+            onMouseEnter={(event) => {
+              const stage = event.target.getStage()
+              if (stage) stage.container().style.cursor = 'ew-resize'
+            }}
+            onMouseLeave={(event) => {
+              const stage = event.target.getStage()
+              if (stage) stage.container().style.cursor = ''
+            }}
+          />
+        </>
       )}
       {device.symbol === 'source_changeover' &&
         isSymbolLabelVisible(device.symbolLabelDisplay, 'changeoverPort1Label', true) &&
@@ -954,19 +1502,26 @@ export function TrunkDeviceSymbol({
         />
       )}
 
-      {useMetadataCallout && metadataCalloutLines.length > 0 && (
+      {useMetadataCallout && renderedMetadataCalloutLines.length > 0 && (
         <>
-          <Line
-            points={metadataCalloutLeaderPoints}
-            stroke={getSecondaryTextColor(isDark ?? false)}
-            strokeWidth={0.7}
-            dash={[3, 3]}
-            listening={false}
-          />
+          {metadataCalloutLeaderPointSets.map((points, index) => (
+            <Line
+              key={`${device.id}-metadata-leader-${index}`}
+              points={points}
+              stroke={getSecondaryTextColor(isDark ?? false)}
+              strokeWidth={0.7}
+              dash={[3, 3]}
+              listening={false}
+            />
+          ))}
           <Group
             x={metadataCalloutPlacement.x}
             y={metadataCalloutPlacement.y}
             {...metadataCalloutGestureHandlers}
+            onMouseEnter={handleMetadataCalloutMouseEnter}
+            onMouseLeave={handleMetadataCalloutMouseLeave}
+            onClick={stopMetadataCalloutClickBubble}
+            onTap={stopMetadataCalloutClickBubble}
           >
             <Rect
               width={metadataCalloutWidth}
@@ -985,7 +1540,7 @@ export function TrunkDeviceSymbol({
               y={5}
               width={metadataCalloutWidth - 10}
               height={metadataCalloutHeight - 10}
-              text={metadataCalloutLines.join('\n')}
+              text={renderedMetadataCalloutLines.join('\n')}
               fontFamily={fontFamily}
               fontSize={8}
               lineHeight={1.25}
@@ -1033,7 +1588,7 @@ export function TrunkDeviceSymbol({
       )}
 
       {/* Generic trunk labels on the right: conversion details + notes (single stacked flow). */}
-      {!useMetadataCallout && stackedRightLabelItems.length > 0 && (
+      {!useMetadataCallout && !isSharedMetadataMember && stackedRightLabelItems.length > 0 && (
         <SymbolTextLabels
           items={stackedRightLabelItems}
           config={{ position: 'right', layout: 'stack' }}
@@ -1048,6 +1603,7 @@ export function TrunkDeviceSymbol({
       )}
       {placeNotesOnTop &&
         !useMetadataCallout &&
+        !isSharedMetadataMember &&
         topStackLabelItems.length > 0 &&
         !hasConnectedTopWire && (
           <SymbolTextLabels
@@ -1062,6 +1618,7 @@ export function TrunkDeviceSymbol({
         )}
       {placeNotesOnTop &&
         !useMetadataCallout &&
+        !isSharedMetadataMember &&
         topStackLabelItems.length > 0 &&
         hasConnectedTopWire && (
           <Text
@@ -1137,7 +1694,16 @@ export function TrunkDeviceSymbol({
                 surgeSelectionBounds.height,
                 2
               )
-            : getPreviewOutlineProps(canvasZoom, ENDPOINT_OUTLINE_SIZE))}
+            : isWideCircuitConverter || converterResizeDirection != null
+              ? getPaddedRectPreviewOutlineProps(
+                  canvasZoom,
+                  -renderedSymbolSize.width / 2,
+                  -renderedSymbolSize.height / 2,
+                  renderedSymbolSize.width,
+                  renderedSymbolSize.height,
+                  4
+                )
+              : getPreviewOutlineProps(canvasZoom, ENDPOINT_OUTLINE_SIZE))}
         />
       )}
       {/* Hover highlight */}
@@ -1152,7 +1718,16 @@ export function TrunkDeviceSymbol({
                 surgeSelectionBounds.height,
                 2
               )
-            : getHoverOutlineProps(canvasZoom, ENDPOINT_OUTLINE_SIZE))}
+            : isWideCircuitConverter || converterResizeDirection != null
+              ? getPaddedRectHoverOutlineProps(
+                  canvasZoom,
+                  -renderedSymbolSize.width / 2,
+                  -renderedSymbolSize.height / 2,
+                  renderedSymbolSize.width,
+                  renderedSymbolSize.height,
+                  4
+                )
+              : getHoverOutlineProps(canvasZoom, ENDPOINT_OUTLINE_SIZE))}
         />
       )}
       {/* Selection outline */}
@@ -1167,7 +1742,29 @@ export function TrunkDeviceSymbol({
                 surgeSelectionBounds.height,
                 2
               )
-            : getSelectionOutlineProps(canvasZoom, ENDPOINT_OUTLINE_SIZE))}
+            : isWideCircuitConverter || converterResizeDirection != null
+              ? getPaddedRectSelectionOutlineProps(
+                  canvasZoom,
+                  -renderedSymbolSize.width / 2,
+                  -renderedSymbolSize.height / 2,
+                  renderedSymbolSize.width,
+                  renderedSymbolSize.height,
+                  4
+                )
+              : getSelectionOutlineProps(canvasZoom, ENDPOINT_OUTLINE_SIZE))}
+        />
+      )}
+      {/* Keep the resize pill above the yellow selection outline. */}
+      {isSelected && converterResizeDirection && (
+        <Rect
+          x={converterResizeHandleEdge - CONVERTER_RESIZE_HANDLE_WIDTH / 2}
+          y={-(renderedSymbolSize.height + 2) / 2}
+          width={CONVERTER_RESIZE_HANDLE_WIDTH}
+          height={renderedSymbolSize.height + 2}
+          fill="#0284c7"
+          opacity={0.9}
+          cornerRadius={2}
+          listening={false}
         />
       )}
     </Group>

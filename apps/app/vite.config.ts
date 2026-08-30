@@ -21,9 +21,49 @@ export function normalizeCommunityModuleIds(
     .sort()
 }
 
+const hostedTemplateModulePaths = [
+  'apps/app/src/components/home/NewProjectDialog.tsx',
+  'apps/app/src/components/home/TemplateCard.tsx',
+  'apps/app/src/lib/projectManagement.ts',
+  'apps/app/src/lib/projectStorage/adapters/supabaseEditorCloudProjectAdapter.ts',
+  'apps/app/src/pages/Home.tsx',
+  'apps/app/src/pages/ProjectPage.tsx',
+] as const
+
+export function assertNoHostedTemplateModules(moduleIds: Iterable<string>): void {
+  const leaked = [...new Set(moduleIds)].filter((moduleId) =>
+    hostedTemplateModulePaths.includes(moduleId as (typeof hostedTemplateModulePaths)[number]),
+  )
+  if (leaked.length > 0) {
+    throw new Error(
+      `Community build includes hosted template module(s): ${leaked.join(', ')}`,
+    )
+  }
+}
+
+const hostedDxfModulePrefixes = [
+  'apps/app/src/components/export/DxfExportDialog.tsx',
+  'apps/app/src/hooks/useDxfExportDialog.tsx',
+  'apps/app/src/lib/export/dxf/',
+  `apps/app/src/lib/export/${'dxf'}ElectricalOverlayExport.ts`,
+] as const
+
+export function assertNoHostedDxfModules(moduleIds: Iterable<string>): void {
+  const leaked = [...new Set(moduleIds)].filter((moduleId) =>
+    hostedDxfModulePrefixes.some(
+      (prefix) => moduleId === prefix || moduleId.startsWith(prefix),
+    ),
+  )
+  if (leaked.length > 0) {
+    throw new Error(`Community build includes hosted DXF module(s): ${leaked.join(', ')}`)
+  }
+}
+
 const aliases = {
   '@/hooks/useExportDialog': './src/editions/community/useCommunityExportDialog.tsx',
   '@/hooks/useAuthSession': './src/editions/community/communityAuthSession.ts',
+  '@/components/home/NewProjectDialog':
+    './src/editions/community/CommunityNewProjectDialog.tsx',
   '@/components/export/ExportDialog': './src/editions/community/CommunityExportDialog.tsx',
   '@/lib/editionPdfRenderingPolicy': './src/editions/community/communityPdfRenderingPolicy.ts',
   '@/lib/db': './src/editions/community/communityDb.ts',
@@ -96,6 +136,8 @@ export default defineConfig({
       },
       generateBundle() {
         const modules = normalizeCommunityModuleIds(this.getModuleIds())
+        assertNoHostedTemplateModules(modules)
+        assertNoHostedDxfModules(modules)
         fs.writeFileSync(
           path.resolve(appRoot, '.community-module-audit.local.json'),
           `${JSON.stringify({ modules: [...new Set(modules)] }, null, 2)}\n`,

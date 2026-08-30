@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { applyDarkModeInversion, invertSvgForDarkMode } from '@/utils/planImageProcessing'
-import type { Floor } from '@/types/schema'
+import { importedPlanAssetUsesSvgContent, type Floor } from '@/types/schema'
 import { logger } from '@/lib/logger'
 
 /**
@@ -21,13 +21,17 @@ export function usePlanImageBitmap(
   const planImageProcessedDataUrl = canonicalAsset?.processedDataUrl ?? floor?.planAssetProcessed
   const hasWhiteBackground = canonicalAsset?.hasWhiteBackground ?? floor?.planAssetHasWhiteBackground ?? false
   const darkModeAware = canonicalAsset?.darkModeAware ?? hasWhiteBackground
-  const svgContent = canonicalAsset?.kind === 'pdf-vector' ? canonicalAsset.svgContent : undefined
+  const svgContent = importedPlanAssetUsesSvgContent(canonicalAsset?.kind)
+    ? canonicalAsset?.svgContent
+    : undefined
 
   useEffect(() => {
     if (!planImageDataUrl && !svgContent) {
       setImg(null)
       return
     }
+
+    let cancelled = false
 
     const loadImage = async () => {
       try {
@@ -46,8 +50,11 @@ export function usePlanImageBitmap(
         }
 
         const image = new window.Image()
-        image.onload = () => setImg(image)
+        image.onload = () => {
+          if (!cancelled) setImg(image)
+        }
         image.onerror = () => {
+          if (cancelled) return
           logger.error('Failed to load plan image (overlay)')
           setImg(null)
         }
@@ -55,13 +62,20 @@ export function usePlanImageBitmap(
       } catch (error) {
         logger.error('Failed to process plan image (overlay):', error)
         const image = new window.Image()
-        image.onload = () => setImg(image)
-        image.onerror = () => setImg(null)
+        image.onload = () => {
+          if (!cancelled) setImg(image)
+        }
+        image.onerror = () => {
+          if (!cancelled) setImg(null)
+        }
         image.src = planImageDataUrl ?? ''
       }
     }
 
     loadImage()
+    return () => {
+      cancelled = true
+    }
   }, [
     planImageDataUrl,
     planImageProcessedDataUrl,
@@ -69,7 +83,7 @@ export function usePlanImageBitmap(
     darkModeAware,
     svgContent,
     themeMode,
-    floor?.planAsset,
+    floor?.id,
   ])
 
   return img

@@ -16,7 +16,8 @@ export {
 } from './PlanPlacementDragFollowers'
 export { PlanWiresLayerWithDrag } from './PlanWiresLayerWithDrag'
 export { FloorPlanMode } from './FloorPlanMode'
-export { StairRenderer, getStairBounds } from './StairRenderer'
+export { StairRenderer, getStairBounds, buildStairGeometry } from './StairRenderer'
+export { isSpiralStair } from '@/lib/plan/stairPlanScale'
 export { PlanGraphicElementRenderer } from './PlanGraphicElementRenderer'
 export {
   PlanInsertPointPreview,

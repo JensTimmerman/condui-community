@@ -1,8 +1,5 @@
 import type { CableSpec, CircuitPhaseAssignment } from '@/types/schema'
-import {
-  getActiveConductorCount,
-  type PhaseAssignmentConstraint,
-} from '@/lib/wires/phaseAssignment'
+import type { PhaseAssignmentConstraint } from '@/lib/wires/phaseAssignment'
 
 export type WireConductorOption = {
   value: string
@@ -43,19 +40,10 @@ export const DC_WIRE_CONDUCTOR_OPTIONS: WireConductorOption[] = [
 
 export function getWireConductorOptions(
   isDC: boolean,
-  phaseAssignment?: CircuitPhaseAssignment,
-  phaseConstraint?: PhaseAssignmentConstraint
+  _phaseAssignment?: CircuitPhaseAssignment,
+  _phaseConstraint?: PhaseAssignmentConstraint
 ): WireConductorOption[] {
-  const options = isDC ? DC_WIRE_CONDUCTOR_OPTIONS : AC_WIRE_CONDUCTOR_OPTIONS
-  const activeConductors = isDC
-    ? undefined
-    : (getActiveConductorCount(phaseAssignment) ?? phaseConstraint?.activeConductorCount)
-  if (activeConductors == null) return options
-
-  const filtered = options.filter(
-    (option) => option.conductors - (option.hasPE ? 1 : 0) === activeConductors
-  )
-  return filtered.length > 0 ? filtered : options
+  return isDC ? DC_WIRE_CONDUCTOR_OPTIONS : AC_WIRE_CONDUCTOR_OPTIONS
 }
 
 export function resolveConductorDropdownValue(

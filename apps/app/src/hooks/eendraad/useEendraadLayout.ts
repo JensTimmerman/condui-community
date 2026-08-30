@@ -5,21 +5,26 @@ import { calculateBottomUpLayout, type BottomUpLayoutResult } from '@/lib/layout
 import type { Point } from '@/types/ui'
 
 /**
- * Hook to calculate the eendraad layout from the current project and layout overrides
+ * Calculate the eendraad layout from the current project and layout overrides.
+ *
+ * Runs synchronously on purpose. The result is required to render every drop /
+ * delete / move, so it sits on the interaction-critical path. Offloading it to a
+ * Web Worker (previously attempted, see eendraadLayoutWorkerClient) regressed the
+ * common case: the whole project is structured-cloned to the worker and the
+ * result cloned back on every edit, and the canvas had to blank while the async
+ * result was pending — a visible flash plus 200-300 ms of latency per edit. A
+ * worker cannot make an interaction feel responsive when its output is needed to
+ * paint that same interaction. If a project ever grows large enough to jank here,
+ * memoize / incrementalize the layout or debounce overrides rather than moving
+ * this computation off-thread.
  */
 export function useEendraadLayout(): BottomUpLayoutResult | null {
   const currentProject = useProjectStore((state: ProjectState) => state.currentProject)
   const eendraadLayoutOverrides = useUIStore((state: UIState) => state.eendraadLayoutOverrides)
 
-  return useMemo<BottomUpLayoutResult | null>(() => {
+  return useMemo(() => {
     if (!currentProject) return null
-
-    // Convert Map to format expected by layout engine
-    const overrides = new Map<string, Point>()
-    eendraadLayoutOverrides.forEach((value, key) => {
-      overrides.set(key, value)
-    })
-
+    const overrides = new Map<string, Point>(eendraadLayoutOverrides)
     return calculateBottomUpLayout(currentProject, overrides)
   }, [currentProject, eendraadLayoutOverrides])
 }

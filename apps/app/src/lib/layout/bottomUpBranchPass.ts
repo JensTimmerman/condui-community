@@ -2,13 +2,17 @@ import type { Circuit, Panel } from '@/types/schema'
 import { getCircuitBranches } from './endpointChains'
 import type { BranchLayout, TrunkLayout } from './wireSegments'
 import { calculateBranchWidth } from './bottomUpBranchWidths'
-import {
-  getVisibleConversionLabelParts,
-  getVisibleEndpointNoteText,
-} from '@/lib/conversionLabels'
+import { getVisibleConversionLabelParts, getVisibleEndpointNoteText } from '@/lib/conversionLabels'
 import { getVisibleCertificationLabelParts } from '@/lib/certificationLabels'
 import { countSymbolLabelVisualLines } from '@/lib/symbolLabelMetrics'
 import { getEndpointBranchLabelPrefix } from '@/lib/eendraad/automaticEndpointBranchNaming'
+import {
+  CIRCUIT_CONVERTER_OUTPUT_ROW_SPACING,
+  getCircuitConverterDcConnectionCount,
+  getCircuitConverterPrimaryEndpointIds,
+  isCircuitConverterDcChild,
+  supportsCircuitConverterDcConnections,
+} from './circuitConverterGeometry'
 
 export interface BranchPassConstants {
   BRANCH_LEAD_IN: number
@@ -48,9 +52,7 @@ const ENDPOINT_LABEL_FIXED_VERTICAL_CLEARANCE = 25
 function endpointUsesRightSideLabel(endpoint: Circuit['endpoints'][number], isBranchEnd: boolean) {
   return (
     isBranchEnd &&
-    (endpoint.symbol === 'solar_panel' ||
-      endpoint.symbol === 'battery' ||
-      endpoint.symbol === 'ev')
+    (endpoint.symbol === 'solar_panel' || endpoint.symbol === 'battery' || endpoint.symbol === 'ev')
   )
 }
 
@@ -65,10 +67,7 @@ export function getBranchBottomLabelHeight(branchEndpoints: Circuit['endpoints']
       ...getVisibleCertificationLabelParts(endpoint).map((part) => part.text),
       getVisibleEndpointNoteText(endpoint),
     ].filter((text) => text.length > 0)
-    const visualLines = texts.reduce(
-      (total, text) => total + countSymbolLabelVisualLines(text),
-      0
-    )
+    const visualLines = texts.reduce((total, text) => total + countSymbolLabelVisualLines(text), 0)
     maximumVisualLines = Math.max(maximumVisualLines, visualLines)
   })
 
@@ -134,18 +133,40 @@ export function calculateFirstBranchY(
   const mcbStartY = circuitLayout.parentRcd ? startY - constants.MCB_Y_OFFSET : startY
   const trunkDevicesBeforeBranches = (circuitLayout.circuit.trunkDevices || []).filter(
     (d) => d.trunkPosition === 0
-  ).length
-  return trunkDevicesBeforeBranches > 0
+  )
+  const converterReserve = trunkDevicesBeforeBranches.reduce(
+    (reserve, device) =>
+      reserve +
+      (supportsCircuitConverterDcConnections(device)
+        ? Math.max(0, getCircuitConverterDcConnectionCount(device) - 2) *
+          CIRCUIT_CONVERTER_OUTPUT_ROW_SPACING
+        : 0),
+    0
+  )
+  return trunkDevicesBeforeBranches.length > 0
     ? mcbStartY -
         constants.TRUNK_DEVICE_MCB_GAP -
-        (trunkDevicesBeforeBranches - 1) *
+        (trunkDevicesBeforeBranches.length - 1) *
           (constants.TRUNK_DEVICE_SPACING + constants.SYMBOL_SIZE) -
-        constants.BRANCH_START_OFFSET
+        constants.BRANCH_START_OFFSET -
+        converterReserve
     : mcbStartY - constants.BRANCH_START_OFFSET
 }
 
 function getNonPanelEndpoints(circuit: Circuit) {
-  return circuit.endpoints.filter((e) => e.symbol !== 'panel_distribution')
+  return circuit.endpoints.filter(
+    (e) => e.symbol !== 'panel_distribution' && !isCircuitConverterDcChild(e)
+  )
+}
+
+function getStandardCircuitBranches(circuit: Circuit) {
+  const primaryEndpointIds = getCircuitConverterPrimaryEndpointIds(circuit)
+  return getCircuitBranches(circuit).filter(
+    (branchEndpoints) =>
+      !branchEndpoints.some(
+        (endpoint) => isCircuitConverterDcChild(endpoint) || primaryEndpointIds.has(endpoint.id)
+      )
+  )
 }
 
 function createEmptyBranch(
@@ -195,7 +216,7 @@ function createEndpointBranchRows(
   constants: BranchPassConstants,
   nestedBranchLabelClearance: number
 ): BranchLayout[] {
-  const endpointBranches = getCircuitBranches(circuit)
+  const endpointBranches = getStandardCircuitBranches(circuit)
   const storedBranches = circuit.branches ?? []
   const result: BranchLayout[] = []
   let domoticaVerticalReserve = 0
@@ -206,12 +227,21 @@ function createEndpointBranchRows(
   endpointBranches.forEach((branchEndpoints, branchIndex) => {
     const trunkDevicesBetween = (circuit.trunkDevices || []).filter(
       (d) => d.trunkPosition > 0 && d.trunkPosition <= branchIndex
-    ).length
-    const interBranchTrunkDeviceOffset = trunkDevicesBetween * constants.TRUNK_DEVICE_SPACING
+    )
+    const interBranchTrunkDeviceOffset =
+      trunkDevicesBetween.length * constants.TRUNK_DEVICE_SPACING +
+      trunkDevicesBetween.reduce(
+        (reserve, device) =>
+          reserve +
+          (supportsCircuitConverterDcConnections(device)
+            ? Math.max(0, getCircuitConverterDcConnectionCount(device) - 2) *
+              CIRCUIT_CONVERTER_OUTPUT_ROW_SPACING
+            : 0),
+        0
+      )
     const availableLabelHeight =
-      (branchIndex === 0
-        ? constants.BRANCH_START_OFFSET
-        : constants.ENDPOINT_BRANCH_SPACING) - ENDPOINT_LABEL_FIXED_VERTICAL_CLEARANCE
+      (branchIndex === 0 ? constants.BRANCH_START_OFFSET : constants.ENDPOINT_BRANCH_SPACING) -
+      ENDPOINT_LABEL_FIXED_VERTICAL_CLEARANCE
     labelVerticalReserve += Math.max(
       0,
       getBranchBottomLabelHeight(branchEndpoints) - availableLabelHeight
@@ -351,7 +381,7 @@ export function calculateBranchLayoutPass(
     if (circuitLayout.parentCircuit) continue
 
     const circuit = circuitLayout.circuit
-    const endpointBranches = getCircuitBranches(circuit)
+    const endpointBranches = getStandardCircuitBranches(circuit)
     const nestedCircuits = resolveBranchSubCircuits(circuit, circuitMap)
     const startX = getBranchStartX(circuitLayout, constants)
     const trunk = circuitLayout.parentRcd

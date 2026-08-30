@@ -37,6 +37,7 @@ import {
   type ProtectionLabelKey,
 } from '@/lib/protectionLabels'
 import { getDerivedCircuitKind } from '@/lib/circuitKind'
+import { useEditionFeatureAvailability } from '@/hooks/useEditionFeatureAvailability'
 import { TRANSFORMER_OVERLAY_PATHS } from '@/lib/symbols'
 import {
   SWITCH_TYPE_SYMBOLS,
@@ -61,7 +62,6 @@ import {
 } from '@/lib/projectV2/electrical'
 import { DEFAULT_PANEL_GRID_COLUMNS } from '@/lib/panel/panelGridDefaults'
 import { getInstallDateTargetInheritedYear } from '@/lib/installDatePropagation'
-import { useEditionFeatureAvailability } from '@/hooks/useEditionFeatureAvailability'
 import { InstallDateField } from '../shared/propertiesShared'
 import {
   getSynergridFocusForCircuit,
@@ -83,7 +83,7 @@ import {
   getSupplyDeviceSerialNumbers,
   getSupplyInverterMultiplier,
   getSupplyInverterSerialNumbers,
-} from '@/utils/inverterMultipliers'
+} from '@/lib/supplyAssembly/inverterMultipliers'
 import {
   formatPhaseAssignment,
   getPanelIncomingPhaseState,
@@ -97,15 +97,23 @@ import {
   getSupplyInverterUnitPhaseAssignments,
 } from '@/lib/supplyAssembly/supplyConverterPhases'
 import { findPanelById } from '@/lib/panel/panelTree'
+import { resolveEffectiveEarthingSystem } from '@/lib/panel/panelEarthingSync'
 import {
   getPanelBusFeedKind,
   getPanelFeedOrganization,
   panelCanConfigureBackupOutput,
+  panelHasBackupOutput,
   panelHasModularChangeover,
   panelRequiresSplitFeed,
   type PanelFeedOrganization,
 } from '@/lib/panel/panelFeedOrganization'
 import { getPanelBusSections } from '@/lib/panel/panelBusSections'
+import {
+  CIRCUIT_CONVERTER_MAX_CONNECTIONS,
+  getCircuitConverterDcConnectionCount,
+  supportsCircuitConverterDcConnections,
+} from '@/lib/layout/circuitConverterGeometry'
+import { resizeConverterDcConnections } from '@/lib/eendraad/resizeConverterDcConnections'
 
 const SYNERGRID_AUTO_MATCH_DEBOUNCE_MS = 450
 export function TrunkDeviceProperties({
@@ -290,6 +298,7 @@ export function TrunkDeviceProperties({
     : 'other'
   const em = device.energyMeterProps || {}
   const conv = device.conversionProps || {}
+  const circuitConverterDcConnectionCount = getCircuitConverterDcConnectionCount(device)
   const supplyDeviceMultiplier = getSupplyDeviceMultiplier(device)
   const supplyDeviceSerialNumbers = getSupplyDeviceSerialNumbers(device)
   const selectedSupplyUnitIndex = placementId
@@ -1207,6 +1216,33 @@ export function TrunkDeviceProperties({
         device.symbol === 'inverter' ||
         device.symbol === 'dc_dc_converter') && (
         <>
+          {!isGroundDevice &&
+            (circuit ||
+              (isSupplyDevice &&
+                (device.supplyPath === 'converter-branch' || device.supplyPath === 'backup'))) &&
+            supportsCircuitConverterDcConnections(device) && (
+              <div>
+                <label className={labelClass}>
+                  {isSupplyDevice
+                    ? t('supply.converterTopDcConnections', 'Top DC connections')
+                    : t('supply.converterDcConnections', 'DC connections')}
+                </label>
+                <CustomDropdown
+                  value={String(circuitConverterDcConnectionCount)}
+                  onChange={(value) => {
+                    resizeConverterDcConnections(device.id, Number(value) || 1)
+                  }}
+                  options={Array.from({ length: CIRCUIT_CONVERTER_MAX_CONNECTIONS }, (_, index) => {
+                    const value = index + 1
+                    return {
+                      value: String(value),
+                      label: String(value),
+                    }
+                  })}
+                  className={selectClass}
+                />
+              </div>
+            )}
           {converterPhaseOptions.length > 0 && installationSystem && inverterMultiplier !== 2 && (
             <div>
               <label className={labelClass}>{t('supply.converterPhases', 'AC phases')}</label>
@@ -1815,6 +1851,19 @@ export function SupplyProperties({
   const setPanelFeedOrganization = useProjectStore(
     (state: ProjectState) => state.setPanelFeedOrganization
   )
+  const updatePanel = useProjectStore((state: ProjectState) => state.updatePanel)
+  const { advancedPanelLabels } = useEditionFeatureAvailability(currentProject?.project.id)
+  const earthingOptions = useMemo(
+    () => [
+      { value: '', label: t('panels.earthingSystem.none', 'None') },
+      { value: 'TT', label: t('panels.earthingSystem.TT', 'TT') },
+      { value: 'TN-S', label: t('panels.earthingSystem.TN-S', 'TN-S') },
+      { value: 'TN-C', label: t('panels.earthingSystem.TN-C', 'TN-C') },
+      { value: 'TN-C-S', label: t('panels.earthingSystem.TN-C-S', 'TN-C-S') },
+      { value: 'IT', label: t('panels.earthingSystem.IT', 'IT') },
+    ],
+    [t]
+  )
 
   const installation = currentProject
     ? getElectricalInstallationFromProject(currentProject)
@@ -1830,6 +1879,12 @@ export function SupplyProperties({
   const panel = panelId
     ? findPanelById(panels, panelId)
     : panels.find((candidate) => candidate.isMain !== false)
+  const panelNumberingEnabled = !!installation.panelNumberingEnabled
+  const panelNetTypeLabelsEnabled = !!installation.panelNetTypeLabelsEnabled
+  const hasBackupFeed =
+    currentProject != null && panel != null && panelHasBackupOutput(currentProject, panel.id)
+  const earthingValue =
+    panel && currentProject ? (resolveEffectiveEarthingSystem(panel, panels) ?? '') : ''
   const organization =
     currentProject && panel ? getPanelFeedOrganization(currentProject, panel) : 'single'
   const hasChangeover = Boolean(
@@ -1860,6 +1915,85 @@ export function SupplyProperties({
 
   return (
     <div className="space-y-6">
+      {panel && advancedPanelLabels ? (
+        <div className="border-b border-gray-200 pb-4 dark:border-gray-700">
+          <h4 className="mb-3 text-sm font-medium text-gray-700 dark:text-gray-300">
+            {t('panels.diagramLabels', 'Diagram labels')}
+          </h4>
+          <div className="space-y-3">
+            <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <input
+                type="checkbox"
+                checked={panelNumberingEnabled}
+                disabled={readOnly}
+                onChange={(e) => updateInstallation({ panelNumberingEnabled: e.target.checked })}
+              />
+              {t('panels.panelNumbering', 'Panel numbering')}
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <input
+                type="checkbox"
+                checked={panelNetTypeLabelsEnabled}
+                disabled={readOnly}
+                onChange={(e) => {
+                  updateInstallation({ panelNetTypeLabelsEnabled: e.target.checked })
+                  if (e.target.checked && !earthingValue) {
+                    updatePanel(panel.id, { earthingSystem: 'TT' })
+                  }
+                }}
+              />
+              {t('panels.panelNetTypeLabels', 'Net type on diagram')}
+            </label>
+            {panelNetTypeLabelsEnabled ? (
+              <div className="space-y-3">
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {t(
+                      hasBackupFeed
+                        ? 'panels.earthingSystemGridLabel'
+                        : 'panels.earthingSystemLabel',
+                      hasBackupFeed ? 'Earthing system (grid)' : 'Earthing system'
+                    )}
+                  </label>
+                  <CustomDropdown
+                    value={earthingValue}
+                    onChange={(nextValue) =>
+                      updatePanel(panel.id, {
+                        earthingSystem:
+                          nextValue === '' ? undefined : (nextValue as Panel['earthingSystem']),
+                      })
+                    }
+                    options={earthingOptions}
+                    disabled={readOnly}
+                    className={selectClass}
+                  />
+                </div>
+                {hasBackupFeed ? (
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {t('panels.earthingSystemBackupLabel', 'Earthing system (backup)')}
+                    </label>
+                    <CustomDropdown
+                      value={panel.backupEarthingSystem ?? ''}
+                      onChange={(nextValue) =>
+                        updatePanel(panel.id, {
+                          backupEarthingSystem:
+                            nextValue === ''
+                              ? undefined
+                              : (nextValue as Panel['backupEarthingSystem']),
+                        })
+                      }
+                      options={earthingOptions}
+                      disabled={readOnly}
+                      className={selectClass}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       {panel && (
         <div>
           <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">

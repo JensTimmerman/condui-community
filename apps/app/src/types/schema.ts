@@ -151,6 +151,8 @@ export interface Panel {
   rulesetDateOverride?: number
   /** Earthing arrangement shown on the one-wire panel header (omit = none). */
   earthingSystem?: EarthingSystemType
+  /** Earthing arrangement carried by the panel's backup feed (omit = none). */
+  backupEarthingSystem?: EarthingSystemType
 }
 
 export type ProtectionType =
@@ -200,6 +202,10 @@ export interface ProtectionDevice {
   subPanelId?: string // For MCBs that connect to sub-panels
   /** Structural carrier for a secondary panel connected directly to a busbar; no protection symbol is rendered. */
   directPanelFeeder?: boolean
+  /** Structural carrier for an unprotected branch connected directly to a DC bus; no protection symbol is rendered. */
+  directDcBusFeeder?: boolean
+  /** DC bus that owns this outgoing branch. Present on both structural and real protections. */
+  dcBusId?: string
   /** ISO installation date. Preferred over the legacy year override. */
   installationDate?: string
   /** Explicitly keeps automatic/version-derived installation dates off this entity. */
@@ -262,6 +268,10 @@ export interface Circuit {
   supplySource?: {
     kind: 'converter-backup'
     converterId: string
+  }
+  /** An outgoing circuit supplied by a selectable DC bus. */
+  dcBusSource?: {
+    busId: string
   }
   /** Bus section for an unprotected top-level circuit; protected circuits inherit their protection. */
   busSectionId?: string
@@ -423,6 +433,7 @@ export type SymbolKey =
   | 'dc_dc_converter'
   | 'solar_panel'
   | 'battery'
+  | 'dc_bus'
   // Legacy switch keys (backward compat; resolved to new SVGs at render)
   | 'switch_single'
   | 'switch_double'
@@ -488,6 +499,14 @@ export type TrunkDeviceType =
   | 'conversion'
   | 'storage'
   | 'generation'
+  | 'dc_bus'
+
+export interface DcBusDeviceProps {
+  /** Ordered outgoing circuits. The referenced circuit owns its endpoint/trunk content. */
+  branchCircuitIds?: string[]
+  ratedCurrentA?: number
+  ratedVoltageV?: number
+}
 
 export interface TrunkDevice {
   id: string
@@ -512,6 +531,13 @@ export interface TrunkDevice {
   batteryProps?: BatteryDeviceProps
   /** When type === 'generation' and symbol === 'solar_panel'. */
   solarPanelProps?: SolarPanelDeviceProps
+  /** When type === 'dc_bus' and symbol === 'dc_bus'. */
+  dcBusProps?: DcBusDeviceProps
+  /** Ordinary-circuit converter connection on which this passive device is placed. */
+  converterDcConnection?: {
+    converterId: string
+    connectionIndex: number
+  }
   /** Display labels for the two source ports of a supply changeover switch. */
   changeoverProps?: {
     port1Label?: string
@@ -543,6 +569,12 @@ export interface TrunkDevice {
     | 'converter-branch'
     | 'converter-dc'
     | 'converter-dc-top'
+  /** Supply-converter DC exit: 0 is the side exit and 1-4 are the independently routed top exits. */
+  supplyConverterDcConnectionIndex?: number
+  /** Supply DC bus that owns this device after the busbar. Omitted for the serial input side. */
+  supplyDcBusId?: string
+  /** Stable outgoing branch identity within the owning supply DC bus. */
+  supplyDcBusBranchId?: string
   /** Geometry on the converter grid-input path. Missing means inline on the horizontal run. */
   converterGridPlacement?: 'inline' | 'input-leg'
   /**
@@ -772,6 +804,8 @@ export interface SynergridCertification {
 export type TransformerSafetyType = 'none' | 'safety_closed' | 'safety_open'
 
 export interface EnergyConversionDeviceProps {
+  /** Number of independent DC connection blocks on a circuit or supply converter (1-4). */
+  dcConnectionCount?: number
   /** Shared AC phase set used by every AC port of a supply-wire converter. */
   acPhaseAssignment?: CircuitPhaseAssignment
   /** Ordered per-unit AC assignments for a multiplied supply-wire inverter. */
@@ -866,6 +900,11 @@ export interface Endpoint {
   hvacProps?: HvacDeviceProps
   /** When symbol is an energy conversion device (transformer/rectifier/inverter/DC-DC) */
   energyConversionProps?: EnergyConversionDeviceProps
+  /** Endpoint chain attached to one widened ordinary circuit-trunk converter DC connection. */
+  converterDcConnection?: {
+    converterId: string
+    connectionIndex: number
+  }
   /** ISO installation date. Preferred over the legacy year override. */
   installationDate?: string
   /** Explicitly keeps automatic/version-derived installation dates off this entity. */
@@ -963,6 +1002,10 @@ export interface Stair {
   stepDepth: number // Distance between step marks in canvas units
   /** Spiral center pole diameter in canvas units (optional). */
   spiralPoleDiameter?: number
+  /** Spiral sweep in degrees (90–360). Defaults to a full turn. Only used for single-point spiral stairs. */
+  spiralSweepDegrees?: number
+  /** Rotation of the spiral sector around its center, in degrees. Only used for single-point spiral stairs. */
+  spiralRotationDeg?: number
   cornerStyle: StairCornerStyle
   cornerMode: StairCornerMode
   /** Optional per-point override (point index -> point mode). */
@@ -1007,13 +1050,76 @@ export interface FloorPlan {
   masterWallThickness: number // Default thickness (e.g., 20 pixels)
 }
 
-export type ImportedPlanAssetKind = 'raster' | 'pdf-vector' | 'pdf-raster'
+export type ImportedPlanAssetKind = 'raster' | 'pdf-vector' | 'pdf-raster' | 'cad-vector'
+
+export function importedPlanAssetUsesSvgContent(
+  kind: ImportedPlanAssetKind | undefined,
+): boolean {
+  return kind === 'pdf-vector' || kind === 'cad-vector'
+}
 
 export interface ImportedPlanAssetCrop {
   x: number
   y: number
   width: number
   height: number
+}
+
+export interface CadPoint3 {
+  x: number
+  y: number
+  z?: number
+}
+
+export interface CadReferenceExtents {
+  min: CadPoint3
+  max: CadPoint3
+}
+
+export interface CadReferenceCropRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/** Versioned CAD import mapping for DXF overlay export (see docs-context/Future/dxf-electrical-overlay.md). */
+export interface CadReferenceV1 {
+  version: 1
+  sourceKind: 'dxf' | 'dwg'
+  sourceFileName: string
+  sourceFingerprint: string
+  cadImportSessionId: string
+
+  insunitsRaw: number | null
+  insunitsResolved: number
+  metersPerCadUnit: number
+  unitResolutionNote?: string
+
+  fullSourceExtents: CadReferenceExtents | null
+  uncroppedAssetSize: { width: number; height: number }
+
+  extmin: CadPoint3 | null
+  extmax: CadPoint3 | null
+  yAxisUp: boolean
+
+  isReferenceCrop: boolean
+  cropInAssetSpace: CadReferenceCropRect
+  cropInModelSpace: CadReferenceExtents
+  referenceCropAssetRect?: CadReferenceCropRect
+
+  svgNormalization: { scale: number; translateX: number; translateY: number }
+  libreDwgToSvg: { translateX: number; translateY: number; scale: number; flipY: boolean }
+  /** Parsed outer CAD→SVG affine matrix; authoritative for coordinate mapping. */
+  cadToSvgMatrix?: { a: number; b: number; c: number; d: number; e: number; f: number }
+  /** SVG viewBox from import conversion; used for inverse coordinate mapping at export. */
+  rawViewBox?: { x: number; y: number; width: number; height: number }
+
+  /** Editor-only alignment; not used as the sole export offset. */
+  planImageOffset: { x: number; y: number }
+
+  controlPoints?: Array<{ cad: { x: number; y: number }; asset: { x: number; y: number } }>
+  capturedAt: string
 }
 
 export interface ImportedPlanAsset {
@@ -1031,6 +1137,8 @@ export interface ImportedPlanAsset {
   /** If true, adapt this imported asset for dark mode rendering. */
   darkModeAware?: boolean
   crop?: ImportedPlanAssetCrop
+  /** Present on CAD-derived plan assets; required for DXF overlay export. */
+  cadReference?: CadReferenceV1
 }
 
 export interface Floor {
@@ -1407,6 +1515,8 @@ export interface WireSegment {
   domoticaOutputGroup?: 'endpoint' | 'control'
   /** When this segment is a domotica module output wire, index is the absolute output index within that group. */
   domoticaOutputIndex?: number
+  /** Widened ordinary circuit-trunk converter DC connection represented by this segment. */
+  converterDcConnection?: { converterId: string; connectionIndex: number }
   /** Small repeated label shown under long secondary busbars to identify the parent circuit/protection. */
   secondaryBusReferenceLabel?: string
   /** Export-only source label for secondary busbar slices, present on every segment in the busbar. */

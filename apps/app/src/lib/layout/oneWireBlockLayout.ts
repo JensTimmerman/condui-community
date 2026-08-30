@@ -10,6 +10,7 @@ export type OneWireLayoutBlockKind =
   | 'supply-assembly'
   | 'supply-stub'
   | 'secondary-feed'
+  | 'converter-metadata'
   | 'info-block'
 
 export interface OneWireLayoutBlock extends OneWireLayoutRect {

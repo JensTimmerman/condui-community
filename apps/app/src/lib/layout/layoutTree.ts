@@ -17,6 +17,7 @@ import type {
   TrunkDevice,
 } from '@/types/schema'
 import { getSubPanelMainBusFeedDevice } from '@/lib/panel/subPanelFeed'
+import { getEndpointBranchLabelPrefix } from '@/lib/eendraad/automaticEndpointBranchNaming'
 import { resolvePanelSupplyLinkForProtection } from '@/lib/eendraad/panelSupplyLink'
 import {
   getEndpointNoteMaximumRightX,
@@ -38,8 +39,27 @@ import {
 } from '@/lib/panel/panelBusSections'
 import { PANEL_BUS_FEED_GAP } from '@/lib/panel/panelBusFeedPreview'
 import { getDirectConverterChangeoverInsertIndex } from '@/lib/supplyAssembly/directConverterBackupUpgrade'
+import { getSupplyConverterDcConnectionIndex } from '@/lib/supplyAssembly/converterDcConnections'
 import { getSymbolById } from '@/lib/symbols'
 import { getSecondaryBusSectionBoundaryX } from './mainBusSectionBoundary'
+import {
+  CIRCUIT_CONVERTER_BLOCK_SIZE,
+  CIRCUIT_CONVERTER_OUTPUT_BRANCH_LEAD,
+  getCircuitConverterBodyGeometry,
+  getCircuitConverterDcConnectionCount,
+  getCircuitConverterPrimaryBranch,
+  getCircuitConverterPrimaryEndpointIds,
+  getCircuitConverterOutputRowY,
+  getSupplyConverterBodyGeometry,
+  isCircuitConverterDcChild,
+  supportsCircuitConverterDcConnections,
+} from './circuitConverterGeometry'
+import { getEndpointXOffsets } from './bottomUpBranchWidths'
+import {
+  getCircuitConverterMetadataCallouts,
+  type CircuitConverterMetadataCallout,
+} from './circuitConverterMetadataCallouts'
+import { isVerticalSupplyDevice } from './supplyDeviceOrientation'
 
 function getProtectionBusSectionIdForLayoutNode(panel: Panel, node: LayoutNode): string {
   const protection = node.domainRef as ProtectionDevice | undefined
@@ -103,6 +123,19 @@ export interface SymbolVisual {
   bottomLabelMinimumLeftX?: number
   /** For a bottom label, truncate before crossing the circuit's right boundary. */
   bottomLabelMaximumRightX?: number
+  /** Detached metadata frame used when widened-converter output labels collide. */
+  metadataCallout?: {
+    x: number
+    y: number
+    width: number
+    height: number
+    leaderPoints: [number, number, number, number]
+    leaderSegments?: Array<[number, number, number, number]>
+    targetIds?: string[]
+    totalMultiplier?: number
+  }
+  /** A matching endpoint shares the metadata frame rendered by another endpoint. */
+  suppressMetadataLabel?: boolean
 }
 
 export interface WireVisual {
@@ -145,10 +178,21 @@ export interface HitZone {
   outputGroup?: 'control' | 'endpoint'
   outputIndex?: number
   outputExpands?: boolean
+  converterDcConnection?: { converterId: string; connectionIndex: number }
+  /** Selectable DC bus that owns this distribution hit zone. */
+  dcBusId?: string
+  /** Keep the hit target active without drawing an additional preview marker for it. */
+  suppressDropHint?: boolean
   supplyFeedScope?: 'shared' | 'root'
   supplyInsertIndex?: number
   supplyPanelId?: string
   supplyConverterDcBranch?: 'right' | 'top'
+  supplyConverterDcConnectionIndex?: number
+  /** Supply DC bus whose painted bar owns this drop zone. */
+  supplyDcBusId?: string
+  /** Existing outgoing branch on a selectable supply DC bus. */
+  supplyDcBusBranchId?: string
+  dropHintAnchor?: { x: number; y: number }
   /** Geometry selected on the converter grid-input path. */
   converterGridPlacement?: 'inline' | 'input-leg'
   /** The single direct-converter junction where a source changeover may be inserted. */
@@ -181,6 +225,10 @@ export interface LayoutNode {
   id: string
   type: LayoutNodeType
   bounds: Bounds
+  /** Electrical anchor when it differs from the center of asymmetric painted bounds. */
+  connectionAnchor?: { x: number; y: number }
+  /** Direction occupied by extra converter blocks relative to connectionAnchor. */
+  converterGrowthDirection?: 'left' | 'right'
   domainId?: string // panel.id, circuit.id, endpoint.id, protection.id
   /** Unique frame identity when one electrical panel renders in multiple frames. */
   diagramId?: string
@@ -316,6 +364,15 @@ function mirrorLayoutNodeSelfHorizontally(
   node.bounds.x = layoutNodeUsesAnchorX(node)
     ? axisX * 2 - node.bounds.x
     : axisX * 2 - node.bounds.x - node.bounds.width
+  if (node.connectionAnchor) {
+    node.connectionAnchor.x = axisX * 2 - node.connectionAnchor.x
+  }
+  if (node.hitZone?.dropHintAnchor) {
+    node.hitZone.dropHintAnchor.x = axisX * 2 - node.hitZone.dropHintAnchor.x
+  }
+  if (node.converterGrowthDirection) {
+    node.converterGrowthDirection = node.converterGrowthDirection === 'left' ? 'right' : 'left'
+  }
 
   if (node.visual?.type === 'label') {
     if (node.visual.align === 'left') node.visual.align = 'right'
@@ -347,9 +404,7 @@ export function mirrorLayoutNodeHorizontally(
   mirrorSymbolRotation = false
 ): void {
   mirrorLayoutNodeSelfHorizontally(node, axisX, mirrorSymbolRotation)
-  node.children.forEach((child) =>
-    mirrorLayoutNodeHorizontally(child, axisX, mirrorSymbolRotation)
-  )
+  node.children.forEach((child) => mirrorLayoutNodeHorizontally(child, axisX, mirrorSymbolRotation))
 }
 
 function isSupplyAssemblyLayoutNode(node: LayoutNode): boolean {
@@ -373,6 +428,224 @@ function isConverterBackupCircuitRoot(node: LayoutNode): boolean {
     protection?.circuits?.some((circuit) => circuit.supplySource?.kind === 'converter-backup') ===
     true
   )
+}
+
+function normalizeSupplyConverterGrowth(node: LayoutNode): void {
+  const device = node.domainRef as TrunkDevice | undefined
+  if (
+    node.connectionAnchor &&
+    device &&
+    supportsCircuitConverterDcConnections(device) &&
+    getCircuitConverterDcConnectionCount(device) > 1 &&
+    (device.supplyPath === 'converter-branch' || device.supplyPath === 'backup')
+  ) {
+    const geometry = getSupplyConverterBodyGeometry(device, node.connectionAnchor)
+    node.bounds.x = geometry.center.x
+    node.bounds.y = geometry.center.y
+    node.converterGrowthDirection = 'left'
+  }
+  node.children.forEach(normalizeSupplyConverterGrowth)
+}
+
+function translateLayoutNodeHorizontally(node: LayoutNode, dx: number): void {
+  node.bounds.x += dx
+  if (node.connectionAnchor) node.connectionAnchor.x += dx
+  if (node.hitZone?.dropHintAnchor) node.hitZone.dropHintAnchor.x += dx
+  if (node.nestedChildXs) node.nestedChildXs = node.nestedChildXs.map((x) => x + dx)
+  node.children.forEach((child) => translateLayoutNodeHorizontally(child, dx))
+}
+
+/** Keep a supply DC bus entirely left of its electrical connection after any frame mirroring. */
+function normalizeSupplyDcBusGrowth(node: LayoutNode): void {
+  const nodes: LayoutNode[] = []
+  const visit = (candidate: LayoutNode) => {
+    nodes.push(candidate)
+    candidate.children.forEach(visit)
+  }
+  visit(node)
+  const supplyConverterNode = nodes.find((candidate) => {
+    const candidateDevice = candidate.domainRef as TrunkDevice | undefined
+    return (
+      !!candidateDevice &&
+      supportsCircuitConverterDcConnections(candidateDevice) &&
+      (candidateDevice.supplyPath === 'converter-branch' || candidateDevice.supplyPath === 'backup')
+    )
+  })
+  for (const busNode of nodes) {
+    const busDevice = busNode.domainRef as TrunkDevice | undefined
+    if (!busNode.connectionAnchor || busDevice?.type !== 'dc_bus' || !busDevice.supplyPath) {
+      continue
+    }
+    const branchXs = nodes
+      .filter(
+        (candidate) =>
+          (candidate.domainRef as TrunkDevice | undefined)?.supplyDcBusId === busDevice.id
+      )
+      .map((candidate) => candidate.bounds.x)
+    const isSideConverterOutput = getSupplyConverterDcConnectionIndex(busDevice) === 0
+    const converterSidePortX = isSideConverterOutput
+      ? supplyConverterNode?.connectionAnchor
+        ? getSupplyConverterBodyGeometry(
+            supplyConverterNode.domainRef as TrunkDevice,
+            supplyConverterNode.connectionAnchor
+          ).left
+        : supplyConverterNode
+          ? supplyConverterNode.bounds.x - supplyConverterNode.bounds.width / 2
+          : busNode.connectionAnchor.x
+      : busNode.connectionAnchor.x
+    const attachmentX = isSideConverterOutput
+      ? converterSidePortX - LAYOUT_CONSTANTS.SUPPLY_DC_BUS_CONNECTION_LEAD
+      : converterSidePortX
+    busNode.connectionAnchor.x = attachmentX
+    const busStartX = Math.min(
+      attachmentX - LAYOUT_CONSTANTS.DC_BUS_MIN_WIDTH,
+      ...branchXs.map((branchX) => branchX - LAYOUT_CONSTANTS.SECONDARY_BUS_EXTENSION)
+    )
+    const busEndX = attachmentX
+    busNode.bounds.x = (busStartX + busEndX) / 2
+    busNode.bounds.width = busEndX - busStartX
+
+    const branchGroups = new Map<
+      string,
+      { x: number; firstSupplyIndex: number; nodes: LayoutNode[] }
+    >()
+    for (const candidate of nodes) {
+      const candidateDevice = candidate.domainRef as TrunkDevice | undefined
+      if (candidateDevice?.supplyDcBusId !== busDevice.id) continue
+      const branchId = candidateDevice.supplyDcBusBranchId ?? candidateDevice.id
+      const supplyIndex = candidate.hitZone?.supplyInsertIndex ?? Number.MAX_SAFE_INTEGER
+      const existing = branchGroups.get(branchId)
+      if (!existing) {
+        branchGroups.set(branchId, {
+          x: candidate.bounds.x,
+          firstSupplyIndex: supplyIndex,
+          nodes: [candidate],
+        })
+      } else {
+        existing.firstSupplyIndex = Math.min(existing.firstSupplyIndex, supplyIndex)
+        existing.nodes.push(candidate)
+      }
+    }
+    const visualGroups = [...branchGroups.entries()]
+      .map(([branchId, group]) => ({ branchId, ...group }))
+      .sort((a, b) => a.x - b.x)
+    const finalSupplyIndex = Math.max(
+      (busNode.hitZone?.supplyInsertIndex ?? -1) + 1,
+      visualGroups.reduce((max, group) => Math.max(max, group.firstSupplyIndex), -1) + 1
+    )
+    const waypoints = [busStartX, ...visualGroups.map((group) => group.x), busEndX]
+    busNode.children = busNode.children.filter(
+      (child) =>
+        !child.id.startsWith(`supply-dc-bus-segment-${busDevice.id}-`) &&
+        !child.id.startsWith(`supply-dc-bus-branch-slot-${busDevice.id}-`)
+    )
+    for (let segmentIndex = 0; segmentIndex < waypoints.length - 1; segmentIndex += 1) {
+      const startX = waypoints[segmentIndex]!
+      const endX = waypoints[segmentIndex + 1]!
+      if (endX <= startX) continue
+      const insertIndex =
+        segmentIndex === 0
+          ? finalSupplyIndex
+          : visualGroups[segmentIndex - 1]?.firstSupplyIndex ?? finalSupplyIndex
+      busNode.children.push({
+        id: `supply-dc-bus-segment-${busDevice.id}-${segmentIndex}`,
+        type: 'wire',
+        bounds: {
+          x: startX,
+          y: busNode.connectionAnchor.y - LAYOUT_CONSTANTS.BUS_THICKNESS / 2,
+          width: endX - startX,
+          height: LAYOUT_CONSTANTS.BUS_THICKNESS,
+        },
+        visual: { type: 'busBar', thickness: LAYOUT_CONSTANTS.BUS_THICKNESS },
+        hitZone: {
+          type: 'supplyConverterDcWire',
+          padding: 20,
+          supplyFeedScope: busNode.hitZone?.supplyFeedScope,
+          supplyInsertIndex: insertIndex,
+          supplyPanelId: busNode.hitZone?.supplyPanelId,
+          supplyConverterDcBranch: busNode.hitZone?.supplyConverterDcBranch,
+          supplyConverterDcConnectionIndex:
+            busNode.hitZone?.supplyConverterDcConnectionIndex,
+          supplyDcBusId: busDevice.id,
+        },
+        children: [],
+      })
+    }
+
+    const branchSlotPadding = 12
+    const symbolHalfSize = LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
+    const pushBranchSlot = (
+      group: (typeof visualGroups)[number],
+      slotIndex: number,
+      fromY: number,
+      toY: number,
+      insertIndex: number
+    ) => {
+      const top = Math.min(fromY, toY)
+      const bottom = Math.max(fromY, toY)
+      if (bottom <= top) return
+      busNode.children.push({
+        id: `supply-dc-bus-branch-slot-${busDevice.id}-${group.branchId}-${slotIndex}`,
+        type: 'wire',
+        bounds: {
+          x: group.x - branchSlotPadding,
+          y: top,
+          width: branchSlotPadding * 2,
+          height: bottom - top,
+        },
+        hitZone: {
+          type: 'supplyConverterDcWire',
+          padding: 0,
+          supplyFeedScope: busNode.hitZone?.supplyFeedScope,
+          supplyInsertIndex: insertIndex,
+          supplyPanelId: busNode.hitZone?.supplyPanelId,
+          supplyConverterDcBranch: busNode.hitZone?.supplyConverterDcBranch,
+          supplyConverterDcConnectionIndex:
+            busNode.hitZone?.supplyConverterDcConnectionIndex,
+          supplyDcBusId: busDevice.id,
+          supplyDcBusBranchId: group.branchId,
+          dropHintAnchor: { x: group.x, y: (top + bottom) / 2 },
+        },
+        children: [],
+      })
+    }
+
+    for (const group of visualGroups) {
+      const ordered = [...group.nodes].sort((a, b) => b.bounds.y - a.bounds.y)
+      const first = ordered[0]
+      if (!first) continue
+      pushBranchSlot(
+        group,
+        0,
+        busNode.connectionAnchor.y,
+        first.bounds.y + symbolHalfSize,
+        first.hitZone?.supplyInsertIndex ?? group.firstSupplyIndex
+      )
+      for (let index = 0; index < ordered.length - 1; index += 1) {
+        const lower = ordered[index]!
+        const upper = ordered[index + 1]!
+        pushBranchSlot(
+          group,
+          index + 1,
+          lower.bounds.y - symbolHalfSize,
+          upper.bounds.y + symbolHalfSize,
+          upper.hitZone?.supplyInsertIndex ?? group.firstSupplyIndex + index + 1
+        )
+      }
+      const last = ordered.at(-1)!
+      const appendIndex =
+        (last.hitZone?.supplyInsertIndex ?? group.firstSupplyIndex + ordered.length - 1) + 1
+      pushBranchSlot(
+        group,
+        ordered.length,
+        last.bounds.y - symbolHalfSize,
+        last.bounds.y -
+          LAYOUT_CONSTANTS.SUPPLY_DC_BUS_BRANCH_DEVICE_SPACING +
+          symbolHalfSize,
+        appendIndex
+      )
+    }
+  }
 }
 
 export function mirrorSupplyAssemblyLayoutNodesHorizontally(
@@ -413,7 +686,12 @@ export function mirrorSupplyAssemblyLayoutNodesHorizontally(
 }
 
 function buildPanelNodeForVisualDirection(panelLayout: BottomUpPanelLayout): LayoutNode {
-  if (panelLayout.supplyFlowDirection !== 'left-to-right') return buildPanelNode(panelLayout)
+  if (panelLayout.supplyFlowDirection !== 'left-to-right') {
+    const panelNode = buildPanelNode(panelLayout)
+    normalizeSupplyConverterGrowth(panelNode)
+    normalizeSupplyDcBusGrowth(panelNode)
+    return panelNode
+  }
 
   const scope = panelLayout.frameRole === 'supply' ? 'panel' : 'supply'
   const axisX = panelLayout.supplyMirrorAxisX ?? panelLayout.frame.x + panelLayout.frame.width / 2
@@ -426,6 +704,8 @@ function buildPanelNodeForVisualDirection(panelLayout: BottomUpPanelLayout): Lay
     const panelNode = buildPanelNode(panelLayout)
     if (scope === 'panel') mirrorLayoutNodeHorizontally(panelNode, axisX)
     else mirrorSupplyAssemblyLayoutNodesHorizontally(panelNode, axisX)
+    normalizeSupplyConverterGrowth(panelNode)
+    normalizeSupplyDcBusGrowth(panelNode)
     panelNode.horizontalMirrorAxisX = axisX
     panelNode.horizontalMirrorScope = scope
     return panelNode
@@ -502,10 +782,22 @@ function buildPanelNode(panelLayout: BottomUpPanelLayout): LayoutNode {
     )
     if (supplyDeviceData) {
       const supplyDevice = supplyDeviceData.device
-      const isHorizontalSupplyDevice = !(
-        supplyDevice.supplyPath === 'converter-grid' &&
-        supplyDevice.converterGridPlacement === 'input-leg'
-      )
+      const scalableSupplyConverter =
+        supportsCircuitConverterDcConnections(supplyDevice) &&
+        getCircuitConverterDcConnectionCount(supplyDevice) > 1 &&
+        (supplyDevice.supplyPath === 'converter-branch' || supplyDevice.supplyPath === 'backup')
+      const converterGeometry = scalableSupplyConverter
+        ? getSupplyConverterBodyGeometry(supplyDevice, stdElement.position)
+        : undefined
+      const dcBusWidth = LAYOUT_CONSTANTS.DC_BUS_MIN_WIDTH
+      const nodeCenter = converterGeometry?.center ??
+        (supplyDevice.type === 'dc_bus'
+          ? {
+              x: stdElement.position.x - dcBusWidth / 2,
+              y: stdElement.position.y,
+            }
+          : stdElement.position)
+      const isHorizontalSupplyDevice = !isVerticalSupplyDevice(supplyDevice)
       const rotatesProtectionArtwork =
         isHorizontalSupplyDevice &&
         supplyDevice.type === 'protection' &&
@@ -514,11 +806,21 @@ function buildPanelNode(panelLayout: BottomUpPanelLayout): LayoutNode {
         id: stdElement.id,
         type: 'trunkDevice',
         bounds: {
-          x: stdElement.position.x,
-          y: stdElement.position.y,
-          width: LAYOUT_CONSTANTS.SYMBOL_SIZE,
+          x: nodeCenter.x,
+          y: nodeCenter.y,
+          width: converterGeometry
+            ? converterGeometry.width +
+              (LAYOUT_CONSTANTS.SYMBOL_SIZE - CIRCUIT_CONVERTER_BLOCK_SIZE)
+            : supplyDevice.type === 'dc_bus'
+              ? dcBusWidth
+              : LAYOUT_CONSTANTS.SYMBOL_SIZE,
           height: LAYOUT_CONSTANTS.SYMBOL_SIZE,
         },
+        connectionAnchor:
+          converterGeometry || supplyDevice.type === 'dc_bus'
+            ? { ...stdElement.position }
+            : undefined,
+        converterGrowthDirection: converterGeometry ? 'left' : undefined,
         domainId: supplyDeviceData.device.id,
         domainRef: supplyDeviceData.device,
         visual: {
@@ -536,7 +838,9 @@ function buildPanelNode(panelLayout: BottomUpPanelLayout): LayoutNode {
               : supplyDeviceData.device.supplyPath === 'converter-branch' ||
                   supplyDeviceData.device.supplyPath === 'converter-dc' ||
                   supplyDeviceData.device.supplyPath === 'converter-dc-top'
-                ? null
+                ? supplyDevice.type === 'dc_bus' || !!supplyDevice.supplyDcBusId
+                  ? 'supplyConverterDcWire'
+                  : null
                 : supplyDeviceData.device.supplyPath === 'backup-output'
                   ? 'supplyBackupOutputWire'
                   : supplyDeviceData.device.supplyPath === 'changeover-grid'
@@ -549,6 +853,27 @@ function buildPanelNode(panelLayout: BottomUpPanelLayout): LayoutNode {
           supplyFeedScope: supplyDeviceData.feedScope,
           supplyInsertIndex: supplyDeviceData.feedIndex,
           supplyPanelId: panelLayout.panel.id,
+          ...(supplyDevice.type === 'dc_bus'
+            ? {
+                supplyConverterDcBranch:
+                  supplyDevice.supplyPath === 'converter-dc-top' ? ('top' as const) : ('right' as const),
+                supplyConverterDcConnectionIndex:
+                  supplyDevice.supplyConverterDcConnectionIndex ??
+                  (supplyDevice.supplyPath === 'converter-dc-top' ? 1 : 0),
+                supplyDcBusId: supplyDevice.id,
+              }
+            : {}),
+          ...(supplyDevice.supplyDcBusId
+            ? {
+                supplyConverterDcBranch:
+                  supplyDevice.supplyPath === 'converter-dc-top' ? ('top' as const) : ('right' as const),
+                supplyConverterDcConnectionIndex:
+                  supplyDevice.supplyConverterDcConnectionIndex ??
+                  (supplyDevice.supplyPath === 'converter-dc-top' ? 1 : 0),
+                supplyDcBusId: supplyDevice.supplyDcBusId,
+                supplyDcBusBranchId: supplyDevice.supplyDcBusBranchId,
+              }
+            : {}),
           ...(supplyDeviceData.device.supplyPath === 'converter-grid'
             ? {
                 converterGridPlacement: supplyDeviceData.device.converterGridPlacement ?? 'inline',
@@ -1574,23 +1899,21 @@ function buildMainBusNode(
         })
       }
 
-      const dcDevices = devices
-        .filter((candidate) => candidate.device.supplyPath === 'converter-dc')
-        .sort((a, b) => a.x - b.x)
-      const dcTopDevices = devices
-        .filter((candidate) => candidate.device.supplyPath === 'converter-dc-top')
-        .sort((a, b) => a.x - b.x)
       const pushDcInsertionSegment = (
         branch: 'right' | 'top',
+        connectionIndex: number,
         segmentIndex: number,
         x1: number,
         x2: number,
         y: number,
-        insertIndex: number
+        insertIndex: number,
+        dropHintAnchor?: { x: number; y: number }
       ) => {
         if (x2 <= x1) return
+        const branchKey =
+          branch === 'right' ? 'right' : connectionIndex === 1 ? 'top' : `top-${connectionIndex}`
         children.unshift({
-          id: `supply-direct-converter-dc-${branch}-slot-${panelLayout.panel.id}-${segmentIndex}`,
+          id: `supply-direct-converter-dc-${branchKey}-slot-${panelLayout.panel.id}-${segmentIndex}`,
           type: 'wire',
           bounds: {
             x: x1 - pad,
@@ -1605,13 +1928,16 @@ function buildMainBusNode(
             supplyInsertIndex: insertIndex,
             supplyPanelId: panelLayout.panel.id,
             supplyConverterDcBranch: branch,
+            supplyConverterDcConnectionIndex: connectionIndex,
+            dropHintAnchor,
           },
           children: [],
         })
       }
       const pushDcLaneInsertionSegments = (
         branch: 'right' | 'top',
-        branchDevices: typeof dcDevices,
+        connectionIndex: number,
+        branchDevices: typeof devices,
         startX: number,
         endX: number,
         y: number
@@ -1619,40 +1945,96 @@ function buildMainBusNode(
         let previousX = startX
         branchDevices.forEach((candidate, index) => {
           const nextX = candidate.x - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
-          pushDcInsertionSegment(branch, index, previousX, nextX, y, candidate.feedIndex)
+          pushDcInsertionSegment(
+            branch,
+            connectionIndex,
+            index,
+            previousX,
+            nextX,
+            y,
+            candidate.feedIndex
+          )
           previousX = candidate.x + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
         })
         const appendIndex =
           branchDevices.at(-1)?.feedIndex != null
             ? branchDevices.at(-1)!.feedIndex + 1
             : converter.feedIndex + 1
-        pushDcInsertionSegment(branch, branchDevices.length, previousX, endX, y, appendIndex)
+        pushDcInsertionSegment(
+          branch,
+          connectionIndex,
+          branchDevices.length,
+          previousX,
+          endX,
+          y,
+          appendIndex,
+          { x: endX, y }
+        )
       }
-      pushDcLaneInsertionSegments(
-        'right',
-        dcDevices,
-        converter.x + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2,
-        converterBranch.dcEndX,
-        converter.y
-      )
-      if ((dcDevices.length > 0 || dcTopDevices.length > 0) && converterBranch.dcTopY != null) {
-        if (dcTopDevices.length === 0) {
-          const emptyTopDropY = converter.y - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2 - 10
+      const dcPorts = converterBranch.dcPorts ?? []
+      for (const port of dcPorts) {
+        const branch = port.connectionIndex === 0 ? 'right' : 'top'
+        const branchDevices = devices
+          .filter(
+            (candidate) =>
+              getSupplyConverterDcConnectionIndex(candidate.device) === port.connectionIndex
+          )
+          .sort((a, b) => a.x - b.x)
+        if (port.connectionIndex === 0) {
+          pushDcLaneInsertionSegments(
+            branch,
+            port.connectionIndex,
+            branchDevices,
+            converter.x + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2,
+            port.endX,
+            port.y
+          )
+          continue
+        }
+        const converterTopY = getSupplyConverterBodyGeometry(
+          converter.device,
+          converter
+        ).top
+        children.unshift({
+          id: `supply-direct-converter-dc-top-${port.connectionIndex}-vertical-${panelLayout.panel.id}`,
+          type: 'wire',
+          bounds: {
+            x: port.x - pad,
+            y: Math.min(port.y, converterTopY) - pad,
+            width: pad * 2,
+            height: Math.abs(converterTopY - port.y) + pad * 2,
+          },
+          hitZone: {
+            type: 'supplyConverterDcWire',
+            padding: 0,
+            supplyFeedScope: 'root',
+            supplyInsertIndex: branchDevices[0]?.feedIndex ?? converter.feedIndex + 1,
+            supplyPanelId: panelLayout.panel.id,
+            supplyConverterDcBranch: 'top',
+            supplyConverterDcConnectionIndex: port.connectionIndex,
+            suppressDropHint: true,
+          },
+          children: [],
+        })
+        if (branchDevices.length === 0) {
           pushDcInsertionSegment(
             'top',
+            port.connectionIndex,
             0,
-            converter.x - 1,
-            converter.x + 1,
-            emptyTopDropY,
-            converter.feedIndex + 1
+            port.x - 1,
+            port.x + 1,
+            port.y,
+            converter.feedIndex + 1,
+            { x: port.x, y: port.y }
           )
         } else {
           pushDcLaneInsertionSegments(
             'top',
-            dcTopDevices,
-            converter.x,
-            converterBranch.dcTopEndX ?? converterBranch.dcEndX,
-            converterBranch.dcTopY
+            port.connectionIndex,
+            branchDevices,
+            port.x,
+            port.endX,
+            port.y
           )
         }
       }
@@ -1895,6 +2277,317 @@ function buildRcdNode(
     },
     children,
   }
+}
+
+function buildCircuitConverterDcConnectionNodes(
+  panelLayout: BottomUpPanelLayout,
+  circuit: Circuit,
+  device: TrunkDevice,
+  anchor: { x: number; y: number },
+  metadataCallouts: Map<string, CircuitConverterMetadataCallout>
+): LayoutNode[] {
+  if (!supportsCircuitConverterDcConnections(device)) return []
+
+  const count = getCircuitConverterDcConnectionCount(device)
+  const geometry = getCircuitConverterBodyGeometry(device, anchor)
+  const branchOrder = new Map<string, number>()
+  let endpointOrder = 0
+  for (const branch of circuit.branches ?? []) {
+    for (const endpointId of branch.endpointIds) {
+      branchOrder.set(endpointId, endpointOrder++)
+    }
+  }
+
+  if (count <= 1) return []
+  const primaryBranch = getCircuitConverterPrimaryBranch(circuit, device)
+  const primaryIds = new Set(primaryBranch?.endpointIds ?? [])
+
+  const outputNodes = Array.from({ length: count }, (_, connectionIndex): LayoutNode => {
+    const connection = { converterId: device.id, connectionIndex }
+    const port = geometry.dcPorts[connectionIndex]!
+    const rowY = getCircuitConverterOutputRowY(device, anchor.y, connectionIndex)
+    const endpoints = circuit.endpoints
+      .filter((endpoint) =>
+        connectionIndex === 0
+          ? primaryIds.has(endpoint.id)
+          : endpoint.converterDcConnection?.converterId === device.id &&
+            endpoint.converterDcConnection.connectionIndex === connectionIndex
+      )
+      .sort(
+        (a, b) =>
+          (branchOrder.get(a.id) ?? circuit.endpoints.indexOf(a)) -
+          (branchOrder.get(b.id) ?? circuit.endpoints.indexOf(b))
+      )
+    const linkedDevices = (circuit.trunkDevices ?? []).filter(
+      (candidate) =>
+        candidate.converterDcConnection?.converterId === device.id &&
+        candidate.converterDcConnection.connectionIndex === connectionIndex
+    )
+    const chainLength = linkedDevices.length + endpoints.length
+    const endpointOffsets = getEndpointXOffsets(
+      endpoints,
+      CIRCUIT_CONVERTER_OUTPUT_BRANCH_LEAD,
+      LAYOUT_CONSTANTS.ENDPOINT_HORIZONTAL_SPACING,
+      LAYOUT_CONSTANTS.APPLIANCE_AFTER_SOCKET_GAP
+    )
+    const itemX = (index: number) =>
+      chainLength === 1
+        ? port.x
+        : port.x +
+          CIRCUIT_CONVERTER_OUTPUT_BRANCH_LEAD +
+          index * LAYOUT_CONSTANTS.ENDPOINT_HORIZONTAL_SPACING
+    const deviceNodes: LayoutNode[] = linkedDevices.map((linkedDevice, deviceIndex) => {
+      const linkedBusCircuitIds =
+        linkedDevice.type === 'dc_bus'
+          ? linkedDevice.dcBusProps?.branchCircuitIds ??
+            (circuit.subCircuitIds ?? []).filter((circuitId) => {
+              const child = panelLayout.circuits.find((layout) => layout.circuit.id === circuitId)
+              return child?.circuit.dcBusSource?.busId === linkedDevice.id
+            })
+          : []
+      const linkedBusLayouts = linkedBusCircuitIds
+        .map((circuitId) => panelLayout.circuits.find((layout) => layout.circuit.id === circuitId))
+        .filter((layout): layout is BottomUpCircuitLayout => !!layout)
+      const linkedBusEntries = linkedBusLayouts.flatMap((layout) => {
+        const node = buildMcbNode(panelLayout, layout)
+        return node ? [{ layout, node }] : []
+      })
+      const linkedBusChildren = linkedBusEntries.map(({ node }) => node)
+      const baseX = itemX(deviceIndex)
+      if (linkedDevice.type === 'dc_bus') {
+        const baseWidth = Math.max(
+          LAYOUT_CONSTANTS.PROTECTION_WIDTH,
+          LAYOUT_CONSTANTS.SYMBOL_SIZE
+        )
+        let nextAnchorX = baseX + LAYOUT_CONSTANTS.DC_BUS_BRANCH_LEAD_IN
+        linkedBusEntries.forEach(({ layout, node }, branchIndex) => {
+          const anchorOffset = layout.leftReserve + baseWidth / 2
+          const targetX = nextAnchorX
+          translateLayoutNodeHorizontally(node, targetX - node.bounds.x)
+          const rightReach = Math.max(0, layout.width - anchorOffset)
+          const nextLayout = linkedBusEntries[branchIndex + 1]?.layout
+          const nextLeftReach = nextLayout ? nextLayout.leftReserve + baseWidth / 2 : 0
+          nextAnchorX =
+            targetX +
+            rightReach +
+            LAYOUT_CONSTANTS.CIRCUIT_ENVELOPE_GUTTER +
+            nextLeftReach
+        })
+      }
+      const attachmentXs = linkedBusChildren.map((node) => node.bounds.x)
+      const minX = baseX
+      const maxX = Math.max(
+        baseX + LAYOUT_CONSTANTS.DC_BUS_MIN_WIDTH,
+        ...attachmentXs.map((x) => x + LAYOUT_CONSTANTS.SECONDARY_BUS_EXTENSION)
+      )
+      const busSegments: LayoutNode[] = []
+      if (linkedDevice.type === 'dc_bus') {
+        const waypoints = [minX, ...[...attachmentXs].sort((a, b) => a - b), maxX]
+        for (let segmentIndex = 0; segmentIndex < waypoints.length - 1; segmentIndex += 1) {
+          const startX = waypoints[segmentIndex]!
+          const endX = waypoints[segmentIndex + 1]!
+          if (endX <= startX) continue
+          busSegments.push({
+            id: `secondary-bus-segment-${circuit.id}-${linkedDevice.id}-${segmentIndex}`,
+            type: 'wire',
+            bounds: {
+              x: startX,
+              y: rowY - LAYOUT_CONSTANTS.BUS_THICKNESS / 2,
+              width: endX - startX,
+              height: LAYOUT_CONSTANTS.BUS_THICKNESS,
+            },
+            visual: { type: 'busBar', thickness: LAYOUT_CONSTANTS.BUS_THICKNESS },
+            hitZone: {
+              type: 'circuit',
+              padding: 20,
+              converterDcConnection: connection,
+              dcBusId: linkedDevice.id,
+            },
+            children: [],
+          })
+        }
+      }
+      return {
+        id: `converter-dc-device-${device.id}-${connectionIndex}-${linkedDevice.id}`,
+        type: 'trunkDevice',
+        bounds: {
+          x: linkedDevice.type === 'dc_bus' ? (minX + maxX) / 2 : baseX,
+          y: rowY,
+          width:
+            linkedDevice.type === 'dc_bus'
+              ? Math.max(LAYOUT_CONSTANTS.DC_BUS_MIN_WIDTH, maxX - minX)
+              : LAYOUT_CONSTANTS.SYMBOL_SIZE,
+          height: LAYOUT_CONSTANTS.SYMBOL_SIZE,
+        },
+        connectionAnchor:
+          linkedDevice.type === 'dc_bus' ? { x: baseX, y: rowY } : undefined,
+        domainId: linkedDevice.id,
+        domainRef: linkedDevice,
+        visual: {
+          type: 'symbol',
+          symbolId: linkedDevice.symbol,
+          label: linkedDevice.label,
+        },
+        hitZone: {
+          type: 'circuit',
+          padding: 15,
+          converterDcConnection: connection,
+          ...(linkedDevice.type === 'dc_bus' ? { dcBusId: linkedDevice.id } : {}),
+        },
+        children: [...busSegments, ...linkedBusChildren],
+        ...(linkedBusChildren.length > 0
+          ? { nestedChildXs: linkedBusChildren.map((node) => node.bounds.x) }
+          : {}),
+      }
+    })
+    const isSingleEndpoint = chainLength === 1
+    const endpointNodes: LayoutNode[] = endpoints.map((endpoint, endpointIndex) => ({
+      id: `converter-dc-endpoint-${device.id}-${connectionIndex}-${endpoint.id}`,
+      type: 'endpoint',
+      bounds: {
+        x:
+          linkedDevices.length === 0
+            ? endpoints.length === 1
+              ? port.x
+              : port.x +
+                (endpointOffsets[endpointIndex] ?? CIRCUIT_CONVERTER_OUTPUT_BRANCH_LEAD)
+            : itemX(linkedDevices.length + endpointIndex),
+        y: rowY,
+        width: LAYOUT_CONSTANTS.SYMBOL_SIZE,
+        height: LAYOUT_CONSTANTS.SYMBOL_SIZE,
+      },
+      domainId: endpoint.id,
+      domainRef: endpoint,
+      visual: {
+        type: 'symbol',
+        symbolId: endpoint.symbol || getDefaultSymbolForEndpointType(endpoint.type),
+        label: endpoint.label,
+        isEndpointAtBranchEnd: endpointIndex === endpoints.length - 1,
+      },
+      hitZone: { type: 'endpoint', padding: 15 },
+      children: [],
+    }))
+
+    const chainNodes = [...deviceNodes, ...endpointNodes].sort((a, b) => a.bounds.x - b.bounds.x)
+    const wireRight = chainNodes.at(-1)?.bounds.x ?? port.x
+    const storedBranch = (circuit.branches ?? []).find((branch) =>
+      branch.endpointIds.some((endpointId) =>
+        endpoints.some((endpoint) => endpoint.id === endpointId)
+      )
+    )
+    const labelText =
+      `${getEndpointBranchLabelPrefix(circuit)}${connectionIndex + 1}` ||
+      storedBranch?.label?.trim() ||
+      ''
+    const hitPadding = 9
+    const verticalHitNode: LayoutNode = {
+      id: `converter-dc-output-hit-${device.id}-${connectionIndex}-vertical`,
+      type: 'wire',
+      bounds: {
+        x: port.x - hitPadding,
+        y: Math.min(port.y, rowY) - hitPadding,
+        width: hitPadding * 2,
+        height: Math.abs(port.y - rowY) + hitPadding * 2,
+      },
+      domainId: device.id,
+      domainRef: device,
+      hitZone: {
+        type: 'circuit',
+        padding: 0,
+        converterDcConnection: connection,
+        suppressDropHint: true,
+      },
+      children: [],
+    }
+    const horizontalHitNode: LayoutNode = {
+      id: `converter-dc-output-hit-${device.id}-${connectionIndex}-horizontal`,
+      type: 'wire',
+      bounds: {
+        x: port.x - hitPadding,
+        y: rowY - hitPadding,
+        width: Math.max(hitPadding * 2, wireRight - port.x + hitPadding * 2),
+        height: hitPadding * 2,
+      },
+      domainId: device.id,
+      domainRef: device,
+      hitZone: {
+        type: 'circuit',
+        padding: 0,
+        converterDcConnection: connection,
+        suppressDropHint: true,
+      },
+      children: [],
+    }
+
+    return {
+      id: `converter-dc-output-${device.id}-${connectionIndex}`,
+      type: 'branch',
+      bounds: {
+        x: isSingleEndpoint ? port.x - 14 : port.x,
+        y: rowY - 10,
+        width: isSingleEndpoint
+          ? 28
+          : Math.max(CIRCUIT_CONVERTER_OUTPUT_BRANCH_LEAD, wireRight - port.x),
+        height: 20,
+      },
+      domainId: `converter-dc-output-${device.id}-${connectionIndex}`,
+      hitZone: { type: 'circuit', padding: 0, converterDcConnection: connection },
+      children: [
+        verticalHitNode,
+        ...(chainLength <= 1 ? [] : [horizontalHitNode]),
+        ...deviceNodes,
+        ...endpointNodes,
+        ...(labelText
+          ? [
+              {
+                id: `converter-dc-output-label-${device.id}-${connectionIndex}`,
+                type: 'label' as const,
+                bounds: {
+                  x: anchor.x - LAYOUT_CONSTANTS.LABEL_OFFSET,
+                  y: rowY,
+                  width: 100,
+                  height: 20,
+                },
+                visual: {
+                  type: 'label' as const,
+                  text: labelText,
+                  fontSize: 12,
+                  align: 'right' as const,
+                },
+                children: [],
+              },
+            ]
+          : []),
+      ],
+    }
+  })
+
+  const metadataCalloutByTargetId = new Map<string, CircuitConverterMetadataCallout>()
+  metadataCallouts.forEach((callout) => {
+    callout.sharedTargetIds.forEach((targetId) => metadataCalloutByTargetId.set(targetId, callout))
+  })
+  outputNodes.forEach((outputNode) => {
+    outputNode.children.forEach((node) => {
+      if (node.type !== 'endpoint' || node.visual?.type !== 'symbol' || !node.domainId) return
+      const callout = metadataCalloutByTargetId.get(node.domainId)
+      if (!callout) return
+      if (callout.targetId !== node.domainId) {
+        node.visual.suppressMetadataLabel = true
+        return
+      }
+      node.visual.metadataCallout = {
+        x: callout.x,
+        y: callout.y,
+        width: callout.width,
+        height: callout.height,
+        leaderPoints: callout.leaderPoints,
+        leaderSegments: callout.leaderSegments,
+        targetIds: callout.sharedTargetIds,
+        totalMultiplier: callout.totalMultiplier,
+      }
+    })
+  })
+  return outputNodes
 }
 
 function buildMcbNode(
@@ -2202,9 +2895,18 @@ function buildMcbNode(
   const circuitBranches = panelLayout.branches.filter(
     (b) => b.circuitId === circuitLayout.circuit.id
   )
+  const converterPrimaryEndpointIds = getCircuitConverterPrimaryEndpointIds(circuitLayout.circuit)
   for (const branch of circuitBranches) {
     // Skip empty branches for sub-panel circuits (the vertical wire is handled via the MCB → panel symbol)
     if (subPanelSymbolElement && branch.endpoints.length === 0) {
+      continue
+    }
+    if (
+      branch.endpoints.some(
+        (endpoint) =>
+          isCircuitConverterDcChild(endpoint) || converterPrimaryEndpointIds.has(endpoint.id)
+      )
+    ) {
       continue
     }
     const branchNode = buildBranchNode(panelLayout, branch, circuitLayout.circuit.id)
@@ -2219,28 +2921,70 @@ function buildMcbNode(
       (d) => d.id === tdElement.trunkDeviceId
     )
     if (trunkDevice) {
+      const scalableConverter = supportsCircuitConverterDcConnections(trunkDevice)
+      const converterGeometry = scalableConverter
+        ? getCircuitConverterBodyGeometry(trunkDevice, tdElement.position)
+        : undefined
+      const nodeCenter = converterGeometry?.center ?? tdElement.position
+      const converterMetadataCallouts = converterGeometry
+        ? getCircuitConverterMetadataCallouts({
+            circuit: circuitLayout.circuit,
+            device: trunkDevice,
+            anchor: tdElement.position,
+            symbolSize: LAYOUT_CONSTANTS.SYMBOL_SIZE,
+            endpointSpacing: LAYOUT_CONSTANTS.ENDPOINT_HORIZONTAL_SPACING,
+            applianceAfterSocketGap: LAYOUT_CONSTANTS.APPLIANCE_AFTER_SOCKET_GAP,
+          })
+        : new Map<string, CircuitConverterMetadataCallout>()
+      const converterChildren = converterGeometry
+          ? buildCircuitConverterDcConnectionNodes(
+            panelLayout,
+            circuitLayout.circuit,
+            trunkDevice,
+            tdElement.position,
+            converterMetadataCallouts
+          )
+        : []
+      const converterCallout = converterMetadataCallouts.get(trunkDevice.id)
       children.push({
         id: tdElement.id,
         type: 'trunkDevice',
         bounds: {
-          x: tdElement.position.x,
-          y: tdElement.position.y,
-          width: LAYOUT_CONSTANTS.SYMBOL_SIZE,
+          x: nodeCenter.x,
+          y: nodeCenter.y,
+          width: converterGeometry
+            ? converterGeometry.width +
+              (LAYOUT_CONSTANTS.SYMBOL_SIZE - CIRCUIT_CONVERTER_BLOCK_SIZE)
+            : trunkDevice.type === 'dc_bus'
+              ? LAYOUT_CONSTANTS.DC_BUS_MIN_WIDTH
+              : LAYOUT_CONSTANTS.SYMBOL_SIZE,
           height: LAYOUT_CONSTANTS.SYMBOL_SIZE,
         },
+        connectionAnchor: converterGeometry ? { ...tdElement.position } : undefined,
+        converterGrowthDirection: converterGeometry ? 'right' : undefined,
         domainId: trunkDevice.id,
         domainRef: trunkDevice,
         visual: {
           type: 'symbol',
           symbolId: trunkDevice.symbol || 'energy_meter',
           label: trunkDevice.label,
+          metadataCallout: converterCallout
+            ? {
+                x: converterCallout.x,
+                y: converterCallout.y,
+                width: converterCallout.width,
+                height: converterCallout.height,
+                leaderPoints: converterCallout.leaderPoints,
+                leaderSegments: converterCallout.leaderSegments,
+              }
+            : undefined,
         },
         hitZone: {
           type: 'circuit', // Clicking a trunk device targets the circuit
           // Larger padding so trunk devices (energy conversion, meters) are easy to click.
           padding: 10,
         },
-        children: [],
+        children: converterChildren,
       })
     }
   }
@@ -2267,16 +3011,31 @@ function buildMcbNode(
     })
   }
 
-  // Add nested circuits (sub-circuits) — look up by ID, not duplicated objects
-  if (circuitLayout.circuit.subCircuitIds && circuitLayout.circuit.subCircuitIds.length > 0) {
+  // Add nested circuits (sub-circuits) — look up by ID, not duplicated objects.
+  // A DC bus remains visible and droppable before it has its first outgoing branch.
+  const circuitDcBusDevice = (circuitLayout.circuit.trunkDevices ?? []).find(
+    (device) => device.type === 'dc_bus' && !device.converterDcConnection
+  )
+  if ((circuitLayout.circuit.subCircuitIds?.length ?? 0) > 0 || circuitDcBusDevice) {
+    const converterLinkedDcBusIds = new Set(
+      (circuitLayout.circuit.trunkDevices ?? [])
+        .filter((device) => device.type === 'dc_bus' && !!device.converterDcConnection)
+        .map((device) => device.id)
+    )
     // When there are multiple nested circuits, create a secondary bus node for them.
     // Use the subCircuitIds list itself to find their layouts, so this works even
     // when parentCircuit metadata is missing or not set.
-    const nestedLayouts = circuitLayout.circuit.subCircuitIds
+    const nestedLayouts = (circuitLayout.circuit.subCircuitIds ?? [])
       .map((nestedId) => panelLayout.circuits.find((cl) => cl.circuit.id === nestedId))
       .filter((cl): cl is (typeof panelLayout.circuits)[number] => cl !== undefined)
+      .filter(
+        (cl) =>
+          !cl.circuit.dcBusSource ||
+          !converterLinkedDcBusIds.has(cl.circuit.dcBusSource.busId)
+      )
 
-    if (nestedLayouts.length > 1) {
+    const dcBusDevice = circuitDcBusDevice
+    if (nestedLayouts.length > 1 || dcBusDevice) {
       const baseWidth = Math.max(LAYOUT_CONSTANTS.PROTECTION_WIDTH, LAYOUT_CONSTANTS.SYMBOL_SIZE)
       const nestedXs = nestedLayouts.map((cl) => {
         const protEl =
@@ -2297,17 +3056,21 @@ function buildMcbNode(
         return protEl ? protEl.position.x : cl.x + cl.leftReserve + baseWidth / 2
       })
 
-      if (nestedXs.length > 0) {
+      if (nestedXs.length > 0 || dcBusDevice) {
         const secondaryBusAttachmentXs =
           hasPanelAttachmentOnSecondaryBus(circuitLayout.protection, circuitLayout.circuit) &&
           subPanelSymbolElement
             ? [subPanelSymbolElement.position.x, ...nestedXs]
-            : nestedXs
+            : nestedXs.length > 0
+              ? nestedXs
+              : [wireX]
         const leftmostX = Math.min(...secondaryBusAttachmentXs)
         const rightmostX = Math.max(...secondaryBusAttachmentXs)
         const extension = LAYOUT_CONSTANTS.SECONDARY_BUS_EXTENSION
-        const busStartX = leftmostX - extension
-        const busEndX = rightmostX + extension
+        const busStartX = dcBusDevice ? wireX : leftmostX - extension
+        const busEndX = dcBusDevice
+          ? Math.max(wireX + LAYOUT_CONSTANTS.DC_BUS_MIN_WIDTH, rightmostX + extension)
+          : rightmostX + extension
 
         const busThickness = LAYOUT_CONSTANTS.BUS_THICKNESS
         const busYTop = topWireY - busThickness / 2
@@ -2326,7 +3089,7 @@ function buildMcbNode(
           if (endX <= startX) continue
 
           secondaryBusSegments.push({
-            id: `secondary-bus-segment-${circuitLayout.circuit.id}-${i}`,
+            id: `secondary-bus-segment-${circuitLayout.circuit.id}-${secondaryBusSegments.length}`,
             type: 'wire',
             bounds: {
               x: startX,
@@ -2344,6 +3107,7 @@ function buildMcbNode(
               // Per-segment safety margin around the visual core, rendered as
               // the dashed outline in hitbox debug (like other hit zones).
               padding: 20,
+              ...(dcBusDevice ? { dcBusId: dcBusDevice.id } : {}),
             },
             children: [],
           })
@@ -2370,6 +3134,7 @@ function buildMcbNode(
             // segment instead of one big padded box.
             type: null,
             padding: 0,
+            ...(dcBusDevice ? { dcBusId: dcBusDevice.id } : {}),
           },
           // Child wire segments model the individual visual bus sections.
           // Store nested child X positions as metadata for insertion logic.
@@ -2378,12 +3143,36 @@ function buildMcbNode(
         }
 
         children.push(secondaryBusNode)
+
+        if (dcBusDevice) {
+          const dcBusNode = children.find(
+            (candidate) =>
+              candidate.type === 'trunkDevice' && candidate.domainId === dcBusDevice.id
+          )
+          if (dcBusNode) {
+            dcBusNode.bounds.x = (busStartX + busEndX) / 2
+            dcBusNode.bounds.y = topWireY
+            dcBusNode.bounds.width = busEndX - busStartX
+            dcBusNode.connectionAnchor = { x: wireX, y: topWireY }
+            dcBusNode.hitZone = {
+              type: 'circuit',
+              padding: 20,
+              dcBusId: dcBusDevice.id,
+            }
+          }
+        }
       }
     }
 
-    for (const nestedId of circuitLayout.circuit.subCircuitIds) {
+    for (const nestedId of circuitLayout.circuit.subCircuitIds ?? []) {
       const nestedLayout = panelLayout.circuits.find((cl) => cl.circuit.id === nestedId)
       if (!nestedLayout) continue
+      if (
+        nestedLayout.circuit.dcBusSource &&
+        converterLinkedDcBusIds.has(nestedLayout.circuit.dcBusSource.busId)
+      ) {
+        continue
+      }
 
       const mergeNestedFeederOntoParentMcb =
         !!nestedLayout.protection &&

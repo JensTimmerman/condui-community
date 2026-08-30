@@ -5,10 +5,12 @@ import CustomDropdown from '@/components/common/CustomDropdown'
 import { DebouncedNumberInput } from '@/components/forms'
 import { resolvePlanCanvasPxPerMeter, usePlanGrid } from '@/hooks/plan'
 import {
+  isSpiralStair,
   stairCanvasUnitsToCentimeters,
   stairCentimetersToCanvasUnits,
 } from '@/lib/plan/stairPlanScale'
 import type { Floor, Stair, StairCornerMode } from '@/types/schema'
+import { StairUpArrowDirectionPicker } from './StairUpArrowDirectionPicker'
 
 interface StairPropertiesProps {
   stair: Stair
@@ -44,6 +46,8 @@ export function StairProperties({ stair, floor, selectedPointIndices = [] }: Sta
   const effectivePointMode: StairCornerMode | '' =
     effectiveModes.length === 0 ? '' : hasMixedPointModes ? '' : effectiveModes[0]!
   const overrideCount = Object.keys(stair.cornerModeOverrides ?? {}).length
+  const spiralStair = isSpiralStair(stair)
+  const spiralSweepDegrees = stair.spiralSweepDegrees ?? 360
 
   return (
     <div className="space-y-4">
@@ -85,6 +89,30 @@ export function StairProperties({ stair, floor, selectedPointIndices = [] }: Sta
           className="w-full rounded border border-gray-300 bg-white px-2 py-1 text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
         />
       </div>
+      {spiralStair && (
+        <div>
+          <label className="mb-1 block text-xs font-medium text-gray-700 dark:text-gray-300">
+            {t('stairs.spiralSweepDegrees', 'Spiral sweep')} (°)
+          </label>
+          <DebouncedNumberInput
+            type="number"
+            min={90}
+            max={360}
+            step={15}
+            value={Math.round(spiralSweepDegrees)}
+            minValue={90}
+            maxValue={360}
+            fallbackValue={360}
+            onCommit={(nextSweep) =>
+              updateStair(stair.id, {
+                spiralSweepDegrees: Math.max(90, Math.min(360, Math.round(nextSweep))),
+              })
+            }
+            className="w-full rounded border border-gray-300 bg-white px-2 py-1 text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
+          />
+        </div>
+      )}
+      {!spiralStair && (
       <div>
         <label className="mb-1 block text-xs font-medium text-gray-700 dark:text-gray-300">
           {t('stairs.cornerStyle', 'Corner style')}
@@ -99,6 +127,8 @@ export function StairProperties({ stair, floor, selectedPointIndices = [] }: Sta
           className="w-full rounded border border-gray-300 bg-white px-2 py-1 text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
         />
       </div>
+      )}
+      {!spiralStair && (
       <div>
         <label className="mb-1 block text-xs font-medium text-gray-700 dark:text-gray-300">
           {t('stairs.defaultPointBehavior', 'Default point behavior')}
@@ -120,27 +150,13 @@ export function StairProperties({ stair, floor, selectedPointIndices = [] }: Sta
           </p>
         )}
       </div>
-      <div className="space-y-2 rounded border border-gray-200 p-3 dark:border-gray-700">
-        <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-          <input
-            type="checkbox"
-            checked={!!stair.showUpArrow}
-            onChange={(e) => updateStair(stair.id, { showUpArrow: e.target.checked })}
-            className="rounded border-gray-300 dark:border-gray-600"
-          />
-          {t('stairs.drawUpArrows', 'Draw up arrows')}
-        </label>
-        <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-          <input
-            type="checkbox"
-            checked={!!stair.invertUpArrow}
-            onChange={(e) => updateStair(stair.id, { invertUpArrow: e.target.checked })}
-            className="rounded border-gray-300 dark:border-gray-600"
-          />
-          {t('stairs.invertUpArrow', 'Invert arrow direction')}
-        </label>
-      </div>
-      {overrideKeys.length > 0 && (
+      )}
+      <StairUpArrowDirectionPicker
+        stair={stair}
+        spiralStair={spiralStair}
+        onChange={(patch) => updateStair(stair.id, patch)}
+      />
+      {!spiralStair && overrideKeys.length > 0 && (
         <div className="space-y-2 rounded border border-amber-300 bg-amber-50/60 p-3 dark:border-amber-500/50 dark:bg-amber-400/10">
           <label className="mb-1 block text-xs font-medium text-gray-700 dark:text-gray-300">
             {t(

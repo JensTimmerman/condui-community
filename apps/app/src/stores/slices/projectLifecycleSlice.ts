@@ -13,7 +13,13 @@ import { forceHouseholdInstallationProfile } from '@/lib/installationProfile'
 import { getMutableElectricalInstallationForProject } from '@/lib/projectV2/electrical'
 import { summarizeConverterDcPersistence } from '@/lib/supplyAssembly/persistenceDiagnostics'
 
-let activeSavePromise: Promise<void> | null = null
+let saveQueueTail: Promise<void> = Promise.resolve()
+
+function enqueueProjectSave(task: () => Promise<void>): Promise<void> {
+  const run = saveQueueTail.catch(() => undefined).then(task)
+  saveQueueTail = run
+  return run
+}
 
 export const createProjectLifecycleSlice: ProjectSliceCreator = (set, get) => ({
     setProject: (project) => {
@@ -65,20 +71,11 @@ export const createProjectLifecycleSlice: ProjectSliceCreator = (set, get) => ({
         }
       }),
 
-    saveCurrentProject: async (options) => {
-      const projectId = get().currentProject?.project.id
-      if (!projectId) return
+    saveCurrentProject: (options) =>
+      enqueueProjectSave(async () => {
+        const projectId = get().currentProject?.project.id
+        if (!projectId) return
 
-      // Serialize saves: concurrent calls (e.g. auto-save + plan-import save)
-      // that race through the cloud pipeline cause lock contention on
-      // project_scopes rows, leading to 504 "upstream request timeout".
-      if (activeSavePromise) {
-        try { await activeSavePromise } catch { /* swallow; our own attempt follows */ }
-      }
-
-      let resolve: () => void
-      activeSavePromise = new Promise<void>((r) => { resolve = r })
-      try {
         // A save can overlap a later editor mutation. Never let the older save clear
         // `isDirty`, otherwise that later mutation is skipped by autosave and vanishes
         // on reload. Keep taking the newest snapshot until the project stays unchanged
@@ -120,11 +117,7 @@ export const createProjectLifecycleSlice: ProjectSliceCreator = (set, get) => ({
           getProjectStoreApi().setState({ isDirty: false, lastSaved: new Date().toISOString() })
           return
         }
-      } finally {
-        resolve!()
-        activeSavePromise = null
-      }
-    },
+      }),
 
     undo: () => {
       flushPendingProjectHistory()

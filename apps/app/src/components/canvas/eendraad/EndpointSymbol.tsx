@@ -3,7 +3,13 @@ import { useTranslation } from 'react-i18next'
 import { ZOOM_100 } from '@/constants/canvasConstants'
 import { Group, Image, Line, Rect, Text } from 'react-konva'
 import { useUIStore } from '@/stores/uiStore'
-import { useEndpointSelected, useHoverIncludes, useSetSelection } from '@/editions/community/communityHooks'
+import {
+  useClearHover,
+  useEndpointSelected,
+  useHoverIncludes,
+  useSetHover,
+  useSetSelection,
+} from '@/editions/community/communityHooks'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { logger } from '@/lib/logger'
 import {
@@ -77,6 +83,8 @@ import {
   getConverterDomainCorner,
   isDirectionalConverterSymbol,
 } from '@/lib/converterArtwork'
+import { resolveMetadataCalloutSelection } from '@/lib/ui/metadataCalloutSelection'
+import { applyMetadataCalloutMultiplier } from '@/lib/metadataCalloutGrouping'
 
 const INTERACTIVE_HIT_FILL = 'rgba(0, 0, 0, 0.01)'
 type EendraadPointerEvent = {
@@ -110,6 +118,17 @@ interface EndpointSymbolProps {
   bottomLabelMinimumLeftX?: number
   /** Truncate bottom label text before it enters the next circuit column. */
   bottomLabelMaximumRightX?: number
+  metadataCallout?: {
+    x: number
+    y: number
+    width: number
+    height: number
+    leaderPoints: [number, number, number, number]
+    leaderSegments?: Array<[number, number, number, number]>
+    targetIds?: string[]
+    totalMultiplier?: number
+  }
+  metadataLabelSuppressed?: boolean
 }
 
 export const EndpointSymbol = memo(function EndpointSymbol({
@@ -125,8 +144,12 @@ export const EndpointSymbol = memo(function EndpointSymbol({
   mirrorHorizontally = false,
   bottomLabelMinimumLeftX,
   bottomLabelMaximumRightX,
+  metadataCallout,
+  metadataLabelSuppressed = false,
 }: EndpointSymbolProps) {
   const setSelection = useSetSelection()
+  const setHover = useSetHover()
+  const clearHover = useClearHover()
   const { t } = useTranslation()
   const isSelected = useEndpointSelected(endpoint)
   const isHoveredFromBreadcrumb = useHoverIncludes('endpoint', endpoint.id)
@@ -214,11 +237,14 @@ export const EndpointSymbol = memo(function EndpointSymbol({
   const conversionLabelParts = getVisibleConversionLabelParts(endpoint)
   const certificationLabelParts = getVisibleCertificationLabelParts(endpoint)
   const endpointNoteText = getVisibleEndpointNoteText(endpoint)
-  const symbolSideLabelItems = [
-    ...conversionLabelParts,
-    ...certificationLabelParts,
-    ...(endpointNoteText ? [{ key: 'endpointNotes' as const, text: endpointNoteText }] : []),
-  ]
+  const symbolSideLabelItems = useMemo(
+    () => [
+      ...conversionLabelParts,
+      ...certificationLabelParts,
+      ...(endpointNoteText ? [{ key: 'endpointNotes' as const, text: endpointNoteText }] : []),
+    ],
+    [certificationLabelParts, conversionLabelParts, endpointNoteText]
+  )
 
   const domoticaMainType = domoticaProps?.mainDeviceType
   const domoticaMainSwitchSymbol = domoticaProps?.mainSwitchSymbol
@@ -546,9 +572,65 @@ export const EndpointSymbol = memo(function EndpointSymbol({
     }
   }, [endpoint.id, setSelection])
 
+  const handleMetadataCalloutClick = useCallback(
+    (event: unknown) => {
+      const targetIds = metadataCallout?.targetIds
+      if (!targetIds?.length) {
+        handleClick(event)
+        return
+      }
+      const e = event as EendraadPointerEvent
+      e.cancelBubble = true
+      if (e.evt.button != null && e.evt.button !== 0) return
+      const { selection } = useUIStore.getState()
+      setSelection(
+        resolveMetadataCalloutSelection(selection, targetIds, {
+          extend: !!e.evt.shiftKey,
+          toggle: !!(e.evt.altKey || e.evt.ctrlKey || e.evt.metaKey),
+        })
+      )
+    },
+    [handleClick, metadataCallout?.targetIds, setSelection]
+  )
+
+  const handleMetadataCalloutMouseEnter = useCallback(
+    (event: unknown) => {
+      const e = event as EendraadPointerEvent
+      e.cancelBubble = true
+      const targetIds = metadataCallout?.targetIds
+      if (targetIds?.length) setHover({ type: 'endpoint', ids: targetIds })
+    },
+    [metadataCallout?.targetIds, setHover]
+  )
+
+  const handleMetadataCalloutMouseLeave = useCallback(
+    (event: unknown) => {
+      const e = event as EendraadPointerEvent
+      e.cancelBubble = true
+      const targetIds = metadataCallout?.targetIds
+      const { hover } = useUIStore.getState()
+      if (
+        targetIds?.length &&
+        hover.type === 'endpoint' &&
+        targetIds.every((id) => hover.ids.includes(id))
+      ) {
+        clearHover()
+      }
+    },
+    [clearHover, metadataCallout?.targetIds]
+  )
+
   // Selected by endpoint id (1‑wire, drag rect, …) or by sitplan placement id (multiplied symbols)
   const isHoveredAny = isHovered || isHoveredFromBreadcrumb
   const multiplier = endpointSupportsMultiplier(endpoint) ? getEndpointMultiplier(endpoint) : 1
+  const metadataCalloutLabelItems = useMemo(
+    () =>
+      applyMetadataCalloutMultiplier(
+        symbolSideLabelItems,
+        metadataCallout?.totalMultiplier ?? multiplier
+      ),
+    [metadataCallout?.totalMultiplier, multiplier, symbolSideLabelItems]
+  )
   const multiSocketLabelOffsetX =
     (mirrorHorizontally ? -1 : 1) * (socketExtraWidth / 2)
   const bottomLabelMinimumLeftXForGroup =
@@ -1126,7 +1208,53 @@ export const EndpointSymbol = memo(function EndpointSymbol({
         </Group>
       ))}
       {/* Conversion + endpoint notes: one label block for the whole multi-socket group. */}
-      {symbolSideLabelItems.length > 0 && (
+      {symbolSideLabelItems.length > 0 && metadataCallout && !metadataLabelSuppressed && (
+        <>
+          {(metadataCallout.leaderSegments ?? [metadataCallout.leaderPoints]).map(
+            (leaderPoints, index) => (
+              <Line
+                key={`metadata-leader-${index}`}
+                points={leaderPoints}
+                stroke={getSecondaryTextColor(theme?.mode === 'dark')}
+                strokeWidth={0.7}
+                dash={[3, 3]}
+                listening={false}
+              />
+            )
+          )}
+          <Group
+            x={metadataCallout.x}
+            y={metadataCallout.y}
+            onClick={handleMetadataCalloutClick}
+            onTap={handleMetadataCalloutClick}
+            onMouseEnter={handleMetadataCalloutMouseEnter}
+            onMouseLeave={handleMetadataCalloutMouseLeave}
+          >
+            <Rect
+              width={metadataCallout.width}
+              height={metadataCallout.height}
+              stroke={getSecondaryTextColor(theme?.mode === 'dark')}
+              strokeWidth={isSelected ? 1.2 : 0.7}
+              cornerRadius={2}
+              fill="transparent"
+            />
+            <Text
+              x={5}
+              y={5}
+              width={metadataCallout.width - 10}
+              height={metadataCallout.height - 10}
+              text={metadataCalloutLabelItems.map((part) => part.text).join('\n')}
+              fontFamily={fontFamily}
+              fontSize={8}
+              lineHeight={1.25}
+              fill={getSecondaryTextColor(theme?.mode === 'dark')}
+              wrap="word"
+              listening={false}
+            />
+          </Group>
+        </>
+      )}
+      {symbolSideLabelItems.length > 0 && !metadataCallout && !metadataLabelSuppressed && (
         <Group x={multiSocketLabelOffsetX}>
           <SymbolTextLabels
             items={symbolSideLabelItems.map((part) => ({ key: part.key, text: part.text }))}

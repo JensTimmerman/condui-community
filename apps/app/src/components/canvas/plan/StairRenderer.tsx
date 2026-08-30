@@ -1,4 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
+import { useRef } from 'react'
 import { Circle, Group, Line } from 'react-konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import type { ToolMode } from '@/components/plan/PlanImageTools'
@@ -17,7 +18,17 @@ import {
 import { getThemeColor } from '@/lib/theme/colors'
 import type { Point2, Stair, StairCornerMode } from '@/types/schema'
 import { clamp } from '@/lib/geometry'
-import { getStairRenderMetrics } from '@/lib/plan/stairPlanScale'
+import { getStairRenderMetrics, isSpiralStair } from '@/lib/plan/stairPlanScale'
+import {
+  getPlanHandleSize,
+  getPlanHandleStrokeWidth,
+  getPlanRotationHandleDistance,
+  normalizePlanRotationDeg,
+  PLAN_ROTATION_HANDLE_FILL,
+  PLAN_ROTATION_HANDLE_STROKE,
+  rotationDegFromPlanPointer,
+  snapPlanRotationAngle,
+} from '@/lib/plan/planRotationHandle'
 import { isPrimaryPlanActivationEvent } from '@/lib/canvas/planPointerEvent'
 
 type StairDragEvent = KonvaEventObject<MouseEvent | TouchEvent | PointerEvent | DragEvent>
@@ -28,7 +39,7 @@ interface StairRendererProps {
   themeMode: 'light' | 'dark'
   zoom: number
   pxPerMeter: number
-  renderMode?: 'all' | 'geometry' | 'points'
+  renderMode?: 'all' | 'geometry' | 'points' | 'handles'
   selectedStairId: string | null
   hoveredStairId: string | null
   selectedPointIndices: Map<string, number[]>
@@ -45,6 +56,10 @@ interface StairRendererProps {
   onStairPointDragStart?: (stairId: string, pointIndex: number) => void
   onStairPointMove: (stairId: string, pointIndex: number, x: number, y: number) => void
   onStairPointDragEnd: (stairId: string, pointIndex: number, x: number, y: number) => void
+  getCanvasPointFromEvent?: (event: StairDragEvent) => Point2 | null
+  spiralRotationPreview?: { stairId: string; rotationDeg: number } | null
+  onSpiralRotationPreviewChange?: (preview: { stairId: string; rotationDeg: number } | null) => void
+  onSpiralRotationChange?: (stairId: string, rotationDeg: number) => void
 }
 
 type ModifierEvent = { shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean }
@@ -73,10 +88,40 @@ interface StairGeometry {
   outlinePoints: number[]
   stepLines: Array<[Point2, Point2]>
   upArrowLines: Array<[Point2, Point2]>
+  /** Circular up-arrow path for spiral stairs (polyline with arrowhead on the last segment). */
+  upArrowPath?: Point2[]
+  /** When true, the spiral up-arrow head is drawn at the path start instead of the end. */
+  upArrowHeadAtStart?: boolean
   stepLineColors?: string[]
   spiralHitRadius?: number
   spiralPoleRadius?: number
   spiralCenter?: Point2
+}
+
+const SPIRAL_SWEEP_DEGREES_MIN = 90
+const SPIRAL_SWEEP_DEGREES_MAX = 360
+const SPIRAL_START_ANGLE = -Math.PI / 2
+
+function resolveSpiralSweepRadians(stair: Stair): number {
+  const degrees = stair.spiralSweepDegrees ?? SPIRAL_SWEEP_DEGREES_MAX
+  const clamped = clamp(degrees, SPIRAL_SWEEP_DEGREES_MIN, SPIRAL_SWEEP_DEGREES_MAX)
+  return (clamped / 180) * Math.PI
+}
+
+function resolveSpiralStartAngle(stair: Stair): number {
+  const rotationDeg = stair.spiralRotationDeg ?? 0
+  return SPIRAL_START_ANGLE + (rotationDeg / 180) * Math.PI
+}
+
+/** Spiral stairs default to inverted up-arrow so the head matches the step tone gradient. */
+function resolveSpiralInvertUpArrow(stair: Stair): boolean {
+  return stair.invertUpArrow ?? true
+}
+
+function spiralStepToneColor(baseColor: string, t: number, invertUpArrow: boolean): string {
+  const toneT = invertUpArrow ? t : 1 - t
+  // Dark at the low end of travel, brighter toward the top.
+  return adjustHexColor(baseColor, 0.15 - toneT * 0.3)
 }
 
 interface StraightRunData {
@@ -550,6 +595,89 @@ function adjustHexColor(hex: string, amount: number): string {
   return `#${toHex(next(r))}${toHex(next(g))}${toHex(next(b))}`
 }
 
+function appendDirectedArc(
+  path: Point2[],
+  center: Point2,
+  radius: number,
+  startAngle: number,
+  sweepRadians: number,
+) {
+  if (Math.abs(sweepRadians) <= 1e-6) return
+  const steps = Math.max(6, Math.ceil(Math.abs(sweepRadians) / (Math.PI / 24)))
+  for (let i = 1; i <= steps; i++) {
+    const angle = startAngle + (sweepRadians * i) / steps
+    appendPoint(path, {
+      x: center.x + Math.cos(angle) * radius,
+      y: center.y + Math.sin(angle) * radius,
+    })
+  }
+}
+
+function buildSpiralOutlinePolygon(
+  center: Point2,
+  innerRadius: number,
+  outerRadius: number,
+  startAngle: number,
+  sweepRadians: number,
+  directedSweep: number,
+): Point2[] {
+  if (sweepRadians >= Math.PI * 2 - 1e-4) {
+    const outlineSteps = 72
+    const outlinePolygon: Point2[] = []
+    for (let i = 0; i < outlineSteps; i++) {
+      const angle = (i / outlineSteps) * Math.PI * 2
+      outlinePolygon.push({
+        x: center.x + Math.cos(angle) * outerRadius,
+        y: center.y + Math.sin(angle) * outerRadius,
+      })
+    }
+    return outlinePolygon
+  }
+
+  const endAngle = startAngle + directedSweep
+  const outlinePolygon: Point2[] = []
+  appendPoint(outlinePolygon, {
+    x: center.x + Math.cos(startAngle) * innerRadius,
+    y: center.y + Math.sin(startAngle) * innerRadius,
+  })
+  appendPoint(outlinePolygon, {
+    x: center.x + Math.cos(startAngle) * outerRadius,
+    y: center.y + Math.sin(startAngle) * outerRadius,
+  })
+  appendDirectedArc(outlinePolygon, center, outerRadius, startAngle, directedSweep)
+  appendPoint(outlinePolygon, {
+    x: center.x + Math.cos(endAngle) * innerRadius,
+    y: center.y + Math.sin(endAngle) * innerRadius,
+  })
+  appendDirectedArc(outlinePolygon, center, innerRadius, endAngle, -directedSweep)
+  return outlinePolygon
+}
+
+function buildSpiralUpArrowPath(
+  center: Point2,
+  innerRadius: number,
+  outerRadius: number,
+  startAngle: number,
+  directedSweep: number,
+): Point2[] {
+  const midRadius = (innerRadius + outerRadius) / 2
+  const arrowStart = startAngle + directedSweep * 0.12
+  const arrowEnd = startAngle + directedSweep * 0.82
+  const arcSweep = arrowEnd - arrowStart
+  if (Math.abs(arcSweep) <= 1e-4) return []
+
+  const steps = Math.max(8, Math.ceil(Math.abs(arcSweep) / (Math.PI / 24)))
+  const path: Point2[] = []
+  for (let i = 0; i <= steps; i++) {
+    const angle = arrowStart + (arcSweep * i) / steps
+    path.push({
+      x: center.x + Math.cos(angle) * midRadius,
+      y: center.y + Math.sin(angle) * midRadius,
+    })
+  }
+  return path
+}
+
 function buildSpiralStairGeometry(stair: Stair): StairGeometry {
   const center = stair.points[0]
   if (!center) return { outlinePolygon: [], outlinePoints: [], stepLines: [], upArrowLines: [] }
@@ -557,30 +685,44 @@ function buildSpiralStairGeometry(stair: Stair): StairGeometry {
   const outerRadius = Math.max(8, (stair.width + poleDiameter) / 2)
   const poleRadius = Math.max(2, poleDiameter / 2)
   const innerRadius = poleRadius
-  const sweep = Math.PI * 2
-  const outerCircumference = Math.PI * 2 * outerRadius
-  const stepCount = Math.max(6, Math.round(outerCircumference / Math.max(4, stair.stepDepth)))
-  const outlineSteps = 72
-  const outlinePolygon: Point2[] = []
-  for (let i = 0; i < outlineSteps; i++) {
-    const angle = (i / outlineSteps) * Math.PI * 2
-    outlinePolygon.push({
-      x: center.x + Math.cos(angle) * outerRadius,
-      y: center.y + Math.sin(angle) * outerRadius,
-    })
-  }
+  const sweepRadians = resolveSpiralSweepRadians(stair)
+  const directedSweep = sweepRadians
+  const startAngle = resolveSpiralStartAngle(stair)
+  const outerArcLength = outerRadius * sweepRadians
+  const stepCount = Math.max(2, Math.round(outerArcLength / Math.max(4, stair.stepDepth)))
+  const outlinePolygon = buildSpiralOutlinePolygon(
+    center,
+    innerRadius,
+    outerRadius,
+    startAngle,
+    sweepRadians,
+    directedSweep,
+  )
   const stepLines: Array<[Point2, Point2]> = []
   const stepLineColors: string[] = []
   const baseColor = '#64748b'
-  for (let stepIndex = 0; stepIndex < stepCount; stepIndex++) {
-    const t = stepCount <= 1 ? 0 : stepIndex / (stepCount - 1)
-    const angle = -Math.PI / 2 + sweep * t
-    stepLines.push([
-      { x: center.x + Math.cos(angle) * innerRadius, y: center.y + Math.sin(angle) * innerRadius },
-      { x: center.x + Math.cos(angle) * outerRadius, y: center.y + Math.sin(angle) * outerRadius },
-    ])
-    // 30% tone variance from first to last step.
-    stepLineColors.push(adjustHexColor(baseColor, 0.15 - t * 0.3))
+  const invertUpArrow = resolveSpiralInvertUpArrow(stair)
+  const fullTurn = sweepRadians >= Math.PI * 2 - 1e-4
+  if (fullTurn) {
+    for (let stepIndex = 0; stepIndex < stepCount; stepIndex++) {
+      const t = stepCount <= 0 ? 0 : stepIndex / stepCount
+      const angle = startAngle + directedSweep * t
+      stepLines.push([
+        { x: center.x + Math.cos(angle) * innerRadius, y: center.y + Math.sin(angle) * innerRadius },
+        { x: center.x + Math.cos(angle) * outerRadius, y: center.y + Math.sin(angle) * outerRadius },
+      ])
+      stepLineColors.push(spiralStepToneColor(baseColor, t, invertUpArrow))
+    }
+  } else {
+    for (let stepIndex = 1; stepIndex < stepCount; stepIndex++) {
+      const t = stepIndex / stepCount
+      const angle = startAngle + directedSweep * t
+      stepLines.push([
+        { x: center.x + Math.cos(angle) * innerRadius, y: center.y + Math.sin(angle) * innerRadius },
+        { x: center.x + Math.cos(angle) * outerRadius, y: center.y + Math.sin(angle) * outerRadius },
+      ])
+      stepLineColors.push(spiralStepToneColor(baseColor, t, invertUpArrow))
+    }
   }
   return {
     outlinePolygon,
@@ -588,6 +730,10 @@ function buildSpiralStairGeometry(stair: Stair): StairGeometry {
     stepLines,
     stepLineColors,
     upArrowLines: [],
+    upArrowPath: stair.showUpArrow
+      ? buildSpiralUpArrowPath(center, innerRadius, outerRadius, startAngle, directedSweep)
+      : undefined,
+    upArrowHeadAtStart: stair.showUpArrow ? invertUpArrow : undefined,
     spiralHitRadius: outerRadius,
     spiralPoleRadius: poleRadius,
     spiralCenter: center,
@@ -595,7 +741,7 @@ function buildSpiralStairGeometry(stair: Stair): StairGeometry {
 }
 
 export function buildStairGeometry(stair: Stair): StairGeometry {
-  if (stair.points.length === 1) {
+  if (isSpiralStair(stair)) {
     return buildSpiralStairGeometry(stair)
   }
   const outlinePolygon = buildStairOutlinePolygon(stair)
@@ -655,8 +801,13 @@ export function StairRenderer({
   onStairPointDragStart,
   onStairPointMove,
   onStairPointDragEnd,
+  getCanvasPointFromEvent,
+  spiralRotationPreview = null,
+  onSpiralRotationPreviewChange,
+  onSpiralRotationChange,
 }: StairRendererProps) {
   const interactive = activeTool === 'select'
+  const spiralRotationBaseRef = useRef<number | null>(null)
   const selectionColor = getThemeColor(themeMode, 'selectionColor')
   const hoverColor = '#eab308'
   const stairColor = themeMode === 'dark' ? '#9ca3af' : '#64748b'
@@ -691,14 +842,38 @@ export function StairRenderer({
     screenPxToCanvasUnits(zoom, 4, 2, 8),
     screenPxToCanvasUnits(zoom, 4, 2, 8),
   ]
-  const showGeometry = renderMode !== 'points'
-  const showPoints = renderMode !== 'geometry'
+  const showGeometry = renderMode !== 'points' && renderMode !== 'handles'
+  const showHandles = renderMode === 'handles'
+  const handleSize = getPlanHandleSize(zoom)
+  const handleStrokeWidth = getPlanHandleStrokeWidth(zoom)
+
+  const getRenderStair = (stair: Stair): Stair => {
+    if (spiralRotationPreview?.stairId !== stair.id) return stair
+    return { ...stair, spiralRotationDeg: spiralRotationPreview.rotationDeg }
+  }
+
+  const updateSpiralRotationFromPointer = (
+    stair: Stair,
+    event: StairDragEvent,
+  ): number | null => {
+    if (!getCanvasPointFromEvent || !onSpiralRotationPreviewChange) return null
+    const center = stair.points[0]
+    const pointer = getCanvasPointFromEvent(event)
+    if (!center || !pointer) return null
+    const rotationDeg = normalizePlanRotationDeg(
+      snapPlanRotationAngle(rotationDegFromPlanPointer(pointer, center), event.evt as ModifierEvent),
+    )
+    onSpiralRotationPreviewChange({ stairId: stair.id, rotationDeg })
+    return rotationDeg
+  }
 
   return (
     <Group listening>
-      {stairs.map((stair) => {
+      {!showHandles &&
+        stairs.map((stair) => {
         if (!Array.isArray(stair.points) || stair.points.length < 1) return null
-        const geometry = showGeometry ? buildStairGeometry(stair) : null
+        const renderStair = getRenderStair(stair)
+        const geometry = showGeometry ? buildStairGeometry(renderStair) : null
         if (showGeometry && (!geometry || geometry.outlinePoints.length < 6)) return null
 
         const selectedIndices = selectedPointIndices.get(stair.id) ?? []
@@ -816,6 +991,53 @@ export function StairRenderer({
                     listening={false}
                   />
                 ))}
+                {geometry.upArrowPath && geometry.upArrowPath.length >= 2 && (() => {
+                  const path = geometry.upArrowPath
+                  const headAtStart = !!geometry.upArrowHeadAtStart
+                  const shaftStart = headAtStart ? path[1]! : path[path.length - 2]!
+                  const shaftEnd = headAtStart ? path[0]! : path[path.length - 1]!
+                  const arrowHead = buildArrowHeadGeometry(
+                    shaftStart,
+                    shaftEnd,
+                    renderMetrics.arrowHeadLength,
+                    renderMetrics.arrowHeadWidth,
+                  )
+                  if (!arrowHead) return null
+                  const shaftPoints = headAtStart
+                    ? path.slice(1).flatMap((point) => [point.x, point.y])
+                    : path.slice(0, -1).flatMap((point) => [point.x, point.y])
+
+                  return (
+                    <Group key={`${stair.id}-spiral-arrow`} listening={false}>
+                      {path.length > 2 && (
+                        <Line
+                          points={shaftPoints}
+                          stroke={stairColor}
+                          strokeWidth={renderMetrics.arrowStroke}
+                          lineCap="round"
+                          lineJoin="round"
+                          listening={false}
+                        />
+                      )}
+                      <Line
+                        points={[shaftStart.x, shaftStart.y, arrowHead.shaftEnd.x, arrowHead.shaftEnd.y]}
+                        stroke={stairColor}
+                        strokeWidth={renderMetrics.arrowStroke}
+                        lineCap="round"
+                        listening={false}
+                      />
+                      <Line
+                        points={arrowHead.headPoints}
+                        closed
+                        stroke={stairColor}
+                        fill={stairColor}
+                        strokeWidth={renderMetrics.arrowStroke}
+                        lineJoin="round"
+                        listening={false}
+                      />
+                    </Group>
+                  )
+                })()}
                 {geometry.upArrowLines.map(([start, end], index) => {
                   const arrowHead = buildArrowHeadGeometry(
                     start,
@@ -860,8 +1082,21 @@ export function StairRenderer({
                 )}
               </>
             )}
-            {showPoints && isSelected &&
-              stair.points.map((point, index) => (
+          </Group>
+        )
+      })}
+      {showHandles &&
+        stairs.map((stair) => {
+          if (!Array.isArray(stair.points) || stair.points.length < 1) return null
+          const renderStair = getRenderStair(stair)
+          const geometry = buildStairGeometry(renderStair)
+          const selectedIndices = selectedPointIndices.get(stair.id) ?? []
+          const isSelected = selectedStairId === stair.id || selectedIndices.length > 0
+          if (!interactive || !isSelected) return null
+
+          return (
+            <Group key={`${stair.id}-handles`}>
+              {stair.points.map((point, index) => (
                 <Circle
                   key={`${stair.id}-point-${index}`}
                   x={point.x}
@@ -889,9 +1124,71 @@ export function StairRenderer({
                   onDragEnd={(e) => onStairPointDragEnd(stair.id, index, e.target.x(), e.target.y())}
                 />
               ))}
-          </Group>
-        )
-      })}
+              {isSpiralStair(stair) &&
+                geometry.spiralCenter &&
+                geometry.spiralHitRadius &&
+                getCanvasPointFromEvent &&
+                onSpiralRotationChange && (() => {
+                  const center = geometry.spiralCenter
+                  const rotationDeg = renderStair.spiralRotationDeg ?? 0
+                  const handleDistance = getPlanRotationHandleDistance(geometry.spiralHitRadius, zoom)
+                  const constrainRotationHandleLocal = (pos: { x: number; y: number }) => {
+                    const angle = Math.atan2(pos.x, -pos.y)
+                    return {
+                      x: Math.sin(angle) * handleDistance,
+                      y: -Math.cos(angle) * handleDistance,
+                    }
+                  }
+                  return (
+                    <Group
+                      key={`${stair.id}-rotation-handle-group`}
+                      x={center.x}
+                      y={center.y}
+                      rotation={rotationDeg}
+                    >
+                      <Circle
+                        x={0}
+                        y={-handleDistance}
+                        radius={handleSize * 0.7}
+                        fill={PLAN_ROTATION_HANDLE_FILL}
+                        stroke={PLAN_ROTATION_HANDLE_STROKE}
+                        strokeWidth={handleStrokeWidth}
+                        listening
+                        draggable
+                        dragBoundFunc={constrainRotationHandleLocal}
+                        onDragStart={() => {
+                          spiralRotationBaseRef.current = renderStair.spiralRotationDeg ?? 0
+                        }}
+                        onPointerDown={(event) => {
+                          if (!isPrimaryPlanActivationEvent(event.evt)) return
+                          event.cancelBubble = true
+                          onStairSelect(stair.id)
+                        }}
+                        onDragMove={(event) => {
+                          event.cancelBubble = true
+                          updateSpiralRotationFromPointer(stair, event)
+                          event.target.position({ x: 0, y: -handleDistance })
+                        }}
+                        onDragEnd={(event) => {
+                          event.cancelBubble = true
+                          const nextRotation =
+                            updateSpiralRotationFromPointer(stair, event) ??
+                            spiralRotationPreview?.rotationDeg ??
+                            spiralRotationBaseRef.current ??
+                            renderStair.spiralRotationDeg ??
+                            0
+                          onSpiralRotationChange?.(stair.id, nextRotation)
+                          onSpiralRotationPreviewChange?.(null)
+                          spiralRotationBaseRef.current = null
+                          event.target.position({ x: 0, y: -handleDistance })
+                        }}
+                      />
+                    </Group>
+                  )
+                })()}
+            </Group>
+          )
+        })}
     </Group>
   )
 }

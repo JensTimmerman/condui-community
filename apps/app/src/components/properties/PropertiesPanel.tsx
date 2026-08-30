@@ -43,10 +43,12 @@ export default function PropertiesPanel({
   readOnly = false,
   showSensitiveInfoNotice = false,
   embedded = false,
+  isTemplate = false,
 }: {
   readOnly?: boolean
   showSensitiveInfoNotice?: boolean
   embedded?: boolean
+  isTemplate?: boolean
 }) {
   const { t } = useTranslation()
   const { selection, activePlanTool, planWallDrawingThicknessCm, setPlanWallDrawingThicknessCm } =
@@ -213,6 +215,7 @@ export default function PropertiesPanel({
   const showProjectProperties =
     !selection.type ||
     selection.ids.length === 0 ||
+    (isTemplate && selection.type === 'infoBlock' && selection.ids[0] === 'installer') ||
     (selection.type === 'infoBlock' &&
       selection.ids.length >= 1 &&
       (selection.ids[0] === 'address' || selection.ids[0] === 'ean'))
@@ -232,6 +235,7 @@ export default function PropertiesPanel({
         updateProject={updateProject}
         updateInstallation={updateInstallation}
         readOnly={readOnly}
+        isTemplate={isTemplate}
       />
     )
   } else if (
@@ -242,7 +246,7 @@ export default function PropertiesPanel({
     const id = (stairOnlyPointSelection?.stairId ?? selection.ids[0])!
     content = (
       <>
-        {selection.type === 'infoBlock' && id === 'installer' && (
+        {selection.type === 'infoBlock' && id === 'installer' && !isTemplate && (
           <InstallerProperties
             project={currentProject}
             updateProject={updateProject}

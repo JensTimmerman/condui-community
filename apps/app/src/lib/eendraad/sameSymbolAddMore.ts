@@ -6,7 +6,7 @@ import { endpointSupportsMultiplier, getEndpointMultiplier } from '@/utils/endpo
 import {
   getSupplyDeviceMultiplier,
   supportsSupplyDeviceMultiplier,
-} from '@/utils/inverterMultipliers'
+} from '@/lib/supplyAssembly/inverterMultipliers'
 
 export type SameSymbolAddMoreTarget =
   | { endpoint: Endpoint; trunkDevice?: never }

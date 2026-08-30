@@ -203,7 +203,7 @@ function assetFromFloor(floor: Floor): AssetModelV2[] {
     assets.push({
       id: floor.planImportAsset.id,
       kind:
-        floor.planImportAsset.kind === 'pdf-vector'
+        floor.planImportAsset.kind === 'cad-vector' || floor.planImportAsset.kind === 'pdf-vector'
           ? 'floorplan-vector'
           : floor.planImportAsset.kind === 'pdf-raster'
             ? 'floorplan-processed'

@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { Group, Circle, Line, Rect } from 'react-konva'
 import {
   collectDropZoneHints,
+  isRelocationDropZoneHintCompatible,
   isRelocationNoOpDropZoneHint,
   resolveActiveDropZoneHintNodeId,
   type DropZoneHintRelocation,
@@ -59,6 +60,7 @@ export function DropZoneHintsOverlay({
       h.nodeId.startsWith('same-symbol-add-more-')
     )
     return hints.filter((hint) => {
+      if (!isRelocationDropZoneHintCompatible(hint, relocation)) return false
       if (isRelocationNoOpDropZoneHint(hint, relocation)) return false
       if (hint.nodeId !== activeHintNodeId || hint.nodeId.startsWith('same-symbol-add-more-')) {
         // Hide regular circle hints that overlap with a same-symbol-add-more square,

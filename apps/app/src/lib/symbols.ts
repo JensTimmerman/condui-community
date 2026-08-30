@@ -26,6 +26,8 @@ export interface SymbolMetadata {
    * Order is visual only; matching is domain-based and direction-agnostic.
    */
   portDomains?: [ElectricalDomain, ElectricalDomain]
+  /** Passive two-terminal device that preserves the domain of the wire it is placed on. */
+  inheritsWireDomain?: boolean
   /** If true, symbol is not shown in the library (e.g. deprecated types). */
   hiddenFromLibrary?: boolean
   /** Library-only preset; resolves to a base endpoint symbol (and defaults) on drop. */
@@ -949,6 +951,19 @@ export const symbols: SymbolMetadata[] = [
     inputDomain: 'DC',
     outputDomain: 'DC',
   },
+  {
+    id: 'dc_bus',
+    name: 'DC busbar',
+    nameNL: 'DC-rail',
+    nameFR: 'Jeu de barres CC',
+    category: 'energyConversion',
+    scope: 'eendraad',
+    svgPath: '/symbols/energy-conversion/dc_bus.svg',
+    tags: ['DC', 'bus', 'busbar', 'rail', 'Lynx', 'distribution'],
+    inputDomain: 'DC',
+    outputDomain: 'DC',
+    portDomains: ['DC', 'DC'],
+  },
 
   // Notes / Labels
   {
@@ -1140,6 +1155,38 @@ export function getPortDomainsForSymbol(symbolId: string): SymbolPortDomains {
     meta?.inputDomain ?? DEFAULT_ELECTRICAL_DOMAIN,
     meta?.outputDomain ?? DEFAULT_ELECTRICAL_DOMAIN,
   ]
+}
+
+/** True for components that may be inserted on AC or DC without changing domains. */
+export function symbolInheritsWireDomain(symbolId: string): boolean {
+  const meta = getSymbolById(symbolId)
+  if (meta?.inheritsWireDomain) return true
+  return [
+    'mcb',
+    'rcd',
+    'rcbo',
+    'fuse',
+    'main_switch',
+    'spd',
+    'rotating_switch',
+    'junction_box',
+    'junction_panel',
+    'energy_meter',
+    'switch',
+    'switch_1p_twoway',
+    'switch_2p_twoway',
+    'switch_dimmer',
+    'relay',
+    'domotica',
+  ].includes(symbolId)
+}
+
+/** Whether a symbol can connect to the requested wire domain. */
+export function symbolSupportsWireDomain(
+  symbolId: string,
+  wireDomain: ElectricalDomain
+): boolean {
+  return symbolInheritsWireDomain(symbolId) || getPortDomainsForSymbol(symbolId).includes(wireDomain)
 }
 
 /**

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useProjectStore } from '@/stores/projectStore'
 import { applyDarkModeInversion, invertSvgForDarkMode } from '@/utils/planImageProcessing'
-import type { Floor } from '@/types/schema'
+import { importedPlanAssetUsesSvgContent, type Floor } from '@/types/schema'
 import { logger } from '@/lib/logger'
 
 export function resolvePlanImageDataUrls(activeFloor: Floor | null): {
@@ -52,7 +52,9 @@ export function usePlanImage(
   } = resolvePlanImageDataUrls(activeFloor)
   const hasWhiteBackground = canonicalAsset?.hasWhiteBackground ?? activeFloor?.planAssetHasWhiteBackground ?? false
   const darkModeAware = canonicalAsset?.darkModeAware ?? hasWhiteBackground
-  const svgContent = canonicalAsset?.kind === 'pdf-vector' ? canonicalAsset.svgContent : undefined
+  const svgContent = importedPlanAssetUsesSvgContent(canonicalAsset?.kind)
+    ? canonicalAsset?.svgContent
+    : undefined
 
   // Load image when plan asset changes
   useEffect(() => {
@@ -60,6 +62,8 @@ export function usePlanImage(
       setPlanImage(null)
       return
     }
+
+    let cancelled = false
 
     const loadImage = async () => {
       try {
@@ -84,10 +88,12 @@ export function usePlanImage(
         // Load the final image
         const img = new window.Image()
         img.onload = () => {
+          if (cancelled) return
           setPlanImage(img)
           // Check if there's already a plan image on this floor
-          const hasExistingImage = activeFloor?.planAsset || activeFloor?.planImportAsset
-          const floorId = activeFloor?.id
+          const floorId = activeFloorIdRef.current
+          const floor = floorId ? useProjectStore.getState().getFloorById(floorId) : undefined
+          const hasExistingImage = floor?.planAsset || floor?.planImportAsset
           if (!hasExistingImage) {
             // Center the image
             setPlanImagePosition({ x: 0, y: 0 })
@@ -100,6 +106,7 @@ export function usePlanImage(
           }
         }
         img.onerror = () => {
+          if (cancelled) return
           logger.error('Failed to load plan image')
           setPlanImage(null)
         }
@@ -109,9 +116,11 @@ export function usePlanImage(
         // Fallback to original image
         const img = new window.Image()
         img.onload = () => {
+          if (cancelled) return
           setPlanImage(img)
-          const hasExistingImage = activeFloor?.planAsset || activeFloor?.planImportAsset
-          const floorId = activeFloor?.id
+          const floorId = activeFloorIdRef.current
+          const floor = floorId ? useProjectStore.getState().getFloorById(floorId) : undefined
+          const hasExistingImage = floor?.planAsset || floor?.planImportAsset
           if (!hasExistingImage) {
             setPlanImagePosition({ x: 0, y: 0 })
             if (floorId) useProjectStore.getState().updateFloor(floorId, { planImageOffset: { x: 0, y: 0 } })
@@ -126,6 +135,9 @@ export function usePlanImage(
     }
 
     loadImage()
+    return () => {
+      cancelled = true
+    }
   }, [
     planImageDataUrl,
     planImageProcessedDataUrl,
@@ -133,8 +145,6 @@ export function usePlanImage(
     darkModeAware,
     svgContent,
     theme.mode,
-    activeFloor?.planAsset,
-    activeFloor?.planImportAsset,
     activeFloor?.id,
     canvasRef,
   ])

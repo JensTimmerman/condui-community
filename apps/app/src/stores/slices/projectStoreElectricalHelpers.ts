@@ -8,6 +8,7 @@ import {
   normalizeFloorPlanAssets,
   removePanelGridDuplicateRefsInProject,
   removePromotedIncomingProtectionsFromSubPanels,
+  pruneStalePanelGridProtectionReferencesInProject,
 } from '@/lib/eendraad/projectElectricalDomain'
 import { dedupeAllPanelsProtectionsInProject } from '@/lib/eendraad/mainBusOrder'
 import { ensureInstallationFeedTopology } from '@/lib/feedTopology'
@@ -103,6 +104,8 @@ export function hydrateProjectForEditor(project: ProjectInput): {
     healPromotedIncomingProtectionGridRefs(runtimeProject)
   const healedLinkedSubPanelSymbols = ensureLinkedSubPanelsHaveOwnPanelEndpoint(runtimeProject)
   const removedDuplicatePanelGridRefs = removePanelGridDuplicateRefsInProject(runtimeProject)
+  const prunedStalePanelGridProtectionRefs =
+    pruneStalePanelGridProtectionReferencesInProject(runtimeProject)
   normalizeDomoticaProject(runtimeProject)
   normalizeFloorPlanAssets(runtimeProject)
   healProjectFloorsElectricalLayers(runtimeProject)
@@ -146,6 +149,7 @@ export function hydrateProjectForEditor(project: ProjectInput): {
       healedPromotedIncomingGridRefs ||
       healedLinkedSubPanelSymbols ||
       removedDuplicatePanelGridRefs ||
+      prunedStalePanelGridProtectionRefs ||
       healedSharedPlanScale ||
       healedEarthingSitplan ||
       synchronizedPanelPlanVisibilityBeforePlacementHealing ||

@@ -30,7 +30,7 @@ The root document contains these portable domains:
 | Field                    | Role                                                                                                  |
 | ------------------------ | ----------------------------------------------------------------------------------------------------- |
 | `schemaVersion`          | Project JSON schema discriminator.                                                                    |
-| `project`                | Identity, name, timestamps, locale, customer/installation metadata, and local editor resume settings. |
+| `project`                | Identity, name, timestamps, locale, optional historical template provenance, customer/installation metadata, and local editor resume settings. |
 | `site`                   | Optional installation address and geographic context.                                                 |
 | `building`               | Floors, shared plan calibration, spaces, and optional georeferencing.                                 |
 | `systems`                | Stable system records referenced by layers and elements.                                              |
@@ -46,6 +46,12 @@ The optional `project.showInspectionAgencyInInfoBlock` boolean controls whether 
 portable inspection-agency contact stored in `project.inspectionAgency` is rendered as
 a fourth column in drawing info blocks. Missing or `false` leaves the standard
 three-column info block unchanged.
+
+`project.origin` is optional historical provenance for a project initially seeded from
+a cloud template. When present it has `kind: "template"`, `templateId`,
+`templateName`, `templateRevisionId`, and `seededAt`. It is a snapshot: readers must
+not treat it as a live reference, and copying or importing the project may preserve it.
+It must not cause unrelated project copies to acquire template provenance.
 
 Within `disciplines.electrical`, a protection record with `directPanelFeeder: true` is a
 structural one-wire carrier for a secondary panel connected directly to a busbar. It
@@ -165,6 +171,26 @@ trunk-mounted devices such as transformers, rectifiers, inverters, and DC-DC
 converters. A missing array remains valid and means that the device has no
 situation-plan instance.
 
+An ordinary circuit-trunk inverter, rectifier, or DC-DC converter may persist
+`conversionProps.dcConnectionCount` from 1 through 4. Missing and invalid values are
+read as one. The one-wire converter remains anchored on its first block and grows to
+the right; panel-grid and situation-plan symbols keep their normal size. Endpoints on
+an additional DC connection persist `converterDcConnection.converterId` and a
+zero-based `connectionIndex`. These references affect one-wire topology only and do
+not replace the endpoint's ordinary branch membership.
+
+A circuit trunk device with `type: "dc_bus"` and `symbol: "dc_bus"` represents a
+selectable DC distribution busbar. Its optional `dcBusProps.branchCircuitIds` stores
+the ordered child circuits fed from the bus; optional `ratedCurrentA` and
+`ratedVoltageV` are descriptive ratings. A bus placed on an ordinary converter output
+uses the same `converterDcConnection` reference as other serial DC devices, allowing a
+fuse, junction box, or other DC-compatible passive device to precede it. Each child
+circuit identifies its source with `dcBusSource.busId`. Protected children also carry
+the matching `dcBusId` on their protection. An intentionally unprotected child uses a
+structural protection owner with `directDcBusFeeder: true`; readers must not render or
+interpret that owner as a physical protection device. Missing DC-bus fields preserve
+the legacy circuit topology.
+
 Ground-trunk earthing separators are physical pairs. Each paired separator record may
 carry the same optional `earthingSeparatorPairId`; editors select and delete the pair
 as one item. Older files without this field remain valid: consecutive unpaired
@@ -195,7 +221,20 @@ may contain up to 99 units.
 Supply-trunk devices on a hybrid inverter's secondary DC branch use
 `supplyPath: "converter-dc-top"`; the original right-hand DC chain continues to use
 `"converter-dc"`. Devices within either branch remain ordered by their position in the
-owning supply trunk array.
+owning supply trunk array. Supply converters may use
+`conversionProps.dcConnectionCount` from 1 through 4 and grow left in the one-wire
+supply assembly. That value counts upper DC exits; the established side DC exit remains
+available in addition. A device on one of those independent DC lanes may persist a zero-based
+`supplyConverterDcConnectionIndex`. Missing values remain backward-compatible:
+`"converter-dc"` implies index 0 and `"converter-dc-top"` implies index 1.
+
+A supply-side DC busbar uses the same `type` and `symbol` values. Devices dropped on
+that bus persist `supplyDcBusId` pointing to the bus device and a stable
+`supplyDcBusBranchId` identifying their fan-out branch. Devices before the bus omit
+these fields and remain in serial lane order, so a protection or junction box can
+precede the bus on either the side lane or any upper converter lane. The derived
+supply-assembly graph represents the bus as a `dc-bus` node with a multi-connection DC
+port; the trunk-device records remain the portable source of truth.
 
 Situation-plan placements store their orientation in `rotationDeg` as clockwise degrees.
 User rotation commands use quarter-turns (`0`, `90`, `180`, or `270`); automatic
@@ -222,6 +261,12 @@ two consecutive positions, producing `L1-L2`, `L3-L1`, `L2-L3`, then repeating f
 default order. Devices with more poles follow the same rule: they start at the current
 pole offset, list consecutive phases in that order, and advance the offset by their pole
 count (for example `2P, 3P, 2P` produces `L1-L2`, `L3-L1-L2`, `L3-L1`).
+
+Panels may optionally contain `earthingSystem` for the earthing arrangement on their
+normal/grid feed and `backupEarthingSystem` for the arrangement on a connected backup
+feed. Missing values mean that the corresponding arrangement is not selected. The
+backup value is only rendered when the panel has an active backup supply path; older
+files without it remain valid.
 
 Panels may optionally contain `busSections`, representing independently supplied
 top-level busbar sections inside one physical panel. `primaryBusSectionId` identifies
@@ -271,6 +316,8 @@ An importer may replace the root `project.id` when the imported identity collide
 ## Project-owned assets
 
 Floor-plan images, processed images, vectors, and local installer artwork are stored in the project fields that own them. Binary payloads use standard data URLs; SVG content may be stored as SVG text where the schema permits it. Readers must preserve unrecognized asset metadata but must not fetch or execute unknown content automatically.
+
+CAD-derived floor plans use imported-plan asset kind `cad-vector` (distinct from PDF vector imports). When present, `cadReference` stores versioned source-coordinate metadata: source units, uncropped asset size, per-floor crop in both asset and model space, import-session linkage for multi-floor splits, and the forward/inverse transform parameters captured at import. Legacy projects imported before this metadata existed do not carry `cadReference`.
 
 ## Compatibility and normalization
 

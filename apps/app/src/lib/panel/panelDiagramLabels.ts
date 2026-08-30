@@ -91,6 +91,16 @@ export type PanelDiagramHeaderLine = {
   variant: 'title' | 'body' | 'muted'
 }
 
+type PanelDiagramHeaderOptions = {
+  advancedLabelsEnabled: boolean
+  parentPanel?: Panel | null
+  numberIndexById?: Map<string, number>
+  /** Detached supply frames never carry a panel sequence number. */
+  suppressNumbering?: boolean
+  /** A backup label is meaningful only while a backup feed is connected. */
+  backupFeedActive?: boolean
+}
+
 export function isPanelNumberingActive(
   installation: Installation,
   advancedLabelsEnabled: boolean
@@ -109,23 +119,32 @@ export function isPanelNetLabelsActive(
 export function getPanelFrameTitlePadding(
   panel: Panel,
   installation: Installation,
-  rootPanels: Panel[]
+  rootPanels: Panel[],
+  options: { frameRole?: 'panel' | 'supply'; backupFeedActive?: boolean } = {}
 ): number {
   const project: PanelDiagramProject = {
     installation,
     panels: rootPanels,
     project: { locale: 'nl-BE' },
   }
-  const lineCount = buildPanelDiagramHeaderLines(project, panel, ((key, opts) => {
+  const translate = ((key, opts) => {
     if (opts && typeof opts === 'object' && 'defaultValue' in opts) {
       return String((opts as { defaultValue?: string }).defaultValue ?? key)
     }
     return key
-  }) as TFunction, {
-    advancedLabelsEnabled: true,
-    numberIndexById: buildPanelNumberIndexById(rootPanels),
-    parentPanel: findParentPanel(rootPanels, panel.id),
-  }).length
+  }) as TFunction
+  const lineCount =
+    options.frameRole === 'supply'
+      ? buildSupplyDiagramHeaderLines(project, panel, translate, {
+          advancedLabelsEnabled: true,
+          backupFeedActive: options.backupFeedActive,
+        }).length
+      : buildPanelDiagramHeaderLines(project, panel, translate, {
+          advancedLabelsEnabled: true,
+          numberIndexById: buildPanelNumberIndexById(rootPanels),
+          parentPanel: findParentPanel(rootPanels, panel.id),
+          backupFeedActive: options.backupFeedActive,
+        }).length
   const netLabelsActive = !!installation.panelNetTypeLabelsEnabled
 
   const required =
@@ -143,11 +162,7 @@ export function buildPanelDiagramHeaderLines(
   project: PanelDiagramProject,
   panel: Panel,
   t: TFunction,
-  options: {
-    advancedLabelsEnabled: boolean
-    parentPanel?: Panel | null
-    numberIndexById?: Map<string, number>
-  }
+  options: PanelDiagramHeaderOptions
 ): PanelDiagramHeaderLine[] {
   const displayName = getPanelDisplayName(panel, project)
   const installation = getElectricalInstallationFromProject(project)
@@ -155,7 +170,8 @@ export function buildPanelDiagramHeaderLines(
     return [{ text: displayName, variant: 'title' }]
   }
   const rootPanels = getElectricalPanelsFromProject(project)
-  const numberingActive = isPanelNumberingActive(installation, options.advancedLabelsEnabled)
+  const numberingActive =
+    !options.suppressNumbering && isPanelNumberingActive(installation, options.advancedLabelsEnabled)
   const netLabelsActive = isPanelNetLabelsActive(installation, options.advancedLabelsEnabled)
 
   const numberIndexById =
@@ -191,7 +207,9 @@ export function buildPanelDiagramHeaderLines(
   }
 
   const earthing = resolveEffectiveEarthingSystem(panel, rootPanels)
-  if (!earthing) {
+  const backupEarthing =
+    options.backupFeedActive !== false ? panel.backupEarthingSystem : undefined
+  if (!earthing && !backupEarthing) {
     return lines
   }
 
@@ -233,17 +251,84 @@ export function buildPanelDiagramHeaderLines(
       }),
       variant: 'body',
     })
-    if (earthing) {
-      lines.push({
-        text: t('panels.diagramEarthingSystem', {
-          earthing: formatEarthingLabel(earthing, t),
-          defaultValue: `Earthing system: ${earthing}`,
-        }),
-        variant: 'body',
-      })
-    }
   }
 
+  if (earthing && !isSubPanel) {
+    lines.push({
+      text: t(backupEarthing ? 'panels.diagramEarthingSystemGrid' : 'panels.diagramEarthingSystem', {
+        earthing: formatEarthingLabel(earthing, t),
+        defaultValue: backupEarthing
+          ? `Earthing system (grid): ${earthing}`
+          : `Earthing system: ${earthing}`,
+      }),
+      variant: 'body',
+    })
+  }
+  if (backupEarthing) {
+    lines.push({
+      text: t('panels.diagramEarthingSystemBackup', {
+        earthing: formatEarthingLabel(backupEarthing, t),
+        defaultValue: `Earthing system (backup): ${backupEarthing}`,
+      }),
+      variant: 'body',
+    })
+  }
+
+  return lines
+}
+
+/** Header for a detached supply-assembly frame: network labels, never panel numbering. */
+export function buildSupplyDiagramHeaderLines(
+  project: PanelDiagramProject,
+  panel: Panel,
+  t: TFunction,
+  options: Pick<PanelDiagramHeaderOptions, 'advancedLabelsEnabled' | 'backupFeedActive'>
+): PanelDiagramHeaderLine[] {
+  const installation = getElectricalInstallationFromProject(project)
+  const lines: PanelDiagramHeaderLine[] = [
+    { text: t('canvas.supplyFrame.title', 'Supply'), variant: 'title' },
+  ]
+  if (!installation || !isPanelNetLabelsActive(installation, options.advancedLabelsEnabled)) {
+    return lines
+  }
+
+  const primaryEarthing = resolveEffectiveEarthingSystem(
+    panel,
+    getElectricalPanelsFromProject(project)
+  )
+  const backupEarthing =
+    options.backupFeedActive !== false ? panel.backupEarthingSystem : undefined
+  if (!primaryEarthing && !backupEarthing) return lines
+
+  const netBase = formatNetVoltagePart(installation)
+  lines.push({
+    text: t('panels.diagramNetMain', {
+      net: netBase,
+      frequency: DEFAULT_GRID_FREQUENCY_HZ,
+      defaultValue: `Net: ${netBase} – ${DEFAULT_GRID_FREQUENCY_HZ} Hz`,
+    }),
+    variant: 'body',
+  })
+  if (primaryEarthing) {
+    lines.push({
+      text: t(backupEarthing ? 'panels.diagramEarthingSystemGrid' : 'panels.diagramEarthingSystem', {
+        earthing: formatEarthingLabel(primaryEarthing, t),
+        defaultValue: backupEarthing
+          ? `Earthing system (grid): ${primaryEarthing}`
+          : `Earthing system: ${primaryEarthing}`,
+      }),
+      variant: 'body',
+    })
+  }
+  if (backupEarthing) {
+    lines.push({
+      text: t('panels.diagramEarthingSystemBackup', {
+        earthing: formatEarthingLabel(backupEarthing, t),
+        defaultValue: `Earthing system (backup): ${backupEarthing}`,
+      }),
+      variant: 'body',
+    })
+  }
   return lines
 }
 

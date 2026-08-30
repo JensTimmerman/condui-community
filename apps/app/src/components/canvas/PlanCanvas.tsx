@@ -22,6 +22,15 @@ import {
 } from '@/editions/community/communityHooks'
 import { planCanvasGeometrySelectionRenderKey } from '@/lib/plan/planCanvasSelectionRenderKey'
 import {
+  encodeStairPointId,
+  encodeWallPointId,
+  getPlanCanvasPointSelectionBounds,
+  parseStairPointIds,
+  parseWallPointIds,
+  resolvePlanCanvasPointSelection,
+  STAIR_POINT_ID_PREFIX,
+} from '@/lib/plan/planCanvasPointSelection'
+import {
   createFloorPlanClipboardPayload,
   pasteFloorPlanClipboardPayload,
   selectWallsForFloorPlanClipboard,
@@ -306,54 +315,6 @@ function isKeyboardTypingTarget(target: EventTarget | null): boolean {
 
 const EMPTY_WALL_SELECTION_IDS: string[] = []
 const EMPTY_PLAN_OVERLAY_FLOOR_IDS: string[] = []
-
-/** Prefix for encoded vertex ids returned from drag-rect (id format: "v|wallId|pointIndex"). */
-const WALL_POINT_ID_PREFIX = 'v|'
-const STAIR_POINT_ID_PREFIX = 's|'
-
-function parseWallPointIds(ids: string[]): Map<string, number[]> {
-  const map = new Map<string, number[]>()
-  for (const id of ids) {
-    if (!id.startsWith(WALL_POINT_ID_PREFIX)) continue
-    const parts = id.split('|')
-    if (parts.length < 3) continue
-    const wallId = parts[1]!
-    const pointIndex = parseInt(parts[2]!, 10)
-    if (Number.isNaN(pointIndex)) continue
-    const list = map.get(wallId) ?? []
-    if (!list.includes(pointIndex)) list.push(pointIndex)
-    map.set(wallId, list)
-  }
-  return map
-}
-
-function parseStairPointIds(ids: string[]): Map<string, number[]> {
-  const map = new Map<string, number[]>()
-  for (const id of ids) {
-    if (!id.startsWith(STAIR_POINT_ID_PREFIX)) continue
-    const parts = id.split('|')
-    if (parts.length < 3) continue
-    const stairId = parts[1]!
-    const pointIndex = parseInt(parts[2]!, 10)
-    if (Number.isNaN(pointIndex)) continue
-    const list = map.get(stairId) ?? []
-    if (!list.includes(pointIndex)) list.push(pointIndex)
-    map.set(stairId, list)
-  }
-  return map
-}
-
-function encodeWallPointId(wallId: string, pointIndex: number): string {
-  return `${WALL_POINT_ID_PREFIX}${wallId}|${pointIndex}`
-}
-
-function encodeStairPointId(stairId: string, pointIndex: number): string {
-  return `${STAIR_POINT_ID_PREFIX}${stairId}|${pointIndex}`
-}
-
-function cloneIndexedPointMap(source: Map<string, number[]>): Map<string, number[]> {
-  return new Map(Array.from(source.entries(), ([id, indices]) => [id, [...indices]]))
-}
 
 type ContentBounds = { minX: number; minY: number; maxX: number; maxY: number }
 
@@ -965,6 +926,10 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
     },
     [activeFloor?.floorPlan?.stairs, wallSelectionPreviewTick]
   )
+  const [spiralRotationPreview, setSpiralRotationPreview] = useState<{
+    stairId: string
+    rotationDeg: number
+  } | null>(null)
 
   const gridSize = usePlanGrid(activeFloor ?? null, planView, isFloorPlanMode, tempPxPerMeter)
   const resolveNearbyFloorLineSnap = useCallback(
@@ -1430,79 +1395,21 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
     },
     []
   )
-  const buildWallPointMapFromWallIds = useCallback(
-    (wallIds: string[]): Map<string, number[]> => {
-      const next = new Map<string, number[]>()
-      const walls = activeFloor?.floorPlan?.walls ?? []
-      for (const wallId of wallIds) {
-        const wall = walls.find((entry: Wall) => entry.id === wallId)
-        if (!wall) continue
-        next.set(
-          wallId,
-          wall.points.map((_: Point2, index: number) => index)
-        )
-      }
-      return next
-    },
-    [activeFloor]
-  )
-  const buildStairPointMapFromStairIds = useCallback(
-    (stairIds: string[]): Map<string, number[]> => {
-      const next = new Map<string, number[]>()
-      for (const stairId of stairIds) {
-        const stair = stairsForRender.find((entry) => entry.id === stairId)
-        if (!stair) continue
-        next.set(
-          stairId,
-          stair.points.map((_, index) => index)
-        )
-      }
-      return next
-    },
-    [stairsForRender]
-  )
   const getCurrentMixedPointSelection = useCallback(
-    function () {
-      if (selection.type === 'wallPoint') {
-        return {
-          wallPoints: parseWallPointIds(selection.ids),
-          stairPoints: parseStairPointIds(selection.ids),
-        }
-      }
-
-      let wallPoints =
-        selectedPointIndices.size > 0
-          ? cloneIndexedPointMap(selectedPointIndices)
-          : new Map<string, number[]>()
-      if (wallPoints.size === 0 && selection.type === 'wall' && selection.ids.length > 0) {
-        wallPoints = buildWallPointMapFromWallIds(selection.ids)
-      }
-
-      let stairPoints =
-        selectedStairPointIndices.size > 0
-          ? cloneIndexedPointMap(selectedStairPointIndices)
-          : new Map<string, number[]>()
-      if (stairPoints.size === 0) {
-        if (selection.type === 'stair' && selection.ids.length > 0) {
-          stairPoints = buildStairPointMapFromStairIds(selection.ids)
-        } else if (selection.type === 'stairPoint' && selection.ids.length > 1) {
-          const stairId = selection.ids[0]
-          const pointIndex = Number(selection.ids[1])
-          if (stairId && Number.isFinite(pointIndex)) {
-            stairPoints = new Map([[stairId, [pointIndex]]])
-          }
-        }
-      }
-
-      return { wallPoints, stairPoints }
-    },
+    () =>
+      resolvePlanCanvasPointSelection({
+        selection,
+        selectedWallPointIndices: selectedPointIndices,
+        selectedStairPointIndices,
+        walls: activeFloor?.floorPlan?.walls ?? [],
+        stairs: stairsForRender,
+      }),
     [
-      selection.type,
-      selection.ids,
+      activeFloor?.floorPlan?.walls,
+      selection,
       selectedPointIndices,
       selectedStairPointIndices,
-      buildWallPointMapFromWallIds,
-      buildStairPointMapFromStairIds,
+      stairsForRender,
     ]
   )
   const stairSelectionBounds = useMemo(
@@ -1715,77 +1622,24 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
     [planView.pan.x, planView.pan.y, planView.zoom]
   )
 
-  const wallSelectionBounds = useMemo(
-    function () {
-      if (!isFloorPlanMode || !activeFloor?.floorPlan) return null
-      if (selectedPointIndices.size === 0 && selectedStairPointIndices.size === 0) return null
-
-      // Use the same walls that are rendered (including preview geometry) so
-      // selection bounds and move handles stay in sync during drags.
-      const wallsById = new Map(wallsForRender.map((w) => [w.id, w as Wall]))
-      const stairsById = new Map(stairsForRender.map((stair) => [stair.id, stair as Stair]))
-
-      let minX = Infinity
-      let minY = Infinity
-      let maxX = -Infinity
-      let maxY = -Infinity
-      let found = false
-
-      for (const [wallId, indices] of selectedPointIndices.entries()) {
-        const wall = wallsById.get(wallId)
-        if (!wall) continue
-        const idxs = indices.length ? indices : wall.points.map((_, idx) => idx)
-        for (const idx of idxs) {
-          const p = wall.points[idx]
-          if (!p) continue
-          minX = Math.min(minX, p.x)
-          minY = Math.min(minY, p.y)
-          maxX = Math.max(maxX, p.x)
-          maxY = Math.max(maxY, p.y)
-          found = true
-        }
-      }
-
-      for (const [stairId, indices] of selectedStairPointIndices.entries()) {
-        const stair = stairsById.get(stairId)
-        if (!stair) continue
-        for (const idx of indices) {
-          const p = stair.points[idx]
-          if (!p) continue
-          minX = Math.min(minX, p.x)
-          minY = Math.min(minY, p.y)
-          maxX = Math.max(maxX, p.x)
-          maxY = Math.max(maxY, p.y)
-          found = true
-        }
-      }
-
-      if (
-        !found ||
-        !Number.isFinite(minX) ||
-        !Number.isFinite(minY) ||
-        !Number.isFinite(maxX) ||
-        !Number.isFinite(maxY)
-      ) {
-        return null
-      }
-
-      return {
-        x: minX,
-        y: minY,
-        width: maxX - minX,
-        height: maxY - minY,
-      }
-    },
-    [
-      isFloorPlanMode,
-      activeFloor,
-      selectedPointIndices,
-      selectedStairPointIndices,
-      wallsForRender,
-      stairsForRender,
-    ]
-  )
+  const wallSelectionBounds = useMemo(() => {
+    if (!isFloorPlanMode || !activeFloor?.floorPlan) return null
+    if (selectedPointIndices.size === 0 && selectedStairPointIndices.size === 0) return null
+    // Render bounds use preview geometry so the handles remain aligned during a drag.
+    return getPlanCanvasPointSelectionBounds({
+      wallPointIndices: selectedPointIndices,
+      stairPointIndices: selectedStairPointIndices,
+      walls: wallsForRender,
+      stairs: stairsForRender,
+    })
+  }, [
+    isFloorPlanMode,
+    activeFloor,
+    selectedPointIndices,
+    selectedStairPointIndices,
+    wallsForRender,
+    stairsForRender,
+  ])
 
   const makeCanvasPointFromEvent = useCallback(
     (e: PlanCanvasInputEvent): Point2 | null => {
@@ -4239,11 +4093,12 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
 
       const viewportWidth = planCanvasViewportPx?.width ?? containerRef.current?.clientWidth ?? 0
       const viewportHeight = planCanvasViewportPx?.height ?? containerRef.current?.clientHeight ?? 0
+      const { planView: currentPlanView } = useUIStore.getState()
       if (
         viewportWidth <= 0 ||
         viewportHeight <= 0 ||
-        !Number.isFinite(planView.zoom) ||
-        planView.zoom <= 0
+        !Number.isFinite(currentPlanView.zoom) ||
+        currentPlanView.zoom <= 0
       )
         return
 
@@ -4331,20 +4186,20 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
       }
 
       const viewLeft = Math.min(
-        -planView.pan.x / planView.zoom,
-        (viewportWidth - planView.pan.x) / planView.zoom
+        -currentPlanView.pan.x / currentPlanView.zoom,
+        (viewportWidth - currentPlanView.pan.x) / currentPlanView.zoom
       )
       const viewRight = Math.max(
-        -planView.pan.x / planView.zoom,
-        (viewportWidth - planView.pan.x) / planView.zoom
+        -currentPlanView.pan.x / currentPlanView.zoom,
+        (viewportWidth - currentPlanView.pan.x) / currentPlanView.zoom
       )
       const viewTop = Math.min(
-        -planView.pan.y / planView.zoom,
-        (viewportHeight - planView.pan.y) / planView.zoom
+        -currentPlanView.pan.y / currentPlanView.zoom,
+        (viewportHeight - currentPlanView.pan.y) / currentPlanView.zoom
       )
       const viewBottom = Math.max(
-        -planView.pan.y / planView.zoom,
-        (viewportHeight - planView.pan.y) / planView.zoom
+        -currentPlanView.pan.y / currentPlanView.zoom,
+        (viewportHeight - currentPlanView.pan.y) / currentPlanView.zoom
       )
 
       const overlapWidth = Math.max(
@@ -4355,7 +4210,8 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
         0,
         Math.min(contentBounds.maxY, viewBottom) - Math.max(contentBounds.minY, viewTop)
       )
-      const overlapScreenArea = overlapWidth * overlapHeight * planView.zoom * planView.zoom
+      const overlapScreenArea =
+        overlapWidth * overlapHeight * currentPlanView.zoom * currentPlanView.zoom
       const hasVisibleReference = overlapScreenArea > 64
 
       pendingFloorViewportAutoFitRef.current = null
@@ -4376,9 +4232,6 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
       planImageDisplayHeight,
       planImagePosition.x,
       planImagePosition.y,
-      planView.pan.x,
-      planView.pan.y,
-      planView.zoom,
       planCanvasViewportPx,
       sitplanNotes,
       baseSymbolSizePx,
@@ -7190,6 +7043,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
                   zoom={planView.zoom}
                   pxPerMeter={canvasPxPerMeter}
                   renderMode="geometry"
+                  spiralRotationPreview={spiralRotationPreview}
                   selectedStairId={selectedStairId}
                   hoveredStairId={hoveredStairId}
                   selectedPointIndices={selectedStairPointIndices}
@@ -7804,6 +7658,27 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
                   windowsListening={windowsListening}
                 />
               )}
+
+              {activeFloor?.floorPlan && graphicElementsForRender.length > 0 && (
+                <PlanGraphicElementRenderer
+                  elements={graphicElementsForRender}
+                  selectedIds={selectedGraphicElementIds}
+                  active={isFloorPlanMode && activeTool === 'select'}
+                  zoom={planView.zoom}
+                  canvasPxPerMeter={canvasPxPerMeter}
+                  themeMode={theme.mode}
+                  fontFamily={fontFamily}
+                  snapFloorPoint={snapGraphicFloorPoint}
+                  onSnapGuidesChange={applyVertexMoveProjectedSnapGuides}
+                  onSelect={handleGraphicElementSelect}
+                  onMove={handleGraphicElementMove}
+                  onResize={handleGraphicElementResize}
+                  onRotate={(elementId, rotationDeg) =>
+                    updatePlanGraphicElement(elementId, { rotationDeg })
+                  }
+                />
+              )}
+
               {activeFloor?.floorPlan && (
                 <StairRenderer
                   stairs={stairsForRender}
@@ -7811,7 +7686,9 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
                   themeMode={theme.mode}
                   zoom={planView.zoom}
                   pxPerMeter={canvasPxPerMeter}
-                  renderMode="points"
+                  renderMode="handles"
+                  spiralRotationPreview={spiralRotationPreview}
+                  onSpiralRotationPreviewChange={setSpiralRotationPreview}
                   selectedStairId={selectedStairId}
                   hoveredStairId={hoveredStairId}
                   selectedPointIndices={selectedStairPointIndices}
@@ -7894,25 +7771,9 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
                   onStairPointDragStart={handleStairPointDragStart}
                   onStairPointMove={handleStairPointMove}
                   onStairPointDragEnd={handleStairPointDragEnd}
-                />
-              )}
-
-              {activeFloor?.floorPlan && graphicElementsForRender.length > 0 && (
-                <PlanGraphicElementRenderer
-                  elements={graphicElementsForRender}
-                  selectedIds={selectedGraphicElementIds}
-                  active={isFloorPlanMode && activeTool === 'select'}
-                  zoom={planView.zoom}
-                  canvasPxPerMeter={canvasPxPerMeter}
-                  themeMode={theme.mode}
-                  fontFamily={fontFamily}
-                  snapFloorPoint={snapGraphicFloorPoint}
-                  onSnapGuidesChange={applyVertexMoveProjectedSnapGuides}
-                  onSelect={handleGraphicElementSelect}
-                  onMove={handleGraphicElementMove}
-                  onResize={handleGraphicElementResize}
-                  onRotate={(elementId, rotationDeg) =>
-                    updatePlanGraphicElement(elementId, { rotationDeg })
+                  getCanvasPointFromEvent={makeCanvasPointFromEvent}
+                  onSpiralRotationChange={(stairId, rotationDeg) =>
+                    updateStair(stairId, { spiralRotationDeg: rotationDeg })
                   }
                 />
               )}

@@ -524,7 +524,8 @@ export function FloorPlanMode({
       cornerStyle: 'round',
       cornerMode: 'turn',
       showUpArrow: false,
-      invertUpArrow: false,
+      invertUpArrow: true,
+      spiralRotationDeg: 0,
     }
     commitStairWithUndo(activeFloorId, stair)
     setStairDrawingPoints([])
@@ -2399,6 +2400,8 @@ export function FloorPlanMode({
       openingPointerState,
       graphicPointerState,
       updateDraftPoint,
+      getDefaultOpeningWidth,
+      getOpeningPlacementOptions,
     ]
   )
 
@@ -2656,18 +2659,20 @@ export function FloorPlanMode({
       ? {
           id: '__preview-stair__',
           floorId: activeFloorId ?? '__preview-floor__',
-          points: stairSpiralPreviewActive
-            ? [stairDrawingPoints[0]!]
-            : stairPreviewRawPoints.length >= 2
-              ? stairPreviewRawPoints
-              : stairDrawingPoints,
+          points:
+            stairDrawingPoints.length === 1
+              ? [stairDrawingPoints[0]!]
+              : stairPreviewRawPoints.length >= 2
+                ? stairPreviewRawPoints
+                : stairDrawingPoints,
           width: (PLAN_STAIR_DEFAULT_WIDTH_CM / 100) * canvasPxPerMeter,
           stepDepth: (PLAN_STAIR_DEFAULT_STEP_DEPTH_CM / 100) * canvasPxPerMeter,
           spiralPoleDiameter: (PLAN_STAIR_SPIRAL_POLE_DIAMETER_CM / 100) * canvasPxPerMeter,
           cornerStyle: 'round',
           cornerMode: 'turn',
           showUpArrow: false,
-          invertUpArrow: false,
+          invertUpArrow: true,
+          spiralRotationDeg: 0,
         }
       : null
   const stairPreviewGeometry = stairPreviewStair ? buildStairGeometry(stairPreviewStair) : null

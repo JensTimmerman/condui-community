@@ -49,7 +49,7 @@ import { canCreateSupplyTopologyFromDrop } from '@/lib/supplyTopologyFeature'
 import { getMainBusInsertionSectionId } from '@/lib/panel/panelBusSections'
 import { panelHasContent, isLastMainPanel } from '@/utils/eendraad'
 import { endpointSupportsMultiplier } from '@/utils/endpointMultipliers'
-import { supportsSupplyDeviceMultiplier } from '@/utils/inverterMultipliers'
+import { supportsSupplyDeviceMultiplier } from '@/lib/supplyAssembly/inverterMultipliers'
 import {
   findSameSymbolAddMoreLayoutTargets,
   incrementSameSymbolAddMoreTarget,
@@ -2908,7 +2908,12 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
               addEndpoint: (
                 circuitId: string,
                 endpoint: Endpoint,
-                insertAfterEndpointId?: string | null
+                insertAfterEndpointId?: string | null,
+                branchOpts?: {
+                  branchId?: string | null
+                  branchInsertIndex?: number
+                  forceNewBranch?: boolean
+                }
               ) => {
                 // Reuse all properties from the original endpoint, but keep the new ID generated
                 // by the drop behavior so wiring/branch logic stays consistent.
@@ -2925,6 +2930,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                   // is a normal branch/circuit drop), explicitly clear any old domotica
                   // child link from the source endpoint.
                   domoticaChildProps: endpoint.domoticaChildProps,
+                  converterDcConnection: endpoint.converterDcConnection,
                   id: endpoint.id,
                 }
                 const isDomoticaChildDrop = !!endpoint.domoticaChildProps
@@ -2937,14 +2943,14 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                   if (!isDomoticaChildDrop) {
                     delete (merged as Partial<Endpoint>).label
                   }
-                  store.addEndpoint(circuitId, merged, undefined)
+                  store.addEndpoint(circuitId, merged, undefined, branchOpts)
                 } else {
                   // Intra-circuit move: clear label so addEndpoint() re-derives it from target branch.
                   // This avoids stale labels when dragging between branches (e.g. 05 -> 04).
                   if (!isDomoticaChildDrop) {
                     delete (merged as Partial<Endpoint>).label
                   }
-                  store.addEndpoint(circuitId, merged, insertAfterEndpointId)
+                  store.addEndpoint(circuitId, merged, insertAfterEndpointId, branchOpts)
                 }
                 createdEndpointIds.push(merged.id)
                 setSelection({ type: 'endpoint', ids: [merged.id] })
@@ -3721,7 +3727,9 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                 feedScope: info.supplyFeedScope ?? sourceDeviceLayout?.feedScope ?? 'shared',
                 index: sourceDeviceLayout?.feedIndex ?? info.device.trunkPosition ?? 0,
                 supplyPath: info.device.supplyPath,
+                supplyConverterDcConnectionIndex: info.device.supplyConverterDcConnectionIndex,
                 converterGridPlacement: info.device.converterGridPlacement,
+                dcBusRoot: info.device.type === 'dc_bus',
               },
             })
           } else if (info.circuit) {
@@ -3734,6 +3742,8 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                   0,
                   info.circuit.trunkDevices?.findIndex((device) => device.id === elementId) ?? 0
                 ),
+                converterDcConnection: info.device.converterDcConnection,
+                dcBusRoot: info.device.type === 'dc_bus',
               },
             })
           }
@@ -5648,6 +5658,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                     dropTarget?.type === 'mainBus' && previewGraph.createdProtectionIds.length > 0
                   const isSecondaryBusProtectionPreview =
                     dropTarget?.type === 'circuit' &&
+                    !dropTarget.dcBusId &&
                     typeof dropTarget.secondaryBusInsertIndex === 'number' &&
                     previewGraph.createdProtectionIds.length > 0
 

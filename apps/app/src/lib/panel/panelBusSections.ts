@@ -5,7 +5,7 @@ import type {
   PanelBusSection,
   ProtectionDevice,
 } from '@/types/schema'
-import { getMainBusOrder } from '@/lib/eendraad/mainBusOrder'
+import { getMainBusOrder } from './mainBusOrder'
 
 export const LEGACY_MAIN_BUS_SECTION_PREFIX = 'legacy-main-bus:'
 

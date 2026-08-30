@@ -497,7 +497,14 @@ export function PlanWiresLayer({
         pathData,
       }
     })
-  }, [dragWaypointPreview, getEndpointById, placementPositionOverrides, routeStyle, routes])
+  }, [
+    dragWaypointPreview,
+    getEndpointById,
+    getTrunkDeviceById,
+    placementPositionOverrides,
+    routeStyle,
+    routes,
+  ])
 
   return (
     <Group name="plan-wires-layer" listening={active}>

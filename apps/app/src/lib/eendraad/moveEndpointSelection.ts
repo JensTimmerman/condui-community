@@ -33,7 +33,7 @@ function resolveTargetBranchIndex(circuit: Circuit, target: DropTarget): number 
     if (target.branchEndpoints.length === 0) return 0
     const targetIds = new Set(target.branchEndpoints)
     const index = branches.findIndex((branch) =>
-      branch.endpointIds.some((endpointId) => targetIds.has(endpointId)),
+      branch.endpointIds.some((endpointId) => targetIds.has(endpointId))
     )
     return index >= 0 ? index : null
   }
@@ -68,16 +68,36 @@ function endpointsInBranchOrder(circuit: Circuit, branches: Branch[]): Endpoint[
   return ordered
 }
 
+function applyConverterDcMoveTarget(
+  endpoints: Endpoint[],
+  movedEndpointIds: Set<string>,
+  target: DropTarget
+): Endpoint[] {
+  return endpoints.map((endpoint) => {
+    if (!movedEndpointIds.has(endpoint.id)) return endpoint
+    if (target.converterDcConnection) {
+      return { ...endpoint, converterDcConnection: { ...target.converterDcConnection } }
+    }
+    if (!endpoint.converterDcConnection) return endpoint
+    const { converterDcConnection: _removed, ...ordinaryEndpoint } = endpoint
+    return ordinaryEndpoint
+  })
+}
+
 function movingBranchGroupsForSelection(
   circuit: Circuit,
   draggedEndpointId: string,
   selectedEndpointIds: string[],
-  allowSingle = false,
+  allowSingle = false
 ): { movingBranches: Branch[]; movedEndpointIds: string[]; movedEndpoints: Endpoint[] } | null {
   const branches = circuit.branches ?? []
   const circuitEndpointIds = new Set(circuit.endpoints.map((endpoint) => endpoint.id))
   const selected = new Set(selectedEndpointIds.filter((id) => circuitEndpointIds.has(id)))
-  if (!selected.has(draggedEndpointId) || selected.size === 0 || (!allowSingle && selected.size <= 1)) {
+  if (
+    !selected.has(draggedEndpointId) ||
+    selected.size === 0 ||
+    (!allowSingle && selected.size <= 1)
+  ) {
     return null
   }
 
@@ -91,7 +111,7 @@ function movingBranchGroupsForSelection(
   if (
     movingBranchEntries.length === 0 ||
     !movingBranchEntries.some(({ selectedEndpointIds }) =>
-      selectedEndpointIds.includes(draggedEndpointId),
+      selectedEndpointIds.includes(draggedEndpointId)
     )
   ) {
     return null
@@ -100,10 +120,7 @@ function movingBranchGroupsForSelection(
   const byId = new Map(circuit.endpoints.map((endpoint) => [endpoint.id, endpoint]))
   const movingBranches = movingBranchEntries.map(({ branch, selectedEndpointIds }) => ({
     ...branch,
-    id:
-      selectedEndpointIds.length === branch.endpointIds.length
-        ? branch.id
-        : generateId(),
+    id: selectedEndpointIds.length === branch.endpointIds.length ? branch.id : generateId(),
     endpointIds: [...selectedEndpointIds],
   }))
   const movedEndpointIds = movingBranches.flatMap((branch) => branch.endpointIds)
@@ -125,7 +142,7 @@ export function moveEndpointSelectionOnCircuit(
   draggedEndpointId: string,
   selectedEndpointIds: string[],
   target: DropTarget,
-  options?: { allowSingle?: boolean },
+  options?: { allowSingle?: boolean }
 ): MoveEndpointSelectionResult | null {
   const branches = circuit.branches ?? []
   if (target.circuitId !== circuit.id || branches.length === 0) return null
@@ -134,7 +151,7 @@ export function moveEndpointSelectionOnCircuit(
     circuit,
     draggedEndpointId,
     selectedEndpointIds,
-    options?.allowSingle,
+    options?.allowSingle
   )
   if (!moving) return null
   const selected = new Set(moving.movedEndpointIds)
@@ -146,7 +163,7 @@ export function moveEndpointSelectionOnCircuit(
     branches
       .map((branch, index) => ({ branch, index }))
       .filter(({ branch }) => branch.endpointIds.some((endpointId) => selected.has(endpointId)))
-      .map(({ index }) => index),
+      .map(({ index }) => index)
   )
   if (selectedBranchIndexes.has(targetIndex)) return null
 
@@ -160,7 +177,9 @@ export function moveEndpointSelectionOnCircuit(
     }))
     .filter(({ branch }) => branch.endpointIds.length > 0)
 
-  const insertIndex = remainingEntries.findIndex(({ originalIndex }) => originalIndex >= targetIndex)
+  const insertIndex = remainingEntries.findIndex(
+    ({ originalIndex }) => originalIndex >= targetIndex
+  )
   const safeInsertIndex = insertIndex >= 0 ? insertIndex : remainingEntries.length
   const remainingBranches = remainingEntries.map(({ branch }) => branch)
 
@@ -177,7 +196,11 @@ export function moveEndpointSelectionOnCircuit(
 
   return {
     branches: nextBranches,
-    endpoints: endpointsInBranchOrder(circuit, nextBranches),
+    endpoints: applyConverterDcMoveTarget(
+      endpointsInBranchOrder(circuit, nextBranches),
+      selected,
+      target
+    ),
     movedEndpointIds: moving.movedEndpointIds,
   }
 }
@@ -188,14 +211,14 @@ export function moveEndpointSelectionBetweenCircuits(
   draggedEndpointId: string,
   selectedEndpointIds: string[],
   target: DropTarget,
-  options?: { allowSingle?: boolean },
+  options?: { allowSingle?: boolean }
 ): MoveEndpointSelectionBetweenCircuitsResult | null {
   if (sourceCircuit.id === targetCircuit.id || target.circuitId !== targetCircuit.id) return null
   const moving = movingBranchGroupsForSelection(
     sourceCircuit,
     draggedEndpointId,
     selectedEndpointIds,
-    options?.allowSingle,
+    options?.allowSingle
   )
   if (!moving) return null
 
@@ -219,13 +242,21 @@ export function moveEndpointSelectionBetweenCircuits(
     label: '',
   }))
   const nextTargetBranches = [
-    ...targetBranches.slice(0, insertIndex).map((branch) => ({ ...branch, endpointIds: [...branch.endpointIds] })),
+    ...targetBranches
+      .slice(0, insertIndex)
+      .map((branch) => ({ ...branch, endpointIds: [...branch.endpointIds] })),
     ...movingTargetBranches,
-    ...targetBranches.slice(insertIndex).map((branch) => ({ ...branch, endpointIds: [...branch.endpointIds] })),
+    ...targetBranches
+      .slice(insertIndex)
+      .map((branch) => ({ ...branch, endpointIds: [...branch.endpointIds] })),
   ]
-  const nextTargetEndpoints = endpointsInBranchOrder(
-    { ...targetCircuit, endpoints: [...targetCircuit.endpoints, ...moving.movedEndpoints] },
-    nextTargetBranches,
+  const nextTargetEndpoints = applyConverterDcMoveTarget(
+    endpointsInBranchOrder(
+      { ...targetCircuit, endpoints: [...targetCircuit.endpoints, ...moving.movedEndpoints] },
+      nextTargetBranches
+    ),
+    selected,
+    target
   )
 
   return {

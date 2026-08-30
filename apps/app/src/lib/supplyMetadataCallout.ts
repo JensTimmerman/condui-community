@@ -1,4 +1,7 @@
 import type { Point } from '@/types/ui'
+import type { TrunkDevice } from '@/types/schema'
+import { getSupplyDeviceMultiplier } from '@/lib/supplyAssembly/inverterMultipliers'
+import { getMetadataCalloutGroups } from '@/lib/metadataCalloutGrouping'
 
 export interface SupplyMetadataCalloutSegment {
   startPoint: Point
@@ -33,6 +36,63 @@ export interface SupplyMetadataCalloutGroupPlacement extends SupplyMetadataCallo
 
 export type SupplyMetadataCalloutPlacementKind = 'upper-left' | 'top'
 
+export interface SupplyMetadataCalloutCluster {
+  ownerConverterId: string
+  representativeId: string
+  targetIds: string[]
+  totalMultiplier: number
+}
+
+/**
+ * Groups identical supply metadata only within one converter-owned topology.
+ * Non-metadata devices do not interrupt ownership, so a fuse or junction box
+ * between two equal panels still allows them to share one frame.
+ */
+export function getSupplyMetadataCalloutClusters(
+  items: Array<{ device: TrunkDevice; lines: string[] }>
+): Map<string, SupplyMetadataCalloutCluster> {
+  const ownerByDeviceId = new Map<string, string>()
+  let activeConverterId: string | undefined
+
+  for (const { device } of items) {
+    if (device.supplyPath === 'converter-branch' || device.supplyPath === 'backup') {
+      activeConverterId = device.id
+      ownerByDeviceId.set(device.id, device.id)
+      continue
+    }
+    const belongsToActiveConverter =
+      device.supplyPath === 'converter-dc' || device.supplyPath === 'converter-dc-top'
+    ownerByDeviceId.set(
+      device.id,
+      belongsToActiveConverter && activeConverterId ? activeConverterId : device.id
+    )
+  }
+
+  const groups = getMetadataCalloutGroups(
+    items.map(({ device, lines }) => ({
+      id: device.id,
+      ownerId: ownerByDeviceId.get(device.id) ?? device.id,
+      symbol: device.symbol ?? '',
+      lines,
+      multiplier: getSupplyDeviceMultiplier(device),
+    }))
+  )
+
+  const result = new Map<string, SupplyMetadataCalloutCluster>()
+  for (const group of new Set(groups.values())) {
+    const representativeId = group.representativeId
+    const targetIds = group.targetIds
+    const cluster = {
+      ownerConverterId: ownerByDeviceId.get(representativeId) ?? representativeId,
+      representativeId,
+      targetIds,
+      totalMultiplier: group.totalMultiplier,
+    }
+    targetIds.forEach((targetId) => result.set(targetId, cluster))
+  }
+  return result
+}
+
 /**
  * A lone metadata card can sit directly above its device. Inverter cards use
  * the upper-left position only when they are part of a grouped supply row,
@@ -49,7 +109,6 @@ export function getSupplyMetadataCalloutPlacementKind({
 }
 
 const CALLOUT_WIRE_CLEARANCE = 6
-export const SUPPLY_METADATA_CALLOUT_MIN_WIDTH = 80
 
 /**
  * Connects a metadata card to the shortest of its three bottom-edge anchors.
@@ -66,6 +125,7 @@ export function getSupplyMetadataCalloutLeaderPoints({
   symbolHeight,
   placementKind,
   mirrorHorizontally = false,
+  adaptiveAnchors = false,
 }: {
   placement: SupplyMetadataCalloutPlacement
   width: number
@@ -75,7 +135,37 @@ export function getSupplyMetadataCalloutLeaderPoints({
   placementKind: SupplyMetadataCalloutPlacementKind
   /** Keep the leader attached to the equivalent symbol port in a mirrored supply layout. */
   mirrorHorizontally?: boolean
+  /** Choose the nearest card and symbol edges instead of fixed bottom/top anchors. */
+  adaptiveAnchors?: boolean
 }): [number, number, number, number] {
+  if (adaptiveAnchors) {
+    const symbolGap = 0.5
+    const cardAnchors = [
+      { x: placement.x, y: placement.y },
+      { x: placement.x, y: placement.y + height / 2 },
+      { x: placement.x, y: placement.y + height },
+      { x: placement.x + width / 2, y: placement.y },
+      { x: placement.x + width / 2, y: placement.y + height },
+      { x: placement.x + width, y: placement.y },
+      { x: placement.x + width, y: placement.y + height / 2 },
+      { x: placement.x + width, y: placement.y + height },
+    ]
+    const symbolAnchors = [
+      { x: 0, y: -symbolHeight / 2 - symbolGap },
+      { x: symbolWidth / 2 + symbolGap, y: 0 },
+      { x: 0, y: symbolHeight / 2 + symbolGap },
+      { x: -symbolWidth / 2 - symbolGap, y: 0 },
+    ]
+    let closest = { card: cardAnchors[0]!, symbol: symbolAnchors[0]!, distance: Infinity }
+    for (const card of cardAnchors) {
+      for (const symbol of symbolAnchors) {
+        const distance = (card.x - symbol.x) ** 2 + (card.y - symbol.y) ** 2
+        if (distance < closest.distance) closest = { card, symbol, distance }
+      }
+    }
+    return [closest.card.x, closest.card.y, closest.symbol.x, closest.symbol.y]
+  }
+
   const canonicalSymbolAnchor =
     placementKind === 'top'
       ? { x: 0, y: -symbolHeight / 2 - 2 }
@@ -99,6 +189,61 @@ export function getSupplyMetadataCalloutLeaderPoints({
   return [closestAnchor.x, closestAnchor.y, symbolAnchor.x, symbolAnchor.y]
 }
 
+/**
+ * Fans a shared metadata frame out from one common, nearest edge anchor. This
+ * keeps grouped leaders visually calm while each target still receives the
+ * line at the closest safe edge of its own symbol.
+ */
+export function getSupplyMetadataSharedLeaderPointSets({
+  placement,
+  width,
+  height,
+  targets,
+}: {
+  placement: SupplyMetadataCalloutPlacement
+  width: number
+  height: number
+  targets: Array<{ position: Point; width: number; height: number }>
+}): Array<[number, number, number, number]> {
+  if (targets.length === 0) return []
+  const cardAnchors = [
+    { x: placement.x + width / 2, y: placement.y + height },
+    { x: placement.x, y: placement.y + height / 2 },
+    { x: placement.x + width, y: placement.y + height / 2 },
+    { x: placement.x + width / 2, y: placement.y },
+    { x: placement.x, y: placement.y + height },
+    { x: placement.x + width, y: placement.y + height },
+    { x: placement.x, y: placement.y },
+    { x: placement.x + width, y: placement.y },
+  ]
+  const targetAnchors = targets.map((target) => [
+    { x: target.position.x, y: target.position.y - target.height / 2 - 0.5 },
+    { x: target.position.x + target.width / 2 + 0.5, y: target.position.y },
+    { x: target.position.x, y: target.position.y + target.height / 2 + 0.5 },
+    { x: target.position.x - target.width / 2 - 0.5, y: target.position.y },
+  ])
+  const score = (card: Point) =>
+    targetAnchors.reduce(
+      (total, anchors) =>
+        total +
+        Math.min(...anchors.map((anchor) => (card.x - anchor.x) ** 2 + (card.y - anchor.y) ** 2)),
+      0
+    )
+  const sharedCardAnchor = cardAnchors.reduce((best, candidate) =>
+    score(candidate) < score(best) ? candidate : best
+  )
+
+  return targetAnchors.map((anchors) => {
+    const targetAnchor = anchors.reduce((best, candidate) => {
+      const candidateDistance =
+        (sharedCardAnchor.x - candidate.x) ** 2 + (sharedCardAnchor.y - candidate.y) ** 2
+      const bestDistance = (sharedCardAnchor.x - best.x) ** 2 + (sharedCardAnchor.y - best.y) ** 2
+      return candidateDistance < bestDistance ? candidate : best
+    })
+    return [sharedCardAnchor.x, sharedCardAnchor.y, targetAnchor.x, targetAnchor.y]
+  })
+}
+
 export function shouldUseSupplyMetadataCallout(lines: string[], multiplier: number): boolean {
   const visualLineCount = lines.reduce(
     (total, line) => total + Math.max(1, line.split(/\r?\n/).length),
@@ -109,6 +254,20 @@ export function shouldUseSupplyMetadataCallout(lines: string[], multiplier: numb
     ...lines.flatMap((line) => line.split(/\r?\n/)).map((line) => line.length)
   )
   return multiplier > 1 || visualLineCount >= 4 || longestLine >= 18
+}
+
+/** Converter specifications need a collision-aware frame even when only a few fields are shown. */
+export function shouldUseSupplyDeviceMetadataCallout(
+  device: Pick<TrunkDevice, 'type' | 'supplyPath'>,
+  lines: string[],
+  multiplier: number
+): boolean {
+  const isSupplyConverter =
+    device.type === 'conversion' &&
+    (device.supplyPath === 'converter-branch' || device.supplyPath === 'backup')
+  return (
+    lines.length > 0 && (isSupplyConverter || shouldUseSupplyMetadataCallout(lines, multiplier))
+  )
 }
 
 function segmentIntersectsRect(
@@ -158,11 +317,17 @@ export function getSupplyMetadataCalloutGroupPlacements({
   items,
   segments,
   symbolRects = [],
+  packRows = true,
+  preferRightNudges = false,
 }: {
   items: SupplyMetadataCalloutGroupItem[]
   segments: SupplyMetadataCalloutSegment[]
   /** Other content (including non-card device symbols) that cards must avoid. */
   symbolRects?: SupplyMetadataCalloutRect[]
+  /** Supply assemblies use compact rows; staggered converter outputs stay nearer their symbols. */
+  packRows?: boolean
+  /** For vertically staggered symbols, try the shorter right-side detour first. */
+  preferRightNudges?: boolean
 }): Map<string, SupplyMetadataCalloutGroupPlacement> {
   const placed = new Map<string, SupplyMetadataCalloutGroupPlacement>()
   const basePlacements = items.map((item) => {
@@ -182,6 +347,7 @@ export function getSupplyMetadataCalloutGroupPlacements({
       segments,
       avoidRects,
       placement: item.placement,
+      preferRightNudges,
     })
     return {
       item,
@@ -195,6 +361,7 @@ export function getSupplyMetadataCalloutGroupPlacements({
   // later card was pushed farther right. The median card remains centered;
   // outer cards absorb the small movement with a compact, visible gap.
   const CALLOUT_GROUP_GAP = 6
+  const CALLOUT_COLLISION_GAP = 8
   const groups = new Map<'upper-left' | 'top', typeof basePlacements>()
   basePlacements.forEach((entry) => {
     const kind = entry.item.placement ?? 'upper-left'
@@ -205,7 +372,7 @@ export function getSupplyMetadataCalloutGroupPlacements({
 
   groups.forEach((group) => {
     const ordered = [...group].sort((left, right) => left.rect.left - right.rect.left)
-    if (ordered.length > 1) {
+    if (packRows && ordered.length > 1) {
       const centerIndex = Math.floor((ordered.length - 1) / 2)
       const centerLeft = ordered[centerIndex]!.rect.left
       const centerRight = ordered[centerIndex]!.rect.right
@@ -246,13 +413,25 @@ export function getSupplyMetadataCalloutGroupPlacements({
   const allResults = [...placed.values()]
   allResults.forEach((current, index) => {
     let attempts = 0
-    while (
-      allResults
+    while (attempts < 24) {
+      const overlappingPrevious = allResults
         .slice(0, index)
-        .some((previous) => rectIntersectsRect(current.rect, previous.rect)) &&
-      attempts < 24
-    ) {
-      current.x += current.width + 6
+        .filter((previous) =>
+          packRows
+            ? rectIntersectsRect(current.rect, previous.rect)
+            : !(
+                current.rect.right + CALLOUT_COLLISION_GAP <= previous.rect.left ||
+                current.rect.left >= previous.rect.right + CALLOUT_COLLISION_GAP ||
+                current.rect.bottom + CALLOUT_COLLISION_GAP <= previous.rect.top ||
+                current.rect.top >= previous.rect.bottom + CALLOUT_COLLISION_GAP
+              )
+        )
+      if (overlappingPrevious.length === 0) break
+      current.x += packRows
+        ? current.width + CALLOUT_GROUP_GAP
+        : Math.max(...overlappingPrevious.map((previous) => previous.rect.right)) -
+          current.rect.left +
+          CALLOUT_COLLISION_GAP
       current.rect = getCalloutRect(
         current.symbolPosition,
         { x: current.x, y: current.y },
@@ -274,6 +453,7 @@ export function getSupplyMetadataCalloutPlacement({
   segments,
   avoidRects = [],
   placement = 'upper-left',
+  preferRightNudges = false,
 }: {
   symbolPosition: Point
   width: number
@@ -282,6 +462,7 @@ export function getSupplyMetadataCalloutPlacement({
   /** Existing device labels/callouts that this card must not cover. */
   avoidRects?: SupplyMetadataCalloutRect[]
   placement?: 'upper-left' | 'top'
+  preferRightNudges?: boolean
 }): SupplyMetadataCalloutPlacement {
   const preferred =
     placement === 'top'
@@ -293,15 +474,20 @@ export function getSupplyMetadataCalloutPlacement({
     placement === 'top'
       ? [
           preferred,
-          // Keep neighboring cards close to their symbols when the preferred
-          // centered position is occupied. Try the left side first so a card
-          // does not unnecessarily jump beyond the next DC device.
-          { x: preferred.x - width - 12, y: preferred.y },
-          // When another device is directly above this one, move the card to
-          // the right as a whole. A small nudge is not enough for wide cards.
-          { x: preferred.x + width + 12, y: preferred.y },
-          { x: preferred.x + 24, y: preferred.y },
-          { x: preferred.x - 24, y: preferred.y },
+          ...(preferRightNudges
+            ? [
+                { x: preferred.x + width + 12, y: preferred.y },
+                { x: preferred.x + 24, y: preferred.y },
+                { x: preferred.x - width - 12, y: preferred.y },
+                { x: preferred.x - 24, y: preferred.y },
+              ]
+            : [
+                // Supply rows traditionally expand toward their source side first.
+                { x: preferred.x - width - 12, y: preferred.y },
+                { x: preferred.x + width + 12, y: preferred.y },
+                { x: preferred.x + 24, y: preferred.y },
+                { x: preferred.x - 24, y: preferred.y },
+              ]),
           { x: preferred.x, y: preferred.y - 20 },
         ]
       : [

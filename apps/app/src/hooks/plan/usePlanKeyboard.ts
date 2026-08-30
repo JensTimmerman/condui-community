@@ -134,6 +134,8 @@ export function isPlanKeyboardDebugEnabled(): boolean {
   }
 }
 
+let planKeyboardRegistrationLogged = false
+
 function describeKeyEventTarget(target: EventTarget | null): string {
   if (!target || !(target instanceof Node)) return String(target)
   if (target instanceof HTMLElement) {
@@ -245,7 +247,8 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
           )
         : []
 
-    if (isPlanKeyboardDebugEnabled()) {
+    if (isPlanKeyboardDebugEnabled() && !planKeyboardRegistrationLogged) {
+      planKeyboardRegistrationLogged = true
       logger.info(
         '[PlanKeyboard] window keydown listener registered for plan canvas. Hover the plan, then try S or 1–9. (Prod: localStorage.setItem("debugPlanKeyboard","1") + reload if you see no logs.)'
       )
