@@ -67,7 +67,8 @@ async function runConversion(request, response, modulePath) {
       'Cache-Control': 'no-store',
       ...(result?.headers ?? {}),
     })
-    response.end(result?.body ?? '')
+    const responseBody = result?.body ?? ''
+    response.end(result?.isBase64Encoded ? Buffer.from(responseBody, 'base64') : responseBody)
   } catch (error) {
     sendJson(response, 500, {
       error: error instanceof Error ? error.message : 'Local conversion failed.',

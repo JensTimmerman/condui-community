@@ -117,7 +117,12 @@ export function parseSvgTransformAttribute(transform: string): Affine2D {
 
 /** Parse the outer LibreDWG CAD→SVG group transform from imported SVG content. */
 export function parseOuterCadToSvgMatrix(svgContent: string): Affine2D {
-  const matrixMatch = svgContent.match(/<g[^>]*transform=["']matrix\(([^"']+)\)["']/i)
+  // LibreDWG writes reusable block definitions before the model-space group.
+  // Those definitions can contain their own transforms, so only search the
+  // rendered portion after </defs> when a definitions block is present.
+  const defsEnd = svgContent.search(/<\/defs\s*>/i)
+  const renderedContent = defsEnd >= 0 ? svgContent.slice(defsEnd) : svgContent
+  const matrixMatch = renderedContent.match(/<g[^>]*transform=["']matrix\(([^"']+)\)["']/i)
   if (matrixMatch) {
     const matrixArgs = matrixMatch[1]
     if (!matrixArgs) return IDENTITY_AFFINE
@@ -125,7 +130,7 @@ export function parseOuterCadToSvgMatrix(svgContent: string): Affine2D {
     if (parsed) return parsed
   }
 
-  const transformMatch = svgContent.match(/<g[^>]*transform=["']([^"']+)["']/i)
+  const transformMatch = renderedContent.match(/<g[^>]*transform=["']([^"']+)["']/i)
   if (transformMatch?.[1]) {
     return parseSvgTransformAttribute(transformMatch[1])
   }

@@ -232,17 +232,8 @@ export function WireRouteAndCableForm({
     !!phaseSystem &&
     !!effectivePhaseAssignment &&
     !!getPhaseAssignmentLabel(effectivePhaseAssignment, phaseSystem)
-  const conductorOptions = getWireConductorOptions(
-    isDC,
-    effectivePhaseAssignment,
-    effectivePhaseConstraint
-  )
-  const selectedConductorValue = resolveConductorDropdownValue(
-    state.cable,
-    isDC,
-    effectivePhaseAssignment,
-    effectivePhaseConstraint
-  )
+  const conductorOptions = getWireConductorOptions(isDC)
+  const selectedConductorValue = resolveConductorDropdownValue(state.cable, isDC)
 
   const wireTypes = isDC
     ? getDcWireTypeOptions(t('wires.other', 'Other'))
@@ -344,37 +335,13 @@ export function WireRouteAndCableForm({
             <CustomDropdown
               value={phaseSelectionValue}
               onChange={(nextValue) => {
-              const nextAssignment = getPhaseAssignmentForOptionValue(
-                nextValue,
-                phaseSystem,
-                effectivePhaseConstraint
-              )
-              const nextConductorOptions = getWireConductorOptions(
-                isDC,
-                nextAssignment,
-                effectivePhaseConstraint
-              )
-              const currentConductor = nextConductorOptions.find(
-                (option) => option.value === resolveConductorDropdownValue(state.cable, isDC)
-              )
-              const preferredConductor =
-                currentConductor ??
-                nextConductorOptions.find(
-                  (option) => option.hasPE === (state.cable.hasPE ?? false)
-                ) ??
-                nextConductorOptions[0]
-              onChange({
-                phaseAssignment: nextAssignment,
-                ...(!phaseOnly && preferredConductor
-                  ? {
-                      cable: {
-                        ...state.cable,
-                        conductors: preferredConductor.conductors,
-                        hasPE: preferredConductor.hasPE,
-                      },
-                    }
-                  : {}),
-              })
+                onChange({
+                  phaseAssignment: getPhaseAssignmentForOptionValue(
+                    nextValue,
+                    phaseSystem,
+                    effectivePhaseConstraint
+                  ),
+                })
               }}
               options={phaseOptions.map((option) => ({
                 value: option.value,

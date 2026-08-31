@@ -1,5 +1,4 @@
-import type { CableSpec, CircuitPhaseAssignment } from '@/types/schema'
-import type { PhaseAssignmentConstraint } from '@/lib/wires/phaseAssignment'
+import type { CableSpec } from '@/types/schema'
 
 export type WireConductorOption = {
   value: string
@@ -38,27 +37,18 @@ export const DC_WIRE_CONDUCTOR_OPTIONS: WireConductorOption[] = [
   { value: '7G', label: '7G', conductors: 7, hasPE: true },
 ]
 
-export function getWireConductorOptions(
-  isDC: boolean,
-  _phaseAssignment?: CircuitPhaseAssignment,
-  _phaseConstraint?: PhaseAssignmentConstraint
-): WireConductorOption[] {
+export function getWireConductorOptions(isDC: boolean): WireConductorOption[] {
   return isDC ? DC_WIRE_CONDUCTOR_OPTIONS : AC_WIRE_CONDUCTOR_OPTIONS
 }
 
-export function resolveConductorDropdownValue(
-  cable: CableSpec,
-  isDC: boolean,
-  phaseAssignment?: CircuitPhaseAssignment,
-  phaseConstraint?: PhaseAssignmentConstraint
-): string {
-  const conductorOptions = getWireConductorOptions(isDC, phaseAssignment, phaseConstraint)
+export function resolveConductorDropdownValue(cable: CableSpec, isDC: boolean): string {
+  const conductorOptions = getWireConductorOptions(isDC)
   const conductors = isDC ? cable.conductors || 2 : cable.conductors
   const hasPE = cable.hasPE ?? false
   const display = hasPE ? `${conductors}G` : `${conductors}`
   return (
     conductorOptions.find((opt) => opt.value === display)?.value ??
     conductorOptions.find((opt) => opt.conductors === conductors && opt.hasPE === hasPE)?.value ??
-    conductorOptions[0]!.value
+    display
   )
 }

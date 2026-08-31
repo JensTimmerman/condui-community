@@ -223,7 +223,42 @@ function repairLegacyTransformListOrder(
   }
   const currentDistance = viewBoxDistance(matrix, extents, viewBox)
   const candidateDistance = viewBoxDistance(candidate, extents, viewBox)
-  return candidateDistance + 1e-6 < currentDistance ? candidate : matrix
+  const translationRepair = candidateDistance + 1e-6 < currentDistance ? candidate : matrix
+  const translationRepairDistance = Math.min(currentDistance, candidateDistance)
+
+  // A short-lived parser selected the first transformed group inside <defs>
+  // instead of LibreDWG's rendered model-space group. Recover axis-aligned
+  // drawings from their authoritative CAD extents and SVG viewBox. Prefer the
+  // normal CAD X direction and use the persisted Y-axis convention.
+  const modelWidth = extents.max.x - extents.min.x
+  const modelHeight = extents.max.y - extents.min.y
+  if (modelWidth <= 0 || modelHeight <= 0) return translationRepair
+  const looksLikeNestedBlockTransform =
+    Math.abs(matrix.b) < 1e-12 &&
+    Math.abs(matrix.c) < 1e-12 &&
+    matrix.a < 0 &&
+    cadReference.yAxisUp &&
+    matrix.d > 0
+  if (!looksLikeNestedBlockTransform) return translationRepair
+  const scaleX = viewBox.width / modelWidth
+  const scaleY = viewBox.height / modelHeight
+  if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY) || scaleX <= 0 || scaleY <= 0) {
+    return translationRepair
+  }
+  const inferredYScale = cadReference.yAxisUp ? -scaleY : scaleY
+  const inferred = {
+    a: scaleX,
+    b: 0,
+    c: 0,
+    d: inferredYScale,
+    e: viewBox.x - scaleX * extents.min.x,
+    f:
+      inferredYScale < 0
+        ? viewBox.y - inferredYScale * extents.max.y
+        : viewBox.y - inferredYScale * extents.min.y,
+  }
+  const inferredDistance = viewBoxDistance(inferred, extents, viewBox)
+  return inferredDistance + 1e-6 < translationRepairDistance ? inferred : translationRepair
 }
 
 export function resolveCadToSvgMatrix(cadReference: CadReferenceV1): Affine2D {

@@ -46,7 +46,6 @@ export function SupplyWireProperties({
   onUpdateCable,
   wireDomain = 'AC',
   configuredPhaseAssignment,
-  effectivePhaseAssignment,
   showPhaseLabel,
   phaseConstraint,
   phaseLocked = false,
@@ -107,17 +106,8 @@ export function SupplyWireProperties({
     'Fca',
   ]
 
-  const conductorOptions = getWireConductorOptions(
-    isDC,
-    effectivePhaseAssignment,
-    phaseConstraint
-  )
-  const selectedConductorValue = resolveConductorDropdownValue(
-    supplyCable,
-    isDC,
-    effectivePhaseAssignment,
-    phaseConstraint
-  )
+  const conductorOptions = getWireConductorOptions(isDC)
+  const selectedConductorValue = resolveConductorDropdownValue(supplyCable, isDC)
 
   const wireTypes = isDC
     ? getDcWireTypeOptions(t('wires.other', 'Other'))
