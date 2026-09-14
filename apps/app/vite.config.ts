@@ -251,6 +251,7 @@ export default defineConfig({
       ),
       '@': path.resolve(appRoot, 'src'),
       '@eendra/app-edition': path.resolve(repoRoot, 'packages/app-edition/src/index.ts'),
+      '@eendra/ui': path.resolve(repoRoot, 'packages/ui/src'),
     },
   },
   build: { sourcemap: false },
