@@ -1,6 +1,6 @@
 const PROJECT_ASSET_REF_PREFIX = 'asset://'
 import {
-  getBuildingFloorsFromProject,
+  selectProjectBuildingFloors,
   type ProjectWithOptionalV2Building,
 } from '@/lib/projectV2/buildingFloors'
 import type { ProjectV2Meta } from '@/types/projectV2'
@@ -32,7 +32,7 @@ export function collectProjectRasterImageUrls(project: ProjectWithRasterPreloadD
     seen.add(value)
   }
 
-  for (const floor of getBuildingFloorsFromProject(project)) {
+  for (const floor of selectProjectBuildingFloors(project)) {
     if ('planAsset' in floor) {
       add(floor.planAsset)
       add(floor.planAssetProcessed)

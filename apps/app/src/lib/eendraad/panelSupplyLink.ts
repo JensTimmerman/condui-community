@@ -1,6 +1,6 @@
 import type { Circuit, Endpoint, Panel, ProtectionDevice } from '@/types/schema'
 import {
-  getElectricalPanelsFromProject,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { findPanelById } from '@/lib/panel/panelTree'
@@ -60,11 +60,20 @@ export function resolvePanelSupplyLinkForProtection(
   sourcePanel: Panel,
   protection: ProtectionDevice
 ): PanelSupplyLink | null {
-  if (!protection.subPanelId) return null
-  const targetPanel = findPanelById(
-    getElectricalPanelsFromProject(project),
-    protection.subPanelId
+  return resolvePanelSupplyLinkForProtectionInPanels(
+    getProjectElectricalPanels(project),
+    sourcePanel,
+    protection,
   )
+}
+
+export function resolvePanelSupplyLinkForProtectionInPanels(
+  panels: Panel[],
+  sourcePanel: Panel,
+  protection: ProtectionDevice,
+): PanelSupplyLink | null {
+  if (!protection.subPanelId) return null
+  const targetPanel = findPanelById(panels, protection.subPanelId)
   if (!targetPanel) return null
 
   const circuits = protection.circuits ?? []
@@ -89,11 +98,21 @@ export function resolvePanelSupplyLinkForPanel(
   project: ProjectWithOptionalV2Electrical,
   targetPanelId: string
 ): PanelSupplyLink | null {
+  return resolvePanelSupplyLinkForPanelInPanels(
+    getProjectElectricalPanels(project),
+    targetPanelId,
+  )
+}
+
+export function resolvePanelSupplyLinkForPanelInPanels(
+  rootPanels: Panel[],
+  targetPanelId: string,
+): PanelSupplyLink | null {
   const search = (panels: Panel[]): PanelSupplyLink | null => {
     for (const panel of panels) {
       for (const protection of panel.protections ?? []) {
         if (protection.subPanelId !== targetPanelId) continue
-        const link = resolvePanelSupplyLinkForProtection(project, panel, protection)
+        const link = resolvePanelSupplyLinkForProtectionInPanels(rootPanels, panel, protection)
         if (link) return link
       }
       const nested = search(panel.subPanels ?? [])
@@ -102,7 +121,7 @@ export function resolvePanelSupplyLinkForPanel(
     return null
   }
 
-  return search(getElectricalPanelsFromProject(project))
+  return search(rootPanels)
 }
 
 export function resolvePanelSupplyLinksForSourcePanel(
@@ -111,6 +130,18 @@ export function resolvePanelSupplyLinksForSourcePanel(
 ): PanelSupplyLink[] {
   return (sourcePanel.protections ?? [])
     .map((protection) => resolvePanelSupplyLinkForProtection(project, sourcePanel, protection))
+    .filter((link): link is PanelSupplyLink => !!link)
+}
+
+/** Resolve source-panel links when the caller already owns the canonical panel projection. */
+export function resolvePanelSupplyLinksForSourcePanelInPanels(
+  rootPanels: Panel[],
+  sourcePanel: Panel,
+): PanelSupplyLink[] {
+  return (sourcePanel.protections ?? [])
+    .map((protection) =>
+      resolvePanelSupplyLinkForProtectionInPanels(rootPanels, sourcePanel, protection),
+    )
     .filter((link): link is PanelSupplyLink => !!link)
 }
 

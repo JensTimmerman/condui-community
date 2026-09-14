@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, Eye, EyeOff, MapPin } from 'lucide-react'
 import { DebouncedTextInput, DebouncedTextarea } from '@/components/forms'
-import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
+import { getProjectElectricalInstallation } from '@/lib/projectV2/electrical'
 import {
   isGeoapifyConfigured,
   searchGeoapifyAddresses,
@@ -180,7 +180,7 @@ export function ProjectProperties({
     inspectionAgencyCatalog: showInspectionAgencyCatalog,
     installationProfileSelection: showInstallationProfile,
   } = useEditionFeatureAvailability(project?.project.id)
-  const installation = project ? getElectricalInstallationFromProject(project) : undefined
+  const installation = project ? getProjectElectricalInstallation(project) : undefined
   const projectInfo = project?.project
   const siteLocation = (
     project as
@@ -319,7 +319,7 @@ export function ProjectProperties({
               </label>
               <input
                 type="number"
-                min={1800}
+                min={1500}
                 max={2100}
                 value={project.project.yearOfConstruction ?? ''}
                 onChange={(e) => {
@@ -421,12 +421,16 @@ export function ProjectProperties({
                   <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
                     {t('installation.country', 'Country')}
                   </label>
-                  <input
-                    type="text"
-                    value={t('installation.countryBelgium', 'Belgium')}
-                    disabled
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-400 cursor-not-allowed"
-                  />
+                  <select
+                    value={installation.address.country}
+                    disabled={readOnly}
+                    onChange={(e) => updateInstallation({ address: { ...installation.address, country: e.target.value } })}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  >
+                    <option value="BE">{t('installation.countryBelgium', 'Belgium')}</option>
+                    <option value="FR">{t('installation.countryFrance', 'France')}</option>
+                    <option value="NL">{t('installation.countryNetherlands', 'Netherlands')}</option>
+                  </select>
                 </div>
               </div>
             </div>

@@ -10,6 +10,7 @@ import type {
   SolarPanelDeviceProps,
   SymbolKey,
   SynergridCertification,
+  DomoticaDeviceProps,
 } from '@/types/schema'
 
 export const SUPPLY_ASSEMBLY_GRAPH_VERSION = 1 as const
@@ -151,7 +152,10 @@ export type SupplyNode =
   | SupplyNodeBase<'inverter-unit', { serialNumber?: string; gridInputConnected?: boolean }>
   | SupplyNodeBase<'battery', BatteryDeviceProps>
   | SupplyNodeBase<'solar-source', SolarPanelDeviceProps>
-  | SupplyNodeBase<'dc-bus', { ratedCurrentA?: number; ratedVoltageV?: number }>
+  | SupplyNodeBase<
+      'dc-bus',
+      { ratedCurrentA?: number; ratedVoltageV?: number; domoticaProps?: DomoticaDeviceProps }
+    >
   | SupplyNodeBase<'protection', SupplyProtectionProperties>
   | SupplyNodeBase<'panel-handoff', Record<string, never>>
   | SupplyNodeBase<'generator-source', GeneratorSourceProperties>

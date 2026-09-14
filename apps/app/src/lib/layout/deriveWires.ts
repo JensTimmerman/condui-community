@@ -54,6 +54,8 @@ import {
 } from './bottomUpLayout'
 import { applyWireInset } from './wireInsets'
 import { applyRotatedWireInset } from './rotatedWireInsets'
+import { TERMINAL_STRIP_WIRE_LABEL_SPAN } from './trunkDeviceSpacing'
+import { isSharedJunctionSymbol } from '@/lib/junctionIdentity'
 import {
   DOMOTICA_BRANCH_LEAD,
   DOMOTICA_BOX_WIDTH,
@@ -67,6 +69,7 @@ import {
   CIRCUIT_CONVERTER_TOP_WIRE_INSET,
   getCircuitConverterBodyGeometry,
   getCircuitConverterDcConnectionCount,
+  getOrdinaryCircuitConverterOutputRowY,
   getSupplyConverterBodyGeometry,
   supportsCircuitConverterDcConnections,
 } from './circuitConverterGeometry'
@@ -174,8 +177,14 @@ function getDomoticaOutputPhaseState(
   | Pick<ReturnType<typeof getCircuitWirePropertiesForDomain>, 'phaseAssignment' | 'showPhaseLabel'>
   | undefined {
   if (!segment.domoticaOutputGroup || segment.domoticaOutputIndex == null) return undefined
+  const segmentSource = circuit.endpoints.find((endpoint) => endpoint.id === segment.fromElementId)
+  const parentId =
+    segmentSource?.symbol === 'domotica'
+      ? segmentSource.id
+      : segmentSource?.domoticaChildProps?.parentEndpointId
   const domotica = circuit.endpoints.find(
-    (endpoint) => endpoint.symbol === 'domotica' && endpoint.domoticaProps
+    (endpoint) =>
+      endpoint.id === parentId && endpoint.symbol === 'domotica' && endpoint.domoticaProps
   )
   if (!domotica?.domoticaProps) return undefined
   const outputWires =
@@ -193,6 +202,33 @@ function applyNodeWireInset(
   otherEnd: { x: number; y: number },
   node: LayoutNode
 ): { x: number; y: number } {
+  if (node.type === 'endpoint' && getNodeSymbolId(node) === 'domotica') {
+    const dx = otherEnd.x - point.x
+    const dy = otherEnd.y - point.y
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      return {
+        x: point.x + (dx < 0 ? -DOMOTICA_BOX_WIDTH / 2 : DOMOTICA_BOX_WIDTH / 2),
+        y: point.y,
+      }
+    }
+    return {
+      x: point.x,
+      y: point.y + (dy < 0 ? -node.bounds.height / 2 : node.bounds.height / 2),
+    }
+  }
+  // Supply DC-bus domotica uses the same anchored, variable-height frame as
+  // regular-panel domotica. Its vertical bus connection must terminate at the
+  // actual frame edge, not at the layout anchor/center.
+  if (node.type === 'trunkDevice' && getNodeSymbolId(node) === 'domotica') {
+    const dx = otherEnd.x - point.x
+    const dy = otherEnd.y - point.y
+    if (Math.abs(dy) > Math.abs(dx)) {
+      return {
+        x: point.x,
+        y: point.y + (dy < 0 ? -node.bounds.height / 2 : node.bounds.height / 2),
+      }
+    }
+  }
   const converter = node.domainRef as TrunkDevice | undefined
   if (
     node.connectionAnchor &&
@@ -245,6 +281,14 @@ function getTrunkDomainAfterNode(
 ): typeof DEFAULT_ELECTRICAL_DOMAIN {
   if (!node) return previousDomain
   const symbolId = getNodeSymbolId(node)
+  const trunkDevice = node.domainRef as TrunkDevice | undefined
+  if (
+    node.type === 'trunkDevice' &&
+    supportsCircuitConverterDcConnections(trunkDevice) &&
+    getCircuitConverterDcConnectionCount(trunkDevice) > 1
+  ) {
+    return previousDomain
+  }
   if (!symbolId || !CONVERSION_SYMBOL_IDS.has(symbolId)) {
     // Non-conversion devices (protection, energy meter, etc.) are domain agnostic
     return previousDomain
@@ -419,10 +463,7 @@ export function deriveWires(
  * from the final converter edge to the final rail endpoint so the asymmetric rail geometry
  * cannot inherit the pre-mirror attachment point.
  */
-function alignSupplyDcBusConnectionLeads(
-  panelNode: LayoutNode,
-  segments: WireSegment[]
-): void {
+function alignSupplyDcBusConnectionLeads(panelNode: LayoutNode, segments: WireSegment[]): void {
   const supplyNodes = panelNode.children.filter(
     (node) => node.type === 'trunkDevice' && node.id.startsWith('supplyTrunkDevice-')
   )
@@ -445,19 +486,47 @@ function alignSupplyDcBusConnectionLeads(
     ) {
       continue
     }
+    const busEndpoint = `device:${busDevice.id}`
     const lead = segments.find(
       (segment) =>
         segment.domain === 'DC' &&
         segment.supplySectionKey?.includes(':converter-dc-right:') === true &&
-        segment.supplySectionKey.includes(`device:${busDevice.id}`)
+        (segment.supplySectionKey.includes(`:${busEndpoint}<>`) ||
+          segment.supplySectionKey.endsWith(`<>${busEndpoint}`))
     )
     if (!lead) continue
     const converterAnchor = getNodeConnectionAnchor(converterNode)
-    lead.startPoint = applyNodeWireInset(
-      converterAnchor,
-      busNode.connectionAnchor,
-      converterNode
+    const inlineDcNodes = supplyNodes.filter((node) => {
+      const device = node.domainRef as TrunkDevice | undefined
+      return (
+        device != null &&
+        device.id !== busDevice.id &&
+        device.id !== converterNode.domainId &&
+        device.type !== 'dc_bus' &&
+        !device.supplyDcBusId &&
+        getSupplyConverterDcConnectionIndex(device) === 0
+      )
+    })
+    const inlineDcNode = inlineDcNodes.reduce(
+      (selected, candidate) => {
+        if (!selected) return candidate
+        return converterAnchor.x >= candidate.bounds.x
+          ? candidate.bounds.x < selected.bounds.x
+            ? candidate
+            : selected
+          : candidate.bounds.x > selected.bounds.x
+            ? candidate
+            : selected
+      },
+      undefined as LayoutNode | undefined
     )
+    lead.startPoint = inlineDcNode
+      ? applyNodeWireInset(
+          getNodeConnectionAnchor(inlineDcNode),
+          busNode.connectionAnchor,
+          inlineDcNode
+        )
+      : applyNodeWireInset(converterAnchor, busNode.connectionAnchor, converterNode)
     lead.endPoint = { ...busNode.connectionAnchor }
     lead.type = 'branch'
   }
@@ -1526,10 +1595,7 @@ function derivePanelWires(
           dcSectionEndpoints[index]!,
           dcSectionEndpoints[index + 1]!
         )
-        const connection = findAssemblyConnection(
-          dcPathNodeIds[index],
-          dcPathNodeIds[index + 1]
-        )
+        const connection = findAssemblyConnection(dcPathNodeIds[index], dcPathNodeIds[index + 1])
         const points =
           start.x !== end.x && start.y !== end.y
             ? [start, { x: end.x, y: start.y }, end]
@@ -1626,12 +1692,12 @@ function derivePanelWires(
         const firstConnection = findAssemblyConnection(pathNodeIds[0], pathNodeIds[1])
         const singleLaneNode = laneNodes.length === 1 ? laneNodes[0] : undefined
         const verticalEnd = singleLaneNode
-          ? singleLaneNode.connectionAnchor ??
+          ? (singleLaneNode.connectionAnchor ??
             applyNodeWireInset(
               { x: singleLaneNode.bounds.x, y: singleLaneNode.bounds.y },
               converterTop,
               singleLaneNode
-            )
+            ))
           : { x: portX, y: topY }
         const verticalCorner = { x: portX, y: verticalEnd.y }
         segments.push(
@@ -1740,10 +1806,7 @@ function derivePanelWires(
             sectionEndpoints[index + 1]!,
             sectionEndpoints[index + 2]!
           )
-          const connection = findAssemblyConnection(
-            pathNodeIds[index + 1],
-            pathNodeIds[index + 2]
-          )
+          const connection = findAssemblyConnection(pathNodeIds[index + 1], pathNodeIds[index + 2])
           const points =
             start.x !== end.x && start.y !== end.y
               ? [start, { x: end.x, y: start.y }, end]
@@ -1777,11 +1840,9 @@ function derivePanelWires(
         (node) => (node.domainRef as TrunkDevice | undefined)?.type === 'dc_bus'
       )) {
         const busDevice = busNode.domainRef as TrunkDevice
-        const branchNodes = supplyTrunkDeviceNodes
-          .filter(
-            (node) =>
-              (node.domainRef as TrunkDevice | undefined)?.supplyDcBusId === busDevice.id
-          )
+        const branchNodes = supplyTrunkDeviceNodes.filter(
+          (node) => (node.domainRef as TrunkDevice | undefined)?.supplyDcBusId === busDevice.id
+        )
         const branchGroups = new Map<string, LayoutNode[]>()
         branchNodes.forEach((node) => {
           const device = node.domainRef as TrunkDevice
@@ -1791,16 +1852,19 @@ function derivePanelWires(
           branchGroups.set(branchId, group)
         })
         for (const [branchId, group] of branchGroups) {
-          const ordered = [...group].sort((left, right) => right.bounds.y - left.bounds.y)
+          const ordered = group
+            .filter((node) => !(node.domainRef as TrunkDevice).converterDcConnection)
+            .sort((left, right) => right.bounds.y - left.bounds.y)
           let fromNode = busNode
           let fromDevice = busDevice
           for (const branchNode of ordered) {
             const branchDevice = branchNode.domainRef as TrunkDevice
+            const incomingPortX = branchNode.connectionAnchor?.x ?? branchNode.bounds.x
             const fromPoint = {
-              x: branchNode.bounds.x,
+              x: incomingPortX,
               y: fromNode === busNode ? busNode.bounds.y : fromNode.bounds.y,
             }
-            const devicePoint = { x: branchNode.bounds.x, y: branchNode.bounds.y }
+            const devicePoint = { x: incomingPortX, y: branchNode.bounds.y }
             const connection = findAssemblyConnection(fromDevice.id, branchDevice.id)
             segments.push(
               applyAssemblyConnection(
@@ -1829,6 +1893,134 @@ function derivePanelWires(
             )
             fromNode = branchNode
             fromDevice = branchDevice
+          }
+
+          const nestedConverterNode = ordered.find((candidate) => {
+            const candidateDevice = candidate.domainRef as TrunkDevice
+            return (
+              supportsCircuitConverterDcConnections(candidateDevice) &&
+              getCircuitConverterDcConnectionCount(candidateDevice) > 1
+            )
+          })
+          const nestedConverter = nestedConverterNode?.domainRef as TrunkDevice | undefined
+          if (!nestedConverterNode || !nestedConverter) continue
+          const anchor = nestedConverterNode.connectionAnchor ?? {
+            x: nestedConverterNode.bounds.x,
+            y: nestedConverterNode.bounds.y,
+          }
+          const growthDirection = nestedConverterNode.converterGrowthDirection ?? 'right'
+          const geometry =
+            growthDirection === 'left'
+              ? getSupplyConverterBodyGeometry(nestedConverter, anchor)
+              : getCircuitConverterBodyGeometry(nestedConverter, anchor)
+          const dcPorts =
+            growthDirection === 'left'
+              ? Array.from({ length: geometry.count }, (_, index) => ({
+                  index,
+                  x: anchor.x - index * CIRCUIT_CONVERTER_BLOCK_SIZE,
+                  y: anchor.y - CIRCUIT_CONVERTER_TOP_WIRE_INSET,
+                }))
+              : getCircuitConverterBodyGeometry(nestedConverter, anchor).dcPorts
+          for (let connectionIndex = 0; connectionIndex < geometry.count; connectionIndex += 1) {
+            const laneNodes = group
+              .filter(
+                (candidate) =>
+                  (candidate.domainRef as TrunkDevice).converterDcConnection?.converterId ===
+                    nestedConverter.id &&
+                  (candidate.domainRef as TrunkDevice).converterDcConnection?.connectionIndex ===
+                    connectionIndex
+              )
+              .sort((left, right) => left.bounds.x - right.bounds.x)
+            const port = dcPorts[connectionIndex]!
+            const rowY = getOrdinaryCircuitConverterOutputRowY(
+              nestedConverter,
+              anchor.y,
+              connectionIndex
+            )
+            const rowPoint = { x: port.x, y: rowY }
+            const firstLaneNode = laneNodes[0]
+            const firstLaneCenter = firstLaneNode
+              ? { x: firstLaneNode.bounds.x, y: firstLaneNode.bounds.y }
+              : undefined
+            const firstLaneTarget =
+              firstLaneNode && firstLaneCenter
+                ? applyNodeWireInset(
+                    firstLaneCenter,
+                    firstLaneCenter.x === port.x ? port : rowPoint,
+                    firstLaneNode
+                  )
+                : undefined
+            const points =
+              firstLaneTarget && firstLaneTarget.x === port.x
+                ? [port, firstLaneTarget]
+                : firstLaneTarget
+                  ? [port, rowPoint, firstLaneTarget]
+                  : [port, rowPoint]
+            for (let pointIndex = 0; pointIndex < points.length - 1; pointIndex += 1) {
+              const startPoint = points[pointIndex]!
+              const endPoint = points[pointIndex + 1]!
+              segments.push(
+                applySupplySection(
+                  {
+                    id: generateId(),
+                    type: startPoint.x === endPoint.x ? 'vertical' : 'branch',
+                    startPoint,
+                    endPoint,
+                    cable: fallbackCable,
+                    panelId: panel.id,
+                    domain: 'DC',
+                    hideWireLabel: true,
+                  },
+                  supplySectionKey(
+                    `dc-bus-${busDevice.id}-${branchId}-converter-${nestedConverter.id}-${connectionIndex}`,
+                    `device:${nestedConverter.id}`,
+                    laneNodes.length > 0
+                      ? `device:${(laneNodes[0]!.domainRef as TrunkDevice).id}`
+                      : `output:${connectionIndex}`
+                  )
+                )
+              )
+            }
+            let previousNode = nestedConverterNode
+            let previousDevice = nestedConverter
+            for (const laneNode of laneNodes) {
+              const laneDevice = laneNode.domainRef as TrunkDevice
+              const rawStart =
+                previousNode === nestedConverterNode
+                  ? { x: laneNode.bounds.x, y: rowY }
+                  : { x: previousNode.bounds.x, y: previousNode.bounds.y }
+              const rawEnd = { x: laneNode.bounds.x, y: laneNode.bounds.y }
+              if (rawStart.x !== rawEnd.x || rawStart.y !== rawEnd.y) {
+                const connection = findAssemblyConnection(previousDevice.id, laneDevice.id)
+                segments.push(
+                  applyAssemblyConnection(
+                    applySupplySection(
+                      {
+                        id: generateId(),
+                        type: rawStart.x === rawEnd.x ? 'vertical' : 'branch',
+                        startPoint:
+                          previousNode === nestedConverterNode
+                            ? rawStart
+                            : applyNodeWireInset(rawStart, rawEnd, previousNode),
+                        endPoint: applyNodeWireInset(rawEnd, rawStart, laneNode),
+                        cable: fallbackCable,
+                        panelId: panel.id,
+                        domain: 'DC',
+                        hideWireLabel: true,
+                      },
+                      supplySectionKey(
+                        `dc-bus-${busDevice.id}-${branchId}-converter-${nestedConverter.id}-${connectionIndex}`,
+                        `device:${previousDevice.id}`,
+                        `device:${laneDevice.id}`
+                      )
+                    ),
+                    connection
+                  )
+                )
+              }
+              previousNode = laneNode
+              previousDevice = laneDevice
+            }
           }
         }
       }
@@ -1911,16 +2103,23 @@ function derivePanelWires(
     const utilityAssemblyNodeId = supplyAssembly?.nodes.find(
       (node) => node.kind === 'utility-source'
     )?.id
+    const changeoverGridSourceNodeId =
+      supplyAssembly?.nodes.find(
+        (node) => node.kind === 'ac-distribution' && node.label === 'Grid split'
+      )?.id ?? utilityAssemblyNodeId
     // Assemblies may fan out to multiple main panels. Select the handoff that
     // targets the panel currently being rendered; using the first handoff made
     // every additional main panel inherit the original panel's wire path.
     const handoffAssemblyNodeId =
       supplyAssembly?.loadHandoffs.find(
         (handoff) =>
-          (handoff.target.kind === 'panel-input' ||
+          ((handoff.target.kind === 'panel-input' ||
             handoff.target.kind === 'panel-bus-input' ||
             handoff.target.kind === 'circuit-input') &&
-          handoff.target.panelId === panel.id
+          handoff.target.panelId === panel.id) ||
+          (handoff.target.kind === 'root-feed' && installation?.feedTopology?.rootFeeds.some(
+            (feed) => handoff.target.kind === 'root-feed' && feed.id === handoff.target.rootFeedId && feed.panelId === panel.id
+          ))
       )?.handoffNodeId ?? supplyAssembly?.nodes.find((node) => node.kind === 'panel-handoff')?.id
     const currentPanelHandoffConnection = supplyAssembly?.connections.find((connection) =>
       connection.endpoints.some(({ nodeId }) => nodeId === handoffAssemblyNodeId)
@@ -2203,15 +2402,25 @@ function derivePanelWires(
       }
 
       const lowerPortY = changeoverY + portOffset
-      const changeoverGridNodes = supplyTrunkDeviceNodes
+      const changeoverGridInlineNodes = supplyTrunkDeviceNodes
         .filter(
-          (node) => (node.domainRef as TrunkDevice | undefined)?.supplyPath === 'changeover-grid'
+          (node) =>
+            (node.domainRef as TrunkDevice | undefined)?.supplyPath === 'changeover-grid' &&
+            (node.domainRef as TrunkDevice | undefined)?.changeoverGridPlacement !== 'input-leg'
         )
         .sort((a, b) => a.bounds.x - b.bounds.x)
+      const changeoverGridInputLegNodes = supplyTrunkDeviceNodes
+        .filter(
+          (node) =>
+            (node.domainRef as TrunkDevice | undefined)?.supplyPath === 'changeover-grid' &&
+            (node.domainRef as TrunkDevice | undefined)?.changeoverGridPlacement === 'input-leg'
+        )
+        .sort((a, b) => a.bounds.y - b.bounds.y)
       const changeoverGridPathNodeIds = [
         sourceChangeoverNode.domainId,
-        ...changeoverGridNodes.map((node) => node.domainId),
-        utilityAssemblyNodeId,
+        ...changeoverGridInputLegNodes.map((node) => node.domainId),
+        ...[...changeoverGridInlineNodes].reverse().map((node) => node.domainId),
+        changeoverGridSourceNodeId,
       ].filter((id): id is string => !!id)
       const changeoverGridConnections = changeoverGridPathNodeIds
         .slice(0, -1)
@@ -2223,7 +2432,10 @@ function derivePanelWires(
         changeoverGridConnections[0]
       const changeoverGridSectionEndpoints = [
         `utility:${utilityAssemblyNodeId ?? panel.id}`,
-        ...changeoverGridNodes.map((node) => `device:${node.domainId ?? node.id}`),
+        ...changeoverGridInlineNodes.map((node) => `device:${node.domainId ?? node.id}`),
+        ...[...changeoverGridInputLegNodes]
+          .reverse()
+          .map((node) => `device:${node.domainId ?? node.id}`),
         `changeover:${sourceChangeoverNode.domainId ?? sourceChangeoverNode.id}:grid`,
       ]
       const changeoverGridSectionKey = (index: number) =>
@@ -2243,14 +2455,38 @@ function derivePanelWires(
         undefined,
         changeoverGridSwitchSectionKey
       )
-      pushChangeoverWire(
-        { x: elbowX, y: lowerPortY },
-        { x: elbowX, y: lowerY },
-        'upstream',
-        firstChangeoverGridConnection,
-        undefined,
-        changeoverGridSwitchSectionKey
-      )
+      const changeoverGridInputLegWaypoints = [
+        { point: { x: elbowX, y: lowerPortY }, node: undefined as LayoutNode | undefined },
+        ...changeoverGridInputLegNodes.map((node) => ({
+          point: { x: elbowX, y: node.bounds.y },
+          node,
+        })),
+        { point: { x: elbowX, y: lowerY }, node: undefined as LayoutNode | undefined },
+      ]
+      for (let index = 0; index < changeoverGridInputLegWaypoints.length - 1; index++) {
+        const from = changeoverGridInputLegWaypoints[index]!
+        const to = changeoverGridInputLegWaypoints[index + 1]!
+        const start = from.node ? applyNodeWireInset(from.point, to.point, from.node) : from.point
+        const end = to.node ? applyNodeWireInset(to.point, from.point, to.node) : to.point
+        const fromId =
+          index === 0
+            ? sourceChangeoverNode.domainId
+            : changeoverGridInputLegNodes[index - 1]?.domainId
+        const toId =
+          index < changeoverGridInputLegNodes.length
+            ? changeoverGridInputLegNodes[index]?.domainId
+            : (changeoverGridInlineNodes.at(-1)?.domainId ?? changeoverGridSourceNodeId)
+        const sectionIndex = changeoverGridSectionEndpoints.length - 2 - index
+        pushChangeoverWire(
+          start,
+          end,
+          'upstream',
+          (fromId && toId ? findAssemblyConnection(fromId, toId, 'grid-ac') : undefined) ??
+            firstChangeoverGridConnection,
+          undefined,
+          changeoverGridSectionKey(sectionIndex)
+        )
+      }
 
       const backupInputAssignment = backupChangeoverInputSegment?.phaseAssignment
       const gridInputAssignment = gridChangeoverInputSegment?.phaseAssignment
@@ -2275,8 +2511,10 @@ function derivePanelWires(
         const gridBusX = getLeftBiasedBusFeedStubX(gridBusRun.startPoint.x, gridBusRun.endPoint.x)
         const gridBusConnection =
           findAssemblyConnection(
-            utilityAssemblyNodeId,
-            changeoverGridNodes[0]?.domainId ?? sourceChangeoverNode.domainId,
+            changeoverGridSourceNodeId,
+            changeoverGridInlineNodes[0]?.domainId ??
+              changeoverGridInputLegNodes.at(-1)?.domainId ??
+              sourceChangeoverNode.domainId,
             'grid-ac'
           ) ?? firstChangeoverGridConnection
         pushChangeoverWire(
@@ -2295,7 +2533,7 @@ function derivePanelWires(
             point: { x: gridBusX, y: lowerY },
             node: undefined as LayoutNode | undefined,
           },
-          ...changeoverGridNodes.map((node) => ({
+          ...changeoverGridInlineNodes.map((node) => ({
             point: { x: node.bounds.x, y: lowerY },
             node,
           })),
@@ -2305,9 +2543,9 @@ function derivePanelWires(
           },
         ]
         const gridRailPathNodeIds = [
-          utilityAssemblyNodeId,
-          ...changeoverGridNodes.map((node) => node.domainId),
-          sourceChangeoverNode.domainId,
+          changeoverGridSourceNodeId,
+          ...changeoverGridInlineNodes.map((node) => node.domainId),
+          changeoverGridInputLegNodes.at(-1)?.domainId ?? sourceChangeoverNode.domainId,
         ].filter((id): id is string => !!id)
         for (let index = 0; index < gridRailWaypoints.length - 1; index++) {
           const from = gridRailWaypoints[index]!
@@ -2336,6 +2574,7 @@ function derivePanelWires(
             ![
               'backup',
               'backup-output',
+              'changeover-grid',
               'converter-grid',
               'converter-dc',
               'converter-dc-top',
@@ -2416,6 +2655,9 @@ function derivePanelWires(
         )
       }
     } else if (directConverterNode) {
+      const rootBranchOutput = supplyAssembly?.loadHandoffs.some(
+        (handoff) => handoff.id === `${supplyAssembly.id}-root-input-${panel.id}`
+      ) === true
       const supplyY = supplyNode.bounds.y
       const bendX = resolvedSupplyBendX
       const { x: converterX, y: converterY } = getNodeConnectionAnchor(directConverterNode)
@@ -2509,6 +2751,8 @@ function derivePanelWires(
           : [
               {
                 point: { x: bendX, y: supplyY },
+                assemblyNodeId: rootBranchOutput || currentPanelHandoffConnection?.pathRole === 'grid-only-bypass-ac'
+                  ? handoffAssemblyNodeId : undefined,
                 sectionEndpointId: `panel-bus:${panel.id}`,
               },
             ]),
@@ -2530,7 +2774,11 @@ function derivePanelWires(
           ? [
               {
                 point: { x: converterX, y: supplyY },
-                assemblyNodeId: directConverterNode.domainId,
+                // The horizontal main path passes the grid tap, not the inverter's AC port.
+                assemblyNodeId: rootBranchOutput
+                  ? supplyAssembly?.connections.find((edge) => edge.pathRole === 'inverter-grid-ac' && edge.endpoints[1].nodeId === directConverterNode.domainId)?.endpoints[0].nodeId
+                  : currentPanelHandoffConnection?.pathRole === 'grid-only-bypass-ac'
+                    ? utilityAssemblyNodeId : directConverterNode.domainId,
                 sectionEndpointId: `converter:${directConverterNode.domainId}`,
               },
             ]
@@ -2560,7 +2808,8 @@ function derivePanelWires(
         handoffAssemblyNodeId,
         'load-ac'
       )
-      const gridHandoffConnection = findAssemblyConnection(
+      const gridHandoffConnection = rootBranchOutput || currentPanelHandoffConnection?.pathRole === 'grid-only-bypass-ac'
+        ? currentPanelHandoffConnection : findAssemblyConnection(
         utilityAssemblyNodeId,
         handoffAssemblyNodeId,
         'grid-only-bypass-ac'
@@ -2605,6 +2854,7 @@ function derivePanelWires(
         )
       }
       if (vertical) {
+        if (gridHandoffConnection) applyAssemblyConnection(vertical, gridHandoffConnection)
         const bendWaypointIndex = horizontalWaypoints.findIndex(
           ({ point }) => Math.abs(point.x - bendX) < 1
         )
@@ -2855,7 +3105,7 @@ function derivePanelWires(
           waypointScopes[i],
           waypointScopes[i + 1],
           mergeCrossingWithBusDrop,
-          undefined,
+          !to.deviceId ? currentPanelHandoffConnection : undefined,
           supplySectionKey('serial', fromSectionEndpoint, toSectionEndpoint)
         )
       }
@@ -3552,6 +3802,7 @@ function deriveCircuitConverterDcConnectionWires(
       for (const childMcb of dcBusNode.children.filter((child) => child.type === 'mcb')) {
         result.push(...deriveMcbWires(childMcb, panel, rowY, dcBusNode))
       }
+      result.push(...deriveOrdinaryDcBusEndpointBranchWires(dcBusNode, circuit, panel, connection))
     }
 
     // Empty output slots are straight preview stubs. A horizontal branch only
@@ -3619,9 +3870,74 @@ function deriveCircuitConverterDcConnectionWires(
         converterDcConnection: connection,
       })
     }
-
   }
 
+  return result
+}
+
+function deriveOrdinaryDcBusEndpointBranchWires(
+  dcBusNode: LayoutNode,
+  circuit: Circuit,
+  panel: Panel,
+  connection?: { converterId: string; connectionIndex: number }
+): WireSegment[] {
+  const wireProps = getCircuitWirePropertiesForDomain(circuit, 'DC')
+  const result: WireSegment[] = []
+  for (const branchNode of dcBusNode.children.filter((child) => child.type === 'branch')) {
+    const orderedDevices = branchNode.children
+      .filter((child) => child.type === 'endpoint' || child.type === 'trunkDevice')
+      .sort((left, right) => right.bounds.y - left.bounds.y)
+    let fromPoint = {
+      x: branchNode.bounds.x + branchNode.bounds.width / 2,
+      y: dcBusNode.bounds.y,
+    }
+    let fromNode: LayoutNode | undefined
+    for (const endpointNode of orderedDevices) {
+      const endpointPoint = getNodeConnectionAnchor(endpointNode)
+      const fromElementType = fromNode
+        ? fromNode.type === 'trunkDevice' &&
+          (fromNode.domainRef as TrunkDevice | undefined)?.type === 'protection'
+          ? 'protection'
+          : 'endpoint'
+        : 'secondaryBus'
+      const toElementType =
+        endpointNode.type === 'trunkDevice' &&
+        (endpointNode.domainRef as TrunkDevice | undefined)?.type === 'protection'
+          ? 'protection'
+          : 'endpoint'
+      result.push({
+        id: generateId(),
+        type: 'vertical',
+        startPoint: fromNode ? applyNodeWireInset(fromPoint, endpointPoint, fromNode) : fromPoint,
+        endPoint: applyNodeWireInset(endpointPoint, fromPoint, endpointNode),
+        cable: wireProps.cable,
+        panelId: panel.id,
+        circuitId: circuit.id,
+        domain: 'DC',
+        fromElementId: fromNode?.domainId ?? (dcBusNode.domainId as string | undefined),
+        fromElementType,
+        toElementId: endpointNode.domainId,
+        toElementType,
+        inTube: wireProps.inTube,
+        inWall: wireProps.inWall,
+        wireRoute: wireProps.wireRoute,
+        hideWireLabel: true,
+        ...(connection ? { converterDcConnection: connection } : {}),
+      })
+      fromPoint = endpointPoint
+      fromNode = endpointNode
+
+      // Branch-local DC-bus converters live below the bus node rather than
+      // in the MCB's direct trunk-device list. Derive their dedicated output
+      // stubs here so empty A1…An lanes are painted as real conductors.
+      if (
+        endpointNode.type === 'trunkDevice' &&
+        supportsCircuitConverterDcConnections(endpointNode.domainRef as TrunkDevice | undefined)
+      ) {
+        result.push(...deriveCircuitConverterDcConnectionWires(endpointNode, circuit, panel))
+      }
+    }
+  }
   return result
 }
 
@@ -3721,8 +4037,8 @@ function deriveMcbWires(
     const targetPoint = directDcBusFeeder
       ? connEnd
       : converterSource
-      ? applyNodeWireInset(connEnd, sourcePoint, mcbNode)
-      : applyNodeWireInset(connEnd, connStart, mcbNode)
+        ? applyNodeWireInset(connEnd, sourcePoint, mcbNode)
+        : applyNodeWireInset(connEnd, connStart, mcbNode)
     const sourceSegment: WireSegment = {
       id: generateId(),
       type: converterSource ? 'branch' : 'vertical',
@@ -3806,8 +4122,11 @@ function deriveMcbWires(
     if (topCandidates.length > 0) {
       const topmostContentY = Math.min(...topCandidates)
       const isTopmostTrunkDevice = topmostDeviceY !== null && topmostDeviceY === topmostContentY
+      const topmostTrunkDevice = trunkDeviceNodes.at(-1)?.domainRef as TrunkDevice | undefined
       verticalWireTopY = isTopmostTrunkDevice
-        ? topmostContentY - LAYOUT_CONSTANTS.BRANCH_START_OFFSET
+        ? topmostTrunkDevice?.type === 'dc_bus'
+          ? topmostContentY
+          : topmostContentY - LAYOUT_CONSTANTS.BRANCH_START_OFFSET
         : topmostContentY
     }
 
@@ -3836,16 +4155,30 @@ function deriveMcbWires(
       // on all trunk segments. By default (undefined/false), the first segment
       // after the protection can show a label; higher segments stay hidden.
       const hideAllWireLabels = (defaultWireProps.hideWireLabel ?? false) === true
+      const firstTrunkDevice = trunkDeviceNodes[0]?.domainRef as TrunkDevice | undefined
+      const terminalStripDirectlyAfterProtection = firstTrunkDevice?.symbol === 'terminal_strip'
       for (let i = 0; i < waypoints.length - 1; i++) {
         const from = waypoints[i]
         const to = waypoints[i + 1]
         if (!from || !to) continue
+        if (from.y === to.y) continue
         const startPt = { x: mcbX, y: from.y }
         const endPt = { x: mcbX, y: to.y }
 
         const fromNode = allTrunkNodes[i]
         const toNode = allTrunkNodes[i + 1] // undefined for the last segment (→ branch/endpoint)
         const toEndpointRef = to.deviceId ?? toNode?.domainId
+        const fromTrunkDevice = fromNode?.domainRef as TrunkDevice | undefined
+        const toTrunkDevice = toNode?.domainRef as TrunkDevice | undefined
+        const bordersSharedJunction =
+          isSharedJunctionSymbol(fromTrunkDevice?.symbol) ||
+          isSharedJunctionSymbol(toTrunkDevice?.symbol)
+
+        const endsAtDedicatedConverterOutput =
+          i === waypoints.length - 2 &&
+          supportsCircuitConverterDcConnections(fromTrunkDevice) &&
+          getCircuitConverterDcConnectionCount(fromTrunkDevice) > 1
+        if (endsAtDedicatedConverterOutput) continue
 
         const adjustedStart = fromNode ? applyNodeWireInset(startPt, endPt, fromNode) : startPt
         const adjustedEnd = toNode ? applyNodeWireInset(endPt, startPt, toNode) : endPt
@@ -3870,18 +4203,29 @@ function deriveMcbWires(
           cable: segmentWireProps.cable,
           panelId: panel.id,
           domain: currentDomain,
-          fromElementType: i === 0 ? 'protection' : 'endpoint',
-          fromElementId: from.deviceId ?? fromNode?.domainId,
-          toElementId: to.deviceId ?? toNode?.domainId,
+          fromElementType: segmentSectionRef.fromElementType,
+          fromElementId: segmentSectionRef.fromElementId,
+          toElementType: segmentSectionRef.toElementType,
+          toElementId: segmentSectionRef.toElementId,
           circuitId: circuit.id,
           inTube: segmentWireProps.inTube,
           wireRoute: segmentWireProps.wireRoute,
           inWall: segmentWireProps.inWall,
-          // By default, hide labels for all trunk segments. When the user
-          // unchecks "Hide Wire Label" on the circuit, only the first segment
-          // (directly after the protection) will show a label; the rest stay
-          // hidden so there is still just a single label per circuit.
-          hideWireLabel: hideAllWireLabels ? true : i === 0 ? undefined : true,
+          ...(terminalStripDirectlyAfterProtection && i === 1
+            ? {
+                wireLabelEndPoint: {
+                  x: adjustedStart.x,
+                  y: Math.max(adjustedEnd.y, adjustedStart.y - TERMINAL_STRIP_WIRE_LABEL_SPAN),
+                },
+              }
+            : {}),
+          // A shared junction creates a real wire-section boundary, so both
+          // adjacent sections expose their own label by default. Other trunk
+          // runs retain the single-label default. A section override always
+          // wins, allowing either side to be hidden independently.
+          hideWireLabel:
+            segmentWireProps.hideWireLabel ??
+            (hideAllWireLabels ? true : i === 0 || bordersSharedJunction ? undefined : true),
         })
 
         // After this segment, update domain if the next node is a conversion component
@@ -3931,22 +4275,26 @@ function deriveMcbWires(
       const noTrunkSectionRef: CircuitSectionRef = {
         fromElementType: 'protection',
         fromElementId: protection?.id,
-        domain: DEFAULT_ELECTRICAL_DOMAIN,
+        domain: circuitBaseDomain,
       }
       const noTrunkWireProps = getCircuitWirePropertiesForDomain(
         circuit,
-        DEFAULT_ELECTRICAL_DOMAIN,
+        circuitBaseDomain,
         noTrunkSectionRef
       )
       segments.push({
         id: generateId(),
         type: 'vertical',
-        startPoint: applyNodeWireInset(mcbToBranchStart, mcbToBranchEnd, mcbNode),
+        // The direct DC-bus feeder has no rendered protection symbol. Keep the
+        // trunk continuous through its structural owner instead of leaving an
+        // inset gap (or drawing through an invisible symbol).
+        startPoint: directDcBusFeeder
+          ? mcbToBranchStart
+          : applyNodeWireInset(mcbToBranchStart, mcbToBranchEnd, mcbNode),
         endPoint: mcbToBranchEnd,
         cable: noTrunkWireProps.cable,
         panelId: panel.id,
-        // No trunk devices, so trunk domain stays at default (AC)
-        domain: DEFAULT_ELECTRICAL_DOMAIN,
+        domain: circuitBaseDomain,
         fromElementType: 'protection',
         fromElementId: protection?.id,
         circuitId: circuit.id,
@@ -4071,9 +4419,14 @@ function deriveMcbWires(
     for (const converterNode of trunkDeviceNodes) {
       segments.push(...deriveCircuitConverterDcConnectionWires(converterNode, circuit, panel))
     }
+    for (const dcBusNode of trunkDeviceNodes.filter(
+      (node) => (node.domainRef as TrunkDevice | undefined)?.type === 'dc_bus'
+    )) {
+      segments.push(...deriveOrdinaryDcBusEndpointBranchWires(dcBusNode, circuit, panel))
+    }
 
     // Domain at trunk/branch junction (output of last conversion device or MCB)
-    let trunkDomainAtBranch: typeof DEFAULT_ELECTRICAL_DOMAIN = DEFAULT_ELECTRICAL_DOMAIN
+    let trunkDomainAtBranch: typeof DEFAULT_ELECTRICAL_DOMAIN = circuitBaseDomain
     if (trunkDeviceNodes.length > 0) {
       // Walk trunk devices in order from MCB upwards, applying only conversion devices
       for (const td of trunkDeviceNodes) {
@@ -4126,6 +4479,7 @@ function deriveMcbWires(
   // Process nested circuits (sub-circuits)
   const nestedMcbNodes = mcbNode.children.filter((c) => c.type === 'mcb')
   if (nestedMcbNodes.length > 0) {
+    const nestedCircuitDomain = circuitBaseDomain
     // Connect nested circuits at the computed parent wire end, which now also
     // respects top-most trunk devices and direct endpoints.
     const explicitSecondaryBus = mcbNode.children.find(
@@ -4141,15 +4495,11 @@ function deriveMcbWires(
       trunkEndpointNodes.length > 0 ||
       parentWireEndNodes.length > 0
     if (!parentHasVisibleTrunkContent && secondaryBusY !== mcbY) {
-      const parentToBusWireProps = getCircuitWirePropertiesForDomain(
-        circuit,
-        DEFAULT_ELECTRICAL_DOMAIN,
-        {
-          fromElementType: 'protection',
-          fromElementId: protection?.id,
-          domain: DEFAULT_ELECTRICAL_DOMAIN,
-        }
-      )
+      const parentToBusWireProps = getCircuitWirePropertiesForDomain(circuit, nestedCircuitDomain, {
+        fromElementType: 'protection',
+        fromElementId: protection?.id,
+        domain: nestedCircuitDomain,
+      })
       segments.push({
         id: generateId(),
         type: 'vertical',
@@ -4161,7 +4511,7 @@ function deriveMcbWires(
         endPoint: { x: mcbX, y: secondaryBusY },
         cable: panelBusCable,
         panelId: panel.id,
-        domain: DEFAULT_ELECTRICAL_DOMAIN,
+        domain: nestedCircuitDomain,
         fromElementType: 'protection',
         fromElementId: protection?.id,
         circuitId: circuit.id,
@@ -4198,7 +4548,7 @@ function deriveMcbWires(
           endPoint: { x: endX, y: secondaryBusY },
           cable: panelBusCable,
           panelId: panel.id,
-          domain: DEFAULT_ELECTRICAL_DOMAIN,
+          domain: nestedCircuitDomain,
           fromElementType: 'secondaryBus',
           toElementType: 'secondaryBus',
           circuitId: circuit.id,
@@ -4235,11 +4585,11 @@ function deriveMcbWires(
     for (const panelEndpoint of secondaryBusEndpointNodes) {
       const busPoint = { x: panelEndpoint.bounds.x, y: secondaryBusY }
       const endpointPoint = { x: panelEndpoint.bounds.x, y: panelEndpoint.bounds.y }
-      const panelWireProps = getCircuitWirePropertiesForDomain(circuit, DEFAULT_ELECTRICAL_DOMAIN, {
+      const panelWireProps = getCircuitWirePropertiesForDomain(circuit, nestedCircuitDomain, {
         fromElementType: 'secondaryBus',
         toElementType: 'endpoint',
         toElementId: panelEndpoint.domainId,
-        domain: DEFAULT_ELECTRICAL_DOMAIN,
+        domain: nestedCircuitDomain,
       })
       segments.push({
         id: generateId(),
@@ -4248,7 +4598,7 @@ function deriveMcbWires(
         endPoint: applyNodeWireInset(endpointPoint, busPoint, panelEndpoint),
         cable: panelWireProps.cable,
         panelId: panel.id,
-        domain: DEFAULT_ELECTRICAL_DOMAIN,
+        domain: nestedCircuitDomain,
         fromElementType: 'secondaryBus',
         toElementType: 'endpoint',
         toElementId: panelEndpoint.domainId,
@@ -4324,12 +4674,11 @@ function deriveBranchWires(
     // center - width/2 (left edge) to center + width/2 (right edge).
     const boxCenterX = domoticaNode.bounds.x
     const boxLeftX = boxCenterX - DOMOTICA_BOX_WIDTH / 2
-    const boxRightX = boxCenterX + DOMOTICA_BOX_WIDTH / 2
-
     const domoticaHeight = Math.max(0, endpointCount - 1) * DOMOTICA_OUTPUT_SPACING
     const firstOutputY = branchY - domoticaHeight
 
     const addDomoticaOutputChain = (
+      sourceNode: LayoutNode,
       group: 'endpoint',
       index: number,
       outputY: number,
@@ -4349,7 +4698,7 @@ function deriveBranchWires(
           }
           const childProps = ep?.domoticaChildProps
           return (
-            childProps?.parentEndpointId === domoticaNode.domainId &&
+            childProps?.parentEndpointId === sourceNode.domainId &&
             (childProps?.outputGroup === group || childProps?.outputGroup === 'control') &&
             childProps?.outputIndex === index
           )
@@ -4368,11 +4717,12 @@ function deriveBranchWires(
       const segmentShowWireLengthLabel =
         wireProps?.showWireLengthLabel ?? baseProps.showWireLengthLabel
 
-      const start = { x: boxRightX, y: outputY }
+      const sourceBoxRightX = sourceNode.bounds.x + DOMOTICA_BOX_WIDTH / 2
+      const start = { x: sourceBoxRightX, y: outputY }
       const firstNode = childrenOnRow[0]
       const firstEnd = firstNode
         ? { x: firstNode.bounds.x, y: outputY }
-        : { x: boxRightX + fallbackLead, y: outputY }
+        : { x: sourceBoxRightX + fallbackLead, y: outputY }
 
       segments.push({
         id: generateId(),
@@ -4383,7 +4733,7 @@ function deriveBranchWires(
         panelId: panel.id,
         domain,
         circuitId: circuit.id,
-        fromElementId: domoticaNode.domainId,
+        fromElementId: sourceNode.domainId,
         fromElementType: 'endpoint',
         toElementId: firstNode?.domainId,
         toElementType: firstNode ? 'endpoint' : undefined,
@@ -4443,7 +4793,9 @@ function deriveBranchWires(
       id: generateId(),
       type: 'branch',
       startPoint: trunkToDomoticaStart,
-      endPoint: applyNodeWireInset(trunkToDomoticaEnd, trunkToDomoticaStart, domoticaNode),
+      // This point is already the box edge. Applying the generic node inset a
+      // second time would pull the feed away from the Domotica body.
+      endPoint: trunkToDomoticaEnd,
       cable: branchEntryWireProps.cable,
       panelId: panel.id,
       domain: trunkDomainAtBranch,
@@ -4461,6 +4813,7 @@ function deriveBranchWires(
     for (let i = 0; i < endpointCount; i++) {
       const outputY = firstOutputY + i * DOMOTICA_OUTPUT_SPACING
       addDomoticaOutputChain(
+        domoticaNode,
         'endpoint',
         i,
         outputY,
@@ -4469,6 +4822,59 @@ function deriveBranchWires(
         inheritedBranchWireProps,
         trunkDomainAtBranch
       )
+    }
+
+    const addNestedDomoticaOutputs = (sourceNode: LayoutNode, ancestry: Set<string>) => {
+      const sourceId = sourceNode.domainId
+      if (!sourceId || ancestry.has(sourceId)) return
+      const source = sourceNode.domainRef as Endpoint | undefined
+      if (source?.symbol !== 'domotica') return
+
+      const nextAncestry = new Set(ancestry).add(sourceId)
+      const nestedCount = Math.max(
+        DOMOTICA_MIN_ENDPOINT_OUTPUTS,
+        Math.min(
+          DOMOTICA_MAX_ENDPOINT_OUTPUTS,
+          Math.trunc(source.domoticaProps?.endpointCount ?? DOMOTICA_MIN_ENDPOINT_OUTPUTS)
+        )
+      )
+      const nestedVariableHeight = Math.max(0, nestedCount - 1) * DOMOTICA_OUTPUT_SPACING
+      const nestedInputY = sourceNode.bounds.y + nestedVariableHeight / 2
+      const nestedFirstOutputY = nestedInputY - nestedVariableHeight
+      const nestedOutputWires = source.domoticaProps?.endpointOutputWires ?? []
+
+      for (let index = 0; index < nestedCount; index++) {
+        addDomoticaOutputChain(
+          sourceNode,
+          'endpoint',
+          index,
+          nestedFirstOutputY + index * DOMOTICA_OUTPUT_SPACING,
+          DOMOTICA_BRANCH_LEAD,
+          nestedOutputWires[index],
+          inheritedBranchWireProps,
+          trunkDomainAtBranch
+        )
+      }
+
+      for (const childNode of endpointNodes) {
+        const child = childNode.domainRef as Endpoint | undefined
+        if (
+          child?.symbol === 'domotica' &&
+          child.domoticaChildProps?.parentEndpointId === sourceId
+        ) {
+          addNestedDomoticaOutputs(childNode, nextAncestry)
+        }
+      }
+    }
+
+    for (const childNode of endpointNodes) {
+      const child = childNode.domainRef as Endpoint | undefined
+      if (
+        child?.symbol === 'domotica' &&
+        child.domoticaChildProps?.parentEndpointId === domoticaNode.domainId
+      ) {
+        addNestedDomoticaOutputs(childNode, new Set([domoticaNode.domainId ?? '']))
+      }
     }
     return segments
   }

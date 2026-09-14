@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, type FocusEvent, type KeyboardEvent } from 'react'
+import { memo, useEffect, useState, useMemo, type FocusEvent, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Search, ChevronDown, ChevronRight, Star, Clock, X } from 'lucide-react'
 import { useLibraryStore } from '@/stores/libraryStore'
@@ -92,7 +92,7 @@ interface LibraryPanelProps {
   compactOrientation?: 'portrait' | 'landscape'
 }
 
-export default function LibraryPanel({
+function LibraryPanel({
   onDragStart,
   compact = false,
   compactOrientation = 'portrait',
@@ -175,7 +175,7 @@ export default function LibraryPanel({
       localizedName={getLocalizedName(symbol)}
       tooltip={getSymbolLibraryTooltip(symbol.id, i18n.language)}
       isFavorite={favoriteSymbols.includes(symbol.id)}
-      onToggleFavorite={() => toggleFavorite(symbol.id)}
+      onToggleFavorite={toggleFavorite}
       compact={compact}
     />
   )
@@ -492,3 +492,5 @@ export default function LibraryPanel({
     </div>
   )
 }
+
+export default memo(LibraryPanel)

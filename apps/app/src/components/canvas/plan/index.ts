@@ -14,6 +14,7 @@ export {
   PlanPlacementSocketWaterproofH,
   PlanPlacementLightWaterproofH,
 } from './PlanPlacementDragFollowers'
+export { PlanPlacementLabelsLayer, PlanPlacementSymbolsLayer } from './PlanPlacementLayers'
 export { PlanWiresLayerWithDrag } from './PlanWiresLayerWithDrag'
 export { FloorPlanMode } from './FloorPlanMode'
 export { StairRenderer, getStairBounds, buildStairGeometry } from './StairRenderer'

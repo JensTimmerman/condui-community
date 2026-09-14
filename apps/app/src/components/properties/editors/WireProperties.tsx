@@ -35,9 +35,9 @@ import { panelStringT, visibilityToggleClass } from '../shared/propertiesSharedU
 import { WireRouteAndCableForm, type WireRouteFormState } from '../shared/propertiesShared'
 import { GroundWireProperties, SupplyWireProperties } from './SupplyGroundWireProperties'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
-  getSupplyAssembliesFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
+  selectProjectSupplyAssemblies,
 } from '@/lib/projectV2/electrical'
 import {
   getSupplyWireDiagnostic,
@@ -179,9 +179,9 @@ function WireProperties({
   const getTrunkDeviceById = useProjectStore((state: ProjectState) => state.getTrunkDeviceById)
   const currentProject = useProjectStore((state: ProjectState) => state.currentProject)
   const installationForPhase = currentProject
-    ? getElectricalInstallationFromProject(currentProject)
+    ? getProjectElectricalInstallation(currentProject)
     : undefined
-  const panelsForPhase = currentProject ? getElectricalPanelsFromProject(currentProject) : []
+  const panelsForPhase = currentProject ? getProjectElectricalPanels(currentProject) : []
   const updateInstallation = useProjectStore((state: ProjectState) => state.updateInstallation)
   const updateEndpoint = useProjectStore((state: ProjectState) => state.updateEndpoint)
   const getPanelById = useProjectStore((state: ProjectState) => state.getPanelById)
@@ -284,14 +284,14 @@ function WireProperties({
     : undefined
 
   if (wireSegment.supplySectionKey && currentProject) {
-    const installation = getElectricalInstallationFromProject(currentProject)
-    const panels = getElectricalPanelsFromProject(currentProject)
+    const installation = getProjectElectricalInstallation(currentProject)
+    const panels = getProjectElectricalPanels(currentProject)
     if (installation) {
       const topology = ensureInstallationFeedTopology(installation, panels)
       const rootFeed = topology.rootFeeds.find(({ panelId }) => panelId === wireSegment.panelId)
       if (rootFeed) {
         const assembly = wireSegment.supplyAssemblyId
-          ? getSupplyAssembliesFromProject(currentProject).find(
+          ? selectProjectSupplyAssemblies(currentProject).find(
               ({ id }) => id === wireSegment.supplyAssemblyId
             )
           : undefined
@@ -361,7 +361,7 @@ function WireProperties({
   }
 
   if (wireSegment.supplyAssemblyId && wireSegment.supplyConnectionId && currentProject) {
-    const assembly = getSupplyAssembliesFromProject(currentProject).find(
+    const assembly = selectProjectSupplyAssemblies(currentProject).find(
       ({ id }) => id === wireSegment.supplyAssemblyId
     )
     const connection = assembly?.connections.find(({ id }) => id === wireSegment.supplyConnectionId)
@@ -558,7 +558,7 @@ function WireProperties({
   if (isGroundWire) {
     // Ground wire - edit Installation.groundCable
     const installation = currentProject
-      ? getElectricalInstallationFromProject(currentProject)
+      ? getProjectElectricalInstallation(currentProject)
       : undefined
     if (!currentProject || !installation) {
       return (
@@ -611,7 +611,7 @@ function WireProperties({
 
   if (effectiveSupplyWireRole && !isSubPanelSupplyWire) {
     const installation = currentProject
-      ? getElectricalInstallationFromProject(currentProject)
+      ? getProjectElectricalInstallation(currentProject)
       : undefined
     if (!currentProject || !installation) {
       return (
@@ -620,7 +620,7 @@ function WireProperties({
         </div>
       )
     }
-    const panels = getElectricalPanelsFromProject(currentProject)
+    const panels = getProjectElectricalPanels(currentProject)
     const panel = getPanelById(wireSegment.panelId)
     if (!panel) {
       return (
@@ -649,7 +649,7 @@ function WireProperties({
       panels,
       panel,
       wireSegment.busSectionId,
-      getSupplyAssembliesFromProject(currentProject)
+      selectProjectSupplyAssemblies(currentProject)
     )
     const editsPanelIncomingPhase = effectiveSupplyWireRole === 'downstream'
 

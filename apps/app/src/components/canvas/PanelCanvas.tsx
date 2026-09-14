@@ -5,6 +5,7 @@ import { logger } from '@/lib/logger'
  */
 import { useRef, useCallback, useMemo, useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
+import { AlertTriangle } from 'lucide-react'
 import { Group, Rect, Line } from 'react-konva'
 import Konva from 'konva'
 import type { BaseCanvasHandle } from './BaseCanvas'
@@ -20,8 +21,8 @@ import { useDialogStore } from '@/stores/dialogStore'
 import { useCanvasRegistryStore } from '@/stores/canvasRegistryStore'
 import { useThemeColors } from '@/lib/theme/hooks'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
 } from '@/lib/projectV2/electrical'
 import {
   getPanelGridPlacements,
@@ -54,16 +55,14 @@ import {
   PANEL_FOCUS_SINGLE_PANEL_LINK_POLICY,
   type PanelSceneFilter,
 } from '@/lib/panel/applyPanelSceneFilter'
-import {
-  DEFAULT_PANEL_GRID_COLUMNS,
-  DEFAULT_PANEL_GRID_ROWS,
-} from '@/lib/panel/panelGridDefaults'
+import { DEFAULT_PANEL_GRID_COLUMNS, DEFAULT_PANEL_GRID_ROWS } from '@/lib/panel/panelGridDefaults'
 import { getPanelFeedProjection } from '@/lib/feedTopology'
 import {
   getSharedSupplyRefKeysForPanel,
   isSharedSupplyTrunkRef,
   validatePanelRewireOperation,
 } from '@/lib/panel/panelRewire'
+import { getPanelCanvasOverflowModuleKeys } from '@/lib/export/labelStripReadiness'
 import type { PanelGridSlot, PanelGridModuleRef, Circuit, Panel } from '@/types/schema'
 import type { ProjectState } from '@/stores/projectStore'
 import { getPanelDisplayName } from '@/utils/panelNames'
@@ -71,17 +70,9 @@ import type { PanelCanvasMode, Selection as CanvasSelection } from '@/types/ui'
 import type { EditorCapabilities } from '@/lib/viewerMode'
 import { clamp, rectContainsRect } from '@/lib/geometry'
 import { HierarchyPanelCanvas } from './panel/HierarchyPanelCanvas'
-import {
-  PanelOptionsMenu,
-} from './panel/PanelOptionsMenu'
-import {
-  buildPanelSelectorLabel,
-  type PanelOption,
-} from './panel/panelOptionsMenuUtils'
-import {
-  PanelVisibilityMenu,
-  type PanelVisibilityTarget,
-} from './panel/PanelVisibilityMenu'
+import { PanelOptionsMenu } from './panel/PanelOptionsMenu'
+import { buildPanelSelectorLabel, type PanelOption } from './panel/panelOptionsMenuUtils'
+import { PanelVisibilityMenu, type PanelVisibilityTarget } from './panel/PanelVisibilityMenu'
 import {
   usePanelContextMenu,
   usePanelLibraryDrop,
@@ -311,7 +302,7 @@ export default function PanelCanvas({ onMultiFingerSwipe, capabilities }: PanelC
   const panelList = useMemo(
     () =>
       flattenPanels(
-        currentProject ? getElectricalPanelsFromProject(currentProject) : [],
+        currentProject ? getProjectElectricalPanels(currentProject) : [],
         currentProject
       ),
     [currentProject]
@@ -437,10 +428,10 @@ export default function PanelCanvas({ onMultiFingerSwipe, capabilities }: PanelC
 
       let targetPanel =
         effectivePanelCanvasMode.kind === 'panel'
-          ? getPanelById(effectivePanelCanvasMode.panelId) ?? null
+          ? (getPanelById(effectivePanelCanvasMode.panelId) ?? null)
           : elementId
-            ? getPanelById(elementId) ?? null
-      : null
+            ? (getPanelById(elementId) ?? null)
+            : null
 
       if (!targetPanel && elementId) {
         targetPanel =
@@ -479,6 +470,21 @@ export default function PanelCanvas({ onMultiFingerSwipe, capabilities }: PanelC
     if (!panel || !currentProject) return []
     return getPanelGridPlacements(panel, currentProject, mainModules)
   }, [panel, currentProject, mainModules])
+  const overflowModuleCount = useMemo(() => {
+    if (!panel || !currentProject) return 0
+    const visiblePanels =
+      effectivePanelCanvasMode.kind === 'all'
+        ? panelList.map((panelOption) => panelOption.panel)
+        : [panel]
+    return visiblePanels.reduce((count, visiblePanel) => {
+      const visibleModules = getPanelGridModules(visiblePanel.id).filter(
+        (module) => !(module.ref.kind === 'trunkDevice' && module.ref.scope === 'ground')
+      )
+      return (
+        count + getPanelCanvasOverflowModuleKeys(visiblePanel, currentProject, visibleModules).size
+      )
+    }, 0)
+  }, [currentProject, effectivePanelCanvasMode, getPanelGridModules, panel, panelList])
   const supplyPlacements = useMemo(() => {
     if (!panel || !currentProject) return []
     return getSupplyPanelPlacements(panel, currentProject, supplyModules)
@@ -1114,7 +1120,8 @@ export default function PanelCanvas({ onMultiFingerSwipe, capabilities }: PanelC
   const supplyWireTarget = useMemo(() => {
     if (!panel || !panel.isMain || !currentProject) return null
 
-    const supplyDevices = getElectricalInstallationFromProject(currentProject)?.mainSupply?.supplyTrunkDevices ?? []
+    const supplyDevices =
+      getProjectElectricalInstallation(currentProject)?.mainSupply?.supplyTrunkDevices ?? []
 
     // The first module in the supply chain is the first visible supply trunk device (uses effectivePlacements so multi-drag preview is included)
     for (const device of supplyDevices) {
@@ -1950,8 +1957,7 @@ export default function PanelCanvas({ onMultiFingerSwipe, capabilities }: PanelC
     return {
       onGetContextMenuItems:
         canDeleteItems || canPlaceSymbols ? handleGetContextMenuItems : undefined,
-      onDrop:
-        effectivePanelCanvasMode.kind === 'panel' && canPlaceSymbols ? handleDrop : undefined,
+      onDrop: effectivePanelCanvasMode.kind === 'panel' && canPlaceSymbols ? handleDrop : undefined,
       onDragOver:
         effectivePanelCanvasMode.kind === 'panel' && canPlaceSymbols ? handleDragOver : undefined,
       onFindElementsInRectangle:
@@ -2119,7 +2125,8 @@ export default function PanelCanvas({ onMultiFingerSwipe, capabilities }: PanelC
                 ) ?? null
             } else if (showSupplyRowPreview) {
               const supplyDevices =
-                getElectricalInstallationFromProject(currentProject)?.mainSupply?.supplyTrunkDevices ?? []
+                getProjectElectricalInstallation(currentProject)?.mainSupply?.supplyTrunkDevices ??
+                []
               const lastSupply =
                 supplyDevices.length > 0 ? supplyDevices[supplyDevices.length - 1] : null
               if (lastSupply) {
@@ -2136,13 +2143,13 @@ export default function PanelCanvas({ onMultiFingerSwipe, capabilities }: PanelC
             } else if (!inSupplyFrame) {
               if (isProtectionDevice) {
                 const installation = currentProject
-                  ? getElectricalInstallationFromProject(currentProject)
+                  ? getProjectElectricalInstallation(currentProject)
                   : undefined
                 const supplyDevices = panel.isMain
                   ? installation
                     ? (getPanelFeedProjection(
                         installation,
-                        getElectricalPanelsFromProject(currentProject),
+                        getProjectElectricalPanels(currentProject),
                         panel
                       )?.devices ?? [])
                     : []
@@ -2291,6 +2298,21 @@ export default function PanelCanvas({ onMultiFingerSwipe, capabilities }: PanelC
   return (
     <CanvasOverlayScaleProvider containerRef={containerRef}>
       <div ref={containerRef} className="relative w-full h-full" data-1p-ignore data-op-ignore>
+        {overflowModuleCount > 0 ? (
+          <div
+            role="alert"
+            data-testid="panel-canvas-overflow-warning"
+            className="pointer-events-none absolute left-1/2 top-3 z-[100] flex max-w-[min(34rem,calc(100%-7rem))] -translate-x-1/2 items-center gap-2 overflow-hidden whitespace-nowrap rounded-md border border-amber-300 bg-amber-50/95 px-3 py-1.5 text-left text-amber-950 shadow-md dark:border-amber-700 dark:bg-amber-950/90 dark:text-amber-50"
+          >
+            <AlertTriangle
+              className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300"
+              aria-hidden
+            />
+            <span className="truncate text-xs font-semibold">
+              {t('panelCanvas.overflowWarningTitle')}
+            </span>
+          </div>
+        ) : null}
         <HierarchyPanelCanvas
           canvasRef={canvasRef}
           currentProject={currentProject}

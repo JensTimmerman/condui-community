@@ -14,6 +14,7 @@ import { useUIStore } from '@/stores/uiStore'
 import { useCanvasRegistryStore } from '@/stores/canvasRegistryStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { exportLog } from '../exportLogger'
+import { stripInteractiveOverlaysForExport } from '../interactiveOverlayExport'
 
 export type PanelSceneExportMode =
   | { kind: 'panel'; panelId: string }
@@ -22,14 +23,14 @@ export type PanelSceneExportMode =
 
 /**
  * Prepare isolated panel scene for export
- * 
+ *
  * @param exportMode Panel export mode
  * @param options Export options
  * @returns Isolated export scene
  */
 export async function preparePanelScene(
   exportMode: PanelSceneExportMode,
-  options: ExportOptions,
+  options: ExportOptions
 ): Promise<ExportScene> {
   // 1. Ensure the panel canvas is in the right mode before cloning its scene
   const { setActivePanelId, setPanelCanvasMode } = useUIStore.getState()
@@ -45,9 +46,7 @@ export async function preparePanelScene(
 
   if (needsModeSwitch) {
     if (exportMode.kind === 'panel') {
-      exportLog(
-        `[Export] Switching to panel ${exportMode.panelId} (was: ${activePanelId})`,
-      )
+      exportLog(`[Export] Switching to panel ${exportMode.panelId} (was: ${activePanelId})`)
       setActivePanelId(exportMode.panelId)
       setPanelCanvasMode({ kind: 'panel', panelId: exportMode.panelId })
     } else {
@@ -61,7 +60,7 @@ export async function preparePanelScene(
 
   // 2. Get stage from registry (now always returns stage if canvas is mounted)
   const canvasRegistry = useCanvasRegistryStore.getState().registry
-  const stageLookupId = exportMode.kind === 'panel' ? exportMode.panelId : activePanelId ?? ''
+  const stageLookupId = exportMode.kind === 'panel' ? exportMode.panelId : (activePanelId ?? '')
   let stage = canvasRegistry.panel?.getStage(stageLookupId)
 
   // Retry a few times in case stage isn't immediately available
@@ -76,7 +75,7 @@ export async function preparePanelScene(
   if (!stage) {
     throw new ExportError(
       'STAGE_UNAVAILABLE',
-      `Panel stage not available for ${exportMode.kind}. Canvas may not be mounted.`,
+      `Panel stage not available for ${exportMode.kind}. Canvas may not be mounted.`
     )
   }
 
@@ -96,7 +95,9 @@ export async function preparePanelScene(
 
   if (!canvasContentGroup) {
     // Log all children of content layer for debugging
-    logger.error(`[Export] canvas-content group not found. Content layer has ${children.length} children:`)
+    logger.error(
+      `[Export] canvas-content group not found. Content layer has ${children.length} children:`
+    )
     children.forEach((child, idx) => {
       logger.error(`[Export]   Child ${idx}: type=${child.getType()}, name=${child.name()}`)
     })
@@ -111,10 +112,10 @@ export async function preparePanelScene(
     width: stage.width(),
     height: stage.height(),
   })
-  
+
   const tempLayer = new Konva.Layer()
   tempStage.add(tempLayer)
-  
+
   // Clone canvas-content Group (deep clone, no live references)
   const clonedGroup = canvasContentGroup.clone({
     // Clone all children recursively
@@ -127,6 +128,8 @@ export async function preparePanelScene(
   clonedGroup.scaleX(1)
   clonedGroup.scaleY(1)
   clonedGroup.rotation(0)
+
+  stripInteractiveOverlaysForExport(clonedGroup)
 
   // Normalize symbol images (supply, domotica, etc.) to data URLs so SVG/PDF embed them
   const sourceTheme = useSettingsStore.getState().theme.mode
@@ -155,7 +158,7 @@ export async function preparePanelScene(
     if (!surfaceNode) {
       throw new ExportError(
         'NO_CONTENT',
-        `Hierarchy surface ${exportMode.surfaceId} not found in export scene.`,
+        `Hierarchy surface ${exportMode.surfaceId} not found in export scene.`
       )
     }
     const rect = surfaceNode.getClientRect({ relativeTo: clonedGroup })

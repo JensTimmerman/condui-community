@@ -46,7 +46,7 @@ import {
   isInspectionAgencyInfoBlockVisible,
 } from '@/lib/infoBlockLayout'
 import {
-  getElectricalInstallationFromProject,
+  getProjectElectricalInstallation,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import type { InstallerProfile } from '@/lib/installerProfile'
@@ -164,7 +164,7 @@ export function InfoBlock({
   }, [profile?.signatureDataUrl])
 
   const countryLabel = t('installation.countryBelgium', 'Belgium')
-  const installation = project ? getElectricalInstallationFromProject(project) : undefined
+  const installation = project ? getProjectElectricalInstallation(project) : undefined
   const projectName = project?.project?.name ?? ''
   const addressText = installation ? formatInstallationAddress(installation, countryLabel) : ''
   const voltageText = installation ? getVoltageLabel(installation) : ''

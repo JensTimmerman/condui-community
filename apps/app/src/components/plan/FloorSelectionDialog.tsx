@@ -5,7 +5,7 @@ import { useProjectStore, type ProjectState } from '@/stores/projectStore'
 import { useDialogStore } from '@/stores/dialogStore'
 import type { Floor } from '@/types/schema'
 import { generateId } from '@/utils'
-import { getCompatibilityFloorsFromProject } from '@/lib/projectV2/buildingFloors'
+import { readLegacyCompatibilityFloors } from '@/lib/projectV2/buildingFloors'
 
 interface FloorSelectionDialogProps {
   currentFloorId: string | null
@@ -35,7 +35,7 @@ function FloorSelectionDialog({
     useProjectStore()
   const overlayByBase = useProjectStore((s: ProjectState) => s.planFloorOverlayVisibleByBaseFloorId)
   const openDialog = useDialogStore((s: ReturnType<typeof useDialogStore.getState>) => s.openDialog)
-  const floors = currentProject ? getCompatibilityFloorsFromProject(currentProject) : []
+  const floors = currentProject ? readLegacyCompatibilityFloors(currentProject) : []
   const [isCreatingNew, setIsCreatingNew] = useState(false)
   const [newFloorName, setNewFloorName] = useState('')
   const [editingFloorId, setEditingFloorId] = useState<string | null>(null)

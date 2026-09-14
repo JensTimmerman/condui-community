@@ -1,7 +1,7 @@
 import { getInstallationPhases } from '@/lib/wires/phaseAssignment'
 import {
-  getElectricalInstallationFromProject,
-  getSupplyAssembliesFromProject,
+  getProjectElectricalInstallation,
+  selectProjectSupplyAssemblies,
 } from '@/lib/projectV2/electrical'
 import {
   deriveHandoffPhaseSupplyPaths,
@@ -42,14 +42,14 @@ function assemblyPanelId(
   if ('panelId' in assembly.incomingAttachment) return assembly.incomingAttachment.panelId
   if (assembly.incomingAttachment.kind !== 'root-feed') return undefined
   const rootFeedId = assembly.incomingAttachment.rootFeedId
-  return getElectricalInstallationFromProject(context.project)?.feedTopology?.rootFeeds.find(
+  return getProjectElectricalInstallation(context.project)?.feedTopology?.rootFeeds.find(
     (feed) => feed.id === rootFeedId
   )?.panelId
 }
 
 function findAssembly(context: CheckContext): OffGridSupplyAssembly | undefined {
   if (context.scope.type !== 'subgraph') return undefined
-  return getSupplyAssembliesFromProject(context.project).find(
+  return selectProjectSupplyAssemblies(context.project).find(
     (assembly) => assembly.id === context.scope.id
   )
 }
@@ -84,7 +84,7 @@ function isCompliantMainGradeRcd(device: {
  */
 function hasCompliantRootFeedBackupRcd(
   assembly: OffGridSupplyAssembly,
-  installation: NonNullable<ReturnType<typeof getElectricalInstallationFromProject>>,
+  installation: NonNullable<ReturnType<typeof getProjectElectricalInstallation>>,
   handoffId: string,
   backupConnectionIds: ReadonlySet<string>
 ): boolean {
@@ -124,7 +124,7 @@ function hasCompliantRootFeedBackupRcd(
 
 function supplyModePaths(context: CheckContext): Issue[] {
   const assembly = findAssembly(context)
-  const installation = getElectricalInstallationFromProject(context.project)
+  const installation = getProjectElectricalInstallation(context.project)
   if (!assembly || !installation || assembly.presetIntent === 'grid_connected_storage_branch') {
     return []
   }
@@ -196,7 +196,7 @@ function supplyModePaths(context: CheckContext): Issue[] {
  */
 function backupSupplyRcdCompliance(context: CheckContext): Issue[] {
   const assembly = findAssembly(context)
-  const installation = getElectricalInstallationFromProject(context.project)
+  const installation = getProjectElectricalInstallation(context.project)
   if (!assembly || !installation || !isHouseholdInstallation(installation)) return []
   if (installation.address.country && installation.address.country !== 'BE') return []
   if (validateOffGridSupplyAssembly(assembly).status === 'invalid') return []
@@ -279,7 +279,7 @@ function backupSupplyRcdCompliance(context: CheckContext): Issue[] {
 
 function supplyConductorProtectionCoordination(context: CheckContext): Issue[] {
   const assembly = findAssembly(context)
-  const installation = getElectricalInstallationFromProject(context.project)
+  const installation = getProjectElectricalInstallation(context.project)
   if (!assembly || !installation) return []
 
   const panelId = assemblyPanelId(assembly, context)

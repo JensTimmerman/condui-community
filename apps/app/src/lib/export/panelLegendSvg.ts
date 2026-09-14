@@ -2,7 +2,7 @@ import { A4_PORTRAIT, PAGE_MARGIN } from './pageSizes'
 import type { Panel, Circuit, ProtectionDevice, CircuitKind } from '@/types/schema'
 import { getDerivedCircuitKind } from '@/lib/circuitKind'
 import {
-  getElectricalPanelsFromProject,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import type { ExportTheme } from './types'
@@ -47,7 +47,7 @@ export function buildPanelCircuitLegendRows(
   project: ProjectWithOptionalV2Electrical
 ): CircuitLegendRow[] {
   const rows: CircuitLegendRow[] = []
-  const panelsWithPath = collectAllPanelsWithPath(getElectricalPanelsFromProject(project))
+  const panelsWithPath = collectAllPanelsWithPath(getProjectElectricalPanels(project))
 
   for (const { panel, pathLabel } of panelsWithPath) {
     const candidates = new Map<

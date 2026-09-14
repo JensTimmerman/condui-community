@@ -3,12 +3,13 @@
  */
 
 export {
-  generateId,
-  createEmptyProject,
+  createEmptyProjectV2,
   validateProjectStructure,
   cloneProject,
   getProjectStats,
 } from './project'
+
+export { generateId } from './id'
 
 export {
   isSelected,

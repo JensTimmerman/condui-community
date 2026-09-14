@@ -1,4 +1,4 @@
-import { getBuildingFloorsFromProject } from '@/lib/projectV2/buildingFloors'
+import { selectProjectBuildingFloors } from '@/lib/projectV2/buildingFloors'
 import type { ProjectWithOptionalV2Building } from '@/lib/projectV2/buildingFloors'
 import type { Floor } from '@/types/schema'
 
@@ -17,7 +17,7 @@ export function ensureElectricalLayerOnFloor(floor: Floor): void {
 
 /** Auto-heal all floors in a project (mutates). Call on load and when adding/updating floors. */
 export function healProjectFloorsElectricalLayers(project: ProjectWithOptionalV2Building): void {
-  for (const floor of getBuildingFloorsFromProject(project)) {
+  for (const floor of selectProjectBuildingFloors(project)) {
     if (!('layers' in floor)) continue
     ensureElectricalLayerOnFloor(floor)
   }

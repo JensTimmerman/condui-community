@@ -1,6 +1,18 @@
-import type { Panel, Circuit, Endpoint, TrunkDevice, ProtectionDevice } from '@/types/schema'
-import { dropBehaviors } from '@/handlers/eendraad/dropBehaviors'
-import type { SymbolMetadata } from '@/lib/symbols'
+import type {
+  Panel,
+  Circuit,
+  Endpoint,
+  TrunkDevice,
+  ProtectionDevice,
+  Branch,
+} from '@/types/schema'
+import {
+  canDropDcBusOnTarget,
+  canDropSymbolOnSupplyConverterDcWire,
+  dropBehaviors,
+  isEmptyProtectionCircuitForDcDrop,
+} from '@/handlers/eendraad/dropBehaviors'
+import { symbolSupportsWireDomain, type SymbolMetadata } from '@/lib/symbols'
 import type { DropTarget } from '@/lib/layout/findDropTarget'
 import { initializeBranchesIfNeeded, getCircuitBranches } from '@/lib/layout/endpointChains'
 import { getEndpointTypeFromSymbol, getSymbolKeyFromSymbol } from '@/utils'
@@ -10,6 +22,10 @@ import {
   isInBetweenDevice,
   isActualEndpoint,
 } from '@/utils/symbolMapping'
+import {
+  isDcOnlyEndpointSymbol,
+  isEnergyConversionEndpointSymbol,
+} from '@/lib/eendraad/endpointInsertAfter'
 import { DEFAULT_ELECTRICAL_DOMAIN } from '@/types/schema'
 import { resolveSymbolPortsForWire } from '@/lib/symbols'
 import { getNextAvailableCircuitCode } from '@/utils/project'
@@ -26,6 +42,11 @@ import {
   resolveInitialProtectionBusLabel,
 } from '@/lib/protectionKind'
 import { generateId } from '@/utils'
+import {
+  getNextTerminalStripLabel,
+  getTerminalStripTrunkConnectionProps,
+} from '@/lib/terminalStrip/labels'
+import { getNextJunctionIdentity, isSharedJunctionSymbol } from '@/lib/junctionIdentity'
 import {
   createDefaultAcCircuitCable,
   DEFAULT_AC_CIRCUIT_WIRE_LABEL_FLAGS,
@@ -45,18 +66,21 @@ import {
   resolveSmartSwitchExpansion,
   shouldApplySmartSwitchExpansion,
 } from '@/handlers/eendraad/smartSwitchDrop'
-import { isPlugInAfterSocketDrop } from '@/lib/eendraad/endpointInsertAfter'
 import { clamp } from '@/lib/geometry'
-import { getCircuitConverterPrimaryBranch } from './circuitConverterGeometry'
+import {
+  findOrdinaryCircuitDcBusForOutput,
+  getCircuitConverterPrimaryBranch,
+  promoteOrdinaryCircuitBranchesToDcBus,
+} from './circuitConverterGeometry'
 import {
   liftCircuitContentAboveOwnProtection,
   moveCircuitToCircuitContentPosition,
 } from '@/lib/eendraad/circuitContentInsertion'
 import {
-  getElectricalInstallationFromProject,
-  getMutableElectricalInstallationForProject,
-  getMutableElectricalPanelsForProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getEditableProjectElectricalInstallation,
+  getEditableProjectElectricalPanels,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { findPanelById } from '@/lib/panel/panelTree'
@@ -79,7 +103,12 @@ import {
   panelHasPopulatedDirectConverterBackup,
   resolveDirectConverterChangeoverInsertIndex,
 } from '@/lib/supplyAssembly/directConverterBackupUpgrade'
-import { moveSupplyTrunkDeviceAtDropTarget } from '@/lib/eendraad/supplyTrunkDeviceMove'
+import {
+  moveCircuitTrunkDeviceToSupplyDcBus,
+  moveSupplyTrunkDeviceAtDropTarget,
+} from '@/lib/eendraad/supplyTrunkDeviceMove'
+import { reconcileDirectConverterDcDevices } from '@/lib/supplyAssembly/editorIntegration'
+import { promoteDcBusConverterEndpoint } from '@/lib/eendraad/resizeConverterDcConnections'
 import type { ElectricalEnclosureRef } from '@/types/supplyAssembly'
 
 type PreviewProject = ProjectWithOptionalV2Electrical
@@ -113,19 +142,19 @@ function cloneProject<T extends PreviewProject>(project: T): T {
 }
 
 function projectPanels(project: PreviewProject): Panel[] {
-  return getElectricalPanelsFromProject(project)
+  return getProjectElectricalPanels(project)
 }
 
 function mutableProjectPanels(project: PreviewProject): Panel[] {
-  return getMutableElectricalPanelsForProject(project)
+  return getEditableProjectElectricalPanels(project)
 }
 
 function projectInstallation(project: PreviewProject) {
-  return getElectricalInstallationFromProject(project)
+  return getProjectElectricalInstallation(project)
 }
 
 function mutableProjectInstallation(project: PreviewProject) {
-  return getMutableElectricalInstallationForProject(project)
+  return getEditableProjectElectricalInstallation(project)
 }
 
 function findPanelForCircuit(project: PreviewProject, circuitId: string): Panel | null {
@@ -406,103 +435,6 @@ function getWireDomainAtDropTargetSim(
   return AC
 }
 
-function getUpstreamCircuitTrunkDevicesForDropSim(
-  target: DropTarget,
-  circuit: Circuit
-): TrunkDevice[] {
-  const sorted = [...(circuit.trunkDevices ?? [])].sort(
-    (a, b) => (a.trunkPosition ?? 0) - (b.trunkPosition ?? 0)
-  )
-  if (!sorted.length) return []
-
-  if (target.type === 'circuit' && typeof target.circuitTrunkSegmentIndex === 'number') {
-    const endExclusive = clamp(target.circuitTrunkSegmentIndex, 0, sorted.length)
-    return sorted.slice(0, endExclusive)
-  }
-
-  if (target.type === 'circuit' && !target.branchEndpoints?.length) {
-    const trunkPosition = getCircuitTrunkPositionForDropSim(target, circuit)
-    if (trunkPosition === 0) return []
-    return sorted.filter((d) => (d.trunkPosition ?? 0) < trunkPosition)
-  }
-
-  return sorted
-}
-
-function hasUpstreamConversionDeviceForDropSim(target: DropTarget, circuit: Circuit): boolean {
-  const upstream = getUpstreamCircuitTrunkDevicesForDropSim(target, circuit)
-  return upstream.some((device) => device.type === 'conversion')
-}
-
-function simulateBareDcBusBranch(
-  project: PreviewProject,
-  target: DropTarget,
-  symbol: SymbolMetadata,
-  changeSet: EendraadPreviewChangeSet
-): boolean {
-  if (!target.dcBusId || !target.circuitId) return false
-  const parent = findCircuitInProject(project, target.circuitId)
-  const panel = findPanelForCircuit(project, target.circuitId)
-  if (!parent || !panel) return false
-  const circuitId = generateId()
-  const protectionId = generateId()
-  const branch: Circuit = {
-    id: circuitId,
-    code: `${parent.code || 'DC'}${(parent.subCircuitIds?.length ?? 0) + 1}`,
-    kind: 'other',
-    cable: { ...(parent.domainWireOverrides?.DC?.cable ?? parent.cable) },
-    endpoints: [],
-    dcBusSource: { busId: target.dcBusId },
-    hideWireLabel: true,
-    domainWireOverrides: {
-      DC: {
-        ...(parent.domainWireOverrides?.DC ?? {}),
-        cable: { ...(parent.domainWireOverrides?.DC?.cable ?? parent.cable) },
-        hideWireLabel: true,
-      },
-    },
-  }
-  panel.protections.push({
-    id: protectionId,
-    type: 'OTHER',
-    label: '',
-    circuits: [branch],
-    directDcBusFeeder: true,
-    dcBusId: target.dcBusId,
-  })
-  const nextChildren = [...(parent.subCircuitIds ?? [])]
-  const insertIndex = clamp(target.secondaryBusInsertIndex ?? nextChildren.length, 0, nextChildren.length)
-  nextChildren.splice(insertIndex, 0, circuitId)
-  parent.subCircuitIds = nextChildren
-  const bus = parent.trunkDevices?.find((device) => device.id === target.dcBusId)
-  if (bus) {
-    bus.dcBusProps = {
-      ...(bus.dcBusProps ?? {}),
-      branchCircuitIds: (() => {
-        const ids = [...(bus.dcBusProps?.branchCircuitIds ?? [])]
-        ids.splice(clamp(insertIndex, 0, ids.length), 0, circuitId)
-        return ids
-      })(),
-    }
-  }
-  changeSet.createdProtectionIds.push(protectionId)
-  changeSet.affectedCircuitIds.push(parent.id, circuitId)
-  if (!changeSet.affectedPanelIds.includes(panel.id)) changeSet.affectedPanelIds.push(panel.id)
-  simulateEndpointDrop(
-    project,
-    {
-      type: 'circuit',
-      panelId: panel.id,
-      circuitId,
-      branchEndpoints: [],
-      wireDomain: 'DC',
-    },
-    symbol,
-    changeSet
-  )
-  return true
-}
-
 /**
  * Simulate dropping an endpoint or in-between device on a circuit/endpoint/protection.
  * This covers sockets, lights, switches, relays, domotica, fixed appliances, etc.
@@ -513,7 +445,6 @@ function simulateEndpointDrop(
   symbol: SymbolMetadata,
   changeSet: EendraadPreviewChangeSet
 ): void {
-  if (simulateBareDcBusBranch(project, target, symbol, changeSet)) return
   let circuitId = target.circuitId
 
   if (!circuitId && target.type === 'protection' && target.protectionId) {
@@ -545,6 +476,50 @@ function simulateEndpointDrop(
   const circuit = findCircuitInProject(project, circuitId)
   if (!circuit) return
 
+  if (isDcOnlyEndpointSymbol(symbol) && target.endpointId) {
+    const targetEndpoint = circuit.endpoints.find((endpoint) => endpoint.id === target.endpointId)
+    const owningBranch = circuit.branches?.find(
+      (branch) => branch.dcBusId && branch.endpointIds.includes(target.endpointId!)
+    )
+    if (
+      owningBranch &&
+      (targetEndpoint?.symbol === 'dc_dc_converter' || targetEndpoint?.symbol === 'inverter')
+    ) {
+      const promoted = promoteDcBusConverterEndpoint(circuit, targetEndpoint.id)
+      if (!promoted) return
+      circuit.endpoints = promoted.endpoints
+      circuit.branches = promoted.branches
+      target = {
+        ...target,
+        type: 'circuit',
+        endpointId: undefined,
+        insertAfterEndpointId: undefined,
+        branchId: owningBranch.id,
+        branchEndpoints: [],
+        dcBusId: owningBranch.dcBusId,
+        wireDomain: 'DC',
+        converterDcConnection: {
+          converterId: targetEndpoint.id,
+          connectionIndex: 0,
+        },
+      }
+    }
+  }
+
+  if (!target.dcBusId && symbolSupportsWireDomain(symbol.id, 'DC')) {
+    const existingBus = findOrdinaryCircuitDcBusForOutput(circuit, target.converterDcConnection)
+    if (existingBus) target = { ...target, dcBusId: existingBus.id, wireDomain: 'DC' }
+  }
+
+  if (
+    target.dcBusId &&
+    !circuit.trunkDevices?.some(
+      (device) => device.id === target.dcBusId && device.type === 'dc_bus'
+    )
+  ) {
+    return
+  }
+
   initializeBranchesIfNeeded(circuit)
 
   const endpointId = generateId()
@@ -560,10 +535,17 @@ function simulateEndpointDrop(
     label: '',
     symbol: symbolKey,
     placements: [],
+    ...(symbol.id === 'terminal_strip'
+      ? getTerminalStripTrunkConnectionProps(project)
+      : isSharedJunctionSymbol(symbol.id)
+        ? { junctionIdentity: getNextJunctionIdentity(project, symbol.id) }
+        : {}),
   } as Endpoint
 
   // Labeling rules, branch selection: mirror endpointBehavior as closely as possible but purely.
-  const branches = circuit.branches?.length ? circuit.branches : initializeBranchesIfNeeded(circuit)
+  const branches: Branch[] = circuit.branches?.length
+    ? circuit.branches
+    : initializeBranchesIfNeeded(circuit)
 
   let branchEndpointIds = target.branchEndpoints?.length ? target.branchEndpoints : null
   const inBetween = isInBetweenDevice(symbol)
@@ -606,17 +588,19 @@ function simulateEndpointDrop(
     } else {
       const isFixed = isFixedApplianceSymbol(symbol)
 
-      // Fixed appliances are the only actual endpoints that may legally be
-      // inserted *after* a socket on the same branch. Mirror the runtime
-      // computeInsertAfter behaviour: when dropping a fixed appliance after
-      // a socket, keep it on the existing branch and do NOT treat the branch
-      // as "terminal" for the purposes of creating a new branch.
+      // Static devices are the actual endpoints that may legally be inserted
+      // *after* a socket on the same branch. This includes branch-local energy
+      // conversion devices; mirror the runtime computeInsertAfter behaviour.
       const isFixedAfterSocket =
         !!branchEndpointIds?.length && isFixed && insertAfterEp?.type === 'socket'
+      const isDcAfterConversion =
+        !!branchEndpointIds?.length &&
+        isDcOnlyEndpointSymbol(symbol) &&
+        isEnergyConversionEndpointSymbol(insertAfterEp?.symbol)
 
-      if (isFixedAfterSocket) {
+      if (isFixedAfterSocket || isDcAfterConversion) {
         // insertAfterEndpointId already points to the socket; createNewBranch
-        // stays false so the appliance is appended on the same branch.
+        // (or converter) stays false so the static device is appended on the same branch.
       } else if (branchEndpointIds?.length) {
         // General rule for actual endpoints:
         // - If the branch already has a terminal (socket/light), a new terminal
@@ -650,31 +634,66 @@ function simulateEndpointDrop(
     createNewBranch = false
   }
 
-  if (target.converterDcConnection) {
+  const nestedConverterBranch = target.converterDcConnection
+    ? circuit.branches?.find((branch) =>
+        branch.branchDevices?.some(
+          (device) => device.id === target.converterDcConnection?.converterId
+        )
+      )
+    : undefined
+  const existingDcBusBranch =
+    target.dcBusId && !nestedConverterBranch
+      ? (circuit.branches ?? []).find(
+          (branch) =>
+            branch.dcBusId === target.dcBusId &&
+            (branch.id === target.branchId ||
+              branch.endpointIds.some((id) => target.branchEndpoints?.includes(id)))
+        )
+      : undefined
+  if (target.dcBusId && !nestedConverterBranch) {
+    branchEndpointIds = existingDcBusBranch?.endpointIds ?? null
+    createNewBranch = !existingDcBusBranch
+    if (!existingDcBusBranch) insertAfterEndpointId = undefined
+  }
+
+  if (target.converterDcConnection && (!target.dcBusId || nestedConverterBranch)) {
     const connection = target.converterDcConnection
-    const converter = circuit.trunkDevices?.find((device) => device.id === connection.converterId)
+    const converter = [
+      ...(circuit.trunkDevices ?? []),
+      ...(circuit.branches ?? []).flatMap((branch) => branch.branchDevices ?? []),
+    ].find((device) => device.id === connection.converterId)
     const primaryBranch =
       connection.connectionIndex === 0 && converter
-        ? getCircuitConverterPrimaryBranch(circuit, converter)
+        ? (nestedConverterBranch ?? getCircuitConverterPrimaryBranch(circuit, converter))
         : undefined
     const primaryIds = new Set(primaryBranch?.endpointIds ?? [])
-    if (connection.connectionIndex > 0) {
-      endpoint.converterDcConnection = { ...connection }
+    if (connection.connectionIndex === 0 && primaryIds.size > 0) {
+      circuit.endpoints = circuit.endpoints.map((candidate) =>
+        primaryIds.has(candidate.id) && !candidate.converterDcConnection
+          ? { ...candidate, converterDcConnection: { ...connection } }
+          : candidate
+      )
     }
-    const existingOutputEndpoints = circuit.endpoints.filter((candidate) =>
-      connection.connectionIndex === 0
-        ? primaryIds.has(candidate.id)
-        : candidate.converterDcConnection?.converterId === connection.converterId &&
-          candidate.converterDcConnection.connectionIndex === connection.connectionIndex
+    endpoint.converterDcConnection = { ...connection }
+    const existingOutputEndpoints = circuit.endpoints.filter(
+      (candidate) =>
+        (candidate.converterDcConnection?.converterId === connection.converterId &&
+          candidate.converterDcConnection.connectionIndex === connection.connectionIndex) ||
+        (connection.connectionIndex === 0 &&
+          primaryIds.has(candidate.id) &&
+          !candidate.converterDcConnection)
     )
     const existingIds = new Set(existingOutputEndpoints.map((candidate) => candidate.id))
-    branchEndpointIds = existingOutputEndpoints.map((candidate) => candidate.id)
+    branchEndpointIds =
+      existingOutputEndpoints.length > 0
+        ? existingOutputEndpoints.map((candidate) => candidate.id)
+        : (nestedConverterBranch?.endpointIds ?? [])
     insertAfterEndpointId =
       typeof target.insertAfterEndpointId === 'string' &&
       existingIds.has(target.insertAfterEndpointId)
         ? target.insertAfterEndpointId
         : existingOutputEndpoints.at(-1)?.id
-    createNewBranch = existingOutputEndpoints.length === 0
+    createNewBranch = existingOutputEndpoints.length === 0 && !nestedConverterBranch
   }
 
   // Label assignment (simplified but aligned with endpointBehavior).
@@ -746,8 +765,21 @@ function simulateEndpointDrop(
         : -1
     const anchorBranchIndex =
       branchIndexFromEndpoints >= 0 ? branchIndexFromEndpoints : branchesSansNewEndpoint.length - 1
-    const insertionIndex =
-      insertAfterEndpointId === null
+    const dcBusBranchIndexes = target.dcBusId
+      ? branchesSansNewEndpoint.flatMap((branch, index) =>
+          branch.dcBusId === target.dcBusId ? [index] : []
+        )
+      : []
+    const requestedDcBusIndex = clamp(
+      target.secondaryBusInsertIndex ?? dcBusBranchIndexes.length,
+      0,
+      dcBusBranchIndexes.length
+    )
+    const insertionIndex = target.dcBusId
+      ? requestedDcBusIndex < dcBusBranchIndexes.length
+        ? dcBusBranchIndexes[requestedDcBusIndex]!
+        : (dcBusBranchIndexes.at(-1) ?? branchesSansNewEndpoint.length - 1) + 1
+      : insertAfterEndpointId === null
         ? Math.max(0, anchorBranchIndex)
         : Math.max(0, anchorBranchIndex + 1)
     const nextBranches = [...branchesSansNewEndpoint]
@@ -755,6 +787,7 @@ function simulateEndpointDrop(
       id: generateId(),
       label: '',
       endpointIds: [endpointId],
+      ...(target.dcBusId ? { dcBusId: target.dcBusId } : {}),
     })
     circuit.branches = nextBranches
   } else if (branchEndpointIds?.length) {
@@ -778,7 +811,33 @@ function simulateEndpointDrop(
       )
     }
   } else {
-    circuit.branches = [...branches, { id: generateId(), label: '', endpointIds: [endpointId] }]
+    circuit.branches = [
+      ...branches,
+      {
+        id: generateId(),
+        label: '',
+        endpointIds: [endpointId],
+        ...(target.dcBusId ? { dcBusId: target.dcBusId } : {}),
+      },
+    ]
+  }
+
+  if (nestedConverterBranch) {
+    circuit.branches = (circuit.branches ?? [])
+      .map((branch) =>
+        branch.id === nestedConverterBranch.id
+          ? {
+              ...branch,
+              endpointIds: branch.endpointIds.includes(endpointId)
+                ? branch.endpointIds
+                : [...branch.endpointIds, endpointId],
+            }
+          : {
+              ...branch,
+              endpointIds: branch.endpointIds.filter((id) => id !== endpointId),
+            }
+      )
+      .filter((branch) => branch.endpointIds.length > 0 || (branch.branchDevices?.length ?? 0) > 0)
   }
 
   syncSequentialEndpointBranchLabelsToCircuit(circuit)
@@ -809,67 +868,39 @@ function simulateProtectionDrop(
 
   // Map symbol.id → ProtectionType used by runtime dropBehaviors.
   const protectionType = PROTECTION_SYMBOL_ID_TO_TYPE[symbol.id] ?? 'MCB'
-  if (target.dcBusId && isCircuitTrunkAddOnProtectionType(protectionType)) {
-    const parent = target.circuitId ? findCircuitInProject(project, target.circuitId) : null
-    const owningPanel = target.circuitId ? findPanelForCircuit(project, target.circuitId) : null
-    if (!parent || !owningPanel) return
-    const circuitId = generateId()
-    const protectionId = generateId()
-    const branch: Circuit = {
-      id: circuitId,
-      code: `${parent.code || 'DC'}${(parent.subCircuitIds?.length ?? 0) + 1}`,
-      kind: 'other',
-      cable: { ...(parent.domainWireOverrides?.DC?.cable ?? parent.cable) },
-      endpoints: [],
-      dcBusSource: { busId: target.dcBusId },
-      hideWireLabel: true,
-      domainWireOverrides: {
-        DC: {
-          ...(parent.domainWireOverrides?.DC ?? {}),
-          cable: { ...(parent.domainWireOverrides?.DC?.cable ?? parent.cable) },
-          hideWireLabel: true,
-        },
-      },
-    }
-    owningPanel.protections.push({
-      id: protectionId,
-      type: 'OTHER',
+  if (target.dcBusId) {
+    if (!target.circuitId) return
+    const circuit = findCircuitInProject(project, target.circuitId)
+    if (!circuit) return
+    const branch = (circuit.branches ?? []).find(
+      (candidate) =>
+        candidate.dcBusId === target.dcBusId &&
+        (candidate.id === target.branchId ||
+          candidate.endpointIds.some((id) => target.branchEndpoints?.includes(id)))
+    )
+    if (!branch) return
+    const deviceId = generateId()
+    const device: TrunkDevice = {
+      id: deviceId,
+      type: 'protection',
+      symbol: symbol.id as TrunkDevice['symbol'],
       label: '',
-      circuits: [branch],
-      directDcBusFeeder: true,
-      dcBusId: target.dcBusId,
-    })
+      trunkPosition: 0,
+      protectionType,
+      ...getDefaultTrunkDeviceProtectionProps(protectionType, getVoltagePolesConfig(project)),
+    }
+    const branchDevices = [...(branch.branchDevices ?? [])]
     const insertIndex = clamp(
-      target.secondaryBusInsertIndex ?? parent.subCircuitIds?.length ?? 0,
+      target.branchDeviceInsertIndex ?? branchDevices.length,
       0,
-      parent.subCircuitIds?.length ?? 0
+      branchDevices.length
     )
-    parent.subCircuitIds = [...(parent.subCircuitIds ?? [])]
-    parent.subCircuitIds.splice(insertIndex, 0, circuitId)
-    const bus = parent.trunkDevices?.find((device) => device.id === target.dcBusId)
-    if (bus) {
-      const branchCircuitIds = [...(bus.dcBusProps?.branchCircuitIds ?? [])]
-      branchCircuitIds.splice(clamp(insertIndex, 0, branchCircuitIds.length), 0, circuitId)
-      bus.dcBusProps = { ...(bus.dcBusProps ?? {}), branchCircuitIds }
+    branchDevices.splice(insertIndex, 0, device)
+    branch.branchDevices = branchDevices
+    if (!changeSet.affectedCircuitIds.includes(circuit.id)) {
+      changeSet.affectedCircuitIds.push(circuit.id)
     }
-    changeSet.createdProtectionIds.push(protectionId)
-    changeSet.affectedCircuitIds.push(parent.id, circuitId)
-    if (!changeSet.affectedPanelIds.includes(owningPanel.id)) {
-      changeSet.affectedPanelIds.push(owningPanel.id)
-    }
-    simulateTrunkDeviceOnCircuit(
-      project,
-      {
-        type: 'circuit',
-        panelId: owningPanel.id,
-        circuitId,
-        circuitTrunkSegmentIndex: 0,
-        wireDomain: 'DC',
-      },
-      symbol,
-      'protection',
-      changeSet
-    )
+    changeSet.createdTrunkDeviceIds.push(deviceId)
     return
   }
   const isInlineCircuitProtectionDrop =
@@ -951,7 +982,6 @@ function simulateProtectionDrop(
     type: protectionType,
     label: circuitCode,
     circuits: [] as Circuit[],
-    ...(target.dcBusId ? { dcBusId: target.dcBusId } : {}),
     ...(target.type === 'mainBus'
       ? {
           busSectionId:
@@ -967,11 +997,10 @@ function simulateProtectionDrop(
     kind: 'other',
     cable: createDefaultAcCircuitCable(),
     endpoints: [],
-    ...(target.dcBusId ? { dcBusSource: { busId: target.dcBusId } } : {}),
     ...DEFAULT_AC_CIRCUIT_WIRE_LABEL_FLAGS,
   }
   if (target.type === 'supplyConverterBackupWire') {
-    const installation = getMutableElectricalInstallationForProject(project)
+    const installation = getEditableProjectElectricalInstallation(project)
     const converter = installation
       ? getSupplyFeedDevicesForPanel(installation, projectPanels(project), panel.id, 'root').find(
           (device) => device.supplyPath === 'converter-branch'
@@ -998,19 +1027,6 @@ function simulateProtectionDrop(
   if (target.type === 'circuit' && target.circuitId && !isSecondaryBusSlot) {
     const parentCircuit = findCircuitInProject(project, target.circuitId)
     if (parentCircuit) {
-      if (target.dcBusId) {
-        parentCircuit.subCircuitIds = [...(parentCircuit.subCircuitIds ?? []), circuitId]
-        const bus = parentCircuit.trunkDevices?.find((device) => device.id === target.dcBusId)
-        if (bus) {
-          bus.dcBusProps = {
-            ...(bus.dcBusProps ?? {}),
-            branchCircuitIds: [...(bus.dcBusProps?.branchCircuitIds ?? []), circuitId],
-          }
-        }
-        if (!changeSet.affectedCircuitIds.includes(target.circuitId)) {
-          changeSet.affectedCircuitIds.push(target.circuitId)
-        }
-      } else {
       const insertBeforeId = target.insertBeforeNestedCircuitId
       const insertBeforeIndex = insertBeforeId
         ? (parentCircuit.subCircuitIds ?? []).indexOf(insertBeforeId)
@@ -1056,7 +1072,6 @@ function simulateProtectionDrop(
           parentProtection.subPanelId = undefined
         }
       }
-      }
     }
   }
 
@@ -1092,21 +1107,6 @@ function simulateProtectionDrop(
       circuitId,
       target.secondaryBusInsertIndex
     )
-    if (target.dcBusId) {
-      const parent = findCircuitInProject(project, target.circuitId)
-      const bus = parent?.trunkDevices?.find((device) => device.id === target.dcBusId)
-      if (bus) {
-        const branchCircuitIds = (bus.dcBusProps?.branchCircuitIds ?? []).filter(
-          (id) => id !== circuitId
-        )
-        branchCircuitIds.splice(
-          clamp(target.secondaryBusInsertIndex, 0, branchCircuitIds.length),
-          0,
-          circuitId
-        )
-        bus.dcBusProps = { ...(bus.dcBusProps ?? {}), branchCircuitIds }
-      }
-    }
   }
 }
 
@@ -1311,8 +1311,22 @@ function simulateTrunkDeviceOnCircuit(
     id: deviceId,
     type,
     symbol: symbol.id as TrunkDevice['symbol'],
-    label: type === 'conversion' ? '' : (symbol.name ?? ''),
+    label:
+      symbol.id === 'terminal_strip'
+        ? getNextTerminalStripLabel(project)
+        : type === 'conversion'
+          ? ''
+          : (symbol.name ?? ''),
     trunkPosition,
+    ...(target.converterDcConnection
+      ? { converterDcConnection: { ...target.converterDcConnection } }
+      : {}),
+    ...(type === 'dc_bus' ? { dcBusProps: {} } : {}),
+    ...(symbol.id === 'terminal_strip'
+      ? getTerminalStripTrunkConnectionProps(project)
+      : isSharedJunctionSymbol(symbol.id)
+        ? { junctionIdentity: getNextJunctionIdentity(project, symbol.id) }
+        : {}),
   }
 
   const list = [...(circuit.trunkDevices ?? []), trunkDevice]
@@ -1329,6 +1343,13 @@ function simulateTrunkDeviceOnCircuit(
   }
 
   circuit.trunkDevices = list
+  if (type === 'dc_bus') {
+    circuit.branches = promoteOrdinaryCircuitBranchesToDcBus(
+      circuit,
+      deviceId,
+      target.converterDcConnection
+    )
+  }
 
   changeSet.affectedCircuitIds.push(circuit.id)
   const owningPanel = findPanelForCircuit(project, circuit.id)
@@ -1363,14 +1384,22 @@ function simulateSupplyTrunkDevice(
     if (symbol.id === 'energy_meter') {
       deviceType = 'energy_meter'
       label = 'kWh'
+    } else if (symbol.id === 'relay') {
+      deviceType = 'relay'
     } else if (symbol.id === 'junction_box') {
       deviceType = 'junction_box'
       label = ''
+    } else if (symbol.id === 'terminal_strip') {
+      deviceType = 'terminal_strip'
+      label = getNextTerminalStripLabel(project)
     } else if (symbol.id === 'junction_panel') {
       deviceType = 'junction_panel'
       label = 'JP1'
     } else if (symbol.id === 'source_changeover') {
       deviceType = 'changeover'
+      label = ''
+    } else if (symbol.id === 'domotica') {
+      deviceType = 'domotica'
       label = ''
     } else if (['transformer', 'rectifier', 'inverter', 'dc_dc_converter'].includes(symbol.id)) {
       deviceType = 'conversion'
@@ -1387,7 +1416,11 @@ function simulateSupplyTrunkDevice(
       type: deviceType,
       symbol: symbol.id as TrunkDevice['symbol'],
       label,
+      ...(symbol.id === 'terminal_strip' ? getTerminalStripTrunkConnectionProps(project) : {}),
       trunkPosition: 0,
+      ...(symbol.id === 'domotica'
+        ? { domoticaProps: { endpointCount: 1, endpointChildEndpointIds: [] } }
+        : {}),
     }
     const idx = clamp(insertIndex, 0, list.length)
     list.splice(idx, 0, trunkDevice)
@@ -1475,9 +1508,14 @@ function simulateSupplyTrunkDevice(
   if (symbol.id === 'energy_meter') {
     deviceType = 'energy_meter'
     label = 'kWh'
+  } else if (symbol.id === 'relay') {
+    deviceType = 'relay'
   } else if (symbol.id === 'junction_box') {
     deviceType = 'junction_box'
     label = ''
+  } else if (symbol.id === 'terminal_strip') {
+    deviceType = 'terminal_strip'
+    label = getNextTerminalStripLabel(project)
   } else if (symbol.id === 'junction_panel') {
     deviceType = 'junction_panel'
     label = 'JP1'
@@ -1499,6 +1537,9 @@ function simulateSupplyTrunkDevice(
   } else if (symbol.id === 'dc_bus') {
     deviceType = 'dc_bus'
     label = 'DC'
+  } else if (symbol.id === 'domotica') {
+    deviceType = 'domotica'
+    label = ''
   } else if (
     PROTECTION_SYMBOL_IDS.includes(symbol.id as (typeof PROTECTION_SYMBOL_IDS)[number]) ||
     symbol.category === 'switches'
@@ -1520,6 +1561,7 @@ function simulateSupplyTrunkDevice(
     type: deviceType,
     symbol: symbol.id as TrunkDevice['symbol'],
     label,
+    ...(symbol.id === 'terminal_strip' ? getTerminalStripTrunkConnectionProps(project) : {}),
     trunkPosition: insertIndex,
     ...(target.type === 'supplyWire' &&
     target.supplyFeedScope === 'root' &&
@@ -1536,7 +1578,12 @@ function simulateSupplyTrunkDevice(
         : target.type === 'supplyBackupOutputWire'
           ? { supplyPath: 'backup-output' as const }
           : target.type === 'supplyChangeoverGridWire'
-            ? { supplyPath: 'changeover-grid' as const }
+            ? {
+                supplyPath: 'changeover-grid' as const,
+                ...(target.changeoverGridPlacement
+                  ? { changeoverGridPlacement: target.changeoverGridPlacement }
+                  : {}),
+              }
             : target.type === 'supplyConverterGridWire'
               ? {
                   supplyPath: 'converter-grid' as const,
@@ -1559,11 +1606,17 @@ function simulateSupplyTrunkDevice(
                           supplyDcBusBranchId: target.supplyDcBusBranchId ?? generateId(),
                         }
                       : {}),
+                    ...(target.converterDcConnection
+                      ? { converterDcConnection: { ...target.converterDcConnection } }
+                      : {}),
                   }
                 : {}),
     ...(symbol.id === 'battery' ? { batteryProps: { voltageV: 48, capacityKWh: 5 } } : {}),
     ...(symbol.id === 'solar_panel' ? { solarPanelProps: { wattageW: 1000 } } : {}),
-    ...(symbol.id === 'dc_bus' ? { dcBusProps: { branchCircuitIds: [] } } : {}),
+    ...(symbol.id === 'dc_bus' ? { dcBusProps: {} } : {}),
+    ...(symbol.id === 'domotica'
+      ? { domoticaProps: { endpointCount: 1, endpointChildEndpointIds: [] } }
+      : {}),
     ...(symbol.id === 'source_changeover'
       ? { changeoverProps: { port1Label: '1', port2Label: '2' } }
       : {}),
@@ -1627,6 +1680,9 @@ function simulateGroundTrunkDevice(
   if (symbol.id === 'junction_box') {
     deviceType = 'junction_box'
     label = ''
+  } else if (symbol.id === 'terminal_strip') {
+    deviceType = 'terminal_strip'
+    label = getNextTerminalStripLabel(project)
   } else if (symbol.id === 'junction_panel') {
     deviceType = 'junction_panel'
     label = 'JP1'
@@ -1640,6 +1696,7 @@ function simulateGroundTrunkDevice(
         ? ('earthing_separator' as TrunkDevice['symbol'])
         : (symbol.id as TrunkDevice['symbol']),
     label,
+    ...(symbol.id === 'terminal_strip' ? getTerminalStripTrunkConnectionProps(project) : {}),
     trunkPosition: insertIndex,
   }
 
@@ -1700,6 +1757,14 @@ export function mutateTrunkDeviceRelocation(
   symbol: SymbolMetadata
 ): boolean {
   if (!project) return false
+  if (target.type === 'supplyConverterDcWire') {
+    return !!moveCircuitTrunkDeviceToSupplyDcBus(
+      project,
+      relocating.id,
+      relocating.sourceCircuitId,
+      target
+    )
+  }
   if (target.type !== 'circuit' || !target.circuitId || target.branchEndpoints?.length) return false
 
   const sourceCircuit = findCircuitInProject(project, relocating.sourceCircuitId)
@@ -1801,12 +1866,15 @@ export function simulateTrunkDeviceRelocationOnProject(
   const cloned = cloneProject(project)
   if (!mutateTrunkDeviceRelocation(cloned, relocating, target, symbol)) return null
 
+  const affectedCircuitIds =
+    target.type === 'circuit' && target.circuitId
+      ? [relocating.sourceCircuitId, target.circuitId].filter((id, i, arr) => arr.indexOf(id) === i)
+      : [relocating.sourceCircuitId]
+
   const changeSet: EendraadPreviewChangeSet = {
     project: cloned,
     affectedPanelIds: [],
-    affectedCircuitIds: [relocating.sourceCircuitId, target.circuitId!].filter(
-      (id, i, arr) => arr.indexOf(id) === i
-    ),
+    affectedCircuitIds,
     createdEndpointIds: [],
     createdProtectionIds: [],
     createdTrunkDeviceIds: [],
@@ -1816,7 +1884,17 @@ export function simulateTrunkDeviceRelocationOnProject(
   }
 
   const panelA = findPanelForCircuit(cloned, relocating.sourceCircuitId)
-  const panelB = findPanelForCircuit(cloned, target.circuitId!)
+  const panelB =
+    target.type === 'circuit' && target.circuitId
+      ? findPanelForCircuit(cloned, target.circuitId)
+      : target.panelId
+        ? findPanelById(projectPanels(cloned), target.panelId)
+        : undefined
+  if (target.type === 'supplyConverterDcWire') {
+    for (const panelId of new Set([panelA?.id, panelB?.id])) {
+      if (panelId) reconcileDirectConverterDcDevices(cloned, panelId)
+    }
+  }
   if (panelA && !changeSet.affectedPanelIds.includes(panelA.id))
     changeSet.affectedPanelIds.push(panelA.id)
   if (panelB && !changeSet.affectedPanelIds.includes(panelB.id))
@@ -1840,6 +1918,9 @@ export function simulateSupplyTrunkDeviceRelocationOnProject(
     relocating.targetMounting
   )
   if (!result) return null
+  for (const panelId of new Set([result.sourcePanelId, result.targetPanelId])) {
+    if (panelId) reconcileDirectConverterDcDevices(cloned, panelId)
+  }
 
   return {
     project: cloned,
@@ -1931,6 +2012,14 @@ export function simulateDropOnProject(
 ): EendraadPreviewChangeSet | null {
   if (!project) return null
   if (!canCreateSupplyTopologyFromDrop(symbol, target.type)) return null
+  if (symbol.id === 'dc_bus' && !canDropDcBusOnTarget(target, project)) return null
+  if (
+    target.type === 'supplyConverterDcWire' &&
+    !target.supplyDcBusId &&
+    !canDropSymbolOnSupplyConverterDcWire(symbol.id, false)
+  ) {
+    return null
+  }
 
   const cloned = cloneProject(project)
 
@@ -2027,16 +2116,21 @@ export function simulateDropOnProject(
     // on the circuit trunk (vertical wire). In those cases we preview as trunk
     // device instead of a branch endpoint.
     const isTrunkDrop =
-      target.type === 'circuit' && target.circuitId && !target.branchEndpoints?.length
+      target.type === 'circuit' &&
+      target.circuitId &&
+      !target.dcBusId &&
+      !target.branchEndpoints?.length
     const isTrunkCapable =
       symbol.id === 'energy_meter' ||
       symbol.id === 'junction_box' ||
       symbol.id === 'junction_panel' ||
+      symbol.id === 'terminal_strip' ||
       symbol.id === 'transformer' ||
       symbol.id === 'rectifier' ||
       symbol.id === 'inverter' ||
       symbol.id === 'dc_dc_converter' ||
-      symbol.id === 'dc_bus'
+      symbol.id === 'dc_bus' ||
+      symbol.id === 'domotica'
 
     if (isTrunkDrop && isTrunkCapable && target.circuitId) {
       // Determine trunk device type for this symbol.
@@ -2045,48 +2139,45 @@ export function simulateDropOnProject(
           ? 'energy_meter'
           : symbol.id === 'junction_box'
             ? 'junction_box'
-          : symbol.id === 'junction_panel'
-              ? 'junction_panel'
-              : symbol.id === 'dc_bus'
-                ? 'dc_bus'
-              : 'conversion'
-
-      // For DC-only endpoints, still respect domain logic by optionally
-      // inserting a rectifier first when hovering an AC wire.
-      if (isDcOnlyEndpoint) {
-        const domain = getWireDomainAtDropTargetSim(target, cloned)
-        if (domain !== 'DC') {
-          const rectifierMeta: SymbolMetadata = {
-            ...symbol,
-            id: 'rectifier',
-            name: 'Rectifier',
-          }
-          simulateTrunkDeviceOnCircuit(cloned, target, rectifierMeta, 'conversion', changeSet)
-        }
-      }
+            : symbol.id === 'terminal_strip'
+              ? 'terminal_strip'
+              : symbol.id === 'junction_panel'
+                ? 'junction_panel'
+                : symbol.id === 'dc_bus'
+                  ? 'dc_bus'
+                  : symbol.id === 'domotica'
+                    ? 'domotica'
+                    : 'conversion'
 
       simulateTrunkDeviceOnCircuit(cloned, target, symbol, trunkType, changeSet)
       return changeSet
     }
 
     if (isDcOnlyEndpoint) {
-      const domain = getWireDomainAtDropTargetSim(target, cloned)
-      const targetCircuit = target.circuitId ? findCircuitInProject(cloned, target.circuitId) : null
-      const hasUpstreamConversion = targetCircuit
-        ? hasUpstreamConversionDeviceForDropSim(target, targetCircuit)
-        : false
-      const plugInAfterSocket =
-        !!targetCircuit && isPlugInAfterSocketDrop(target, targetCircuit, symbol)
-      if (domain === 'DC' || plugInAfterSocket) {
+      const protection =
+        target.type === 'protection' && target.protectionId
+          ? findProtectionByIdInProject(cloned, target.protectionId)
+          : target.type === 'circuit' &&
+              target.circuitId &&
+              !target.branchEndpoints?.length &&
+              (target.circuitTrunkSegmentIndex === 0 || target.insertAfterCircuitContent === true)
+            ? findProtectionByCircuitIdInProject(cloned, target.circuitId)
+            : null
+      if (protection && isEmptyProtectionCircuitForDcDrop(protection)) {
+        const circuitId = protection.circuits![0]!.id
+        simulateTrunkDeviceOnCircuit(
+          cloned,
+          { ...target, circuitId },
+          { ...symbol, id: 'inverter', name: 'Inverter' },
+          'conversion',
+          changeSet
+        )
         simulateEndpointDrop(cloned, target, symbol, changeSet)
-      } else if (domain === 'AC' && target.circuitId && !hasUpstreamConversion) {
-        // Insert a rectifier on plain AC only, then add endpoint.
-        const rectifierMeta: SymbolMetadata = {
-          ...symbol,
-          id: 'rectifier',
-          name: 'Rectifier',
-        }
-        simulateTrunkDeviceOnCircuit(cloned, target, rectifierMeta, 'conversion', changeSet)
+        return changeSet
+      }
+
+      const domain = getWireDomainAtDropTargetSim(target, cloned)
+      if (domain === 'DC') {
         simulateEndpointDrop(cloned, target, symbol, changeSet)
       }
     } else {

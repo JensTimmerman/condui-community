@@ -28,12 +28,17 @@ import {
 } from '@/lib/analytics/validationPanelAnalytics'
 
 import { getResponsiveEditorMode } from '@/hooks/useResponsiveEditorMode'
+import { isStructuralCanvasEnabled } from '@/lib/structuralCanvas/availability'
 
 /** Plan canvas view state (zoom, pan, grid) — alias for ViewState */
 export type PlanView = ViewState
 /** Plan visibility toggles — alias for PlanVisibilityState */
 export type PlanVisibility = PlanVisibilityState
-export type LeftDockPanel = 'library' | 'tally' | 'validation' | 'quickPlacer'
+export type LeftDockPanel =
+  | 'library'
+  | 'tally'
+  | 'validation'
+  | 'quickPlacer'
   
 export interface FloatingPanelDragSeed {
   panel: LeftDockPanel
@@ -91,7 +96,9 @@ export const DEFAULT_LAYOUTS: Record<LayoutPreset, () => ViewportLayout> = {
   }),
 }
 
-const CANVAS_TYPES: CanvasType[] = ['eendraad', 'plan', 'panel']
+const CANVAS_TYPES: CanvasType[] = isStructuralCanvasEnabled()
+  ? ['eendraad', 'plan', 'panel', 'structure']
+  : ['eendraad', 'plan', 'panel']
 
 function cloneLayoutForFocusReturn(layout: ViewportLayout): ViewportLayout {
   const cloned = JSON.parse(JSON.stringify(layout)) as ViewportLayout
@@ -136,6 +143,7 @@ export interface UIState {
   /** Live Konva scale per canvas during wheel/pinch; null when in sync with that canvas view store. */
   canvasGestureZoom: Record<CanvasType, number | null>
   panelView: ViewState
+  structureView: ViewState
   panels: PanelState
   activeFloorId: string | null
   /** Active situation-plan tool, shared so sibling panels can reflect drawing properties. */
@@ -213,6 +221,7 @@ export interface UIState {
   setPlanView: (view: Partial<ViewState>) => void
   setCanvasGestureZoom: (canvas: CanvasType, zoom: number | null) => void
   setPanelView: (view: Partial<ViewState>) => void
+  setStructureView: (view: Partial<ViewState>) => void
   setActivePanelId: (panelId: string | null) => void
   setPanelCanvasMode: (mode: PanelCanvasMode) => void
   setSitplanPanelFilterId: (panelId: string | null) => void
@@ -290,6 +299,7 @@ const initialState = {
     eendraad: null,
     plan: null,
     panel: null,
+    structure: null,
   },
   panelView: {
     zoom: 2,
@@ -297,6 +307,15 @@ const initialState = {
     showGrid: true,
     gridSize: 24,
     snapToGrid: true,
+    snapToProjection: false,
+    gridIntensity: 50,
+  },
+  structureView: {
+    zoom: 1,
+    pan: { x: 0, y: 0 },
+    showGrid: false,
+    gridSize: 24,
+    snapToGrid: false,
     snapToProjection: false,
     gridIntensity: 50,
   },
@@ -332,7 +351,7 @@ const initialState = {
   eendraadDateMarkingMode: false,
   eendraadLayoutOverrides: new Map<string, Point>(),
   planCanvasViewportPx: null as { width: number; height: number } | null,
-  fitToViewTrigger: { eendraad: 0, plan: 0, panel: 0 } as Record<CanvasType, number>,
+  fitToViewTrigger: { eendraad: 0, plan: 0, panel: 0, structure: 0 } as Record<CanvasType, number>,
   cancelPlanResetScaleTrigger: 0,
   isExporting: false,
   tallyWindowOpen: false,
@@ -644,6 +663,11 @@ export const useUIStore = create<UIState>()(
           state.panelView = { ...state.panelView, ...view }
         }),
 
+      setStructureView: (view) =>
+        set((state) => {
+          state.structureView = { ...state.structureView, ...view }
+        }),
+
       setActivePanelId: (panelId) =>
         set((state) => {
           state.activePanelId = panelId
@@ -854,12 +878,13 @@ export const useUIStore = create<UIState>()(
 
       closeFloatingWindows: () => {
         const state = useUIStore.getState()
-        const hasFloatingWindows =
-          state.libraryWindowOpen ||
-          state.tallyWindowOpen ||
-          state.validationWindowOpen ||
-          state.quickPlacerWindowOpen
+        const hasFloatingWindows = [
+          state.libraryWindowOpen,
+          state.tallyWindowOpen,
+          state.validationWindowOpen,
+          state.quickPlacerWindowOpen,
           
+        ].some(Boolean)
         if (!hasFloatingWindows) return false
 
         set((draft) => {
@@ -993,6 +1018,9 @@ export const useUIStore = create<UIState>()(
           snapToGrid: state.panelView.snapToGrid,
           snapToProjection: state.panelView.snapToProjection,
         },
+        structureView: {
+          ...initialState.structureView,
+        },
         planVisibility: pickPersistedPlanVisibility(state.planVisibility),
         panels: state.panels,
         activeFloorId: state.activeFloorId,
@@ -1014,6 +1042,7 @@ export const useUIStore = create<UIState>()(
             eendraad: () => ({ ...DEFAULT_LAYOUTS.single(), panels: [{ canvas: 'eendraad' }] }),
             plan: () => ({ ...DEFAULT_LAYOUTS.single(), panels: [{ canvas: 'plan' }] }),
             panel: () => ({ ...DEFAULT_LAYOUTS.single(), panels: [{ canvas: 'panel' }] }),
+            structure: () => ({ ...DEFAULT_LAYOUTS.single(), panels: [{ canvas: 'structure' }] }),
             both: DEFAULT_LAYOUTS.sideBySide,
             panelAndPlan: () => ({
               ...DEFAULT_LAYOUTS.sideBySide(),
@@ -1039,6 +1068,10 @@ export const useUIStore = create<UIState>()(
           state.panelView = {
             ...initialState.panelView,
             ...(state.panelView ?? {}),
+          }
+          state.structureView = {
+            ...initialState.structureView,
+            ...(state.structureView ?? {}),
           }
         }
         // v0/v1/v2/v3 -> v4: keep only sitplan slider prefs; reset all

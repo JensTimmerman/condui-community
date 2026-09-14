@@ -10,6 +10,20 @@ import { applyCoordinatePrecision, formatCoordinate } from './coordinatePrecisio
 import Konva from 'konva'
 
 /**
+ * Konva's perfect-draw optimization renders some semi-transparent shapes to
+ * its buffer canvas first. The SVG bridge serializes that canvas as one image
+ * with the full stage dimensions, which turns an otherwise vector export into
+ * a huge transparent PNG. Export scenes are isolated clones, so disabling the
+ * optimization here cannot affect the live editor.
+ */
+export function disableBufferCanvasForSvgExport(root: Konva.Container): void {
+  root.find((node: Konva.Node) => node instanceof Konva.Shape).forEach((node) => {
+    const shape = node as Konva.Shape
+    shape.perfectDrawEnabled(false)
+  })
+}
+
+/**
  * Render an isolated export scene to SVG string
  * 
  * @param scene Isolated export scene
@@ -39,6 +53,7 @@ export async function renderSvgFromScene(
   
   // Add scene root to temp layer
   tempLayer.add(scene.rootNode)
+  disableBufferCanvasForSvgExport(scene.rootNode)
   tempStage.draw()
   
   // Export using react-konva-to-svg (patched version)

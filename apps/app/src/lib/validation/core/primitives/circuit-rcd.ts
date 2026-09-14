@@ -12,12 +12,21 @@ import { isHouseholdInstallation } from '@/lib/installationProfile'
 import {
   getPanelFeedProjection,
   trunkDeviceCountsAsProtection,
-  resolvePanelSupplyLinkForPanel,
+  resolvePanelSupplyLinkForPanelInPanels,
   i18n,
   projectPanels,
   projectInstallation,
   validationCircuitCode,
 } from './common'
+import type { ResidualCurrentType } from '@/types/schema'
+
+const FIXED_LOAD_ONLY_CIRCUIT_KINDS = new Set([
+  'fixed_appliance',
+  'boiler',
+  'heating',
+  'stove',
+  'hvac',
+])
 
 function normalizeForFuzzyMatch(input: string): string {
   return input
@@ -62,7 +71,7 @@ function findRootPanelForPanel(panels: Panel[], targetPanelId: string): Panel | 
 }
 
 function findFeederCircuitIdsForPanel(panels: Panel[], targetPanelId: string): string[] {
-  const link = resolvePanelSupplyLinkForPanel({ panels }, targetPanelId)
+  const link = resolvePanelSupplyLinkForPanelInPanels(panels, targetPanelId)
   return link?.feederCircuit ? [link.feederCircuit.id] : []
 }
 
@@ -82,11 +91,16 @@ function getSupplyProtectionsForCircuit(
   return devices.filter((td) => trunkDeviceCountsAsProtection(td))
 }
 
-function getRcdSensitivitiesForCircuit(
+type RcdProtectionDetails = {
+  sensitivityMa?: number
+  residualCurrentType?: ResidualCurrentType
+}
+
+function getRcdProtectionDetailsForCircuit(
   query: InstallationQueryAPI,
   project: ValidationProject,
   circuitId: string
-): number[] {
+): RcdProtectionDetails[] {
   const upstream = query.getUpstream(circuitId)
   const panelRcds =
     upstream
@@ -110,26 +124,28 @@ function getRcdSensitivitiesForCircuit(
       .filter((p): p is NonNullable<typeof p> => !!p && (p.type === 'RCD' || p.type === 'RCBO')) ??
     []
 
-  const allRcdsSensitivity: number[] = []
+  return [...panelRcds, ...supplyRcds, ...feederUpstreamRcds].map((device) => ({
+    sensitivityMa: device.sensitivityMa,
+    residualCurrentType: device.residualCurrentType,
+  }))
+}
 
-  for (const p of panelRcds) {
-    if (p.sensitivityMa != null) allRcdsSensitivity.push(p.sensitivityMa)
-  }
-  for (const td of supplyRcds) {
-    if (td.sensitivityMa != null) allRcdsSensitivity.push(td.sensitivityMa)
-  }
-  for (const p of feederUpstreamRcds) {
-    if (p.sensitivityMa != null) allRcdsSensitivity.push(p.sensitivityMa)
-  }
-
-  return allRcdsSensitivity
+function getRcdSensitivitiesForCircuit(
+  query: InstallationQueryAPI,
+  project: ValidationProject,
+  circuitId: string,
+): number[] {
+  return getRcdProtectionDetailsForCircuit(query, project, circuitId)
+    .map((rcd) => rcd.sensitivityMa)
+    .filter((sensitivity): sensitivity is number => sensitivity != null)
 }
 
 /**
  * Enforce that certain circuit types have 30 mA RCD/RCBO protection.
  *
  * Requires 30 mA protection for the household circuits named in 4.2.4.3(b),
- * plus EV charging circuits under 7.22.4.1:
+ * plus EV charging circuits under 7.22.4.1, including protection against
+ * disruptive DC components under 5.3.5.3(f):
  * - lighting;
  * - general-purpose sockets (not a socket dedicated to a modeled fixed load);
  * - washers, dryers and dishwashers;
@@ -169,6 +185,20 @@ function circuitHasRcdProtection(
   const hasGeneralPurposeSocket = circuit.endpoints.some(
     (endpoint) => endpoint.type === 'socket' && !socketsDedicatedToFixedLoads.has(endpoint.id),
   )
+  // Some legacy projects do not persist branch membership. The derived kind still
+  // tells us that a circuit containing only fixed appliances (and their possible
+  // dedicated connection socket) is not a general-purpose socket circuit. Keep
+  // explicit branch topology authoritative when it is available so a genuinely
+  // mixed circuit with an extra socket remains subject to the 30 mA rule.
+  const hasCompleteBranchTopology =
+    (circuit.branches?.length ?? 0) > 0 &&
+    circuit.endpoints.every((endpoint) =>
+      circuit.branches?.some((branch) => branch.endpointIds.includes(endpoint.id)),
+    )
+  const fixedLoadOnlyWithoutBranches =
+    !hasCompleteBranchTopology && FIXED_LOAD_ONLY_CIRCUIT_KINDS.has(kind)
+  const hasGeneralPurposeSocketForRule =
+    hasGeneralPurposeSocket && !fixedLoadOnlyWithoutBranches
   const hasNamedLaundryAppliance = circuit.endpoints.some(
     (endpoint) =>
       endpoint.symbol === 'washer' ||
@@ -177,10 +207,14 @@ function circuitHasRcdProtection(
   )
   const needsRcd =
     kind === 'ev' ||
-    (household && (kind === 'lighting' || hasGeneralPurposeSocket || hasNamedLaundryAppliance))
+    (household &&
+      (kind === 'lighting' || hasGeneralPurposeSocketForRule || hasNamedLaundryAppliance))
   if (!needsRcd) return { passed: true }
 
-  const allRcdsSensitivity = getRcdSensitivitiesForCircuit(query, project, scope.id)
+  const rcdProtections = getRcdProtectionDetailsForCircuit(query, project, scope.id)
+  const allRcdsSensitivity = rcdProtections
+    .map((rcd) => rcd.sensitivityMa)
+    .filter((sensitivity): sensitivity is number => sensitivity != null)
   const owningPanel = findPanelOwningCircuit(projectPanels(project), scope.id)
   const panelKey = owningPanel?.id ?? 'unknown-panel'
 
@@ -204,7 +238,33 @@ function circuitHasRcdProtection(
 
   const has30mA = allRcdsSensitivity.some((s) => s <= 30)
   if (has30mA) {
-    return { passed: true }
+    if (kind !== 'ev') return { passed: true }
+
+    const hasIntegratedDcResidualProtection = circuit.endpoints.some(
+      (endpoint) =>
+        endpoint.symbol === 'ev' &&
+        endpoint.evChargerProps?.integratedDcResidualProtection === true,
+    )
+    const hasTypeBRcd = rcdProtections.some(
+      (rcd) => rcd.residualCurrentType === 'B' && (rcd.sensitivityMa ?? Number.POSITIVE_INFINITY) <= 30,
+    )
+
+    if (hasIntegratedDcResidualProtection || hasTypeBRcd) return { passed: true }
+
+    return {
+      passed: false,
+      offenders: [{ kind: 'circuit', id: circuit.id, viewHint: 'eendraad' }],
+      mergeBucket: `${panelKey}:dc-compatibility`,
+      message: i18n.t('validation.primitives.circuitHasRcdProtection.dcCompatibility.message', {
+        circuitCode: validationCircuitCode(circuit.code),
+        defaultValue: `EV charging circuit ${circuit.code} has 30 mA RCD protection, but no protection against disruptive DC fault current was identified`,
+      }),
+      details: i18n.t('validation.primitives.circuitHasRcdProtection.dcCompatibility.details', {
+        circuitCode: validationCircuitCode(circuit.code),
+        defaultValue:
+          'AREI 7.22.4.1 and 5.3.5.3(f) require the charging point to remain protected against disruptive DC components. Use a Type B RCD, or mark the charger as having coordinated built-in DC residual-current protection/detection (such as 6 mA DC detection).',
+      }),
+    }
   }
 
   const detectedSensitivities = Array.from(new Set(allRcdsSensitivity)).sort((a, b) => a - b)

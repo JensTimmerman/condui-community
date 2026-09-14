@@ -174,12 +174,21 @@ function updateEndpointsForDomoticaParents(
 
 export function relabelDomoticaChildRows(circuit: Circuit): Endpoint[] {
   const nextById = new Map(circuit.endpoints.map((endpoint) => [endpoint.id, { ...endpoint }]))
+  const visited = new Set<string>()
 
-  for (const parent of circuit.endpoints) {
-    if (parent.symbol !== 'domotica' || parent.domoticaChildProps || !parent.domoticaProps) continue
+  const labelParent = (parentId: string, ancestry: Set<string>) => {
+    if (ancestry.has(parentId) || visited.has(parentId)) return
+    const parent = nextById.get(parentId)
+    if (parent?.symbol !== 'domotica' || !parent.domoticaProps) return
+    visited.add(parentId)
+    const nextAncestry = new Set(ancestry).add(parentId)
 
-    const baseLabel = (parent.label?.trim() || `${circuit.code}1`).replace(/\.\d+$/, '')
+    const parentLabel = parent.label?.trim() || `${circuit.code}1`
+    const baseLabel = parent.domoticaChildProps
+      ? parentLabel
+      : parentLabel.replace(/\.\d+$/, '')
     let rowLabelIndex = 1
+    const nestedChildIds: string[] = []
 
     const labelRowsForGroup = (ids: string[] | undefined, group: DomoticaOutputGroup) => {
       (ids ?? []).forEach((rootChildId, outputIndex) => {
@@ -199,11 +208,28 @@ export function relabelDomoticaChildRows(circuit: Circuit): Endpoint[] {
           if (!child) continue
           child.label = `${baseLabel}.${rowLabelIndex}`
           rowLabelIndex += 1
+          if (child.symbol === 'domotica' && child.domoticaProps) nestedChildIds.push(child.id)
         }
       })
     }
 
     labelRowsForGroup(parent.domoticaProps.endpointChildEndpointIds, 'endpoint')
+
+    for (const nestedChildId of nestedChildIds) {
+      labelParent(nestedChildId, nextAncestry)
+    }
+  }
+
+  const modules = circuit.endpoints.filter(
+    (endpoint) => endpoint.symbol === 'domotica' && endpoint.domoticaProps
+  )
+  const rootModules = modules.filter((endpoint) => {
+    const parentId = endpoint.domoticaChildProps?.parentEndpointId
+    return !parentId || nextById.get(parentId)?.symbol !== 'domotica'
+  })
+  for (const root of rootModules) labelParent(root.id, new Set())
+  for (const module of modules) {
+    if (!visited.has(module.id)) labelParent(module.id, new Set())
   }
 
   return circuit.endpoints.map((endpoint) => nextById.get(endpoint.id) ?? endpoint)
@@ -253,6 +279,17 @@ export function insertDomoticaChildEndpoint(
   const targetParent = circuit.endpoints.find((endpoint) => endpoint.id === targetParentEndpointId)
   const child = circuit.endpoints.find((endpoint) => endpoint.id === childEndpointId)
   if (!targetParent?.domoticaProps || !child) return null
+
+  const endpointById = new Map(circuit.endpoints.map((endpoint) => [endpoint.id, endpoint]))
+  const visitedAncestors = new Set<string>()
+  let ancestor: Endpoint | undefined = targetParent
+  while (ancestor) {
+    if (ancestor.id === childEndpointId) return null
+    if (visitedAncestors.has(ancestor.id)) return null
+    visitedAncestors.add(ancestor.id)
+    const parentId: string | undefined = ancestor.domoticaChildProps?.parentEndpointId
+    ancestor = parentId ? endpointById.get(parentId) : undefined
+  }
 
   const updatedParents = new Map<string, Endpoint>()
   const outputIndexRemaps = new Map<string, Map<number, number>>()

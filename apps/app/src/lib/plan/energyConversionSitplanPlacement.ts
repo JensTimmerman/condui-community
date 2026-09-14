@@ -1,11 +1,11 @@
 import { getAllCircuits } from '@/lib/eendraad/projectElectricalDomain'
 import {
-  getBuildingFloorsFromProject,
-  getMutableCompatibilityFloorsForProject,
+  selectProjectBuildingFloors,
+  mutateBuildingFloorViews,
   type ProjectWithOptionalV2Building,
 } from '@/lib/projectV2/buildingFloors'
 import {
-  getElectricalPanelsFromProject,
+  selectProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import type { SymbolKey } from '@/types/schema'
@@ -34,24 +34,24 @@ const PHYSICAL_SUPPLY_SYMBOLS = new Set<SymbolKey>([
 
 /**
  * Gives legacy conversion and physical supply devices the placement behavior used for new drops.
- * Conversion placements that are not represented in a panel are visible,
+ * Non-inverter conversion placements that are not represented in a panel are visible,
  * including placements that older editor versions stored in the hidden-items
  * list. Placements intentionally represented in a panel remain hidden on the
  * situation plan. Missing conversion placements are optional and are never
- * treated as orphaned data.
+ * treated as orphaned data. Existing inverter plan visibility is an independent
+ * user choice and is preserved even when its panel module is hidden.
  */
 export function healEnergyConversionSitplanPlacements(
   project: EnergyConversionSitplanProject
 ): boolean {
   let changed = false
 
-  const floors = getBuildingFloorsFromProject(project)
-  const compatibilityFloors = getMutableCompatibilityFloorsForProject(project)
+  const floors = selectProjectBuildingFloors(project)
   const fallbackFloorId = floors[0]?.id
   if (!fallbackFloorId) return changed
 
   const conversionPlacementIds = new Set<string>()
-  for (const panel of getElectricalPanelsFromProject(project)) {
+  for (const panel of selectProjectElectricalPanels(project)) {
     for (const circuit of getAllCircuits(panel)) {
       const floorId =
         resolveCircuitSitplanTargetFloorId(project, null, circuit.id) ?? fallbackFloorId
@@ -73,7 +73,7 @@ export function healEnergyConversionSitplanPlacements(
           if (placement) endpoint.placements.push(placement)
         }
         for (const endpointPlacement of endpoint.placements) {
-          conversionPlacementIds.add(endpointPlacement.id)
+          if (endpoint.symbol !== 'inverter') conversionPlacementIds.add(endpointPlacement.id)
         }
       }
 
@@ -84,7 +84,7 @@ export function healEnergyConversionSitplanPlacements(
           if (placement) device.placements = [placement]
         }
         for (const devicePlacement of device.placements ?? []) {
-          conversionPlacementIds.add(devicePlacement.id)
+          if (device.symbol !== 'inverter') conversionPlacementIds.add(devicePlacement.id)
         }
       }
     }
@@ -106,19 +106,21 @@ export function healEnergyConversionSitplanPlacements(
       }
     }
     for (const placement of device.placements ?? []) {
-      conversionPlacementIds.add(placement.id)
+      if (device.symbol !== 'inverter') conversionPlacementIds.add(placement.id)
     }
   }
 
   const placementsHiddenByPanel = getSituationPlanPlacementIdsHiddenByPanel(project)
-  for (const floor of compatibilityFloors) {
-    const hiddenIds = floor.hiddenSitplanPlacementIds ?? []
-    const visibleIds = hiddenIds.filter(
-      (id) => !conversionPlacementIds.has(id) || placementsHiddenByPanel.has(id),
-    )
-    if (visibleIds.length === hiddenIds.length) continue
-    floor.hiddenSitplanPlacementIds = visibleIds.length > 0 ? visibleIds : undefined
-    changed = true
-  }
+  mutateBuildingFloorViews(project, (floors) => {
+    for (const floor of floors) {
+      const hiddenIds = floor.hiddenSitplanPlacementIds ?? []
+      const visibleIds = hiddenIds.filter(
+        (id) => !conversionPlacementIds.has(id) || placementsHiddenByPanel.has(id),
+      )
+      if (visibleIds.length === hiddenIds.length) continue
+      floor.hiddenSitplanPlacementIds = visibleIds.length > 0 ? visibleIds : undefined
+      changed = true
+    }
+  })
   return changed
 }

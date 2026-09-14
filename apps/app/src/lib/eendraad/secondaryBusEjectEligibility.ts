@@ -2,7 +2,7 @@ import type { Circuit, Panel, ProtectionDevice } from '@/types/schema'
 import { findParentCircuitInfo } from '@/lib/eendraad/findParentCircuitInfo'
 import { pickRepresentativeCircuitIdForMainBusMove } from '@/lib/eendraad/mainBusOrder'
 import {
-  getElectricalPanelsFromProject,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 
@@ -61,7 +61,7 @@ export function resolveSecondaryBusEjectSelection(
   if (!project || selectedProtectionIds.length === 0) return null
   const selectedSet = new Set(selectedProtectionIds)
   if (selectedSet.size !== selectedProtectionIds.length) return null
-  const projectPanels = getElectricalPanelsFromProject(project)
+  const projectPanels = getProjectElectricalPanels(project)
 
   let sourcePanel: Panel | null = null
   let parentCircuit: Circuit | null = null

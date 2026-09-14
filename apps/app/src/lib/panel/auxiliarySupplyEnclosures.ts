@@ -1,3 +1,4 @@
+import { getAllCircuits, isTerminalStripDevice } from '@/lib/eendraad/projectElectricalDomain'
 import {
   panelGridModuleRefKey,
   resolveModuleWidthCols,
@@ -6,16 +7,17 @@ import { findFirstFreeMainOrOverflowSlot } from '@/components/canvas/panel/autoA
 import { ensureInstallationFeedTopology } from '@/lib/feedTopology'
 import { DEFAULT_PANEL_GRID_COLUMNS, DEFAULT_PANEL_GRID_ROWS } from '@/lib/panel/panelGridDefaults'
 import {
-  getAuxiliaryElectricalEnclosuresFromProject,
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
-  getMutableAuxiliaryElectricalEnclosuresForProject,
-  getSupplyAssembliesFromProject,
+  selectProjectAuxiliaryElectricalEnclosures,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
+  editProjectAuxiliaryElectricalEnclosures,
+  selectProjectSupplyAssemblies,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { supplyNodeReferencesDevice } from '@/lib/supplyAssembly/deviceReferences'
 import type { Panel, PanelGridModuleRef, PanelGridSlot, Point2, TrunkDevice } from '@/types/schema'
 import type { AuxiliaryElectricalEnclosure, ElectricalEnclosureRef } from '@/types/supplyAssembly'
+import { MIN_PANEL_GRID_MODULE_WIDTH } from '@/lib/panel/panelGridUnits'
 
 export const MIN_AUXILIARY_COLUMNS = 12
 const DEFAULT_AUXILIARY_COLUMNS = 18
@@ -44,7 +46,7 @@ function findPanel(panels: Panel[], panelId: string): Panel | undefined {
 }
 
 function getKnownSupplyDevices(project: ProjectWithOptionalV2Electrical): TrunkDevice[] {
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   if (!installation) return []
   const candidates = [
     ...(installation.mainSupply.supplyTrunkDevices ?? []),
@@ -64,12 +66,12 @@ function removeSupplyDeviceFromVisualSlots(
   deviceId: string
 ): void {
   const key = panelGridModuleRefKey(supplyModuleRef(deviceId))
-  visitPanels(getElectricalPanelsFromProject(project), (panel) => {
+  visitPanels(getProjectElectricalPanels(project), (panel) => {
     if (!panel.gridView) return
     panel.gridView.slots = removeModuleFromSlots(panel.gridView.slots, key)
     panel.gridView.supplyPanelSlots = removeModuleFromSlots(panel.gridView.supplyPanelSlots, key)
   })
-  for (const enclosure of getAuxiliaryElectricalEnclosuresFromProject(project)) {
+  for (const enclosure of selectProjectAuxiliaryElectricalEnclosures(project)) {
     enclosure.gridView.slots = removeModuleFromSlots(enclosure.gridView.slots, key)
   }
 }
@@ -80,13 +82,13 @@ export function getSupplyDeviceMounting(
 ): ElectricalEnclosureRef | undefined {
   const device = getKnownSupplyDevices(project).find((candidate) => candidate.id === deviceId)
   if (device?.panelMounting) return device.panelMounting
-  for (const assembly of getSupplyAssembliesFromProject(project)) {
+  for (const assembly of selectProjectSupplyAssemblies(project)) {
     const node = assembly.nodes.find((candidate) => supplyNodeReferencesDevice(candidate, deviceId))
     if (node?.mounting) return node.mounting.enclosure
   }
   const refKey = panelGridModuleRefKey(supplyModuleRef(deviceId))
   let slotMounting: ElectricalEnclosureRef | undefined
-  visitPanels(getElectricalPanelsFromProject(project), (panel) => {
+  visitPanels(getProjectElectricalPanels(project), (panel) => {
     if (panel.gridView?.slots.some((slot) => panelGridModuleRefKey(slot.module) === refKey)) {
       slotMounting = { kind: 'panel', panelId: panel.id }
     } else if (
@@ -107,11 +109,11 @@ export function resolveSupplyDeviceMounting(
 ): ElectricalEnclosureRef | undefined {
   const explicit = getSupplyDeviceMounting(project, deviceId)
   if (explicit) return explicit
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   if (!installation) return undefined
   const topology = ensureInstallationFeedTopology(
     installation,
-    getElectricalPanelsFromProject(project)
+    getProjectElectricalPanels(project)
   )
   if (topology.sharedFeed.trunkDevices?.some((device) => device.id === deviceId)) {
     return { kind: 'grid' }
@@ -145,7 +147,7 @@ export function getAuxiliaryMountedSupplyDeviceIds(
   project: ProjectWithOptionalV2Electrical
 ): ReadonlySet<string> {
   return new Set(
-    getAuxiliaryElectricalEnclosuresFromProject(project).flatMap((enclosure) =>
+    selectProjectAuxiliaryElectricalEnclosures(project).flatMap((enclosure) =>
       getAuxiliaryEnclosureSupplyDeviceIds(project, enclosure.id)
     )
   )
@@ -161,7 +163,7 @@ export function setSupplyDeviceMounting(
   device.panelMounting = enclosure
   // Older project versions stored this fact on mirrored assembly nodes. Clear that
   // compatibility copy once the physical device owns the canonical mounting.
-  for (const assembly of getSupplyAssembliesFromProject(project)) {
+  for (const assembly of selectProjectSupplyAssemblies(project)) {
     for (const node of assembly.nodes) {
       if (!supplyNodeReferencesDevice(node, deviceId)) continue
       delete node.mounting
@@ -195,16 +197,16 @@ export function moveSupplyDeviceToEnclosureAutomatically(
   ownerPanelId: string
 ): boolean {
   if (enclosureRefsEqual(resolveSupplyDeviceMounting(project, deviceId), enclosure)) return true
-  const panel = findPanel(getElectricalPanelsFromProject(project), ownerPanelId)
+  const panel = findPanel(getProjectElectricalPanels(project), ownerPanelId)
   const auxiliary =
     enclosure.kind === 'auxiliary'
-      ? getAuxiliaryElectricalEnclosuresFromProject(project).find(
+      ? selectProjectAuxiliaryElectricalEnclosures(project).find(
           (candidate) => candidate.id === enclosure.enclosureId
         )
       : undefined
   const targetPanel =
     enclosure.kind === 'panel'
-      ? findPanel(getElectricalPanelsFromProject(project), enclosure.panelId)
+      ? findPanel(getProjectElectricalPanels(project), enclosure.panelId)
       : panel
   if (enclosure.kind === 'auxiliary' && !auxiliary) return false
   if (enclosure.kind !== 'auxiliary' && !targetPanel) return false
@@ -213,12 +215,15 @@ export function moveSupplyDeviceToEnclosureAutomatically(
   if (!setSupplyDeviceMounting(project, deviceId, enclosure)) return false
 
   const ref = supplyModuleRef(deviceId)
-  const width = Math.max(1, resolveModuleWidthCols(ref, project))
+  const width = Math.max(MIN_PANEL_GRID_MODULE_WIDTH, resolveModuleWidthCols(ref, project))
   if (auxiliary) {
     const occupied = auxiliary.gridView.slots.map((slot) => ({
       row: slot.row,
       col: slot.col,
-      width: Math.max(1, resolveModuleWidthCols(slot.module, project, slot)),
+      width: Math.max(
+        MIN_PANEL_GRID_MODULE_WIDTH,
+        resolveModuleWidthCols(slot.module, project, slot)
+      ),
     }))
     const spot = findFirstFreeMainOrOverflowSlot(
       occupied,
@@ -243,7 +248,10 @@ export function moveSupplyDeviceToEnclosureAutomatically(
   const occupied = slots.map((slot) => ({
     row: slot.row,
     col: slot.col,
-    width: Math.max(1, resolveModuleWidthCols(slot.module, project, slot)),
+    width: Math.max(
+      MIN_PANEL_GRID_MODULE_WIDTH,
+      resolveModuleWidthCols(slot.module, project, slot)
+    ),
   }))
   const spot = findFirstFreeMainOrOverflowSlot(
     occupied,
@@ -253,7 +261,7 @@ export function moveSupplyDeviceToEnclosureAutomatically(
     grid.feedFromTop
   )
   slots.push({ row: spot.row, col: spot.col, module: ref })
-  if (enclosure.kind === 'panel') {
+  if (enclosure.kind === 'panel' && getKnownSupplyDevices(project).find((device) => device.id === deviceId)?.symbol !== 'inverter') {
     const key = panelGridModuleRefKey(ref)
     grid.hiddenModuleKeys = grid.hiddenModuleKeys?.filter((candidate) => candidate !== key)
     grid.shownModuleKeys = [...new Set([...(grid.shownModuleKeys ?? []), key])]
@@ -275,7 +283,7 @@ export function planAuxiliarySupplyEnclosureGrid(
 
   const widths = uniqueDeviceIds.map((deviceId) => {
     const ref = supplyModuleRef(deviceId)
-    return Math.max(1, resolveModuleWidthCols(ref, project))
+    return Math.max(MIN_PANEL_GRID_MODULE_WIDTH, resolveModuleWidthCols(ref, project))
   })
   const columns = Math.max(
     MIN_AUXILIARY_COLUMNS,
@@ -315,7 +323,7 @@ export function createAuxiliarySupplyEnclosure(
   }
 ): AuxiliaryElectricalEnclosure | null {
   if (
-    getAuxiliaryElectricalEnclosuresFromProject(project).some(
+    selectProjectAuxiliaryElectricalEnclosures(project).some(
       (enclosure) => enclosure.id === options.id
     )
   ) {
@@ -338,7 +346,7 @@ export function createAuxiliarySupplyEnclosure(
     panelViewPosition: options.position,
     gridView,
   }
-  getMutableAuxiliaryElectricalEnclosuresForProject(project).push(enclosure)
+  editProjectAuxiliaryElectricalEnclosures(project).push(enclosure)
   return enclosure
 }
 
@@ -349,7 +357,7 @@ export function moveSupplyDeviceToAuxiliaryEnclosure(
   row: number,
   col: number
 ): boolean {
-  const enclosure = getAuxiliaryElectricalEnclosuresFromProject(project).find(
+  const enclosure = selectProjectAuxiliaryElectricalEnclosures(project).find(
     (candidate) => candidate.id === enclosureId
   )
   if (!enclosure) return false
@@ -358,6 +366,9 @@ export function moveSupplyDeviceToAuxiliaryEnclosure(
   enclosure.gridView.columns = Math.max(MIN_AUXILIARY_COLUMNS, enclosure.gridView.columns)
   removeSupplyDeviceFromVisualSlots(project, deviceId)
   enclosure.gridView.slots.push({ row, col, module: supplyModuleRef(deviceId) })
+  const key = panelGridModuleRefKey(supplyModuleRef(deviceId))
+  enclosure.gridView.hiddenModuleKeys = enclosure.gridView.hiddenModuleKeys?.filter((candidate) => candidate !== key)
+  enclosure.gridView.shownModuleKeys = [...new Set([...(enclosure.gridView.shownModuleKeys ?? []), key])]
   return true
 }
 
@@ -368,7 +379,7 @@ export function moveSupplyDeviceToPanelEnclosure(
   row: number,
   col: number
 ): boolean {
-  const panel = findPanel(getElectricalPanelsFromProject(project), panelId)
+  const panel = findPanel(getProjectElectricalPanels(project), panelId)
   if (!panel?.gridView) return false
   if (!setSupplyDeviceMounting(project, deviceId, { kind: 'panel', panelId })) return false
   removeSupplyDeviceFromVisualSlots(project, deviceId)
@@ -389,12 +400,17 @@ export function moveSupplyDeviceToGridEnclosure(
   row: number,
   col: number
 ): boolean {
-  const panel = findPanel(getElectricalPanelsFromProject(project), panelId)
+  const panel = findPanel(getProjectElectricalPanels(project), panelId)
   if (!panel?.gridView) return false
   if (!setSupplyDeviceMounting(project, deviceId, { kind: 'grid' })) return false
   removeSupplyDeviceFromVisualSlots(project, deviceId)
   panel.gridView.supplyPanelSlots ??= []
   panel.gridView.supplyPanelSlots.push({ row, col, module: supplyModuleRef(deviceId) })
+  const key = panelGridModuleRefKey(supplyModuleRef(deviceId))
+  const ownerPanel = getProjectElectricalPanels(project).find((candidate) => candidate.isMain) ?? panel
+  ownerPanel.gridView ??= { rows: DEFAULT_PANEL_GRID_ROWS, columns: DEFAULT_PANEL_GRID_COLUMNS, feedFromTop: false, slots: [] }
+  ownerPanel.gridView.hiddenModuleKeys = ownerPanel.gridView.hiddenModuleKeys?.filter((candidate) => candidate !== key)
+  ownerPanel.gridView.shownModuleKeys = [...new Set([...(ownerPanel.gridView.shownModuleKeys ?? []), key])]
   return true
 }
 
@@ -402,13 +418,17 @@ export function deleteAuxiliarySupplyEnclosure(
   project: ProjectWithOptionalV2Electrical,
   enclosureId: string
 ): boolean {
-  const enclosures = getMutableAuxiliaryElectricalEnclosuresForProject(project)
+  const enclosures = editProjectAuxiliaryElectricalEnclosures(project)
   const index = enclosures.findIndex((enclosure) => enclosure.id === enclosureId)
   if (index < 0) return false
   const enclosure = enclosures[index]!
+  // A physical terminal strip must be moved out before its enclosure is removed.
+  if (getProjectElectricalPanels(project).some((panel) => getAllCircuits(panel).some((circuit) =>
+    (circuit.trunkDevices ?? []).some((device) => isTerminalStripDevice(device) &&
+      device.panelMounting?.kind === 'auxiliary' && device.panelMounting.enclosureId === enclosureId)))) return false
   const deviceIds = getAuxiliaryEnclosureSupplyDeviceIds(project, enclosureId)
   const ownerPanel = enclosure.ownerPanelId
-    ? findPanel(getElectricalPanelsFromProject(project), enclosure.ownerPanelId)
+    ? findPanel(getProjectElectricalPanels(project), enclosure.ownerPanelId)
     : undefined
   if (ownerPanel && !ownerPanel.gridView) {
     ownerPanel.gridView = {
@@ -429,7 +449,10 @@ export function deleteAuxiliarySupplyEnclosure(
   const occupied = (ownerGrid?.slots ?? []).map((slot) => ({
     row: slot.row,
     col: slot.col,
-    width: Math.max(1, resolveModuleWidthCols(slot.module, project, slot)),
+    width: Math.max(
+      MIN_PANEL_GRID_MODULE_WIDTH,
+      resolveModuleWidthCols(slot.module, project, slot)
+    ),
   }))
   for (const deviceId of deviceIds) {
     if (enclosure.ownerPanelId) {
@@ -440,7 +463,10 @@ export function deleteAuxiliarySupplyEnclosure(
       if (ownerGrid) {
         const ref = supplyModuleRef(deviceId)
         const previousSlot = previousSlots.get(panelGridModuleRefKey(ref))
-        const width = Math.max(1, resolveModuleWidthCols(ref, project, previousSlot))
+        const width = Math.max(
+          MIN_PANEL_GRID_MODULE_WIDTH,
+          resolveModuleWidthCols(ref, project, previousSlot)
+        )
         const spot = findFirstFreeMainOrOverflowSlot(
           occupied,
           width,
@@ -460,11 +486,19 @@ export function deleteAuxiliarySupplyEnclosure(
             : {}),
         })
         occupied.push({ row: spot.row, col: spot.col, width })
+        const device = getKnownSupplyDevices(project).find((candidate) => candidate.id === deviceId)
+        if (device?.supplyPath === 'converter-branch') {
+          const key = panelGridModuleRefKey(ref)
+          ownerGrid.hiddenModuleKeys = ownerGrid.hiddenModuleKeys?.filter(
+            (candidate) => candidate !== key
+          )
+          ownerGrid.shownModuleKeys = [...new Set([...(ownerGrid.shownModuleKeys ?? []), key])]
+        }
       }
     } else {
       const device = getKnownSupplyDevices(project).find((candidate) => candidate.id === deviceId)
       if (device) delete device.panelMounting
-      for (const assembly of getSupplyAssembliesFromProject(project)) {
+      for (const assembly of selectProjectSupplyAssemblies(project)) {
         for (const node of assembly.nodes) {
           if (supplyNodeReferencesDevice(node, deviceId)) delete node.mounting
         }

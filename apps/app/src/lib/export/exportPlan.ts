@@ -1,7 +1,7 @@
 import type { BottomUpPanelLayout } from '@/lib/layout/bottomUpLayout'
 import {
-  getAuxiliaryElectricalEnclosuresFromProject,
-  getElectricalPanelsFromProject,
+  selectProjectAuxiliaryElectricalEnclosures,
+  selectProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import type { Panel } from '@/types/schema'
@@ -44,9 +44,9 @@ export function orderEendraadLayoutsForExport(
 export function buildPanelExportTargets(
   project: ProjectWithOptionalV2Electrical
 ): PanelExportTarget[] {
-  const panelRoots = getElectricalPanelsFromProject(project)
+  const panelRoots = selectProjectElectricalPanels(project)
   const panels = collectAllPanels(panelRoots)
-  const auxiliaryEnclosures = getAuxiliaryElectricalEnclosuresFromProject(project).filter(
+  const auxiliaryEnclosures = selectProjectAuxiliaryElectricalEnclosures(project).filter(
     (enclosure) => enclosure.hidden !== true
   )
   const nonEmptyAuxiliaryEnclosures = auxiliaryEnclosures.filter(

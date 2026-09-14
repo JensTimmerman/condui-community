@@ -103,7 +103,7 @@ export function computeEendraadFrameBounds({
       if (!el) continue
 
       const endpoint = getEndpointById(id)
-      const isDomoticaParent = endpoint?.symbol === 'domotica' && !endpoint.domoticaChildProps
+      const isDomoticaParent = endpoint?.symbol === 'domotica'
 
       if (isDomoticaParent) {
         const endpointCount = Math.max(

@@ -1,19 +1,17 @@
-import { memo } from 'react'
-import { useTranslation } from 'react-i18next'
+import { memo, useMemo, useRef } from 'react'
+import type { TFunction } from 'i18next'
 import { Group, Text } from 'react-konva'
-import type { LayoutNode } from '@/lib/layout/layoutTree'
+import { getLayoutNodeIdentityKey, type LayoutNode } from '@/lib/layout/layoutTree'
 import { SupplySymbol } from './SupplySymbol'
 import { GroundSymbol } from './GroundSymbol'
 import { ProtectionSymbol } from './ProtectionSymbol'
-import { EndpointSymbol } from './EndpointSymbol'
+import { EndpointMetadataCallout, EndpointSymbol } from './EndpointSymbol'
 import { CircuitLabel } from './CircuitLabel'
 import { PanelFrame } from './PanelFrame'
 import { PanelSymbol } from './PanelSymbol'
 import { useProjectStore } from '@/stores/projectStore'
 import { useUIStore } from '@/stores/uiStore'
-import type { ProjectState } from '@/stores/projectStore'
 import { getPanelSymbolLabel } from '@/lib/panel/panelDiagramLabels'
-import { useEditionFeatureAvailability } from '@/hooks/useEditionFeatureAvailability'
 import { TrunkDeviceSymbol } from './TrunkDeviceSymbol'
 import { EENDRAAD_PANEL_SYMBOL_WIDTH, getEendraadPanelBodyCenterYOffset } from './canvasSymbols'
 import { useThemeColors } from '@/lib/theme/hooks'
@@ -30,13 +28,14 @@ import {
   measureCircuitNotesLineWidth,
   normalizeCircuitNotesText,
 } from '@/lib/layout/circuitNoteMetrics'
-import type { Endpoint, ProtectionDevice, TrunkDevice, Panel } from '@/types/schema'
+import type { Circuit, Endpoint, ProtectionDevice, TrunkDevice, Panel } from '@/types/schema'
 import { isPanelOnlySubPanelFeeder as isPanelOnlySubPanelFeederCircuit } from '@/lib/layout/bottomUpLayout'
 import type { Point } from '@/types/ui'
 import { getSupplyProtectionLabelCollisionInfo } from '@/lib/eendraad/supplyProtectionLabelCollisions'
 import { findPanelDistributionEndpointInCircuit } from '@/lib/eendraad/panelSupplyLink'
 import { countPanelCircuits } from '@/utils/plan/placementHelpers'
 import { isVerticalSupplyDevice } from '@/lib/layout/supplyDeviceOrientation'
+import { reconcileLayoutNode } from '@/lib/layout/eendraadDerivedLayout'
 
 function isPanelOnlySubPanelFeeder(
   protection: ProtectionDevice,
@@ -57,8 +56,9 @@ function isPanelOnlySubPanelFeeder(
 
 interface RenderNodeProps {
   node: LayoutNode
+  translate: TFunction
+  advancedPanelLabels: boolean
   panelLayout?: BottomUpPanelLayout // For PanelFrame and child nodes
-  allEndpoints?: Endpoint[] // For endpoint lookup (still needed for now)
   getProtectionById?: (id: string) => ProtectionDevice | undefined // For protection lookup
   getPanelById?: (id: string) => Panel | undefined // For panel lookup
   supplyProtectionCollisionIds?: Set<string>
@@ -72,6 +72,29 @@ interface RenderNodeProps {
   onGroundDragEnd?: (newPos: Point) => void
   /** Convert Konva drag event to canvas position (pointer). Used so drop target uses cursor position. */
   getCanvasPositionFromEvent?: (e: unknown) => Point | null
+  /** Render a selected endpoint instead of leaving it for the interaction overlay. */
+  renderSelectedEndpoint?: boolean
+  /** Internal guard used when this node is already rendered inside a translated island. */
+  disablePositionIsland?: boolean
+}
+
+function localizeLayoutNode(node: LayoutNode, originX: number, originY: number): LayoutNode {
+  return {
+    ...node,
+    bounds: { ...node.bounds, x: node.bounds.x - originX, y: node.bounds.y - originY },
+    connectionAnchor: node.connectionAnchor
+      ? {
+          x: node.connectionAnchor.x - originX,
+          y: node.connectionAnchor.y - originY,
+        }
+      : undefined,
+    nestedChildXs: node.nestedChildXs?.map((x) => x - originX),
+    // Metadata callouts are positioned relative to their owning symbol node.
+    // The symbol itself is localized by its bounds/position island, so translating
+    // the callout here a second time moves the floating card off-canvas.
+    visual: node.visual,
+    children: node.children.map((child) => localizeLayoutNode(child, originX, originY)),
+  }
 }
 
 /**
@@ -80,10 +103,47 @@ interface RenderNodeProps {
  * This is the unified rendering system that walks the layout tree
  * and renders the appropriate Konva components for each node type.
  */
-const RenderNode = memo(function RenderNode({
+function renderNodePropsEqual(previous: RenderNodeProps, next: RenderNodeProps): boolean {
+  if (
+    previous.node !== next.node ||
+    previous.translate !== next.translate ||
+    previous.advancedPanelLabels !== next.advancedPanelLabels ||
+    previous.getProtectionById !== next.getProtectionById ||
+    previous.getPanelById !== next.getPanelById ||
+    previous.onElementDragStart !== next.onElementDragStart ||
+    previous.shouldSuppressKonvaDragEnd !== next.shouldSuppressKonvaDragEnd ||
+    previous.onElementDragMove !== next.onElementDragMove ||
+    previous.onElementDragEnd !== next.onElementDragEnd ||
+    previous.onGroundDragEnd !== next.onGroundDragEnd ||
+    previous.getCanvasPositionFromEvent !== next.getCanvasPositionFromEvent ||
+    previous.renderSelectedEndpoint !== next.renderSelectedEndpoint ||
+    previous.disablePositionIsland !== next.disablePositionIsland
+  ) {
+    return false
+  }
+
+  const needsPanelLayout =
+    next.node.type === 'panel' ||
+    next.node.type === 'trunkDevice' ||
+    (next.node.type === 'endpoint' &&
+      next.node.visual?.type === 'symbol' &&
+      next.node.visual.symbolId === 'panel_distribution')
+  if (needsPanelLayout && previous.panelLayout !== next.panelLayout) return false
+  if (
+    next.node.type === 'trunkDevice' &&
+    previous.supplyProtectionCollisionIds?.has(next.node.id) !==
+      next.supplyProtectionCollisionIds?.has(next.node.id)
+  ) {
+    return false
+  }
+  return true
+}
+
+const PositionedRenderIsland = memo(function PositionedRenderIsland({
   node,
+  translate,
+  advancedPanelLabels,
   panelLayout,
-  allEndpoints = [],
   getProtectionById,
   getPanelById,
   supplyProtectionCollisionIds,
@@ -93,12 +153,81 @@ const RenderNode = memo(function RenderNode({
   shouldSuppressKonvaDragEnd,
   onGroundDragEnd,
   getCanvasPositionFromEvent,
+  renderSelectedEndpoint,
 }: RenderNodeProps) {
-  const { t } = useTranslation()
-  const currentProject = useProjectStore((s: ProjectState) => s.currentProject)
-  const { advancedPanelLabels } = useEditionFeatureAvailability(currentProject?.project.id)
+  const previousLocalNodeRef = useRef<LayoutNode | undefined>(undefined)
+  const localNode = useMemo(() => {
+    const localized = localizeLayoutNode(node, node.bounds.x, node.bounds.y)
+    const reconciled = reconcileLayoutNode(localized, previousLocalNodeRef.current)
+    previousLocalNodeRef.current = reconciled
+    return reconciled
+  }, [node])
+  return (
+    <Group x={node.bounds.x} y={node.bounds.y} name="eendraad-hit-cullable">
+      <RenderNode
+        node={localNode}
+        translate={translate}
+        advancedPanelLabels={advancedPanelLabels}
+        panelLayout={panelLayout}
+        getProtectionById={getProtectionById}
+        getPanelById={getPanelById}
+        supplyProtectionCollisionIds={supplyProtectionCollisionIds}
+        onElementDragStart={onElementDragStart}
+        onElementDragMove={onElementDragMove}
+        onElementDragEnd={onElementDragEnd}
+        shouldSuppressKonvaDragEnd={shouldSuppressKonvaDragEnd}
+        onGroundDragEnd={onGroundDragEnd}
+        getCanvasPositionFromEvent={getCanvasPositionFromEvent}
+        renderSelectedEndpoint={renderSelectedEndpoint}
+        disablePositionIsland
+      />
+    </Group>
+  )
+})
+
+const RenderNode = memo(function RenderNodeImpl({
+  node,
+  translate: t,
+  advancedPanelLabels,
+  panelLayout,
+  getProtectionById,
+  getPanelById,
+  supplyProtectionCollisionIds,
+  onElementDragStart,
+  onElementDragMove,
+  onElementDragEnd,
+  shouldSuppressKonvaDragEnd,
+  onGroundDragEnd,
+  getCanvasPositionFromEvent,
+  renderSelectedEndpoint = false,
+  disablePositionIsland = false,
+}: RenderNodeProps) {
   const resolvedSupplyProtectionCollisionIds =
     supplyProtectionCollisionIds ?? getSupplyProtectionLabelCollisionInfo(node).collisionIds
+
+  if (
+    !disablePositionIsland &&
+    (node.type === 'rcd' || node.type === 'mcb' || node.type === 'branch')
+  ) {
+    return (
+      <PositionedRenderIsland
+        node={node}
+        translate={t}
+        advancedPanelLabels={advancedPanelLabels}
+        panelLayout={panelLayout}
+        getProtectionById={getProtectionById}
+        getPanelById={getPanelById}
+        supplyProtectionCollisionIds={resolvedSupplyProtectionCollisionIds}
+        onElementDragStart={onElementDragStart}
+        onElementDragMove={onElementDragMove}
+        onElementDragEnd={onElementDragEnd}
+        shouldSuppressKonvaDragEnd={shouldSuppressKonvaDragEnd}
+        onGroundDragEnd={onGroundDragEnd}
+        getCanvasPositionFromEvent={getCanvasPositionFromEvent}
+        renderSelectedEndpoint={renderSelectedEndpoint}
+      />
+    )
+  }
 
   // Render based on node type
   switch (node.type) {
@@ -108,12 +237,13 @@ const RenderNode = memo(function RenderNode({
       return (
         <PanelFrame key={node.id} panelLayout={panelLayout}>
           <Group>
-            {node.children.map((child, i) => (
+            {node.children.map((child) => (
               <RenderNode
-                key={`${child.id}-${i}`}
+                key={getLayoutNodeIdentityKey(child)}
                 node={child}
+                translate={t}
+                advancedPanelLabels={advancedPanelLabels}
                 panelLayout={panelLayout}
-                allEndpoints={allEndpoints}
                 getProtectionById={getProtectionById}
                 getPanelById={getPanelById}
                 supplyProtectionCollisionIds={resolvedSupplyProtectionCollisionIds}
@@ -148,12 +278,13 @@ const RenderNode = memo(function RenderNode({
       if (!panelLayout) return null
       return (
         <Group key={node.id}>
-          {node.children.map((child, i) => (
+          {node.children.map((child) => (
             <RenderNode
-              key={`${child.id}-${i}`}
+              key={getLayoutNodeIdentityKey(child)}
               node={child}
+              translate={t}
+              advancedPanelLabels={advancedPanelLabels}
               panelLayout={panelLayout}
-              allEndpoints={allEndpoints}
               getProtectionById={getProtectionById}
               getPanelById={getPanelById}
               supplyProtectionCollisionIds={resolvedSupplyProtectionCollisionIds}
@@ -220,12 +351,13 @@ const RenderNode = memo(function RenderNode({
                 onDragEnd={() => {}}
               />
             )}
-          {node.children.map((child, i) => (
+          {node.children.map((child) => (
             <RenderNode
-              key={`${child.id}-${i}`}
+              key={getLayoutNodeIdentityKey(child)}
               node={child}
+              translate={t}
+              advancedPanelLabels={advancedPanelLabels}
               panelLayout={panelLayout}
-              allEndpoints={allEndpoints}
               getProtectionById={getProtectionById}
               getPanelById={getPanelById}
               supplyProtectionCollisionIds={resolvedSupplyProtectionCollisionIds}
@@ -245,12 +377,13 @@ const RenderNode = memo(function RenderNode({
       // Secondary bus (trunk) - rendered as wire segment, but we still need the container
       return (
         <Group key={node.id}>
-          {node.children.map((child, i) => (
+          {node.children.map((child) => (
             <RenderNode
-              key={`${child.id}-${i}`}
+              key={getLayoutNodeIdentityKey(child)}
               node={child}
+              translate={t}
+              advancedPanelLabels={advancedPanelLabels}
               panelLayout={panelLayout}
-              allEndpoints={allEndpoints}
               getProtectionById={getProtectionById}
               getPanelById={getPanelById}
               supplyProtectionCollisionIds={resolvedSupplyProtectionCollisionIds}
@@ -265,16 +398,24 @@ const RenderNode = memo(function RenderNode({
         </Group>
       )
 
-    case 'branch':
-      // Branch - just a container for endpoints
+    case 'branch': {
+      const metadataCalloutNodes = node.children.flatMap((child) => {
+        if (child.type !== 'endpoint' || !child.domainRef || child.visual?.type !== 'symbol') {
+          return []
+        }
+        const metadataCallout = child.visual.metadataCallout
+        if (!metadataCallout || child.visual.suppressMetadataLabel) return []
+        return [{ child, metadataCallout }]
+      })
       return (
         <Group key={node.id}>
-          {node.children.map((child, i) => (
+          {node.children.map((child) => (
             <RenderNode
-              key={`${child.id}-${i}`}
+              key={getLayoutNodeIdentityKey(child)}
               node={child}
+              translate={t}
+              advancedPanelLabels={advancedPanelLabels}
               panelLayout={panelLayout}
-              allEndpoints={allEndpoints}
               getProtectionById={getProtectionById}
               getPanelById={getPanelById}
               supplyProtectionCollisionIds={resolvedSupplyProtectionCollisionIds}
@@ -286,8 +427,17 @@ const RenderNode = memo(function RenderNode({
               getCanvasPositionFromEvent={getCanvasPositionFromEvent}
             />
           ))}
+          {metadataCalloutNodes.map(({ child, metadataCallout }) => (
+            <EndpointMetadataCallout
+              key={`${child.id}-metadata-callout-overlay`}
+              endpoint={child.domainRef as Endpoint}
+              position={{ x: child.bounds.x, y: child.bounds.y }}
+              metadataCallout={metadataCallout}
+            />
+          ))}
         </Group>
       )
+    }
 
     case 'endpoint': {
       // Endpoint symbol or sub-panel symbol. A panel_distribution endpoint is the
@@ -333,9 +483,10 @@ const RenderNode = memo(function RenderNode({
               ? Math.max(40, nextColumnX - labelStartX - 8)
               : Math.max(80, panelLayout!.frame.x + panelLayout!.frame.width - labelStartX - 12)
 
+          const latestProject = useProjectStore.getState().currentProject
           const panelName =
-            currentProject != null
-              ? getPanelSymbolLabel(currentProject, subPanel, advancedPanelLabels)
+            latestProject != null
+              ? getPanelSymbolLabel(latestProject, subPanel, advancedPanelLabels)
               : subPanel.name || visual.label || endpoint?.label || ''
 
           return (
@@ -378,16 +529,16 @@ const RenderNode = memo(function RenderNode({
       // Regular endpoint symbol
       if (!node.domainRef) return null
       const endpoint = node.domainRef as Endpoint
-      // Find full endpoint data (includes placements, etc.)
-      const fullEndpoint = allEndpoints.find((e) => e.id === endpoint.id) || endpoint
-      // Only the domotica parent module is non-draggable.
-      // Domotica child endpoints must stay draggable so users can pull them back out.
-      const canDragEndpoint = fullEndpoint.symbol !== 'domotica'
+      // Domotica parents are draggable as a complete group; their resize handle
+      // stops propagation separately so resizing still takes precedence there.
+      const canDragEndpoint = true
       return (
         <EndpointSymbol
           key={node.id}
-          endpoint={fullEndpoint}
+          endpoint={endpoint}
           position={{ x: node.bounds.x, y: node.bounds.y }}
+          circuitConverterAnchor={node.connectionAnchor}
+          converterGrowthDirection={node.converterGrowthDirection}
           onDragMove={
             onElementDragMove
               ? (newPos) => onElementDragMove(endpoint.id, 'endpoint', newPos)
@@ -421,9 +572,11 @@ const RenderNode = memo(function RenderNode({
             node.visual?.type === 'symbol' ? node.visual.bottomLabelMaximumRightX : undefined
           }
           metadataCallout={node.visual?.type === 'symbol' ? node.visual.metadataCallout : undefined}
+          renderMetadataCallout={false}
           metadataLabelSuppressed={
             node.visual?.type === 'symbol' ? node.visual.suppressMetadataLabel : undefined
           }
+          suppressWhenSelected={!renderSelectedEndpoint}
         />
       )
     }
@@ -438,7 +591,11 @@ const RenderNode = memo(function RenderNode({
         isSupplyTrunkDevice && isVerticalSupplyDevice(trunkDevice)
       const isSubPanelSupplyTrunkDevice = node.id?.startsWith('subpanelSupplyTrunkDevice-')
       const isGroundTrunkDevice = node.id?.startsWith('groundTrunkDevice-')
-      const isDraggableTrunkDevice = !isGroundTrunkDevice
+      // Ordinary DC-rail branch protections are serialized inside their branch rather
+      // than on Circuit.trunkDevices. They are selectable/editable, but the existing
+      // circuit-trunk drag path cannot relocate that nested array safely yet.
+      const isDcBusBranchDevice = node.id?.startsWith('dc-bus-branch-device-')
+      const isDraggableTrunkDevice = !isGroundTrunkDevice && !isDcBusBranchDevice
       return (
         <>
           <TrunkDeviceSymbol
@@ -446,6 +603,7 @@ const RenderNode = memo(function RenderNode({
             device={trunkDevice}
             position={{ x: node.bounds.x, y: node.bounds.y }}
             circuitConverterAnchor={node.connectionAnchor}
+            converterGrowthDirection={node.converterGrowthDirection}
             dcBusWidth={trunkDevice.type === 'dc_bus' ? node.bounds.width : undefined}
             metadataCallout={
               node.visual?.type === 'symbol' ? node.visual.metadataCallout : undefined
@@ -458,10 +616,15 @@ const RenderNode = memo(function RenderNode({
                 : undefined
             }
             supplyPanelId={panelLayout?.panel.id}
+            supplyPanelMainBusY={panelLayout?.mainBus.y}
+            supplyPanelLabel={panelLayout?.panel.name}
+            allowVerticalSupplyNotes={isSupplyTrunkDevice && panelLayout?.frameRole !== 'supply'}
             isHorizontal={isSupplyTrunkDevice && !isVerticalSupplyBranchDevice}
             symbolRotationDeg={node.visual?.type === 'symbol' ? node.visual.rotationDeg : undefined}
             protectionLabelPosition={isVerticalSupplyBranchDevice ? 'right' : undefined}
-            showDeviceLabelLeft={isSubPanelSupplyTrunkDevice}
+            showDeviceLabelLeft={
+              isSubPanelSupplyTrunkDevice || isVerticalSupplyBranchDevice
+            }
             splitProtectionResidualLine={
               isSupplyTrunkDevice && resolvedSupplyProtectionCollisionIds.has(node.id)
             }
@@ -485,12 +648,13 @@ const RenderNode = memo(function RenderNode({
             }
             draggableCircuitTrunk={isDraggableTrunkDevice}
           />
-          {node.children.map((child, index) => (
+          {node.children.map((child) => (
             <RenderNode
-              key={`${child.id}-${index}`}
+              key={getLayoutNodeIdentityKey(child)}
               node={child}
+              translate={t}
+              advancedPanelLabels={advancedPanelLabels}
               panelLayout={panelLayout}
-              allEndpoints={allEndpoints}
               getProtectionById={getProtectionById}
               getPanelById={getPanelById}
               supplyProtectionCollisionIds={resolvedSupplyProtectionCollisionIds}
@@ -529,6 +693,12 @@ const RenderNode = memo(function RenderNode({
               })
             }
           : undefined
+        const labelCircuit = node.domainRef as Circuit | undefined
+        const labelProtection = labelCircuit
+          ? panelLayout?.panel.protections.find((protection) =>
+              protection.circuits?.some((circuit) => circuit.id === labelCircuit.id)
+            )
+          : undefined
         return (
           <Group
             key={node.id}
@@ -545,6 +715,12 @@ const RenderNode = memo(function RenderNode({
                   : node.visual.text
               }
               align={node.visual.align}
+              custom={
+                labelProtection?.circuits?.some(
+                  (circuit) => circuit.eendraadManualCodeLock === true
+                ) ?? labelCircuit?.eendraadManualCodeLock === true
+              }
+              protectionId={labelProtection?.id}
             />
           </Group>
         )
@@ -555,12 +731,13 @@ const RenderNode = memo(function RenderNode({
       // Unknown node type - just render children
       return (
         <Group key={node.id}>
-          {node.children.map((child, i) => (
+          {node.children.map((child) => (
             <RenderNode
-              key={`${child.id}-${i}`}
+              key={getLayoutNodeIdentityKey(child)}
               node={child}
+              translate={t}
+              advancedPanelLabels={advancedPanelLabels}
               panelLayout={panelLayout}
-              allEndpoints={allEndpoints}
               getProtectionById={getProtectionById}
               getPanelById={getPanelById}
               supplyProtectionCollisionIds={resolvedSupplyProtectionCollisionIds}
@@ -575,7 +752,7 @@ const RenderNode = memo(function RenderNode({
         </Group>
       )
   }
-})
+}, renderNodePropsEqual)
 
 export default RenderNode
 

@@ -1,6 +1,6 @@
 const HARD_RELOAD_PARAM = 'sw-bust'
-const WAITING_SERVICE_WORKER_TIMEOUT_MS = 800
-const SERVICE_WORKER_ACTIVATION_GRACE_MS = 250
+const WAITING_SERVICE_WORKER_TIMEOUT_MS = 15_000
+const SERVICE_WORKER_ACTIVATION_GRACE_MS = 5_000
 const HARD_RELOAD_CLEANUP_TIMEOUT_MS = 1500
 
 let serviceWorkerRegistration: ServiceWorkerRegistration | null = null
@@ -33,16 +33,14 @@ export async function requestAppServiceWorkerUpdateAndReload(
     (await waitForWaitingServiceWorker(registration, options.waitingTimeoutMs))
   if (!waitingWorker) return false
 
+  const controllerChange = navigator.serviceWorker.controller
+    ? waitForServiceWorkerControllerChange(options.activationGraceMs)
+    : Promise.resolve(false)
   waitingWorker.postMessage({ type: 'SKIP_WAITING' })
 
-  if (navigator.serviceWorker.controller) {
-    await waitForServiceWorkerControllerChange(options.activationGraceMs)
-  }
+  await controllerChange
 
-  await forceAppHardReload({
-    cleanupTimeoutMs: options.cleanupTimeoutMs,
-    nowMs: options.nowMs,
-  })
+  reloadWithCacheBust(options.nowMs)
   return true
 }
 
@@ -90,6 +88,20 @@ function reloadWithCacheBust(nowMs = Date.now): void {
   const url = new URL(window.location.href)
   url.searchParams.set(HARD_RELOAD_PARAM, String(nowMs()))
   window.location.replace(url.toString())
+}
+
+/**
+ * A worker that was unregistered by the fallback can still control the first navigation fired by
+ * its old page. Complete one more navigation before booting the app; that new document is outside
+ * the removed worker's lifecycle. This also leaves normal update URLs clean after activation.
+ */
+export function completeAppHardReloadNavigation(): boolean {
+  const url = new URL(window.location.href)
+  if (!url.searchParams.has(HARD_RELOAD_PARAM)) return false
+
+  url.searchParams.delete(HARD_RELOAD_PARAM)
+  window.location.replace(url.toString())
+  return true
 }
 
 function waitForServiceWorkerControllerChange(

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useCanvasOverlayScale } from '@/contexts/CanvasOverlayScaleContext'
 import { useResponsiveEditorMode } from '@/hooks/useResponsiveEditorMode'
 import { preventCanvasToolbarMouseFocus } from '@/lib/ui/preventCanvasToolbarMouseFocus'
@@ -70,6 +71,7 @@ export function FloatingControl({
 }: FloatingControlProps) {
   const [internalOpen, setInternalOpen] = useState(false)
   const [hovered, setHovered] = useState(false)
+  const [tooltipPosition, setTooltipPosition] = useState({ left: 0, top: 0 })
   const wrapperRef = useRef<HTMLDivElement>(null)
   const [mobileMenuLayout, setMobileMenuLayout] = useState({ top: 0, maxHeight: 0 })
   const { isCompact: editorCompact } = useResponsiveEditorMode()
@@ -91,10 +93,28 @@ export function FloatingControl({
   const baseButtonClasses =
     'inline-flex items-center justify-center w-12 h-12 shadow-lg border transition-all text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-500'
 
-  const tooltipSideClass = side === 'right' ? 'right-full mr-2' : 'left-full ml-2'
   const menuSideClass = side === 'right' ? 'right-full mr-2 top-0' : 'left-full ml-2 top-0'
 
   const showTooltip = hovered && !isOpen && !suppressTooltip
+
+  useLayoutEffect(() => {
+    if (!showTooltip) return
+    const positionTooltip = () => {
+      const rect = wrapperRef.current?.getBoundingClientRect()
+      if (!rect) return
+      setTooltipPosition({
+        left: side === 'right' ? rect.left - 8 : rect.right + 8,
+        top: rect.top + rect.height / 2,
+      })
+    }
+    positionTooltip()
+    window.addEventListener('resize', positionTooltip)
+    window.addEventListener('scroll', positionTooltip, true)
+    return () => {
+      window.removeEventListener('resize', positionTooltip)
+      window.removeEventListener('scroll', positionTooltip, true)
+    }
+  }, [showTooltip, side])
 
   useEffect(() => {
     if (!isOpen || !children) return
@@ -178,8 +198,15 @@ export function FloatingControl({
         {icon}
       </button>
 
-      {showTooltip && (
-        <div className={`pointer-events-none absolute top-1/2 -translate-y-1/2 ${tooltipSideClass}`}>
+      {showTooltip && typeof document !== 'undefined' && createPortal(
+        <div
+          className="pointer-events-none fixed z-[100] -translate-y-1/2"
+          style={{
+            left: tooltipPosition.left,
+            top: tooltipPosition.top,
+            transform: `translate(${side === 'right' ? '-100%' : '0'}, -50%)`,
+          }}
+        >
           <div className="rounded-md bg-gray-900 text-white text-xs px-2 py-1 shadow-lg whitespace-nowrap">
             <div className="font-semibold">{label}</div>
             {tooltipDescription && (
@@ -187,7 +214,8 @@ export function FloatingControl({
             )}
             {hotkey && <span className="ml-1 italic opacity-80">{hotkey}</span>}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {isOpen && children && (

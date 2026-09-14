@@ -10,7 +10,7 @@ import {
   type CircuitGraphIndex,
 } from '@/lib/eendraad/circuitGraph'
 import {
-  getElectricalPanelsFromProject,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 
@@ -149,7 +149,7 @@ function describeInstallDateTargetOwners(
     }
     for (const subPanel of panel.subPanels) visitPanel(subPanel, `${panelPath} > `)
   }
-  for (const panel of getElectricalPanelsFromProject(project)) visitPanel(panel, '')
+  for (const panel of getProjectElectricalPanels(project)) visitPanel(panel, '')
   return owners
 }
 
@@ -321,7 +321,7 @@ export function getInstallDateTargetInheritedYear(
     return undefined
   }
 
-  for (const panel of getElectricalPanelsFromProject(project)) {
+  for (const panel of getProjectElectricalPanels(project)) {
     const found = visitPanel(panel, projectYear)
     if (found != null) return found
   }
@@ -405,7 +405,7 @@ function traceInstallDateTargetInheritedYear(
     }
     return undefined
   }
-  for (const panel of getElectricalPanelsFromProject(project)) {
+  for (const panel of getProjectElectricalPanels(project)) {
     const found = visitPanel(panel, projectYear, '')
     if (found) return found
   }

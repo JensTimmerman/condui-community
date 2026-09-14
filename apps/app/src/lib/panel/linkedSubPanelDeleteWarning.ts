@@ -1,8 +1,7 @@
 import type { Panel, ProtectionDevice } from '@/types/schema'
-import { findParentCircuitInfo } from '@/lib/eendraad/findParentCircuitInfo'
 import { getPanelDisplayName } from '@/utils/panelNames'
 import {
-  getElectricalPanelsFromProject,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 
@@ -20,9 +19,8 @@ function collectAllProtections(panels: Panel[], out: ProtectionDevice[]): void {
 }
 
 /**
- * Sub-panel ids that would have no `protection.subPanelId` feeder after removing the
- * given protections, matching {@link migrateSubCircuitContentToParent} transferring
- * `subPanelId` to a surviving parent protection when applicable.
+ * Sub-panel ids that would have no surviving `protection.subPanelId` feeder after
+ * removing the given protections.
  *
  * These boards are the ones the store cascade-deletes to avoid `panelMissingOneWireSymbol` orphans.
  */
@@ -31,27 +29,13 @@ export function getSubPanelIdsOrphanedAfterRemovingFeederProtections(
   protectionIdsToRemove: ReadonlySet<string>,
 ): string[] {
   const all: ProtectionDevice[] = []
-  const panels = getElectricalPanelsFromProject(project)
+  const panels = getProjectElectricalPanels(project)
   collectAllProtections(panels, all)
 
   const fedAfter = new Set<string>()
   for (const pr of all) {
     if (!protectionIdsToRemove.has(pr.id) && pr.subPanelId) {
       fedAfter.add(pr.subPanelId)
-    }
-  }
-
-  for (const pr of all) {
-    if (!protectionIdsToRemove.has(pr.id)) continue
-    const sid = pr.subPanelId
-    if (!sid || !pr.circuits?.length) continue
-    for (const c of pr.circuits) {
-      const parentInfo = findParentCircuitInfo(c.id, panels)
-      const q = parentInfo?.parentProtection
-      if (q && !protectionIdsToRemove.has(q.id)) {
-        fedAfter.add(sid)
-        break
-      }
     }
   }
 

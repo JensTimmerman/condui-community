@@ -93,7 +93,7 @@ export default function CanvasFloatingControlRail({
       style={{ ...outerStyle, zIndex }}
     >
       <CanvasScaledOverlay
-        className={`grid touch-pan-y grid-cols-1 gap-2 ${menuOpen ? 'overflow-visible' : 'overflow-y-auto overscroll-y-contain'} pointer-events-auto [-webkit-overflow-scrolling:touch] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${overlayClassName}`.trim()}
+        className={`grid touch-pan-y grid-cols-1 gap-2 ${menuOpen || !railOverflows ? 'overflow-visible' : 'overflow-y-auto overscroll-y-contain'} pointer-events-auto [-webkit-overflow-scrolling:touch] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${overlayClassName}`.trim()}
         transformOrigin={
           verticalAlign === 'center' && !pinBelowTopOverlay
             ? side === 'left'

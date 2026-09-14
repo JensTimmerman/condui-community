@@ -1,68 +1,56 @@
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { useProjectStore } from '@/stores/projectStore'
 import { logger } from '@/lib/logger'
 
+const AUTOSAVE_IDLE_DELAY_MS = 5_000
+const AUTOSAVE_MAX_DELAY_MS = 30_000
+
 /**
- * Auto-save hook that saves the project periodically when it's dirty
- * Saves every 30 seconds if there are unsaved changes
+ * Save after a short period without project mutations, with a 30-second upper
+ * bound during continuous editing. Page suspension still flushes immediately.
  */
 export function useAutoSave({ disabled = false }: { disabled?: boolean } = {}) {
-  const { isDirty, saveCurrentProject } = useProjectStore()
-  const intervalRef = useRef<NodeJS.Timeout | null>(null)
+  const saveCurrentProject = useProjectStore((state) => state.saveCurrentProject)
 
   useEffect(() => {
-    if (disabled) {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current)
-        intervalRef.current = null
-      }
-      return
+    if (disabled) return
+    let idleTimer: ReturnType<typeof setTimeout> | null = null
+    let maxTimer: ReturnType<typeof setTimeout> | null = null
+
+    const clearTimers = () => {
+      if (idleTimer) clearTimeout(idleTimer)
+      if (maxTimer) clearTimeout(maxTimer)
+      idleTimer = null
+      maxTimer = null
+    }
+    const persistIfDirty = () => {
+      clearTimers()
+      if (!useProjectStore.getState().isDirty) return
+      void saveCurrentProject().catch((error: unknown) => {
+        logger.error('Auto-save failed:', error)
+      })
+    }
+    const schedule = () => {
+      if (idleTimer) clearTimeout(idleTimer)
+      idleTimer = setTimeout(persistIfDirty, AUTOSAVE_IDLE_DELAY_MS)
+      maxTimer ??= setTimeout(persistIfDirty, AUTOSAVE_MAX_DELAY_MS)
     }
 
-    if (isDirty) {
-      // Clear any existing interval
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current)
+    const initial = useProjectStore.getState()
+    if (initial.isDirty) schedule()
+    const unsubscribe = useProjectStore.subscribe((state, previous) => {
+      if (!state.isDirty) {
+        clearTimers()
+        return
       }
+      if (state.currentProject !== previous.currentProject) schedule()
+    })
 
-      // Set up auto-save interval (30 seconds)
-      intervalRef.current = setInterval(() => {
-        const { isDirty: currentIsDirty } = useProjectStore.getState()
-        if (currentIsDirty) {
-          saveCurrentProject().catch((error: unknown) => {
-            logger.error('Auto-save failed:', error)
-          })
-        }
-      }, 30000) // 30 seconds
-
-      // Start persistence on the next task. Waiting multiple seconds here leaves a
-      // real data-loss window when somebody refreshes immediately after a drop.
-      // Same-task edits are still batched, and saveCurrentProject follows mutations
-      // made while its persistence pass is in flight.
-      const timeoutId = setTimeout(() => {
-        const { isDirty: currentIsDirty } = useProjectStore.getState()
-        if (currentIsDirty) {
-          saveCurrentProject().catch((error: unknown) => {
-            logger.error('Auto-save failed:', error)
-          })
-        }
-      }, 0)
-
-      return () => {
-        if (intervalRef.current) {
-          clearInterval(intervalRef.current)
-        }
-        clearTimeout(timeoutId)
-      }
-    } else {
-      // Clear interval when not dirty
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current)
-        intervalRef.current = null
-      }
-      return undefined
+    return () => {
+      unsubscribe()
+      clearTimers()
     }
-  }, [disabled, isDirty, saveCurrentProject])
+  }, [disabled, saveCurrentProject])
 
   useEffect(() => {
     if (disabled) return

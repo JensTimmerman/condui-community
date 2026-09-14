@@ -1,6 +1,6 @@
 import type { Panel, PanelGridModuleRef, ProtectionDevice } from '@/types/schema'
 import {
-  getElectricalPanelsFromProject,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 
@@ -37,7 +37,7 @@ export function findConverterBackupPanelFeed(
   project: ProjectWithOptionalV2Electrical,
   panelId: string
 ): ConverterBackupPanelFeed | null {
-  return visitPanels(getElectricalPanelsFromProject(project), (sourcePanel, protection) => {
+  return visitPanels(getProjectElectricalPanels(project), (sourcePanel, protection) => {
     if (protection.subPanelId !== panelId) return null
     const circuit = (protection.circuits ?? []).find(
       (candidate) => candidate.supplySource?.kind === 'converter-backup'
@@ -76,7 +76,7 @@ export function findConverterBackupProtectionRefs(
       walk(panel.subPanels ?? [])
     }
   }
-  walk(getElectricalPanelsFromProject(project))
+  walk(getProjectElectricalPanels(project))
   return refs
 }
 
@@ -92,6 +92,6 @@ export function findConverterBackupPanelFeedsFromSource(
       collectTargets(panel.subPanels ?? [])
     }
   }
-  collectTargets(getElectricalPanelsFromProject(project))
+  collectTargets(getProjectElectricalPanels(project))
   return feeds
 }

@@ -22,10 +22,10 @@ import type {
   TrunkDevice,
 } from '@/types/schema'
 import type { ValidationProject } from './types'
-import { getOneWireSegmentsFromProject } from '@/lib/projectV2/annotations'
+import { queryOneWireSegments } from '@/lib/projectV2/annotations'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
 } from '@/lib/projectV2/electrical'
 
 export interface IndexedSitplanMapping {
@@ -82,11 +82,11 @@ export class ProjectIndex {
 
   private indexProject(project: ValidationProject): void {
     this.indexTopLevelTrunkDevices(project)
-    this.walkPanels(getElectricalPanelsFromProject(project))
+    this.walkPanels(getProjectElectricalPanels(project))
   }
 
   private indexTopLevelTrunkDevices(project: ValidationProject): void {
-    const installation = getElectricalInstallationFromProject(project)
+    const installation = getProjectElectricalInstallation(project)
     const supply = installation?.mainSupply?.supplyTrunkDevices
     if (supply) {
       for (const td of supply) this.trunkDeviceById.set(td.id, td)
@@ -148,6 +148,11 @@ export class ProjectIndex {
         this.trunkDeviceById.set(td.id, td)
       }
     }
+    for (const branch of circuit.branches ?? []) {
+      for (const td of branch.branchDevices ?? []) {
+        this.trunkDeviceById.set(td.id, td)
+      }
+    }
 
     for (const endpoint of circuit.endpoints) {
       this.allEndpoints.push(endpoint)
@@ -186,7 +191,7 @@ export class ProjectIndex {
   }
 
   private indexCableSegments(project: ValidationProject): void {
-    for (const segment of getOneWireSegmentsFromProject(project)) {
+    for (const segment of queryOneWireSegments(project)) {
       if (!segment.circuitId) continue
       const arr = this.cableSegmentsByCircuitId.get(segment.circuitId)
       if (arr) arr.push(segment)

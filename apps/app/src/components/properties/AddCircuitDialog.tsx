@@ -26,7 +26,7 @@ import {
 } from '@/constants/poleConfig'
 import type { ProtectionDevice, Circuit, ProtectionType, PolesConfig } from '@/types/schema'
 import { flattenPanels } from '@/utils/eendraad/panelHelpers'
-import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
+import { getProjectElectricalPanels } from '@/lib/projectV2/electrical'
 
 const labelClass = 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1'
 const selectClass =
@@ -58,7 +58,7 @@ export default function AddCircuitDialog({
   const addCircuit = useProjectStore((s: ProjectState) => s.addCircuit)
   const updateEndpoint = useProjectStore((s: ProjectState) => s.updateEndpoint)
 
-  const panels = flattenPanels(currentProject ? getElectricalPanelsFromProject(currentProject) : [])
+  const panels = flattenPanels(currentProject ? getProjectElectricalPanels(currentProject) : [])
   const polesConfig = getVoltagePolesConfig(currentProject)
   const defaultProtectionProps = getProtectionCreationProps(currentProject, 'MCB')
 

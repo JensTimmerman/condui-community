@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowLeft, Menu } from 'lucide-react'
+import { ArrowLeft, Menu, Tag } from 'lucide-react'
 import { useLocalizedNavigate } from '@/hooks/useLocalizedNavigate'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
@@ -26,7 +26,10 @@ import {
   UndoIcon,
 } from '@/components/icons/UiIcons'
 import { eendraChromeHeaderBackgroundClass } from '@/lib/ui/chromeLayoutStyles'
-import { HardwareTallyPanel, HardwareTallyPanelContent } from '@/components/tally/HardwareTallyPanel'
+import {
+  HardwareTallyPanel,
+  HardwareTallyPanelContent,
+} from '@/components/tally/HardwareTallyPanel'
 import ValidationIssuesPanel from '@/components/validation/ValidationIssuesPanel'
 import ValidationIssuesDialog, {
   ValidationRevalidateButton,
@@ -42,6 +45,13 @@ import { EditorPreferencesToolbar } from '@/components/settings/EditorPreference
 import { SettingsPanel } from '@/components/settings/SettingsPanel'
 import { ShortcutsDialog } from '@/components/shortcuts/ShortcutsDialog'
 import { useDialog } from '@/hooks/useDialog'
+import { LabelStripExportDialog } from '@/components/export/LabelStripExportDialog'
+import { exportLabelStripsToPdf, type LabelStripExportOptions } from '@/lib/export/labelStripExport'
+import {
+  exportLabelStripsToBrotherLbx,
+  renderBrotherLbxPreviewSvg,
+} from '@/lib/export/brotherLbxExport'
+import { logger } from '@/lib/logger'
 
 export default function CommunityLayout({ demoMode = false }: { demoMode?: boolean }) {
   const { t } = useTranslation()
@@ -70,11 +80,11 @@ export default function CommunityLayout({ demoMode = false }: { demoMode?: boole
   const setValidationWindowOpen = useUIStore((state) => state.setValidationWindowOpen)
   const setQuickPlacerWindowOpen = useUIStore((state) => state.setQuickPlacerWindowOpen)
   const planVisibleInLayout = useUIStore((state) =>
-    state.viewportLayout.panels.some((panel) => panel.canvas === 'plan'),
+    state.viewportLayout.panels.some((panel) => panel.canvas === 'plan')
   )
   const [leftDockResizePreviewWidth, setLeftDockResizePreviewWidth] = useState<number | null>(null)
   const [windowWidth, setWindowWidth] = useState(() =>
-    typeof window === 'undefined' ? 1 : Math.max(window.innerWidth, 1),
+    typeof window === 'undefined' ? 1 : Math.max(window.innerWidth, 1)
   )
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -130,6 +140,70 @@ export default function CommunityLayout({ demoMode = false }: { demoMode?: boole
     dialog.custom({
       title: t('shortcuts.title'),
       content: <ShortcutsDialog />,
+      size: 'xl',
+      showCloseButton: true,
+    })
+  }
+
+  const handleExportLabels = async (options: LabelStripExportOptions) => {
+    dialog.close()
+    if (!project) return
+    try {
+      const provider = (panelId: string) => useProjectStore.getState().getPanelGridModules(panelId)
+      const blob =
+        options.exportFormat === 'brother-lbx'
+          ? await exportLabelStripsToBrotherLbx(project, options, provider)
+          : await exportLabelStripsToPdf(project, options, provider)
+      const safeName =
+        (project.project.name || 'label-strips').replace(/[^\w\s-]/g, '').trim() || 'label-strips'
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `${safeName}-labels.${options.exportFormat === 'brother-lbx' && options.brotherMode === 'single-strip' ? 'zip' : options.exportFormat === 'brother-lbx' ? 'lbx' : 'pdf'}`
+      document.body.appendChild(anchor)
+      anchor.click()
+      document.body.removeChild(anchor)
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      logger.error('Export labels failed:', error)
+      dialog.info({
+        title: t('labelStripExport.errorTitle', 'Label export failed'),
+        message: t(
+          'labelStripExport.errorMessage',
+          'The label export could not be created. Please try again.'
+        ),
+        variant: 'error',
+      })
+    }
+  }
+
+  const handlePreviewLabels = async (options: LabelStripExportOptions) => {
+    if (!project) throw new Error('No project available for preview')
+    const provider = (panelId: string) => useProjectStore.getState().getPanelGridModules(panelId)
+    return options.exportFormat === 'brother-lbx'
+      ? renderBrotherLbxPreviewSvg(project, options, provider)
+      : exportLabelStripsToPdf(project, options, provider)
+  }
+  const handleOpenPanelCanvasFromLabelExport = () => {
+    dialog.close()
+    useUIStore.getState().setViewMode('panel')
+  }
+
+  const openLabelStripExport = () => {
+    setMenuOpen(false)
+    dialog.custom({
+      id: 'label-strip-export',
+      title: t('labelStripExport.title'),
+      titleIcon: <Tag className="h-5 w-5" aria-hidden />,
+      content: (
+        <LabelStripExportDialog
+          onCancel={() => dialog.close()}
+          onExport={handleExportLabels}
+          onOpenPanelCanvas={handleOpenPanelCanvasFromLabelExport}
+          onPreview={handlePreviewLabels}
+          suppressCanvasWarning={demoMode}
+        />
+      ),
       size: 'xl',
       showCloseButton: true,
     })
@@ -217,7 +291,10 @@ export default function CommunityLayout({ demoMode = false }: { demoMode?: boole
       <header
         className={`relative z-[220] flex shrink-0 items-center gap-2 border-b border-slate-200 px-2 py-1.5 sm:justify-between sm:px-4 sm:py-3 dark:border-gray-700 ${eendraChromeHeaderBackgroundClass}`}
       >
-        <div ref={menuRef} className="relative z-50 flex min-w-0 flex-1 items-center gap-2 sm:gap-4">
+        <div
+          ref={menuRef}
+          className="relative z-50 flex min-w-0 flex-1 items-center gap-2 sm:gap-4"
+        >
           <button
             type="button"
             data-testid="app-main-menu-trigger"
@@ -244,7 +321,10 @@ export default function CommunityLayout({ demoMode = false }: { demoMode?: boole
                 <ArrowLeft className={menuIconClass} aria-hidden />
                 {t('menu.backToMain')}
               </button>
-              <div className="my-1.5 border-t border-gray-200 dark:border-gray-600" role="separator" />
+              <div
+                className="my-1.5 border-t border-gray-200 dark:border-gray-600"
+                role="separator"
+              />
               <button
                 type="button"
                 role="menuitem"
@@ -261,13 +341,26 @@ export default function CommunityLayout({ demoMode = false }: { demoMode?: boole
               <button
                 type="button"
                 role="menuitem"
+                data-testid="app-menu-export-labels"
+                onClick={openLabelStripExport}
+                className={menuItemClass}
+              >
+                <Tag className={menuIconClass} aria-hidden />
+                {t('menu.exportLabels')}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
                 onClick={() => void downloadProject()}
                 className={menuItemClass}
               >
                 <ProjectDownloadIcon className={menuIconClass} />
                 {t('menu.exportProject')}
               </button>
-              <div className="my-1.5 border-t border-gray-200 dark:border-gray-600" role="separator" />
+              <div
+                className="my-1.5 border-t border-gray-200 dark:border-gray-600"
+                role="separator"
+              />
               <button
                 type="button"
                 role="menuitem"
@@ -288,7 +381,9 @@ export default function CommunityLayout({ demoMode = false }: { demoMode?: boole
               </button>
             </div>
           ) : null}
-          <span className="hidden select-none text-gray-400 sm:inline" aria-hidden>|</span>
+          <span className="hidden select-none text-gray-400 sm:inline" aria-hidden>
+            |
+          </span>
           <button
             type="button"
             onClick={() => void backToMain()}
@@ -298,7 +393,9 @@ export default function CommunityLayout({ demoMode = false }: { demoMode?: boole
             <ConduiLogo className="sm:hidden" heightPx={13} />
             <ConduiLogo className="hidden sm:inline-block" heightPx={30} />
           </button>
-          <span className="hidden select-none text-gray-400 sm:inline" aria-hidden>|</span>
+          <span className="hidden select-none text-gray-400 sm:inline" aria-hidden>
+            |
+          </span>
           <h2 className="min-w-0 max-w-[24vw] truncate text-sm leading-none text-gray-700 sm:text-lg dark:text-gray-300">
             {project.project.name}
           </h2>
@@ -388,15 +485,10 @@ export default function CommunityLayout({ demoMode = false }: { demoMode?: boole
             ratio={clamp(effectiveLeftDockWidth / windowWidth, 0.1, 0.9)}
             onDragStart={() => setLeftDockResizePreviewWidth(leftDockWidth)}
             onRatioChange={(nextRatio, containerWidth) => {
-              setLeftDockResizePreviewWidth(
-                clamp(Math.round(containerWidth * nextRatio), 220, 640),
-              )
+              setLeftDockResizePreviewWidth(clamp(Math.round(containerWidth * nextRatio), 220, 640))
             }}
             onDragEnd={(endRatio, containerWidth) => {
-              setPanelWidth(
-                'library',
-                clamp(Math.round(containerWidth * endRatio), 220, 640),
-              )
+              setPanelWidth('library', clamp(Math.round(containerWidth * endRatio), 220, 640))
               setLeftDockResizePreviewWidth(null)
             }}
           />

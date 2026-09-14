@@ -43,7 +43,12 @@ export function getEndpointTypeFromSymbol(symbol: SymbolMetadata): EndpointType 
   }
 
   // Lighting
-  if (id === 'light_point' || id === 'light_spot' || id === 'light_led' || id === 'light_fluorescent') {
+  if (
+    id === 'light_point' ||
+    id === 'light_spot' ||
+    id === 'light_led' ||
+    id === 'light_fluorescent'
+  ) {
     return 'light_point'
   }
 
@@ -88,12 +93,18 @@ export function getEndpointTypeFromSymbol(symbol: SymbolMetadata): EndpointType 
   }
 
   // Metering and energy conversion (can be trunk device or endpoint)
-  if (id === 'energy_meter' || id === 'transformer' || id === 'rectifier' || id === 'inverter' || id === 'dc_dc_converter') {
+  if (
+    id === 'energy_meter' ||
+    id === 'transformer' ||
+    id === 'rectifier' ||
+    id === 'inverter' ||
+    id === 'dc_dc_converter'
+  ) {
     return 'fixed_appliance'
   }
 
   // Junction box/panel: can be trunk device or in-between endpoint on branch (like energy meter)
-  if (id === 'junction_box' || id === 'junction_panel') {
+  if (id === 'junction_box' || id === 'junction_panel' || id === 'terminal_strip') {
     return 'fixed_appliance'
   }
 
@@ -126,7 +137,12 @@ export function getSymbolKeyFromSymbol(symbol: SymbolMetadata): SymbolKey | unde
 
   // Map known symbols - return the actual symbol ID to preserve subtype
   // Sockets
-  if (id === 'socket' || id === 'socket_gnd' || id === 'socket_child' || id === 'socket_gnd_child') {
+  if (
+    id === 'socket' ||
+    id === 'socket_gnd' ||
+    id === 'socket_child' ||
+    id === 'socket_gnd_child'
+  ) {
     return id as SymbolKey
   }
   if (id === 'double_socket_child') return 'socket_child' as SymbolKey
@@ -152,7 +168,12 @@ export function getSymbolKeyFromSymbol(symbol: SymbolMetadata): SymbolKey | unde
   if (id === 'switch_double') return 'switch_1p_twoway' as SymbolKey
 
   // Lighting
-  if (id === 'light_point' || id === 'light_spot' || id === 'light_led' || id === 'light_fluorescent') {
+  if (
+    id === 'light_point' ||
+    id === 'light_spot' ||
+    id === 'light_led' ||
+    id === 'light_fluorescent'
+  ) {
     return id as SymbolKey
   }
 
@@ -204,6 +225,7 @@ export function getSymbolKeyFromSymbol(symbol: SymbolMetadata): SymbolKey | unde
     id === 'source_changeover' ||
     id === 'junction_box' ||
     id === 'junction_panel' ||
+    id === 'terminal_strip' ||
     id === 'transformer' ||
     id === 'rectifier' ||
     id === 'inverter' ||
@@ -278,37 +300,65 @@ export function isInBetweenDevice(symbol: SymbolMetadata): boolean {
     id === 'energy_meter' ||
     id === 'junction_box' ||
     id === 'junction_panel' ||
+    id === 'terminal_strip' ||
     id === 'switch_single' ||
-    id === 'switch_double' ||
-    // Energy conversion devices behave like inline devices on a branch:
-    // they sit between the trunk and the actual load, just like switches.
-    id === 'transformer' ||
-    id === 'rectifier' ||
-    id === 'inverter' ||
-    id === 'dc_dc_converter'
+    id === 'switch_double'
   )
 }
 
-/** Fixed appliance symbol ids (can be added after a socket on the same branch) */
+/**
+ * Static endpoint symbols that may be added after a socket on the same branch.
+ *
+ * Conversion devices are endpoint loads in this position. They still change
+ * the electrical domain for the part of the branch after them, but they do
+ * not become circuit-wide trunk devices just because they are converters.
+ */
 const FIXED_APPLIANCE_SYMBOL_IDS = [
-  'oven', 'washer', 'dryer', 'dishwasher', 'boiler',
-  'ev', 'freezer', 'fridge', 'microwave', 'motor', 'fixed_appliance_generic', 'stove',
-  'furnace', 'furnace_heatpump', 'furnace_gas', 'furnace_oil', 'furnace_pellets',
-  'heating', 'ventilation', 'door_lock',
-  'buzzer', 'bell', 'horn', 'siren',
-  'solar_panel', 'battery',
+  'oven',
+  'washer',
+  'dryer',
+  'dishwasher',
+  'boiler',
+  'ev',
+  'freezer',
+  'fridge',
+  'microwave',
+  'motor',
+  'fixed_appliance_generic',
+  'stove',
+  'furnace',
+  'furnace_heatpump',
+  'furnace_gas',
+  'furnace_oil',
+  'furnace_pellets',
+  'heating',
+  'ventilation',
+  'door_lock',
+  'buzzer',
+  'bell',
+  'horn',
+  'siren',
+  'solar_panel',
+  'battery',
+  'transformer',
+  'rectifier',
+  'inverter',
+  'dc_dc_converter',
 ] as const
 
 /**
- * True if the symbol is a fixed appliance (only type that can be placed after a socket).
+ * True if the symbol is a static device (the endpoint class that can be
+ * placed after a socket).
  */
 export function isFixedApplianceSymbol(symbol: SymbolMetadata): boolean {
-  return FIXED_APPLIANCE_SYMBOL_IDS.includes(symbol.id as typeof FIXED_APPLIANCE_SYMBOL_IDS[number])
+  return FIXED_APPLIANCE_SYMBOL_IDS.includes(
+    symbol.id as (typeof FIXED_APPLIANCE_SYMBOL_IDS)[number]
+  )
 }
 
 /**
  * Actual endpoints sit at the very end of a branch (socket, light, fixed_appliance).
- * Only one terminal (socket/light) per branch; fixed appliances can follow a socket.
+ * Only one terminal (socket/light) per branch; static devices can follow a socket.
  */
 export function isActualEndpointSymbol(symbol: SymbolMetadata): boolean {
   const id = symbol.id
@@ -345,12 +395,18 @@ export function isActualEndpointSymbol(symbol: SymbolMetadata): boolean {
     id === 'horn' ||
     id === 'siren' ||
     id === 'solar_panel' ||
-    id === 'battery'
+    id === 'battery' ||
+    id === 'transformer' ||
+    id === 'rectifier' ||
+    id === 'inverter' ||
+    id === 'dc_dc_converter'
   )
 }
 
 /**
- * Whether an existing endpoint is "in-between" (switch, relay, domotica, energy_meter, junction_box).
+ * Whether an existing endpoint is "in-between" (switch, relay, domotica,
+ * energy_meter, junction_box). Conversion endpoints are static branch devices,
+ * so they remain at the end of their branch and own the domain boundary there.
  */
 export function isInBetweenEndpoint(ep: Endpoint): boolean {
   if (ep.type === 'switch') return true
@@ -359,12 +415,7 @@ export function isInBetweenEndpoint(ep: Endpoint): boolean {
     ep.symbol === 'energy_meter' ||
     ep.symbol === 'junction_box' ||
     ep.symbol === 'junction_panel' ||
-    // Treat energy conversion devices as in‑between devices on branches so
-    // they affect branch span and spacing exactly like switches do.
-    ep.symbol === 'transformer' ||
-    ep.symbol === 'rectifier' ||
-    ep.symbol === 'inverter' ||
-    ep.symbol === 'dc_dc_converter'
+    ep.symbol === 'terminal_strip'
   )
 }
 
@@ -408,14 +459,15 @@ export function isTrunkDeviceType(type: string): boolean {
     type === 'energy_meter' ||
     type === 'protection' ||
     type === 'changeover' ||
-    type === 'conversion'
+    type === 'conversion' ||
+    type === 'domotica'
   )
 }
 
 /**
  * Get a default label for a symbol based on its metadata
  */
-export function getDefaultLabel(symbol: SymbolMetadata, locale: string = 'en'): string {
+export function getDefaultLabel(symbol: SymbolMetadata, locale: string = 'nl-BE'): string {
   if (locale === 'nl-BE') return symbol.nameNL
   if (locale === 'fr-BE') return symbol.nameFR
   return symbol.name

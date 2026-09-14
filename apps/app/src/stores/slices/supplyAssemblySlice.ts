@@ -1,8 +1,8 @@
 import { current } from 'immer'
 import { trackSupplyAssemblyMutation } from '@/lib/analytics/supplyAssemblyAnalytics'
 import {
-  getMutableAuxiliaryElectricalEnclosuresForProject,
-  getMutableSupplyAssembliesForProject,
+  editProjectAuxiliaryElectricalEnclosures,
+  editProjectSupplyAssemblies,
 } from '@/lib/projectV2/electrical'
 import type { ProjectSliceCreator } from './projectStoreTypes'
 import type { ProjectV2 } from '@/types/projectV2'
@@ -18,6 +18,9 @@ import {
 } from '@/lib/panel/auxiliarySupplyEnclosures'
 import { reconcileInvalidPanelFeedOrganizationsInProject } from '@/lib/panel/panelFeedOrganization'
 import { disconnectSupplyInverterGridInputInProject } from '@/lib/supplyAssembly/disconnectInverterGridInput'
+import { dismissEmptySharedSupplyFrame } from '@/lib/panel/sharedSupplyFrame'
+import { initializeDirectConverterPanelBranches, reconcileSupplyAssemblyBranchProtections } from '@/lib/supplyAssembly/editorIntegration'
+import { resolveAssemblyPanelInput } from '@/lib/supplyAssembly/electricalTopology'
 
 function markProjectChanged(state: { currentProject: ProjectV2 | null; isDirty: boolean }): void {
   if (!state.currentProject) return
@@ -26,13 +29,27 @@ function markProjectChanged(state: { currentProject: ProjectV2 | null; isDirty: 
 }
 
 export const createSupplyAssemblySlice: ProjectSliceCreator = (set, get) => ({
+  dismissEmptySharedSupplyFrame: () => {
+    get().withSingleUndoEntry(() => {
+      let dismissed = false
+      set((state) => {
+        if (!state.currentProject) return
+        dismissed = dismissEmptySharedSupplyFrame(state.currentProject)
+        if (dismissed) markProjectChanged(state)
+      })
+      return dismissed
+    }, { sessionLabel: 'delete empty supply frame' })
+  },
   addSupplyAssembly: (assembly) => {
     let created = false
     set((state) => {
       if (!state.currentProject) return
-      const assemblies = getMutableSupplyAssembliesForProject(state.currentProject)
+      const assemblies = editProjectSupplyAssemblies(state.currentProject)
       if (assemblies.some(({ id }) => id === assembly.id)) return
       assemblies.push(assembly)
+      initializeDirectConverterPanelBranches(state.currentProject, assemblies[assemblies.length - 1]!)
+      const input = resolveAssemblyPanelInput(state.currentProject, assembly.incomingAttachment)
+      if (input) reconcileSupplyAssemblyBranchProtections(state.currentProject, input.panelId)
       markProjectChanged(state)
       created = true
     })
@@ -48,11 +65,13 @@ export const createSupplyAssemblySlice: ProjectSliceCreator = (set, get) => ({
     let replaced = false
     set((state) => {
       if (!state.currentProject) return
-      const assemblies = getMutableSupplyAssembliesForProject(state.currentProject)
+      const assemblies = editProjectSupplyAssemblies(state.currentProject)
       const index = assemblies.findIndex((candidate) => candidate.id === id)
       if (index < 0) return
       if (assembly.id !== id && assemblies.some((candidate) => candidate.id === assembly.id)) return
       assemblies[index] = assembly
+      const input = resolveAssemblyPanelInput(state.currentProject, assembly.incomingAttachment)
+      if (input) reconcileSupplyAssemblyBranchProtections(state.currentProject, input.panelId)
       markProjectChanged(state)
       replaced = true
     })
@@ -68,7 +87,7 @@ export const createSupplyAssemblySlice: ProjectSliceCreator = (set, get) => ({
     let deletedAssemblyForAnalytics: OffGridSupplyAssembly | null = null
     set((state) => {
       if (!state.currentProject) return
-      const assemblies = getMutableSupplyAssembliesForProject(state.currentProject)
+      const assemblies = editProjectSupplyAssemblies(state.currentProject)
       const index = assemblies.findIndex((assembly) => assembly.id === id)
       if (index < 0) return
       const deleted = assemblies[index]
@@ -89,7 +108,7 @@ export const createSupplyAssemblySlice: ProjectSliceCreator = (set, get) => ({
   addSupplyAssemblyNode: (assemblyId, node, oneWirePosition) =>
     set((state) => {
       if (!state.currentProject) return
-      const assembly = getMutableSupplyAssembliesForProject(state.currentProject).find(
+      const assembly = editProjectSupplyAssemblies(state.currentProject).find(
         ({ id }) => id === assemblyId
       )
       if (!assembly || assembly.nodes.some(({ id }) => id === node.id)) return
@@ -104,7 +123,7 @@ export const createSupplyAssemblySlice: ProjectSliceCreator = (set, get) => ({
   moveSupplyAssemblyNode: (assemblyId, nodeId, position) =>
     set((state) => {
       if (!state.currentProject) return
-      const assembly = getMutableSupplyAssembliesForProject(state.currentProject).find(
+      const assembly = editProjectSupplyAssemblies(state.currentProject).find(
         ({ id }) => id === assemblyId
       )
       if (!assembly?.nodes.some(({ id }) => id === nodeId)) return
@@ -116,7 +135,7 @@ export const createSupplyAssemblySlice: ProjectSliceCreator = (set, get) => ({
   deleteSupplyAssemblyNode: (assemblyId, nodeId) =>
     set((state) => {
       if (!state.currentProject) return
-      const assembly = getMutableSupplyAssembliesForProject(state.currentProject).find(
+      const assembly = editProjectSupplyAssemblies(state.currentProject).find(
         ({ id }) => id === assemblyId
       )
       if (!assembly) return
@@ -150,7 +169,7 @@ export const createSupplyAssemblySlice: ProjectSliceCreator = (set, get) => ({
   addSupplyAssemblyConnection: (assemblyId, connection) =>
     set((state) => {
       if (!state.currentProject) return
-      const assembly = getMutableSupplyAssembliesForProject(state.currentProject).find(
+      const assembly = editProjectSupplyAssemblies(state.currentProject).find(
         ({ id }) => id === assemblyId
       )
       if (!assembly || assembly.connections.some(({ id }) => id === connection.id)) return
@@ -166,7 +185,7 @@ export const createSupplyAssemblySlice: ProjectSliceCreator = (set, get) => ({
   updateSupplyAssemblyConnection: (assemblyId, connectionId, updates) =>
     set((state) => {
       if (!state.currentProject) return
-      const assembly = getMutableSupplyAssembliesForProject(state.currentProject).find(
+      const assembly = editProjectSupplyAssemblies(state.currentProject).find(
         ({ id }) => id === assemblyId
       )
       const connection = assembly?.connections.find(({ id }) => id === connectionId)
@@ -185,7 +204,7 @@ export const createSupplyAssemblySlice: ProjectSliceCreator = (set, get) => ({
   deleteSupplyAssemblyConnection: (assemblyId, connectionId) =>
     set((state) => {
       if (!state.currentProject) return
-      const assembly = getMutableSupplyAssembliesForProject(state.currentProject).find(
+      const assembly = editProjectSupplyAssemblies(state.currentProject).find(
         ({ id }) => id === assemblyId
       )
       if (!assembly) return
@@ -216,7 +235,7 @@ export const createSupplyAssemblySlice: ProjectSliceCreator = (set, get) => ({
   addAuxiliaryElectricalEnclosure: (enclosure) =>
     set((state) => {
       if (!state.currentProject) return
-      const enclosures = getMutableAuxiliaryElectricalEnclosuresForProject(state.currentProject)
+      const enclosures = editProjectAuxiliaryElectricalEnclosures(state.currentProject)
       if (enclosures.some(({ id }) => id === enclosure.id)) return
       enclosures.push(enclosure)
       markProjectChanged(state)
@@ -225,7 +244,7 @@ export const createSupplyAssemblySlice: ProjectSliceCreator = (set, get) => ({
   updateAuxiliaryElectricalEnclosure: (id, updates) =>
     set((state) => {
       if (!state.currentProject) return
-      const enclosures = getMutableAuxiliaryElectricalEnclosuresForProject(state.currentProject)
+      const enclosures = editProjectAuxiliaryElectricalEnclosures(state.currentProject)
       const enclosure = enclosures.find((candidate) => candidate.id === id)
       if (!enclosure) return
       if (

@@ -1,4 +1,15 @@
 {
+  "junctionIdentity": {
+    "label": "Identification de connexion",
+    "pickExisting": "Réutiliser une identification existante",
+    "toggleVisibility": "Afficher ou masquer l’identification sur le schéma",
+    "noExisting": "Aucune identification existante"
+  },
+  "terminalStrip": {
+    "pin": "Borne",
+    "incomingPin": "Entrée",
+    "outgoingPin": "Sortie"
+  },
   "appUpdate": {
     "banner": "Une nouvelle version de l’application est disponible.",
     "refresh": "Actualiser"
@@ -78,6 +89,7 @@
     "backToMain": "Retour à l'accueil",
     "versions": "Versions",
     "exportPdf": "Exporter en PDF",
+    "exportLabels": "Exporter les étiquettes",
     "reExportPdf": "Réexporter le PDF",
     "validation": "Validation",
     "exportProject": "Télécharger le projet",
@@ -347,6 +359,8 @@
       "hint": "Nom, adresse et signature requis sur les plans conformes AREI. Enregistré pour tous les projets.",
       "name": "Nom de l'installateur",
       "companyNumber": "Numéro d'entreprise",
+      "vatNumber": "Numéro de TVA",
+      "vatNumberAccountHint": "Modifiez ce numéro de TVA dans l'application de compte.",
       "email": "E-mail",
       "mobile": "Gsm",
       "phone": "Téléphone",
@@ -366,6 +380,92 @@
       "saved": "Enregistré"
     }
   },
+  "visionScan": {
+    "title": "Scanner un document",
+    "action": "Scanner",
+    "choosePdf": "Choisir des fichiers",
+    "chooseFiles": "Choisir des PDF ou images",
+    "invalidFile": "Choisissez un PDF ou une image.",
+    "addPages": "Ajouter des pages",
+    "dragPage": "Faire glisser la page {{page}} pour la déplacer",
+    "classifying": "Classement des pages…",
+    "recognizing": "Traitement du document…",
+    "serviceUnavailable": "Le service vision local ne fonctionne pas. Exécutez npm run vision:api et réessayez.",
+    "failed": "Le document n’a pas pu être classé.",
+    "registrationRequired": "Inscrivez-vous pour numériser un document.",
+    "hosted": {
+      "cancelScan": "Annuler le scan",
+      "cancelFailed": "Impossible d’annuler le scan.",
+      "processing": "Traitement du document…",
+      "reviewReady": "Prêt pour la vérification des pages"
+    },
+    "mode": {
+      "title": "Choisir la reconnaissance",
+      "description": "Option de développement pour comparer les méthodes de reconnaissance.",
+      "hybrid": {
+        "title": "Hybride",
+        "description": "Combine la préparation OpenCV avec le modèle de vision entraîné. Recommandé."
+      },
+      "opencv": {
+        "title": "OpenCV",
+        "description": "Utilise un traitement d’image déterministe sans le modèle de vision."
+      }
+    },
+    "confident": "Le classement semble correct",
+    "review": "Vérifier cette page",
+    "page": "Page {{page}}",
+    "pagePreview": "Aperçu de la page {{page}}",
+    "crop": "Recadrage",
+    "cropCorner": "Coin {{corner}} du recadrage",
+    "applyCrop": "Appliquer",
+    "levels": "Luminosité",
+    "highPass": "Égalisation",
+    "planReview": {
+      "analyzing": "Préparation des plans…",
+      "cleaned": "Nettoyé",
+      "editable": "Modifiable",
+      "previous": "Plan précédent",
+      "next": "Plan suivant",
+      "zoomOut": "Dézoomer",
+      "zoomIn": "Zoomer",
+      "fit": "Ajuster à la vue"
+    },
+    "summary": {
+      "title": "Résumé du scan",
+      "circuits": "Circuits",
+      "endpoints": "Points",
+      "placed": "Sur plan",
+      "detected": "Détectés",
+      "unplaced_one": "{{count}} point n’est pas associé à un plan.",
+      "unplaced_other": "{{count}} points ne sont pas associés à un plan.",
+      "create": "Créer le projet",
+      "creating": "Création du projet…",
+      "types": {
+        "socket": "prises",
+        "switch": "interrupteurs",
+        "light_point": "points lumineux",
+        "fixed_appliance": "appareils",
+        "domotica": "domotique"
+      }
+    },
+    "pending": {
+      "title": "Scan de document",
+      "processing": "Traitement en arrière-plan",
+      "reviewPages": "Vérifiez les pages détectées",
+      "ready": "Prêt à vérifier",
+      "failed": "Nécessite votre attention",
+      "unavailable": "Service Vision indisponible",
+      "open": "Ouvrir",
+      "discard": "Supprimer"
+    },
+    "moveEarlier": "Déplacer la page plus tôt",
+    "moveLater": "Déplacer la page plus tard",
+    "types": {
+      "one_wire": "Unifilaire",
+      "plan": "Plan",
+      "other": "Autre"
+    }
+  },
   "project": {
     "rename": "Renommer le projet",
     "new": "Nouveau projet",
@@ -379,7 +479,7 @@
     "customerMobile": "Mobile",
     "customerPhone": "Téléphone",
     "yearOfConstruction": "Année de construction",
-    "yearOfConstructionInvalid": "Veuillez entrer une année valide entre 1800 et 2100.",
+    "yearOfConstructionInvalid": "Veuillez entrer une année valide entre 1500 et 2100.",
     "meterEanCode": "Code EAN du compteur",
     "meterEanCodePlaceholder": "p.ex. 5412345678901234",
     "inspectionAgency": "Organisme de contrôle",
@@ -427,8 +527,22 @@
     "importFailedMessage": "Impossible d'importer le projet.",
     "importProjectLoadingTitle": "Importation du projet…",
     "importProjectLoadingBody": "Traitement des images de plan et des données du projet. Les gros fichiers peuvent prendre un moment.",
+    "importRepairedSupplyHandoffs": "{{count}} lien(s) d’alimentation obsolète(s) supprimé(s) pour permettre l’importation. Les autres données du projet ont été conservées.",
     "importSchematicalsArchive": "Importer une archive Schematicals (dev)…",
     "importSchematicalsFolder": "Importer un dossier Schematicals (dev)…",
+    "devElectricalImportButton": "Importer JSON (dev)…",
+    "devElectricalImportTitle": "Importer le JSON électrique",
+    "devElectricalImportJson": "JSON d’import électrique",
+    "devElectricalImportValid": "Le JSON est valide",
+    "devElectricalImportInvalid": "Corrigez les erreurs de validation",
+    "devElectricalImportCreate": "Créer le projet",
+    "devElectricalImportCopyPrompt": "Copier le prompt système",
+    "devElectricalImportPromptCopied": "Prompt système copié",
+    "devElectricalImportRepaired": "JSON réparé",
+    "devElectricalImportRepair": {
+      "removedWrapping": "Texte ou Markdown autour du JSON supprimé.",
+      "closedDelimiters": "Crochets de fermeture manquants ajoutés à la fin."
+    },
     "openExampleProject": "Ouvrir le projet d'exemple",
     "exampleTitle": "Essayer un projet d'exemple",
     "exampleDescription": "Voyez a quoi ressemble un projet termine.",
@@ -482,6 +596,8 @@
     "city": "Commune",
     "country": "Pays",
     "countryBelgium": "Belgique",
+    "countryFrance": "France",
+    "countryNetherlands": "Pays-Bas",
     "voltage": "Tension",
     "mainSupply": "Alimentation principale",
     "voltage_2x230": "2×230V",
@@ -748,7 +864,7 @@
     },
     "solarPanel": {
       "groupTitle": "Marque et modèle",
-      "wattage": "Puissance (W)",
+      "wattage": "Puissance (Wp)",
       "voltage": "Tension (V)"
     },
     "battery": {
@@ -757,7 +873,8 @@
       "powerKw": "Puissance (kW)"
     },
     "evCharger": {
-      "groupTitle": "Données borne de recharge"
+      "groupTitle": "Données borne de recharge",
+      "integratedDcResidualProtection": "Détection intégrée du courant continu résiduel (6 mA)"
     },
     "certification": {
       "groupTitle": "Identification de l'appareil (certification)",
@@ -808,8 +925,54 @@
     "eendraad": "Schéma unifilaire",
     "plan": "Plan de situation",
     "panel": "Tableau",
+    "structure": "Structure",
     "both": "Les deux",
     "panelAndPlan": "Tableau + Plan"
+  },
+  "structure": {
+    "noStructure": "Aucune structure électrique",
+    "noFilterResults": "Aucun résultat pour les filtres actuels",
+    "buildFailed": "La structure n’a pas pu être construite",
+    "traceScope": "Direction du tracé",
+    "upstream": "En amont",
+    "downstream": "En aval",
+    "both": "Les deux",
+    "none": "Aucun",
+    "layoutDirection": "Direction de la disposition",
+    "horizontal": "Horizontal",
+    "vertical": "Vertical",
+    "relationships": "Relations",
+    "secondaryLinks": "Liens secondaires",
+    "inferred": "Relations déduites",
+    "items": "éléments",
+    "links": "liens",
+    "diagnostics": "diagnostics",
+    "viewOptions": "Options d’affichage",
+    "supply": "Alimentation",
+    "panelGraph": "Parcours des tableaux",
+    "circuitGraph": "Circuits",
+    "panelOrphans": "Données de tableau non liées",
+    "circuitOrphans": "Données de circuit non liées",
+    "graphScope": "Portée du graphe",
+    "selectedPanel": "Tableau sélectionné",
+    "entireInstallation": "Installation complète",
+    "occurrences": "Occurrences physiques",
+    "selectedConnection": "connexion sélectionnée",
+    "connectionBetween": "Connexion de {{source}} à {{target}}",
+    "item": "Élément structurel",
+    "knowledge": "Niveau de connaissance",
+    "knowledge_explicit": "Explicite",
+    "knowledge_inferred": "Déduit",
+    "knowledge_ambiguous": "Ambigu",
+    "knowledge_missing": "Manquant",
+    "source": "Source",
+    "sourceType": "Type de source",
+    "sourceId": "ID source",
+    "projectedReadOnly": "Élément de vue projeté · lecture seule",
+    "resetView": "Réinitialiser la vue structurelle",
+    "filtersActive": "filtres actifs",
+    "alternativePaths_one": "{{count}} chemin alternatif",
+    "alternativePaths_other": "{{count}} chemins alternatifs"
   },
   "panelCanvas": {
     "selectPanel": "Sélectionner un tableau",
@@ -822,6 +985,8 @@
     "feedFromBottom": "Alimentation par le bas",
     "rows": "Lignes",
     "columns": "Colonnes",
+    "topTerminalStripRail": "Rail de bornes supérieur",
+    "bottomTerminalStripRail": "Rail de bornes inférieur",
     "showDomotica": "Afficher domotique",
     "moveToSupplyPanel": "Déplacer vers le tableau réseau",
     "moveToMainPanel": "Déplacer vers le tableau principal",
@@ -835,6 +1000,27 @@
     "rewireModeOff": "Mode recâblage",
     "autoArrange": "Arrange Modules automatiquement",
     "autoArrangeConfirm": "Cela remplacera complètement la disposition actuelle du tableau. Continuer ?",
+    "labelMode": "Mode étiquettes",
+    "swapLabelRows": "Inverser les rangées",
+    "swapPanelLabels": "Inverser toutes les rangées d’étiquettes du tableau",
+    "editRowTopLabels": "Modifier les étiquettes supérieures de la rangée",
+    "editRowBottomLabels": "Modifier les étiquettes inférieures de la rangée",
+    "editPanelTopLabels": "Modifier toutes les étiquettes supérieures",
+    "editPanelBottomLabels": "Modifier toutes les étiquettes inférieures",
+    "overflowWarningTitle": "Certains modules débordent",
+    "overflowWarningMessage": "Certains modules sont dans la zone de débordement. Replacez-les dans la grille ou agrandissez le tableau ; les exports d’étiquettes les excluront.",
+    "labelSourceLabel": "Étiquette",
+    "labelSourceNotes": "Notes",
+    "labelSourceExtra": "Extra",
+    "labelSourceTechnical": "Technique",
+    "labelCellPlaceholder": "Étiquette",
+    "notesCellPlaceholder": "Notes",
+    "extraCellPlaceholder": "Ajouter des notes d’étiquette",
+    "technicalCellPlaceholder": "Propriétés techniques",
+    "labelAlignLeft": "Aligner à gauche",
+    "labelAlignCenter": "Centrer",
+    "labelAlignRight": "Aligner à droite",
+    "labelAlignJustify": "Répartir le texte",
     "panelLayout": "Disposition du tableau"
   },
   "panelFilter": {
@@ -878,6 +1064,18 @@
       "lockedTooltip": "L’étiquetage automatique est activé",
       "lockedDescription": "Désactivez-le pour modifier cette étiquette.",
       "openAutomaticNaming": "Ouvrir l’étiquetage automatique",
+      "automaticStatus": "Automatique",
+      "customStatus": "Personnalisé",
+      "setCustomLabel": "Définir un label personnalisé",
+      "useAutomaticLabel": "Utiliser le label automatique",
+      "customLabelNonStandardWarning": "Ce label personnalisé ne suit pas la séquence A, B, C…",
+      "customLabelDuplicateWarning": "Ce label est également utilisé par un autre circuit de ce tableau.",
+      "customLabelBothWarnings": "Ce label personnalisé ne suit pas la séquence A, B, C… et est également utilisé par un autre circuit de ce tableau.",
+      "resetAllLabels": "Réinitialiser tous les labels",
+      "resetAllTooltip": "Supprimer tous les labels personnalisés et rétablir la dénomination automatique de tous les circuits.",
+      "resetAllConfirmTitle": "Réinitialiser tous les labels personnalisés ?",
+      "resetAllConfirmMessage": "Tous les labels de circuit personnalisés seront effacés et remplacés par des labels automatiques. Vous pouvez annuler cette modification.",
+      "resetAllConfirm": "Réinitialiser les labels",
       "confirmOverwriteTitle": "Remplacer les lettres ?",
       "confirmOverwriteMessage": "La dénomination automatique remplace les lettres actuelles par A, B, C… selon l’ordre des rangées sur chaque tableau. Continuer ?",
       "confirmOverwriteConfirm": "Continuer"
@@ -1103,6 +1301,13 @@
     "wireStyleSpline": "Courbe",
     "wireStyleOrthogonal": "90°"
   },
+  "situationPlan": {
+    "bulkDeleteWarning": {
+      "title": "Supprimer les symboles ?",
+      "message": "Ces symboles figurent aussi dans le schéma unifilaire. Supprimer les enlève aussi de ce schéma ; Masquer les conserve.",
+      "hide": "Masquer"
+    }
+  },
   "symbols": {
     "library": "Bibliothèque de symboles",
     "recent": "Récent",
@@ -1231,6 +1436,7 @@
       "panelMissingOneWireSymbol": "Tableau sans symbole unifilaire",
       "panelGridDuplicateModule": "Module en double sur le canevas du tableau",
       "supplyTrunkMisplacedInMainGrid": "Élément d'alimentation dans une zone incorrecte",
+      "supplyTrunkVisualPlacementMissing": "Élément d'alimentation absent du canevas du tableau",
       "splitBusWithoutBackupSupply": "Jeu de barres divisé sans alimentation de secours",
       "branchMultiplierEndpointsSplit": "Symboles multiplicateurs séparés sur une même derivation",
       "danglingReference": "Référence pendante",
@@ -1241,6 +1447,8 @@
   },
   "validation": {
     "title": "Validation RGIE",
+    "disabledOutsideBelgium": "Validation désactivée en dehors de la Belgique.",
+    "belgianRulesOnly": "L’application vérifie actuellement uniquement les règles RGIE pour la Belgique.",
     "errors": "Erreurs",
     "warnings": "Avertissements",
     "info": "Info",
@@ -1463,11 +1671,13 @@
       "endpointOnPanelCircuit": "Le point « {{endpointLabel}} » est attaché au pseudo-circuit PANEL et ne s'affichera pas correctement dans le schéma unifilaire.",
       "endpointMultipleFloorPlacements": "Le point « {{endpointLabel}} » est placé sur {{floorCount}} étages, mais ce symbole ne doit avoir qu'un seul placement.",
       "endpointPlacementIntegrity": "Le point « {{endpointLabel}} » a des données de placement invalides ({{violation}}).",
+      "planPlacementIdentityConflict": "Le placement du plan de situation « {{placementId}} » est partagé par {{ownerLabels}}. Les symboles peuvent se chevaucher, disparaître ou être sélectionnés ensemble ; recréez les doublons concernés avec des placements uniques.",
       "endpointMissingPlanPlacement": "{{endpointLabel}} ({{circuitCode}}) — absent du plan.",
       "panelDistributionLabelDrift": "Le symbole « {{endpointLabel}} » ne correspond pas au tableau « {{panelName}} » (circuit {{circuitCode}}).",
       "panelMissingOneWireSymbol": "Le tableau « {{panelName}} » existe mais n'a pas de symbole/lien d'alimentation unifilaire.",
       "panelGridDuplicateModule": "Le canevas du tableau affiche « {{moduleLabel}} » plus d'une fois ; conservez le module complet et masquez le doublon plus faible.",
       "supplyTrunkMisplacedInMainGrid": "L'élément d'alimentation « {{label}} » est placé sur la grille principale (ligne {{row}}, colonne {{col}}) mais doit être uniquement dans la bande d'alimentation — le canevas et le schéma unifilaire sont incohérents.",
+      "supplyTrunkVisualPlacementMissing": "L'élément d'alimentation « {{label}} » existe dans la topologie d'alimentation mais n'a aucun emplacement accessible sur le canevas du tableau.",
       "splitBusWithoutBackupSupply": "Le tableau « {{panelName}} » possède {{busSectionCount}} sections de jeu de barres, mais aucune alimentation de secours raccordée. Regroupez-les sur une seule alimentation réseau.",
       "branchMultiplierEndpointsSplit": "Circuit {{circuitCode}} : la dérivation « {{branchLabel}} » contient {{absorbCount}} symbole(s) multiplicateur(s) en trop comme points séparés ; fusionnez en un seul point avec plusieurs placements. Utilisez Réparer dans l’inspecteur d’orphelins."
     },
@@ -1670,6 +1880,10 @@
         "sensitivity": {
           "message": "Le circuit {{circuitCode}} est protégé par un ou plusieurs différentiels, mais aucun n'a une sensibilité de 30 mA",
           "details": "L’éclairage, les prises à usage général, les lave-linge, sèche-linge, lave-vaisselle et circuits de recharge VE nécessitent une protection différentielle de 30 mA. Adaptez la sensibilité en amont ou raccordez ce circuit à un appareil de 30 mA."
+        },
+        "dcCompatibility": {
+          "message": "Le circuit VE {{circuitCode}} dispose d'une protection différentielle de 30 mA, mais aucune protection contre les défauts continus n'a été identifiée",
+          "details": "Le RGIE 7.22.4.1 et 5.3.5.3(f) exigent que le point de recharge reste protégé contre les composantes continues perturbatrices. Utilisez un différentiel de type B ou indiquez que la borne intègre une protection/détection continue coordonnée, par exemple une détection DC de 6 mA."
         }
       }
     },
@@ -1730,8 +1944,64 @@
     "error": {
       "title": "Échec de l'exportation",
       "message": "Échec de l'exportation du PDF. Veuillez réessayer.",
-      "details": "Exportation terminée mais certaines pages ont échoué :\n{{errors}}"
+      "details": "Exportation terminée mais certaines pages ont échoué :\n{{errors}}",
+      "validationFailureTitle": "L’exportation n’a pas pu être terminée",
+      "validationFailureMessage": "Un problème est survenu lors de la préparation de votre exportation. Votre projet est en sécurité et le problème a été signalé à notre équipe. Réessayez plus tard."
     }
+  },
+  "labelStripExport": {
+    "title": "Exporter les étiquettes",
+    "canvasWarningTitle": "Organisez d’abord le canevas du tableau",
+    "canvasWarningMessage": "Une disposition intacte donnera des étiquettes peu fiables.",
+    "overflowWarningTitle": "Certains modules ne tiennent pas",
+    "overflowWarningMessage": "{{count}} module(s) sélectionné(s) sont dans la zone de débordement et seront exclus. Vérifiez la disposition du tableau avant l’export.",
+    "sourcesTitle": "Tableaux à inclure",
+    "noSources": "Aucun tableau disponible",
+    "virtualSource": "Coffret d’alimentation",
+    "paperSettings": "Papier",
+    "exportFormat": "Format d’export",
+    "brotherLbx": "Brother LBX",
+    "brotherPrinter": "Imprimante Brother",
+    "brotherP900Family": "PT-P900 / PT-P950",
+    "brotherE920": "PT-E920BT",
+    "brotherP910": "PT-P910BT",
+    "brotherE800": "PT-E800W",
+    "brotherD800": "PT-D800W",
+    "brotherQl810w": "QL-810W",
+    "brotherQl820": "QL-820NWB",
+    "brotherTapeWidth": "Largeur du ruban Brother",
+    "brotherSheets": "Feuilles",
+    "brotherSingleStrip": "Bande unique",
+    "panelContents": "Contenu du tableau",
+    "paperSize": "Format du papier",
+    "preset": "Préréglage de bande",
+    "generic25": "Générique 25 mm",
+    "generic35": "Générique 35 mm",
+    "custom": "Personnalisé",
+    "customHeight": "Hauteur de bande personnalisée",
+    "customHeightFirst": "Hauteur de la première bande",
+    "customHeightSecond": "Hauteur de la deuxième bande",
+    "height": "{{value}} mm de haut",
+    "mode": "Bandes",
+    "modeSingle": "Unique",
+    "modeDouble": "Double",
+    "include": "Inclure",
+    "domotics": "Domotique",
+    "nonProtection": "Onduleurs",
+    "terminalStrips": "Borniers",
+    "skipEmptyRows": "Ignorer les rangées vides",
+    "skipEmptyRowsDescription": "Désactivez cette option pour imprimer des bandes vides à compléter manuellement plus tard.",
+    "madeWith": "Étiquettes de coffret réalisées avec",
+    "rowFromTop": "Rangée {{row}} depuis le haut",
+    "preview": "Aperçu",
+    "hidePreview": "Masquer l’aperçu",
+    "previewPages": "{{count}} pages",
+    "previewLoading": "Génération de l’aperçu...",
+    "previewError": "L’aperçu n’a pas pu être généré. Réessayez.",
+    "export": "Exporter",
+    "errorTitle": "Échec de l’export des étiquettes",
+    "errorMessage": "L’export des étiquettes n’a pas pu être créé. Réessayez.",
+    "generatedDescription": "{{type}} alimente {{items}}"
   },
   "properties": {
     "title": "Propriétés",
@@ -1915,6 +2185,7 @@
     "circuitNotFound": "Circuit introuvable",
     "trySelectingAgain": "Essayez de sélectionner à nouveau le fil. Les segments de fil sont régénérés, donc la sélection peut avoir été perdue.",
     "other": "Autre",
+    "batteryCable": "Câble de batterie",
     "customTypePlaceholder": "Nom de type personnalisé",
     "supplyTitle": "Propriétés du fil d'alimentation",
     "supplySegmentUpstream": "Côté alimentation (jusqu'au séparateur)",

@@ -13,7 +13,7 @@ import { useUIStore } from '@/stores/uiStore'
 import { getVoltageSummaryLabel } from '@/utils/voltageLabel'
 import { SYMBOL_SIZE, getSymbolColor, getTextColor, GROUND_OUTLINE_SIZE, getSelectionOutlineProps, getHoverOutlineProps, getTouchAwareHitAreaProps } from './canvasSymbols'
 import { useTouchPrimaryDevice } from '@/editions/community/communityHooks'
-import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
+import { getProjectElectricalInstallation } from '@/lib/projectV2/electrical'
 import { CatalogSymbolImage } from './CatalogSymbolImage'
 
 type EendraadPointerEvent = {
@@ -33,7 +33,7 @@ export function SupplySymbol({ x, y, panelId }: SupplySymbolProps) {
   const fontFamily = useCanvasFontFamily()
   type ProjectStoreState = ReturnType<typeof useProjectStore.getState>
   const installation = useProjectStore((s: ProjectStoreState) =>
-    s.currentProject ? getElectricalInstallationFromProject(s.currentProject) : undefined
+    s.currentProject ? getProjectElectricalInstallation(s.currentProject) : undefined
   )
   const setSelection = useSetSelection()
   const canvasZoom = useEffectiveCanvasZoom(ZOOM_100, 'eendraad')

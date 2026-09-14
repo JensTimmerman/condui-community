@@ -2,7 +2,8 @@
  * Utility functions for working with project data
  */
 
-import { nanoid } from 'nanoid'
+import { generateId } from './id'
+export { generateId } from './id'
 import i18n from '@/i18n'
 import type {
   Panel,
@@ -17,35 +18,38 @@ import type {
 import { ensurePanelPlacement } from './panelPlacement'
 import { healEarthingSitplanPlacements } from '@/lib/plan/earthingSitplanPlacement'
 import { healPlanWiring } from '@/lib/plan/planWiring'
+import type { ProjectWithOptionalV2PlanWiring } from '@/lib/projectV2/planWiring'
 import { migrateProjectV1ToV2 } from '@/lib/projectV2/migration'
 import { polesConfigFromVoltageSystem } from '@/constants/poleConfig'
 import { normalizeInstallationNominalVoltage } from '@/constants/nominalVoltage'
-import { ensureInstallationFeedTopology, getAllSupplyTrunkDevices, getPanelSupplyTrunkDevices } from '@/lib/feedTopology'
+import {
+  ensureInstallationFeedTopology,
+  getAllSupplyTrunkDevices,
+  getPanelSupplyTrunkDevices,
+} from '@/lib/feedTopology'
 import { getDefaultTrunkDeviceProtectionProps } from '@/lib/protectionDefaults'
 import type { ProjectV2 } from '@/types/projectV2'
-import { getBuildingFloorsFromProject } from '@/lib/projectV2/buildingFloors'
+import { selectProjectBuildingFloors } from '@/lib/projectV2/buildingFloors'
+import type { ProjectWithOptionalV2Building } from '@/lib/projectV2/buildingFloors'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
-  getSupplyAssembliesFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
+  selectProjectSupplyAssemblies,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
-import { findPanelById, walkPanels } from '@/lib/panel/panelTree'
+import { findPanelById } from '@/lib/panel/panelTree'
 import { DEFAULT_INSTALLATION_PROFILE } from '@/lib/installationProfile'
-import {
-  DEFAULT_PANEL_GRID_COLUMNS,
-  DEFAULT_PANEL_GRID_ROWS,
-} from '@/lib/panel/panelGridDefaults'
+import { DEFAULT_PANEL_GRID_COLUMNS, DEFAULT_PANEL_GRID_ROWS } from '@/lib/panel/panelGridDefaults'
 import { validatePanelBusSectionTopology } from '@/lib/panel/panelBusSectionValidation'
 
-type Project = Parameters<typeof migrateProjectV1ToV2>[0]
-
-/**
- * Generate a unique ID for entities
- */
-export function generateId(): string {
-  return nanoid(16)
-}
+type ValidatableProject = ProjectWithOptionalV2Building &
+  ProjectWithOptionalV2Electrical &
+  ProjectWithOptionalV2PlanWiring & {
+    project: {
+      id?: string
+      name?: string
+    }
+  }
 
 /** Privacy-preserving label suffix for diagnostics exports and import fallbacks (first 8 chars without hyphens). */
 export function shortProjectIdLabel(projectId: string): string {
@@ -81,7 +85,10 @@ export function ensureDefaultEarthingSeparators(installation: Installation): boo
     changed = true
   }
   const separators = devices.filter((device) => device.type === 'earthing_separator')
-  if (separators.length >= 2 && !separators.slice(0, 2).some((device) => device.earthingSeparatorPairId)) {
+  if (
+    separators.length >= 2 &&
+    !separators.slice(0, 2).some((device) => device.earthingSeparatorPairId)
+  ) {
     const pairId = generateId()
     separators.slice(0, 2).forEach((device) => {
       device.earthingSeparatorPairId = pairId
@@ -92,7 +99,7 @@ export function ensureDefaultEarthingSeparators(installation: Installation): boo
   return changed
 }
 
-/** Default installation used when none is provided to createEmptyProject. */
+/** Default installation used when none is provided to createEmptyProjectV2. */
 function getDefaultInstallation(): Installation {
   const installation: Installation = {
     ...DEFAULT_EENDRAAD_INSTALLATION_OPTIONS,
@@ -128,30 +135,28 @@ function supplyPoleCount(system: '1~' | '2~' | '1N~' | '3~' | '3N~' | 'DC'): num
 /**
  * Add default supply/ground trunk devices and main-panel grid layout.
  * Two earthing separators on ground wire; on supply wire (in flow order from supply
- * origin to bus): 40A MCB, energy meter, 40A 300mA RCBO (3000 breaking capacity).
+ * origin to bus): 40A MCB, energy meter, 300mA RCD.
  *
  * Feed scope split (controls the dashed supply separator on the eendraadsschema):
  *   - Shared feed (utility / supply panel side): first MCB + energy meter.
- *   - Root feed (main panel side): the RCBO closest to the bus.
+ *   - Root feed (main panel side): the RCD closest to the bus.
  * Panel grid mirrors this: shared devices in `supplyPanelSlots`, root device in
  * `slots` (main panel area).
  */
-function addDefaultTrunkDevicesAndPanelGrid(
-  installation: Installation,
-  mainPanel: Panel
-): void {
+function addDefaultTrunkDevicesAndPanelGrid(installation: Installation, mainPanel: Panel): void {
   const system = installation.nominalVoltage?.system ?? '2~'
   const polesConfig = polesConfigFromVoltageSystem(system)
   const poleCols = supplyPoleCount(system)
 
   const supplyMcb1Id = generateId()
   const supplyMeterId = generateId()
-  const supplyRcboId = generateId()
+  const supplyRcdId = generateId()
 
   const supplyProtectionLabel = i18n.t('panels.supply', { defaultValue: 'Supply' })
   const mainProtectionLabel = i18n.t('supply.mainProtectionLabel', { defaultValue: 'Main' })
   const mcbDefaults = getDefaultTrunkDeviceProtectionProps('MCB', polesConfig)
-  const rcboDefaults = getDefaultTrunkDeviceProtectionProps('RCBO', polesConfig)
+  const rcdDefaults = getDefaultTrunkDeviceProtectionProps('RCD', polesConfig)
+  delete rcdDefaults.ratingA
   const hiddenSupplyProtectionNameLabel = {
     symbolLabelDisplay: { visibility: { supplyProtectionNameLabel: false } },
   } as const
@@ -179,32 +184,50 @@ function addDefaultTrunkDevicesAndPanelGrid(
     },
   ]
 
-  // Root (main-panel-side) supply trunk devices: the RCBO just before the bus.
+  // Root (main-panel-side) supply trunk devices: the RCD just before the bus.
   const rootSupplyTrunkDevices: TrunkDevice[] = [
     {
-      id: supplyRcboId,
+      id: supplyRcdId,
       type: 'protection',
-      symbol: 'rcbo',
+      symbol: 'rcd',
       label: mainProtectionLabel,
-      protectionType: 'RCBO',
-      ...rcboDefaults,
+      protectionType: 'RCD',
+      ...rcdDefaults,
       ...hiddenSupplyProtectionNameLabel,
-      ratingA: 40,
       sensitivityMa: 300,
       trunkPosition: 0,
     },
   ]
 
   ensureDefaultEarthingSeparators(installation)
-  if (!installation.mainSupply) installation.mainSupply = { cable: { kind: 'XVB', conductors: 3, sectionMm2: 6, hasPE: true }, origin: 'grid' }
+  if (!installation.mainSupply)
+    installation.mainSupply = {
+      cable: { kind: 'XVB', conductors: 3, sectionMm2: 6, hasPE: true },
+      origin: 'grid',
+    }
   installation.mainSupply.supplyTrunkDevices = sharedSupplyTrunkDevices
 
   const supplyPanelSlots: PanelGridSlot[] = [
-    { row: 0, col: 0, moduleWidth: poleCols, module: { kind: 'trunkDevice', id: supplyMcb1Id, scope: 'supply' } },
-    { row: 0, col: poleCols, moduleWidth: poleCols, module: { kind: 'trunkDevice', id: supplyMeterId, scope: 'supply' } },
+    {
+      row: 0,
+      col: 0,
+      moduleWidth: poleCols,
+      module: { kind: 'trunkDevice', id: supplyMcb1Id, scope: 'supply' },
+    },
+    {
+      row: 0,
+      col: poleCols,
+      moduleWidth: poleCols,
+      module: { kind: 'trunkDevice', id: supplyMeterId, scope: 'supply' },
+    },
   ]
   const mainPanelSlots: PanelGridSlot[] = [
-    { row: 0, col: 0, moduleWidth: poleCols, module: { kind: 'trunkDevice', id: supplyRcboId, scope: 'supply' } },
+    {
+      row: 0,
+      col: 0,
+      moduleWidth: poleCols,
+      module: { kind: 'trunkDevice', id: supplyRcdId, scope: 'supply' },
+    },
   ]
 
   mainPanel.gridView = {
@@ -232,12 +255,12 @@ function addDefaultTrunkDevicesAndPanelGrid(
  * supply/ground devices are added with poles matching the chosen voltage. Otherwise
  * the built-in default installation (1~) is used with default devices.
  */
-export function createEmptyProject(
+export function createEmptyProjectV2(
   name: string,
   yearOfConstruction?: number,
   installation?: Installation,
   meterEanCode?: string
-): Project {
+): ProjectV2 {
   const now = new Date().toISOString()
   const projectId = generateId()
   const mainPanelId = generateId()
@@ -254,11 +277,13 @@ export function createEmptyProject(
   }
 
   const inst = installation ?? getDefaultInstallation()
+  const panels = [mainPanel]
+  const floors = [{ id: floorId, name: 'Ground Floor', layers: ['electrical'] }]
   addDefaultTrunkDevicesAndPanelGrid(inst, mainPanel)
-  ensureInstallationFeedTopology(inst, [mainPanel])
+  ensureInstallationFeedTopology(inst, panels)
 
-  const project: Project = {
-    schemaVersion: '0.2.0',
+  const project = {
+    schemaVersion: '0.2.0' as const,
     project: {
       id: projectId,
       name,
@@ -267,17 +292,12 @@ export function createEmptyProject(
       lastActiveFloorId: floorId,
       locale: 'nl-BE',
       ...(yearOfConstruction != null && { yearOfConstruction }),
-      ...(meterEanCode != null && meterEanCode.trim() !== '' && { meterEanCode: meterEanCode.trim() }),
+      ...(meterEanCode != null &&
+        meterEanCode.trim() !== '' && { meterEanCode: meterEanCode.trim() }),
     },
     installation: inst,
-    panels: [mainPanel],
-    floors: [
-      {
-        id: floorId,
-        name: 'Ground Floor',
-        layers: ['electrical'],
-      },
-    ],
+    panels,
+    floors,
   }
   // Automatically create placement for the main panel on the ground floor
   const panelPlacement = ensurePanelPlacement(project, mainPanel)
@@ -302,22 +322,22 @@ export function createEmptyProject(
 
   healEarthingSitplanPlacements(project)
 
-  return project
-}
+  // Legacy construction is confined to creation/import boundaries. Expose the same object
+  // references through canonical containers so boundary code can use the V2 APIs before the
+  // one-shot migration without creating a divergent runtime copy.
+  Object.assign(project, {
+    building: { floors },
+    disciplines: {
+      electrical: {
+        installation: inst,
+        panels,
+        devices: [],
+        oneWire: {},
+      },
+    },
+  })
 
-/**
- * Native V2 constructor for new editor projects. V1 creation remains available
- * for importers and legacy tests while runtime creation migrates at the boundary.
- */
-export function createEmptyProjectV2(
-  name: string,
-  yearOfConstruction?: number,
-  installation?: Installation,
-  meterEanCode?: string
-): ProjectV2 {
-  return migrateProjectV1ToV2(
-    createEmptyProject(name, yearOfConstruction, installation, meterEanCode)
-  )
+  return migrateProjectV1ToV2(project)
 }
 
 /**
@@ -382,11 +402,14 @@ function collectAllPlacements(panels: Panel[]): Placement[] {
 /**
  * Validate project structure
  */
-export function validateProjectStructure(project: Project): { valid: boolean; errors: string[] } {
+export function validateProjectStructure(project: ValidatableProject): {
+  valid: boolean
+  errors: string[]
+} {
   const errors: string[] = []
-  const installation = getElectricalInstallationFromProject(project)
-  const panels = getElectricalPanelsFromProject(project)
-  const floors = getBuildingFloorsFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
+  const panels = getProjectElectricalPanels(project)
+  const floors = selectProjectBuildingFloors(project)
 
   if (installation) {
     ensureInstallationFeedTopology(installation, panels)
@@ -417,7 +440,9 @@ export function validateProjectStructure(project: Project): { valid: boolean; er
     for (const panel of panels) {
       for (const protection of panel.protections) {
         if (protection.subPanelId && !panelIds.has(protection.subPanelId)) {
-          errors.push(`Protection ${protection.id} references non-existent sub-panel ${protection.subPanelId}`)
+          errors.push(
+            `Protection ${protection.id} references non-existent sub-panel ${protection.subPanelId}`
+          )
         }
       }
       validateSubPanels(panel.subPanels)
@@ -429,8 +454,8 @@ export function validateProjectStructure(project: Project): { valid: boolean; er
     ...validatePanelBusSectionTopology(
       panels,
       installation,
-      getSupplyAssembliesFromProject(project),
-    ).map((issue) => issue.message),
+      selectProjectSupplyAssemblies(project)
+    ).map((issue) => issue.message)
   )
 
   return { valid: errors.length === 0, errors }
@@ -439,9 +464,11 @@ export function validateProjectStructure(project: Project): { valid: boolean; er
 /**
  * Clone a project with a new ID and name
  */
-export function cloneProject(project: Project, newName: string): Project {
+export function cloneProject<
+  T extends { project: { id: string; name: string; createdAt: string; updatedAt: string } },
+>(project: T, newName: string): T {
   const now = new Date().toISOString()
-  const cloned = JSON.parse(JSON.stringify(project)) as Project
+  const cloned = JSON.parse(JSON.stringify(project)) as T
 
   cloned.project.id = generateId()
   cloned.project.name = newName
@@ -477,18 +504,20 @@ function countProtections(panels: Panel[]): number {
 /**
  * Get project summary statistics
  */
-export function getProjectStats(project: Project) {
-  const panels = getElectricalPanelsFromProject(project)
+export function getProjectStats(
+  project: ProjectWithOptionalV2Electrical & ProjectWithOptionalV2Building
+) {
+  const panels = getProjectElectricalPanels(project)
   const circuits = collectAllCircuits(panels)
   const endpoints = collectAllEndpoints(panels)
   const placements = collectAllPlacements(panels)
-  
+
   return {
     panels: countPanels(panels),
     protections: countProtections(panels),
     circuits: circuits.length,
     endpoints: endpoints.length,
-    floors: getBuildingFloorsFromProject(project).length,
+    floors: selectProjectBuildingFloors(project).length,
     placements: placements.length,
   }
 }
@@ -522,11 +551,13 @@ export function getNextAvailableCircuitCode(
   _panelId?: string
 ): string {
   const usedCodes = new Set<string>()
-  const projectPanels = getElectricalPanelsFromProject(project)
-  const installation = getElectricalInstallationFromProject(project) ?? getDefaultInstallation()
+  const projectPanels = getProjectElectricalPanels(project)
+  const installation = getProjectElectricalInstallation(project) ?? getDefaultInstallation()
 
   const addAlphabeticCode = (value: string | undefined | null) => {
-    const code = String(value ?? '').trim().toUpperCase()
+    const code = String(value ?? '')
+      .trim()
+      .toUpperCase()
     if (code && /^[A-Z]+$/.test(code)) {
       usedCodes.add(code)
     }
@@ -554,41 +585,40 @@ export function getNextAvailableCircuitCode(
       addAlphabeticCode(device.label)
     }
   } else {
-
-  // Collect all used circuit codes across the entire project (all panels + subpanels).
-  // IMPORTANT: We treat every existing alphabetic code as "taken", regardless of
-  // whether the circuit currently has endpoints or subcircuits. This guarantees
-  // global uniqueness of circuit codes, even when master/feeder circuits don't
-  // have endpoints themselves.
-  const collectCodes = (panels: Panel[]) => {
-    for (const panel of panels) {
-      for (const circuit of panel.circuits) {
-        addAlphabeticCode(circuit.code)
-      }
-      for (const protection of panel.protections) {
-        addAlphabeticCode(protection.label)
-        if (protection.circuits) {
-          for (const circuit of protection.circuits) {
-            addAlphabeticCode(circuit.code)
+    // Collect all used circuit codes across the entire project (all panels + subpanels).
+    // IMPORTANT: We treat every existing alphabetic code as "taken", regardless of
+    // whether the circuit currently has endpoints or subcircuits. This guarantees
+    // global uniqueness of circuit codes, even when master/feeder circuits don't
+    // have endpoints themselves.
+    const collectCodes = (panels: Panel[]) => {
+      for (const panel of panels) {
+        for (const circuit of panel.circuits) {
+          addAlphabeticCode(circuit.code)
+        }
+        for (const protection of panel.protections) {
+          addAlphabeticCode(protection.label)
+          if (protection.circuits) {
+            for (const circuit of protection.circuits) {
+              addAlphabeticCode(circuit.code)
+            }
           }
         }
+        collectCodes(panel.subPanels)
       }
-      collectCodes(panel.subPanels)
     }
-  }
-  collectCodes(projectPanels)
+    collectCodes(projectPanels)
 
-  // Supply-wire protections (main supply trunk) can carry explicit labels like A/B.
-  // Reserve these as well to avoid collisions when auto-naming new protections/circuits.
-  const topology = ensureInstallationFeedTopology(installation, projectPanels)
-  const supplyTrunkDevices = [
-    ...(topology.sharedFeed.trunkDevices ?? []),
-    ...topology.rootFeeds.flatMap((feed) => feed.trunkDevices ?? []),
-  ]
-  for (const device of supplyTrunkDevices) {
-    if (device.type !== 'protection') continue
-    addAlphabeticCode(device.label)
-  }
+    // Supply-wire protections (main supply trunk) can carry explicit labels like A/B.
+    // Reserve these as well to avoid collisions when auto-naming new protections/circuits.
+    const topology = ensureInstallationFeedTopology(installation, projectPanels)
+    const supplyTrunkDevices = [
+      ...(topology.sharedFeed.trunkDevices ?? []),
+      ...topology.rootFeeds.flatMap((feed) => feed.trunkDevices ?? []),
+    ]
+    for (const device of supplyTrunkDevices) {
+      if (device.type !== 'protection') continue
+      addAlphabeticCode(device.label)
+    }
   }
 
   // Scan forward from A, returning the first label that is not in use.
@@ -616,7 +646,7 @@ function findCircuitInHierarchy(panels: Panel[], circuitId: string): Circuit | u
     // Check direct circuits
     const circuit = panel.circuits.find((c) => c.id === circuitId)
     if (circuit) return circuit
-    
+
     // Check circuits under protections
     for (const protection of panel.protections) {
       if (protection.circuits) {
@@ -624,7 +654,7 @@ function findCircuitInHierarchy(panels: Panel[], circuitId: string): Circuit | u
         if (circuit) return circuit
       }
     }
-    
+
     // Check sub-panels
     const found = findCircuitInHierarchy(panel.subPanels, circuitId)
     if (found) return found
@@ -639,22 +669,32 @@ function findCircuitInHierarchy(panels: Panel[], circuitId: string): Circuit | u
  * Format: CircuitCode + BranchNumber (e.g., A1, A2, B1, B2)
  */
 export function generateEndpointName(
-  project: Project,
+  project: ProjectWithOptionalV2Electrical,
   circuitId: string,
   excludeEndpointId?: string
 ): string {
-  const circuit = findCircuitInHierarchy(getElectricalPanelsFromProject(project), circuitId)
+  return generateEndpointNameFromPanels(
+    getProjectElectricalPanels(project),
+    circuitId,
+    excludeEndpointId
+  )
+}
+
+export function generateEndpointNameFromPanels(
+  panels: Panel[],
+  circuitId: string,
+  excludeEndpointId?: string
+): string {
+  const circuit = findCircuitInHierarchy(panels, circuitId)
   if (!circuit) {
     // Fallback if circuit not found
     return 'Device 1'
   }
 
   const circuitCode = circuit.code.trim()
-  
+
   // Get all endpoints for this circuit (excluding the one being renamed if provided)
-  const circuitEndpoints = circuit.endpoints.filter(
-    (e) => e.id !== excludeEndpointId
-  )
+  const circuitEndpoints = circuit.endpoints.filter((e) => e.id !== excludeEndpointId)
 
   // Extract distinct branch numbers from existing endpoint labels.
   // Multiple endpoints can share the same branch number (same branch),
@@ -679,30 +719,12 @@ export function generateEndpointName(
 }
 
 /** Trunk device anywhere in the project: main supply, ground bus, and all panel/sub-panel circuits. */
-export function findTrunkDeviceInProject(project: ProjectWithOptionalV2Electrical, id: string): TrunkDevice | null {
-  const supply = getAllSupplyTrunkDevices(project).find((d) => d.id === id)
-  if (supply) return supply
-  const ground = getElectricalInstallationFromProject(project)?.groundTrunkDevices?.find(
-    (d) => d.id === id
-  )
-  if (ground) return ground
-  for (const panel of walkPanels(getElectricalPanelsFromProject(project))) {
-    const circuits = [
-      ...(panel.circuits ?? []),
-      ...(panel.protections ?? []).flatMap((protection) => protection.circuits ?? []),
-    ]
-    for (const circuit of circuits) {
-      const device = circuit.trunkDevices?.find((candidate) => candidate.id === id)
-      if (device) return device
-    }
-  }
-  return null
-}
+export { findTrunkDeviceInProject } from '@/lib/eendraad/findTrunkDeviceInProject'
 
 /** Find circuit, panel and optional protection for an endpoint (recursive sub-panels). */
 export function findCircuitForEndpointInPanel(
   panel: Panel,
-  endpointId: string,
+  endpointId: string
 ): { circuit: Circuit; panel: Panel; protection?: ProtectionDevice } | undefined {
   for (const circuit of panel.circuits) {
     if (circuit.endpoints.some((e) => e.id === endpointId)) {
@@ -727,9 +749,9 @@ export function findCircuitForEndpointInPanel(
 
 export function findCircuitForEndpointInProject(
   project: ProjectWithOptionalV2Electrical,
-  endpointId: string,
+  endpointId: string
 ): { circuit: Circuit; panel: Panel; protection?: ProtectionDevice } | undefined {
-  for (const panel of getElectricalPanelsFromProject(project)) {
+  for (const panel of getProjectElectricalPanels(project)) {
     const found = findCircuitForEndpointInPanel(panel, endpointId)
     if (found) return found
   }
@@ -739,7 +761,7 @@ export function findCircuitForEndpointInProject(
 /** Endpoint + junction panel placements on a floor (mirrors projectStore.getPlacementsByFloor). */
 export function collectPlacementsOnFloor(
   project: ProjectWithOptionalV2Electrical,
-  floorId: string,
+  floorId: string
 ): Array<
   Placement & {
     endpointId?: string
@@ -756,7 +778,7 @@ export function collectPlacementsOnFloor(
       isEarthing?: boolean
     }
   > = []
-  for (const rootPanel of getElectricalPanelsFromProject(project)) {
+  for (const rootPanel of getProjectElectricalPanels(project)) {
     const circuits = collectAllCircuits([rootPanel])
     for (const circuit of circuits) {
       for (const endpoint of circuit.endpoints) {
@@ -775,7 +797,7 @@ export function collectPlacementsOnFloor(
       }
     }
   }
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   for (const device of getAllSupplyTrunkDevices(project)) {
     for (const placement of device.placements ?? []) {
       if (placement.floorId === floorId) {

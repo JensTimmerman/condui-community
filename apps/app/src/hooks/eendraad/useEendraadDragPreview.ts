@@ -44,10 +44,11 @@ export interface DragPreviewState {
   sameSymbolAddMore?: SameSymbolAddMoreLayoutTarget
 }
 
-export function shouldPreferMainBusOverSupplyWire(
-  draggingProtectionId: string | null | undefined
-): boolean {
-  return !!draggingProtectionId
+export function shouldPreferMainBusOverSupplyWire(): boolean {
+  // An existing protection can be moved onto a secondary panel's incoming wire.
+  // Let the wire win at the bus/feeder overlap so the move is treated as a
+  // rewire, rather than as a main-bus reorder that leaves the old hierarchy.
+  return false
 }
 
 export function shouldShowPanelDragPreview(dropTarget: DropTarget): boolean {
@@ -62,6 +63,8 @@ export function useEendraadDragPreview(
   options?: {
     draggingProtectionIdRef?: MutableRefObject<string | null>
     getProtectionById?: (id: string) => ProtectionDevice | null | undefined
+    movingPanelAttachmentIdRef?: MutableRefObject<string | null>
+    isPanelAttachmentDropAllowed?: (panelId: string, target: DropTarget) => boolean
     resolveSameSymbolAddMore?: (
       position: Point,
       symbol: SymbolMetadata
@@ -109,13 +112,13 @@ export function useEendraadDragPreview(
       const isProtectionPlacement = protectionIds.includes(
         symbol.id as (typeof PROTECTION_SYMBOL_IDS)[number]
       )
-      // Existing protections need the main-bus preference at the supply/bus crossing
-      // for reorder drags. New protections need the same preference on compact empty
-      // split rails, whose incoming supply stubs necessarily cross the short bars.
+      // New protections need main-bus preference on compact empty split rails, whose
+      // incoming supply stubs necessarily cross the short bars. Existing protections
+      // keep the wire target available so they can be rewired onto a sub-panel feeder.
       // Panels must keep the actual wire target: a converter-backed circuit can run
       // close enough to the main bus for the padded hit zones to overlap.
       const prefersMainBus =
-        shouldPreferMainBusOverSupplyWire(draggingProtectionId) ||
+        shouldPreferMainBusOverSupplyWire() ||
         Boolean(symbol.busFeedKind) ||
         isProtectionPlacement
       const rawDropTarget = detectDropTarget(
@@ -126,6 +129,7 @@ export function useEendraadDragPreview(
               preferMainBusOverGroundWire: true,
               preferMainBusOverSupplyWire: prefersMainBus,
               preferSecondaryBusForNestedProtection: isProtectionPlacement,
+              ...(symbol.id === 'dc_bus' ? { preferCircuitTrunkWire: true } : {}),
               ...(symbol.id === 'source_changeover'
                 ? { normalizeDirectConverterChangeoverDrop: true }
                 : {}),
@@ -153,6 +157,16 @@ export function useEendraadDragPreview(
       }
 
       if (!canCreateSupplyTopologyFromDrop(symbol, dropTarget.type)) {
+        setDragPreview(null)
+        return
+      }
+
+      const movingPanelAttachmentId = options?.movingPanelAttachmentIdRef?.current
+      if (
+        symbol.id === 'panel_distribution' &&
+        movingPanelAttachmentId &&
+        !options?.isPanelAttachmentDropAllowed?.(movingPanelAttachmentId, dropTarget)
+      ) {
         setDragPreview(null)
         return
       }
@@ -198,7 +212,14 @@ export function useEendraadDragPreview(
         if (!shouldShowPanelDragPreview(dropTarget)) {
           setDragPreview(null)
         } else {
-          setDragPreview({ position, symbolData: symbol, dropTarget })
+          setDragPreview({
+            position,
+            symbolData: symbol,
+            dropTarget,
+            ...(movingPanelAttachmentId
+              ? { movingPanelAttachment: { panelId: movingPanelAttachmentId } }
+              : {}),
+          })
         }
       } else if (symbol.id === 'earthing') {
         // Ground/earthing can be dropped on main bus of main panels
@@ -242,8 +263,7 @@ export function useEendraadDragPreview(
     },
     [
       detectDropTarget,
-      options?.draggingProtectionIdRef,
-      options?.getProtectionById,
+      options,
       resolveSameSymbolAddMore,
       isBlockedDropPosition,
     ]

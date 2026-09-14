@@ -74,5 +74,8 @@ export function createPdfDocument(pageSize: PageSize, orientation: 'portrait' | 
     unit: 'mm',
     format: [width, height],
     orientation: orientation,
+    // Keep PDF streams (including any legitimate raster assets) compressed.
+    // The vector export path should not create large raw image streams.
+    compress: true,
   })
 }

@@ -1,14 +1,15 @@
-import { useEffect, useMemo, useRef, type MouseEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useProjectStore, type ProjectState } from '@/stores/projectStore'
 import { useValidationStore, type ValidationState } from '@/stores/validationStore'
 import { useUIStore } from '@/stores/uiStore'
-import { diffValidationSignatures, getValidationSignature } from '@/lib/validation/validationTrigger'
+import { getValidationSignature } from '@/lib/validation/validationTrigger'
 import { AlertCircle, AlertTriangle, CheckCircle2, RotateCw } from 'lucide-react'
 import type { ValidationStatus } from '@/stores/validationStore'
-import { getOneWireSegmentsFromProject } from '@/lib/projectV2/annotations'
-import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
+import { queryOneWireSegments } from '@/lib/projectV2/annotations'
+import { getProjectElectricalInstallation, getProjectElectricalPanels } from '@/lib/projectV2/electrical'
 import { logger } from '@/lib/logger'
+import { cancelActiveValidationWorker } from '@/lib/validation/validationWorkerClient'
 
 type IdleDeadlineLike = { didTimeout: boolean; timeRemaining: () => number }
 type RequestIdleCallbackHandle = number
@@ -20,11 +21,17 @@ type WindowWithIdleCallbacks = Window & {
   cancelIdleCallback?: (handle: RequestIdleCallbackHandle) => void
 }
 
-function requestIdle(cb: (deadline: IdleDeadlineLike) => void, timeoutMs: number): RequestIdleCallbackHandle {
+function requestIdle(
+  cb: (deadline: IdleDeadlineLike) => void,
+  timeoutMs: number
+): RequestIdleCallbackHandle {
   const ric = (window as WindowWithIdleCallbacks).requestIdleCallback
   if (ric) return ric(cb, { timeout: timeoutMs })
   // Fallback: schedule soon on the macrotask queue.
-  return window.setTimeout(() => cb({ didTimeout: true, timeRemaining: () => 0 }), Math.min(250, timeoutMs))
+  return window.setTimeout(
+    () => cb({ didTimeout: true, timeRemaining: () => 0 }),
+    Math.min(250, timeoutMs)
+  )
 }
 
 function cancelIdle(handle: RequestIdleCallbackHandle) {
@@ -35,14 +42,16 @@ function cancelIdle(handle: RequestIdleCallbackHandle) {
 
 interface ValidationStateIconProps {
   className?: string
+  statusOverride?: ValidationStatus
 }
 
-export function ValidationStateIcon({ className = 'w-5 h-5' }: ValidationStateIconProps) {
-  const status = useValidationStore((state: ValidationState) => state.status)
+export function ValidationStateIcon({ className = 'w-5 h-5', statusOverride }: ValidationStateIconProps) {
+  const storedStatus = useValidationStore((state: ValidationState) => state.status)
   const isLoading = useValidationStore((state: ValidationState) => state.isLoading)
   const isDirty = useValidationStore((state: ValidationState) => state.isDirty)
 
-  if (isDirty && !isLoading) {
+  const status = statusOverride ?? storedStatus
+  if (isDirty && !isLoading && statusOverride === undefined) {
     return <RotateCw className={`${className} text-gray-500 dark:text-gray-400`} />
   }
   switch (status) {
@@ -65,20 +74,47 @@ function ValidationStatusIcon() {
   const status = useValidationStore((state: ValidationState) => state.status)
   const isLoading = useValidationStore((state: ValidationState) => state.isLoading)
   const isDirty = useValidationStore((state: ValidationState) => state.isDirty)
-  const setCurrentSignature = useValidationStore((state: ValidationState) => state.setCurrentSignature)
+  const setCurrentSignature = useValidationStore(
+    (state: ValidationState) => state.setCurrentSignature
+  )
   const errorCount = useValidationStore((state: ValidationState) => state.getErrorCount())
   const warningCount = useValidationStore((state: ValidationState) => state.getWarningCount())
   const toggleValidationWindow = useUIStore((state) => state.toggleValidationWindow)
+  const validationDisabledOutsideBelgium =
+    currentProject != null && getProjectElectricalInstallation(currentProject)?.address.country !== 'BE'
+  const displayStatus: ValidationStatus = validationDisabledOutsideBelgium ? 'warning' : status
 
-  // Only re-run validation when validation-relevant data changes (panels, installation, project meta, wire segments).
-  const signature = getValidationSignature(currentProject ?? null)
+  // Signature generation walks the canonical electrical graph. Keep it out of the
+  // input event that mutated that graph; validation itself is already idle-scheduled.
+  const [signature, setSignature] = useState(() => getValidationSignature(currentProject ?? null))
+  const signatureIdleHandleRef = useRef<RequestIdleCallbackHandle | null>(null)
+  useEffect(() => {
+    if (signatureIdleHandleRef.current !== null) {
+      cancelIdle(signatureIdleHandleRef.current)
+      signatureIdleHandleRef.current = null
+    }
+    if (!currentProject) {
+      setSignature('')
+      return
+    }
+    signatureIdleHandleRef.current = requestIdle(() => {
+      signatureIdleHandleRef.current = null
+      setSignature(getValidationSignature(currentProject))
+    }, 500)
+    return () => {
+      if (signatureIdleHandleRef.current !== null) {
+        cancelIdle(signatureIdleHandleRef.current)
+        signatureIdleHandleRef.current = null
+      }
+    }
+  }, [currentProject])
   const lastSignatureRef = useRef<string>('')
 
   const projectSizeScore = useMemo(() => {
     const p = currentProject
     if (!p) return 0
-    const panels = getElectricalPanelsFromProject(p).length
-    const wireSegments = getOneWireSegmentsFromProject(p).length
+    const panels = getProjectElectricalPanels(p).length
+    const wireSegments = queryOneWireSegments(p).length
     // Rough heuristic: panels dominate electrical complexity; wire segments can be large.
     return panels * 50 + wireSegments
   }, [currentProject])
@@ -114,12 +150,34 @@ function ValidationStatusIcon() {
   const idleHandleRef = useRef<RequestIdleCallbackHandle | null>(null)
   const timerRef = useRef<number | null>(null)
 
+  const cancelScheduledValidation = useCallback(() => {
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+    if (idleHandleRef.current !== null) {
+      cancelIdle(idleHandleRef.current)
+      idleHandleRef.current = null
+    }
+  }, [])
+
+  // A project revision is the authoritative editing signal. Pointer events alone
+  // are insufficient: keyboard commands, undo, programmatic drops, and a long
+  // synchronous commit can all mutate after the last pointer event. Restart the
+  // quiet period from the committed revision and abort any obsolete worker run.
+  useEffect(() => {
+    lastInteractionRef.current = Date.now()
+    cancelScheduledValidation()
+    cancelActiveValidationWorker()
+  }, [cancelScheduledValidation, currentProject])
+
   useEffect(() => {
     const markInteraction = () => {
       const now = Date.now()
       if (now - lastInteractionMarkRef.current < 250) return
       lastInteractionMarkRef.current = now
       lastInteractionRef.current = now
+      cancelActiveValidationWorker()
     }
 
     // Capture common “active editing” signals (covers dragging, drawing, typing, zooming).
@@ -143,9 +201,7 @@ function ValidationStatusIcon() {
     if (!signature) return
 
     if (lastSignatureRef.current !== signature) {
-      const prev = lastSignatureRef.current
-      const diff = prev ? diffValidationSignatures(prev, signature, { maxPaths: 20, maxDepth: 6 }) : []
-      logger.info('[Validation] signature changed', diff.length ? { changed: diff } : undefined)
+      logger.info('[Validation] signature changed')
       lastSignatureRef.current = signature
     }
 
@@ -153,14 +209,7 @@ function ValidationStatusIcon() {
     setCurrentSignature(signature)
 
     // Cancel any pending heavy validation.
-    if (timerRef.current) {
-      clearTimeout(timerRef.current)
-      timerRef.current = null
-    }
-    if (idleHandleRef.current !== null) {
-      cancelIdle(idleHandleRef.current)
-      idleHandleRef.current = null
-    }
+    cancelScheduledValidation()
 
     // If the validation store has already validated this signature, or is
     // about to (e.g. the project-open flow scheduled it), there is nothing
@@ -189,7 +238,7 @@ function ValidationStatusIcon() {
 
         idleHandleRef.current = requestIdle(() => {
           const project = projectRef.current
-          if (project) validate(project, signature, 'idle_signature_change')
+          if (project) void validate(project, signature, 'idle_signature_change')
         }, idleDelayMs)
       }, waitForInactivity)
     }
@@ -202,7 +251,14 @@ function ValidationStatusIcon() {
       if (idleHandleRef.current !== null) cancelIdle(idleHandleRef.current)
       idleHandleRef.current = null
     }
-  }, [signature, validate, setCurrentSignature, inactivityMs, idleDelayMs])
+  }, [
+    cancelScheduledValidation,
+    signature,
+    validate,
+    setCurrentSignature,
+    inactivityMs,
+    idleDelayMs,
+  ])
 
   const handleClick = () => {
     toggleValidationWindow()
@@ -214,17 +270,28 @@ function ValidationStatusIcon() {
   }
 
   const getIcon = () => {
-    return <ValidationStateIcon className="w-5 h-5" />
+    return <ValidationStateIcon className="w-5 h-5" statusOverride={displayStatus} />
   }
 
   const getTitle = (status: ValidationStatus) => {
     if (isLoading) return t('validation.checking', { defaultValue: 'Checking...' })
-    if (isDirty) return t('validation.needsValidation', { defaultValue: 'Needs validation (waiting for idle)' })
+    if (validationDisabledOutsideBelgium)
+      return t('validation.disabledOutsideBelgium', { defaultValue: 'Validation disabled outside Belgium.' })
+    if (isDirty)
+      return t('validation.needsValidation', {
+        defaultValue: 'Needs validation (waiting for idle)',
+      })
     switch (status) {
       case 'error':
-        return t('validation.errorsFound', { count: errorCount, defaultValue: `${errorCount} error(s) found` })
+        return t('validation.errorsFound', {
+          count: errorCount,
+          defaultValue: `${errorCount} error(s) found`,
+        })
       case 'warning':
-        return t('validation.warningsFound', { count: warningCount, defaultValue: `${warningCount} warning(s) found` })
+        return t('validation.warningsFound', {
+          count: warningCount,
+          defaultValue: `${warningCount} warning(s) found`,
+        })
       case 'ok':
         return t('validation.allClear', { defaultValue: 'All available checks passed' })
     }
@@ -240,7 +307,7 @@ function ValidationStatusIcon() {
           ? 'bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-300'
           : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300'
       }`}
-      title={getTitle(status)}
+      title={getTitle(displayStatus)}
       disabled={isLoading}
       aria-pressed={validationWindowOpen}
     >

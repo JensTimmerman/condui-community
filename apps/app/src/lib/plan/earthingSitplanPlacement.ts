@@ -2,12 +2,12 @@ import type { EarthingPlacement, Endpoint, Installation, Panel, Placement, Point
 import { generateId } from '@/utils/project'
 import { useProjectStore } from '@/stores/projectStore'
 import {
-  getBuildingFloorsFromProject,
+  selectProjectBuildingFloors,
   type ProjectWithOptionalV2Building,
 } from '@/lib/projectV2/buildingFloors'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  selectProjectElectricalInstallation,
+  selectProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { findMainPanel } from '@/lib/panel/panelTree'
@@ -35,7 +35,7 @@ export function findEarthingPlacementOnFloor(
   floorId: string,
 ): EarthingPlacement | undefined {
   if (!project) return undefined
-  return getEarthingPlacements(getElectricalInstallationFromProject(project)).find(
+  return getEarthingPlacements(selectProjectElectricalInstallation(project)).find(
     (p) => p.floorId === floorId
   )
 }
@@ -73,8 +73,8 @@ function collectPlacementsOnFloorFromProject(
   const result: Array<
     Placement & { endpointId?: string; junctionPanelLabel?: string; isEarthing?: boolean }
   > = []
-  const panels = getElectricalPanelsFromProject(project)
-  const installation = getElectricalInstallationFromProject(project)
+  const panels = selectProjectElectricalPanels(project)
+  const installation = selectProjectElectricalInstallation(project)
 
   const visitPanel = (panel: Panel) => {
     const circuits = [
@@ -128,7 +128,7 @@ function collectPlacementsOnFloorFromProject(
   return result
 }
 
-function firstFloorLayer(floor: ReturnType<typeof getBuildingFloorsFromProject>[number] | undefined): string {
+function firstFloorLayer(floor: ReturnType<typeof selectProjectBuildingFloors>[number] | undefined): string {
   return floor && 'layers' in floor ? floor.layers?.[0] ?? 'electrical' : 'electrical'
 }
 
@@ -136,16 +136,16 @@ function resolveEarthingTargetFloor(project: EarthingSitplanProject): {
   floorId: string
   anchorPos?: Point2
 } | null {
-  const mainPanel = findMainPanel(getElectricalPanelsFromProject(project))
+  const mainPanel = findMainPanel(selectProjectElectricalPanels(project))
   if (!mainPanel) return null
 
-  const panelEndpoint = findPanelEndpointInPanels(getElectricalPanelsFromProject(project), mainPanel)
+  const panelEndpoint = findPanelEndpointInPanels(selectProjectElectricalPanels(project), mainPanel)
   const panelPlacement = panelEndpoint?.placements[0]
   if (panelPlacement) {
     return { floorId: panelPlacement.floorId, anchorPos: panelPlacement.pos }
   }
 
-  const floors = getBuildingFloorsFromProject(project)
+  const floors = selectProjectBuildingFloors(project)
   const groundFloor =
     floors.find(
       (f) =>
@@ -184,12 +184,12 @@ function defaultEarthingPlanPosition(
  * Mutates the project in place; returns true when a placement was added or repaired.
  */
 export function healEarthingSitplanPlacements(project: EarthingSitplanProject): boolean {
-  const inst = getElectricalInstallationFromProject(project)
+  const inst = selectProjectElectricalInstallation(project)
   if (!inst || inst.hasGround === false) return false
   const target = resolveEarthingTargetFloor(project)
   if (!target) return false
 
-  const floors = getBuildingFloorsFromProject(project)
+  const floors = selectProjectBuildingFloors(project)
   const floor = floors.find((f) => f.id === target.floorId)
   if (!floor) return false
 
@@ -227,7 +227,7 @@ export function ensureEarthingSitplanPlacement(
 ): string | null {
   const store = useProjectStore.getState()
   const project = store.currentProject
-  const installation = project ? getElectricalInstallationFromProject(project) : undefined
+  const installation = project ? selectProjectElectricalInstallation(project) : undefined
   if (!project || !installation || installation.hasGround === false) {
     return null
   }
@@ -243,7 +243,7 @@ export function ensureEarthingSitplanPlacement(
     return anyExisting[0]!.id
   }
 
-  const floor = getBuildingFloorsFromProject(project).find((f) => f.id === floorId)
+  const floor = selectProjectBuildingFloors(project).find((f) => f.id === floorId)
   const layer = firstFloorLayer(floor)
   const target = resolveEarthingTargetFloor(project)
   const resolvedPos =
@@ -270,7 +270,7 @@ export function isEarthingSitplanPlacementId(
   project: EarthingSitplanProject | null | undefined,
   placementId: string,
 ): boolean {
-  return getEarthingPlacements(project ? getElectricalInstallationFromProject(project) : undefined).some(
+  return getEarthingPlacements(project ? selectProjectElectricalInstallation(project) : undefined).some(
     (p) => p.id === placementId
   )
 }

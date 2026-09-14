@@ -4,17 +4,25 @@
  * - Block bounds come directly from the layout engine's painted trunk envelopes.
  * - Cuts only at boundaries between envelopes (or between nested child envelopes when unavoidable).
  * - Secondary-bus blocks are split between child circuits only when wider than one slice.
- * - Page clip rectangles meet at the chosen safe boundary without label-margin expansion or overlap.
+ * - Adjacent pages render a small overlap and clip back to the safe core boundary so labels and
+ *   secondary-bus notes are not cut at the page seam.
  */
 
 import type { BottomUpPanelLayout, BottomUpCircuitLayout } from '@/lib/layout/bottomUpLayout'
-import { getPanelDiagramId } from '@/lib/layout/bottomUpLayout'
+import { LAYOUT_CONSTANTS, getPanelDiagramId } from '@/lib/layout/bottomUpLayout'
 import type { ExportScene } from '../types'
 import { A4_LANDSCAPE, getUsableArea } from '../pageSizes'
 import { ExportError } from '../types'
 import { exportLog } from '../exportLogger'
 import { getPdfContentHeightMm } from '../pdfPageLayout'
 import { getCircuitBusSectionId } from '@/lib/panel/panelBusSections'
+import { getCircuitNotesPaintBounds } from '@/lib/layout/circuitNoteMetrics'
+
+/** Overlap between adjacent slices in scene pixels is derived from this physical margin. */
+const SLICE_OVERLAP_MM = 2
+
+/** Estimated horizontal space for branch labels to the left of branchX (px). */
+const LABEL_WIDTH_ESTIMATE_PX = 90
 
 /**
  * Maximum scale (mm per scene pixel) for eendraad export. The height-based scale is capped
@@ -64,6 +72,32 @@ interface MainBusBlock {
  */
 function getMainBusBlocks(panelLayout: BottomUpPanelLayout): MainBusBlock[] {
   const circuits = panelLayout.circuits
+  const circuitNotes = panelLayout.circuitNotes
+  const branches = panelLayout.branches
+  const getCircuitVisualExtent = (cl: BottomUpCircuitLayout): { left: number; right: number } => {
+    let left = cl.x
+    let right = cl.x + cl.width
+
+    // A circuit's nominal x/width covers its trunk envelope, but branch wires and their
+    // labels can protrude beyond it. Keep those painted elements in the same page unit.
+    for (const branch of branches) {
+      if (branch.circuitId !== cl.circuit.id) continue
+      right = Math.max(right, branch.branchX + branch.branchWidth)
+      left = Math.min(
+        left,
+        branch.branchX - LAYOUT_CONSTANTS.LABEL_OFFSET - LABEL_WIDTH_ESTIMATE_PX
+      )
+    }
+
+    for (const note of circuitNotes ?? []) {
+      if (note.circuitId !== cl.circuit.id || note.notesVisible === false) continue
+      const paintBounds = getCircuitNotesPaintBounds(note.label, note.notesOrientation)
+      left = Math.min(left, note.x + paintBounds.left)
+      right = Math.max(right, note.x + paintBounds.right)
+    }
+
+    return { left, right }
+  }
   const blocks: MainBusBlock[] = []
   const childrenByParentId = new Map<string, BottomUpCircuitLayout[]>()
   for (const circuit of circuits) {
@@ -91,8 +125,9 @@ function getMainBusBlocks(panelLayout: BottomUpPanelLayout): MainBusBlock[] {
   for (const cl of topLevel) {
     const descendants = collectDescendants(cl)
     const ownedLayouts = [cl, ...descendants]
-    const left = Math.min(...ownedLayouts.map((layout) => layout.x))
-    const right = Math.max(...ownedLayouts.map((layout) => layout.x + layout.width))
+    const ownedExtents = ownedLayouts.map(getCircuitVisualExtent)
+    const left = Math.min(...ownedExtents.map((extent) => extent.left))
+    const right = Math.max(...ownedExtents.map((extent) => extent.right))
     const directChildren = childrenByParentId.get(cl.circuit.id) ?? []
     blocks.push({
       left,
@@ -104,7 +139,7 @@ function getMainBusBlocks(panelLayout: BottomUpPanelLayout): MainBusBlock[] {
         cl.parentRcd ?? cl.protection ?? undefined
       ),
       nestedExtents: directChildren
-        .map((child) => ({ left: child.x, right: child.x + child.width }))
+        .map(getCircuitVisualExtent)
         .sort((a, b) => a.left - b.left),
     })
   }
@@ -183,6 +218,10 @@ interface CoreSlice {
 function getSliceWidthPxForScale(scale: number): number {
   const usable = getUsableArea(A4_LANDSCAPE)
   return usable.width / scale
+}
+
+function getSliceOverlapPx(globalScale: number): number {
+  return SLICE_OVERLAP_MM / globalScale
 }
 
 function getBlocksInRange(blocks: MainBusBlock[], left: number, right: number): MainBusBlock[] {
@@ -390,6 +429,7 @@ export async function calculateEendraadSlices(
   const globalScale = Math.min(rawScale, EENDRAAD_MAX_SCALE_MM_PER_PX)
   const mainBusY = panelLayout.mainBus.y
   const sliceWidthPx = getSliceWidthPxForScale(globalScale)
+  const overlapPx = getSliceOverlapPx(globalScale)
 
   if (rawScale > EENDRAAD_MAX_SCALE_MM_PER_PX) {
     exportLog(
@@ -433,7 +473,7 @@ export async function calculateEendraadSlices(
       width: coreSlice.right - coreSlice.left,
       height: sceneBounds.height,
       circuitIds,
-      overlapPx: 0,
+      overlapPx,
     })
   }
 

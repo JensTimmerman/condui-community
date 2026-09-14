@@ -3,7 +3,7 @@ import { initReactI18next } from 'react-i18next'
 import { applyCanonicalLanguagePathIfNeeded } from '@/utils/languageRouting'
 import { resolveInitialLanguagePreference } from '@/utils/userPreferences'
 
-if (typeof window !== 'undefined') {
+if (typeof document !== 'undefined') {
   applyCanonicalLanguagePathIfNeeded()
 }
 
@@ -11,10 +11,11 @@ import nlBE from './locales/nl-BE.json'
 import frBE from './locales/fr-BE.json'
 import en from './locales/en.json'
 import { symbolCategoryLabels } from './locales/symbolCategoryLabels'
+import { setDomainLanguage } from '@/lib/i18n/domainI18n'
 
 function withSymbolCategoryLabels<T extends { symbols: Record<string, unknown> }>(
   locale: T,
-  lang: keyof typeof symbolCategoryLabels,
+  lang: keyof typeof symbolCategoryLabels
 ): T {
   return {
     ...locale,
@@ -32,7 +33,7 @@ const resources = {
 }
 
 const getInitialLanguage = () => {
-  if (typeof window === 'undefined') {
+  if (typeof document === 'undefined') {
     return 'nl-BE'
   }
   return resolveInitialLanguagePreference(window.location.hostname)
@@ -46,5 +47,8 @@ i18n.use(initReactI18next).init({
     escapeValue: false, // React already escapes
   },
 })
+
+setDomainLanguage(i18n.language)
+i18n.on('languageChanged', (language) => setDomainLanguage(language))
 
 export default i18n

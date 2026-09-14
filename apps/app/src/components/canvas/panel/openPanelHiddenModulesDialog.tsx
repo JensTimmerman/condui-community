@@ -4,15 +4,13 @@ import { getSymbolById } from '@/lib/symbols'
 import { useDialogStore } from '@/stores/dialogStore'
 import { useProjectStore } from '@/stores/projectStore'
 import { useUIStore } from '@/stores/uiStore'
+import { collectPanelHiddenModuleEntries, type PanelHiddenDialogTarget } from '@/lib/panel/panelHiddenModules'
 import {
   getPanelHiddenModulePresentation,
   getPanelModuleSelection,
 } from './panelHiddenModulePresentation'
 
-export interface PanelHiddenDialogTarget {
-  panelId: string
-  panelName: string
-}
+export type { PanelHiddenDialogTarget } from '@/lib/panel/panelHiddenModules'
 
 interface OpenPanelHiddenModulesDialogOptions {
   showPanelName?: boolean
@@ -29,14 +27,15 @@ export function openPanelHiddenModulesDialog(
   if (!project) return false
 
   const selectionByDialogId = new Map<string, { panelId: string; moduleKey: string }>()
-  const items: HiddenItem[] = targets.flatMap(({ panelId, panelName }) =>
-    store.getPanelHiddenModuleRefs(panelId).map((ref) => {
+  const items: HiddenItem[] = collectPanelHiddenModuleEntries(project, targets, store.getPanelHiddenModuleRefs)
+    .map(({ panelId, panelName, ref, isGridPanel }) => {
       const item = getPanelHiddenModulePresentation(ref, project, t)
       const symbol = item.symbolId ? getSymbolById(item.symbolId) : undefined
       const dialogId = `${panelId}\u0000${item.key}`
       const selection = getPanelModuleSelection(ref)
       selectionByDialogId.set(dialogId, { panelId, moduleKey: item.key })
-      const subtitle = [item.typeLabel, options.showPanelName ? panelName : undefined]
+      const destinationName = isGridPanel ? t('panelCanvas.supplyPanel', 'Grid panel') : panelName
+      const subtitle = [item.typeLabel, options.showPanelName ? destinationName : undefined]
         .filter(Boolean)
         .join(' · ')
       return {
@@ -56,7 +55,6 @@ export function openPanelHiddenModulesDialog(
         }),
       }
     })
-  )
 
   const { openDialog, closeDialog } = useDialogStore.getState()
   openDialog({

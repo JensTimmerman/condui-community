@@ -1,21 +1,21 @@
 import {
-  getEendraadFramesFromProject,
-  getOneWireSegmentsFromProject,
-  type ProjectWithOptionalV2Annotations,
+  queryOneWireFrames,
+  queryOneWireSegments,
+  type AnnotationProject,
 } from '@/lib/projectV2/annotations'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
-  getSupplyAssembliesFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
+  selectProjectSupplyAssemblies,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import {
-  getBuildingFloorsFromProject,
+  selectProjectBuildingFloors,
   type ProjectWithOptionalV2Building,
 } from '@/lib/projectV2/buildingFloors'
 
 type ValidationSignatureProject = ProjectWithOptionalV2Electrical &
-  ProjectWithOptionalV2Annotations & {
+  AnnotationProject & {
     building?: ProjectWithOptionalV2Building['building']
     floors?: ProjectWithOptionalV2Building['floors']
     project?: unknown
@@ -44,6 +44,9 @@ const NON_VALIDATION_KEYS = new Set([
   'symbolLabelDisplay',
   'hideWireLabel',
   'notesVisible',
+  'waterproof',
+  'switchOverlay',
+  'switchOverlayLock',
 
   // Free-form text
   'text',
@@ -59,6 +62,7 @@ const NON_VALIDATION_KEYS = new Set([
 
 // These affect documentation rules even though their names look like display-only flags.
 const VALIDATION_RELEVANT_DISPLAY_KEYS = new Set(['showWireLengthLabel'])
+const OPTIONAL_VISUAL_PROPERTY_GROUPS = new Set(['socketProps', 'lightPointProps'])
 
 function isCircuitLikeObject(obj: Record<string, unknown>): boolean {
   // Minimal structural heuristics to identify circuit objects in the project schema:
@@ -102,7 +106,15 @@ function stripNonValidationFields(value: unknown): unknown {
       if (key.startsWith('show') && key.endsWith('Label')) continue
       if (key.startsWith('hide') && key.endsWith('Label')) continue
 
-      out[key] = stripNonValidationFields(val)
+      const strippedValue = stripNonValidationFields(val)
+      if (
+        OPTIONAL_VISUAL_PROPERTY_GROUPS.has(key) &&
+        isPlainObject(strippedValue) &&
+        Object.keys(strippedValue).length === 0
+      ) {
+        continue
+      }
+      out[key] = strippedValue
     }
     return out
   }
@@ -115,13 +127,13 @@ function stripNonValidationFields(value: unknown): unknown {
 // different slices immutably (new array/object) only when they actually
 // change, which is how the project store is structured.
 let lastProjectSlices: {
-  project: unknown
-  installation: ReturnType<typeof getElectricalInstallationFromProject>
-  panels: ReturnType<typeof getElectricalPanelsFromProject>
-  supplyAssemblies: ReturnType<typeof getSupplyAssembliesFromProject>
-  wireSegments: ReturnType<typeof getOneWireSegmentsFromProject>
-  frames: ReturnType<typeof getEendraadFramesFromProject>
-  floors: ReturnType<typeof getBuildingFloorsFromProject>
+  projectMetadataSignature: string
+  installation: ReturnType<typeof getProjectElectricalInstallation>
+  panels: ReturnType<typeof getProjectElectricalPanels>
+  supplyAssemblies: ReturnType<typeof selectProjectSupplyAssemblies>
+  wireSegments: ReturnType<typeof queryOneWireSegments>
+  frames: ReturnType<typeof queryOneWireFrames>
+  floors: ReturnType<typeof selectProjectBuildingFloors>
 } | null = null
 let lastSignature = ''
 
@@ -133,19 +145,20 @@ let lastSignature = ''
  */
 export function getValidationSignature(project: ValidationSignatureProject | null): string {
   if (!project) return ''
+  const projectMetadataSignature = JSON.stringify(stripNonValidationFields(project.project))
   const slices = {
-    project: project.project,
-    installation: getElectricalInstallationFromProject(project),
-    panels: getElectricalPanelsFromProject(project),
-    supplyAssemblies: getSupplyAssembliesFromProject(project),
-    wireSegments: getOneWireSegmentsFromProject(project),
-    frames: getEendraadFramesFromProject(project),
-    floors: getBuildingFloorsFromProject(project),
+    projectMetadataSignature,
+    installation: getProjectElectricalInstallation(project),
+    panels: getProjectElectricalPanels(project),
+    supplyAssemblies: selectProjectSupplyAssemblies(project),
+    wireSegments: queryOneWireSegments(project),
+    frames: queryOneWireFrames(project),
+    floors: selectProjectBuildingFloors(project),
   }
 
   if (
     lastProjectSlices &&
-    lastProjectSlices.project === slices.project &&
+    lastProjectSlices.projectMetadataSignature === slices.projectMetadataSignature &&
     lastProjectSlices.installation === slices.installation &&
     lastProjectSlices.panels === slices.panels &&
     lastProjectSlices.supplyAssemblies === slices.supplyAssemblies &&

@@ -27,20 +27,20 @@ The current schema version is `2.1.0`.
 
 The root document contains these portable domains:
 
-| Field                    | Role                                                                                                  |
-| ------------------------ | ----------------------------------------------------------------------------------------------------- |
-| `schemaVersion`          | Project JSON schema discriminator.                                                                    |
+| Field                    | Role                                                                                                                                           |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schemaVersion`          | Project JSON schema discriminator.                                                                                                             |
 | `project`                | Identity, name, timestamps, locale, optional historical template provenance, customer/installation metadata, and local editor resume settings. |
-| `site`                   | Optional installation address and geographic context.                                                 |
-| `building`               | Floors, shared plan calibration, spaces, and optional georeferencing.                                 |
-| `systems`                | Stable system records referenced by layers and elements.                                              |
-| `layers`                 | Display/export grouping for building, electrical, and annotation content.                             |
-| `elements`               | Persisted geometry and element properties.                                                            |
-| `relationships`          | Directed links between elements.                                                                      |
-| `views`                  | Floor-plan, one-wire, panel, and export view definitions.                                             |
-| `assets`                 | Metadata and references for floor-plan and other project-owned files.                                 |
-| `disciplines.electrical` | Installation, panels, devices, plan wiring, one-wire annotations, and optional supply assemblies.     |
-| `validation`             | Optional quarantined data retained for recovery and diagnostics.                                      |
+| `site`                   | Optional installation address and geographic context.                                                                                          |
+| `building`               | Floors, shared plan calibration, spaces, and optional georeferencing.                                                                          |
+| `systems`                | Stable system records referenced by layers and elements.                                                                                       |
+| `layers`                 | Display/export grouping for building, electrical, and annotation content.                                                                      |
+| `elements`               | Persisted geometry and element properties.                                                                                                     |
+| `relationships`          | Directed links between elements.                                                                                                               |
+| `views`                  | Floor-plan, one-wire, panel, and export view definitions.                                                                                      |
+| `assets`                 | Metadata and references for floor-plan and other project-owned files.                                                                          |
+| `disciplines.electrical` | Installation, panels, devices, plan wiring, one-wire annotations, and optional supply assemblies.                                              |
+| `validation`             | Optional quarantined data retained for recovery and diagnostics.                                                                               |
 
 The optional `project.showInspectionAgencyInInfoBlock` boolean controls whether the
 portable inspection-agency contact stored in `project.inspectionAgency` is rendered as
@@ -57,6 +57,12 @@ Within `disciplines.electrical`, a protection record with `directPanelFeeder: tr
 structural one-wire carrier for a secondary panel connected directly to a busbar. It
 retains the feeder circuit and `subPanelId`, but readers must not interpret it as a
 physical protection device or render a protection symbol.
+
+An EV endpoint with `symbol: "ev"` may persist
+`evChargerProps.integratedDcResidualProtection: true` when the charger includes
+coordinated residual-DC protection or detection, such as 6 mA DC detection. Missing
+or `false` means the helper validation does not treat the charger as providing that
+protection. The field is optional and older projects remain valid without it.
 
 `disciplines.electrical.supplyAssemblies` optionally stores source-side electrical
 topology before a root feed or panel input. Each assembly owns a versioned port graph,
@@ -80,6 +86,52 @@ them. Missing arrays mean that the project has no supply-assembly data. The
 existing one-wire, panel, and situation-plan canvases derive the representations they
 need from the same topology.
 
+The first main panel's `gridView.supplyPanelVisible: false` also dismisses the
+shared grid frame when it has no visible modules. This removes only the empty
+physical frame: hidden devices, mounting, supply connections, and handoffs remain
+intact. Any visible device mounted on the grid makes that frame appear again.
+
+Panel `gridView.columns` and slot `col`/`moduleWidth` values are expressed in physical
+DIN modules. Panel layout resolves these measurements through an integer
+1/12-module grid. Whole-number values retain their historical meaning; fractional
+values are normalized to the nearest twelfth, which exactly represents halves,
+thirds, and quarters without floating-point occupancy drift. A missing
+`moduleWidth` continues to derive the device width from its normal pole/module rules.
+Terminal strips default to one third of a DIN module and may use manually persisted
+fractional widths on this grid. Panel `gridView` may enable compact terminal-only rows
+with `terminalStripTopRail` and `terminalStripBottomRail`. A terminal-strip slot assigned
+to one of those rows persists `terminalStripRail: "top"` or `"bottom"`; other device
+types ignore that marker and remain in the regular grid.
+
+A circuit terminal-strip occurrence may persist `terminalStripPanelId`, identifying the
+physical panel-canvas frame that contains the strip. This value is independent from the
+occurrence's circuit and one-wire ownership. Occurrences with the same `junctionIdentity`
+represent one physical strip and move together; missing values retain the historical
+behavior of showing the strip on its circuit-owning panel.
+
+Panel label editing is module-owned rather than slot-owned. Protection devices, endpoints,
+and trunk devices may contain an optional `labelNotes` string and optional `panelLabel`
+configuration with `top` and `bottom` cell sources and optional `left`, `center`, `right`, or
+`justify` alignment. Each cell retains a singular `source` for compatibility and may contain
+an ordered `sources` array; multiple sources render on separate lines. Each source is one of
+`label`, `notes`, `labelNotes`, or `technical`. Missing configuration defaults to Extra (`labelNotes`) in
+the top cell and combined `label` plus `notes` in the bottom cell; `labelNotes` is not inferred from other
+values. Editing a linked cell stores the edited text in `labelNotes` and changes that cell's
+source to `labelNotes`. The label export uses the bottom cell for single/on-row strips and
+exports the top and bottom cells separately for double-strip output.
+
+Junction-panel trunk devices may persist `junctionPanelGridView`. It stores the shared
+panel-canvas rows, columns, feed direction, and optional top or bottom terminal rails
+for the physical junction panel identified by `junctionIdentity`. Occurrences with the
+same identity represent one enclosure and receive the same grid configuration. Missing
+configuration defaults to one row and 18 columns.
+
+Each junction-panel occurrence may also persist `junctionPanelTerminal`, containing the
+stable `id`, editable `label`, and `pinCount` of its terminal component. These terminals
+are separate selectable components inside the shared junction-panel enclosure. Older
+projects without this record derive a stable terminal id, a numbered `X` label, and two pins
+until the component is first edited.
+
 A physical supply-assembly node may contain `deviceId`, referencing its canonical
 supply-trunk device record. The device record owns editable physical presentation and
 equipment data such as symbol, label, rating, manufacturer, model, serial information,
@@ -100,13 +152,28 @@ A supply-trunk device may use `type: "changeover"` with
 other trunk devices; it is not free-positioned canvas geometry. A changeover and its
 branch devices belong to a root-panel feed and must not be stored on the shared feed
 before the root-panel boundary.
+This is electrical ownership only: their `panelMounting` may target the grid,
+any existing main or secondary panel, or an auxiliary enclosure. The electrical
+path may leave an enclosure and return to it; moving or reopening mounted devices
+must preserve their connections and chosen panel-grid slots.
+Supply-trunk relays use `type: "relay"` and `symbol: "relay"`. Their optional
+`relayProps` stores the control mode, pole count, and maximum current rating, using
+the same fields as ordinary relay devices. Labels, notes, and label display settings
+remain on the trunk record. Relays are passive serial devices in AC and DC assembly
+paths, not overcurrent protections. Older relay-symbol trunk records with a fallback
+type remain readable; reconciliation normalizes their type while preserving their
+stored properties and connections.
 Supply-trunk devices may contain `supplyPath: "backup"` for the converter,
 `"backup-output"` for serial protection between the converter backup output and the
 changeover, `"changeover-grid"` for serial devices on the grid-only lower lane before
 the changeover grid tap, or `"converter-grid"` for serial protection between that tap
 and the converter grid input. A `"converter-grid"` device is inline on the horizontal
 run by default; `converterGridPlacement: "input-leg"` places it on the converter's
-vertical input leg. An inverter trunk device may persist
+vertical input leg. A `"changeover-grid"` device is inline on the lower horizontal
+rail by default; `changeoverGridPlacement: "input-leg"` places it on the modular
+changeover's vertical grid-input leg after the grid branch. With a separate normal bus,
+inline lower-lane devices feed that bus; otherwise they continue in series to the
+changeover grid input before its input-leg devices. An inverter trunk device may persist
 `converterGridInputConnected: false` to represent an intentionally isolated grid AC
 input; missing means connected for backward compatibility. A disconnected grid input
 has no `inverter-grid-ac` assembly connection and cannot own `converter-grid`
@@ -125,14 +192,35 @@ converterId }`; the matching assembly handoff initially targets `circuit-input` 
 be retargeted to `panel-input` when the circuit feeds a neighboring secondary panel.
 Missing `supplySource` retains the ordinary bus-fed circuit behavior.
 
+For a grid-connected direct converter, the common AC path continues past the
+converter branch through every following serial supply device. The assembly graph
+owns this continuation and its panel handoffs, including the original main panel.
+Additional main-panel inputs depart from the completed common load output; they
+must not bypass downstream supply devices by departing at the converter's grid tap.
+Physical enclosure assignments do not change this output or its connections.
+Recognizable generated legacy handoffs from the utility tap are repaired to that
+common output on opening, with their identities and wire properties preserved.
+Ambiguous or custom connections are retained for validation instead of being guessed.
+Changing a main panel into a secondary panel removes its obsolete root-input
+handoff so the selected circuit becomes its electrical feed.
+
 Load-time compatibility repair must preserve supply devices and assembly graphs it
 cannot assign unambiguously. Inconsistent ownership, a missing converter counterpart,
 or an unsupported graph must be reported for validation or manual repair; readers must
-not silently delete or flatten those records while opening the project.
+not silently delete or flatten those records while opening the project. One explicit
+exception is a legacy ZIP whose `loadHandoffs` target a panel that is absent from the
+same archive: the ZIP importer removes only those dangling handoff records and their
+graph-only handoff nodes/connections, then reports the repaired handoff count to the
+user. The original archive is not modified, and all surviving project data remains
+available for import.
 
 Supply changeovers may persist independent `changeoverProps.port1Label` and
 `changeoverProps.port2Label` display text. Their visibility uses the device's generic
-`symbolLabelDisplay.visibility` map. Supply-assembly connections may carry independent
+`symbolLabelDisplay.visibility` map. The installation may persist
+`supplyTrunkNotesOrientation` as `"horizontal"` or `"vertical"`. This preference is
+shared by all visible device notes on attached supply wires and is independent of
+`circuitNotesOrientation`. Detached supply assemblies render device notes horizontally
+to keep their frame footprint bounded. Missing values remain horizontal. Supply-assembly connections may carry independent
 `wireProperties`; one-wire segments derived from those connections retain the assembly
 and connection identity so edits to inverter inputs, backup outputs, changeover inputs,
 and separate DC branches do not mutate the ordinary main-supply wire settings.
@@ -171,25 +259,68 @@ trunk-mounted devices such as transformers, rectifiers, inverters, and DC-DC
 converters. A missing array remains valid and means that the device has no
 situation-plan instance.
 
+A passive terminal strip uses `type: "terminal_strip"` and
+`symbol: "terminal_strip"`. Its `junctionIdentity` stores the shared physical strip ID
+without the fixed display prefix (for example `1` displays as `X1`), while
+`terminalStripPin` stores the positive pin number. The combined display is therefore
+`X1-3`. An in-line trunk occurrence additionally stores `terminalStripOutgoingPin`,
+so its two wire connections can address distinct terminals and display as `X1-3/4`.
+`terminalStripPin` is the incoming connection and remains the sole pin for an endpoint
+occurrence. These fields are connection-endpoint data owned by the canonical V2
+electrical device occurrence; they do not create duplicate physical strip identities.
+Pins are unique within one strip identity. Assigning an occupied pin moves only
+the conflicting occurrence to the vacated pin when possible, otherwise to the nearest
+free positive pin. Gaps are valid and stored identities are never renumbered on load.
+Legacy combined identities such as `1-3` remain accepted and are split when edited.
+
+Junction boxes, junction panels, and terminal strips may persist `junctionIdentity`.
+Equal identities on occurrences of the same symbol identify one shared physical
+junction while each occurrence retains its own electrical circuit position. Endpoint
+`label` remains branch-owned automatic naming and does not replace this identity.
+
 An ordinary circuit-trunk inverter, rectifier, or DC-DC converter may persist
 `conversionProps.dcConnectionCount` from 1 through 4. Missing and invalid values are
 read as one. The one-wire converter remains anchored on its first block and grows to
-the right; panel-grid and situation-plan symbols keep their normal size. Endpoints on
-an additional DC connection persist `converterDcConnection.converterId` and a
-zero-based `connectionIndex`. These references affect one-wire topology only and do
-not replace the endpoint's ordinary branch membership.
+the right; panel-grid and situation-plan symbols keep their normal size. A one-port
+converter retains the ordinary circuit trunk: its panel-side segment uses the incoming
+domain and the segment above the converter uses the outgoing domain, where endpoints
+remain ordinary branches. Widened converters use separate terminal lanes and persist
+`converterDcConnection.converterId` with a zero-based `connectionIndex` for their
+output endpoints. These references affect one-wire topology only and do not replace
+the endpoint's ordinary branch membership.
 
 A circuit trunk device with `type: "dc_bus"` and `symbol: "dc_bus"` represents a
-selectable DC distribution busbar. Its optional `dcBusProps.branchCircuitIds` stores
-the ordered child circuits fed from the bus; optional `ratedCurrentA` and
-`ratedVoltageV` are descriptive ratings. A bus placed on an ordinary converter output
-uses the same `converterDcConnection` reference as other serial DC devices, allowing a
-fuse, junction box, or other DC-compatible passive device to precede it. Each child
-circuit identifies its source with `dcBusSource.busId`. Protected children also carry
-the matching `dcBusId` on their protection. An intentionally unprotected child uses a
-structural protection owner with `directDcBusFeeder: true`; readers must not render or
-interpret that owner as a physical protection device. Missing DC-bus fields preserve
-the legacy circuit topology.
+selectable DC distribution busbar. Optional `ratedCurrentA` and `ratedVoltageV` are
+descriptive ratings. A bus placed on an ordinary converter output uses the same
+`converterDcConnection` reference as other serial DC devices. Its outgoing taps are
+ordinary branches in the converter's existing circuit: each owning `Branch` persists
+`dcBusId` and keeps its serial endpoint/device chain in `endpointIds`. The one-wire
+view renders those branches as vertical DC taps, but they do not create child circuits
+or protection records. Deleting the final endpoint removes the empty branch; deleting
+the bus removes all branches and endpoints that carry its id. An empty ordinary-panel
+bus is terminal at the normal first endpoint branch row and has no continuation above
+the rail. The rail is exclusive per inverter output: inserting one promotes that
+output's existing endpoint branches by assigning its bus id, and later endpoint drops
+on that output are stored as rail branches. Multi-port promotion affects only the
+selected converter connection. This ordinary-panel rule does not modify supply-assembly
+DC-bus branches. The unreleased legacy `dcBusProps.branchCircuitIds`, `dcBusSource`, and
+`directDcBusFeeder` fields remain accepted for existing development files but are not
+written by ordinary-panel DC-bus interactions. A DC-rail `Branch` may additionally persist
+an optional `branchDevices` array for serial branch-local devices such as protections. The
+array is ordered from the bus toward the endpoint chain. These devices remain owned by the
+parent circuit in the electrical structure; `dcBusId` identifies their one-wire fan-out
+rail, but the bus is not their serial parent and they do not create child circuits.
+An inverter or DC-DC converter within `branchDevices` may use
+`conversionProps.dcConnectionCount` with the same one-through-four range. When widened, it
+grows to the right and downstream branch devices and endpoints persist a
+`converterDcConnection` reference to one of its zero-based output lanes. Existing serial
+content becomes output zero when the converter is first widened. Returning to one output
+removes that explicit output-zero ownership and restores the ordinary serial branch.
+For compatibility, a one-port inverter or DC-DC converter already stored in a DC-rail
+`endpointIds` chain remains accepted. Widening it, or adding the first device to its DC output,
+promotes the same stable id and portable
+device metadata into the owning branch's `branchDevices` array before assigning its
+downstream endpoints to output zero.
 
 Ground-trunk earthing separators are physical pairs. Each paired separator record may
 carry the same optional `earthingSeparatorPairId`; editors select and delete the pair
@@ -204,8 +335,16 @@ possible and otherwise falls back to the project's first floor.
 Situation-plan placement is optional for transformers, rectifiers, inverters,
 DC-DC converters, solar panels, and batteries. Their absence is not a project
 integrity error. When loading older conversion devices without placements, the
-editor creates visible placements. Conversion placements stored as hidden by an
-older editor version are automatically made visible while loading.
+editor creates visible placements. Inverter panel visibility and situation-plan
+visibility are independent; loading preserves explicit hide choices in either view.
+Other conversion placements stored as hidden by an older editor version are
+automatically made visible while loading.
+
+Supply-trunk inverters, including supply-assembly inverters, are hidden in the panel
+view by default. The physical enclosure's `gridView.hiddenModuleKeys` and
+`gridView.shownModuleKeys` store explicit hide/show choices. An existing grid slot
+only stores a position and does not make an inverter visible. Hiding an inverter
+does not remove its mounting or electrical connections.
 
 A supply-trunk inverter, battery, or solar-panel device may contain an ordered
 `serialNumbers` array in its device-specific properties. The array maps one-to-one to
@@ -228,13 +367,24 @@ available in addition. A device on one of those independent DC lanes may persist
 `supplyConverterDcConnectionIndex`. Missing values remain backward-compatible:
 `"converter-dc"` implies index 0 and `"converter-dc-top"` implies index 1.
 
-A supply-side DC busbar uses the same `type` and `symbol` values. Devices dropped on
-that bus persist `supplyDcBusId` pointing to the bus device and a stable
+A supply-side DC busbar uses the same `type` and `symbol` values. Domotica devices
+dropped on that bus persist `type: "domotica"` and `symbol: "domotica"`; their
+`domoticaProps` may preserve the displayed control capabilities and inner device
+configuration, but endpoint-output count is not used on this DC-only placement.
+Other devices dropped on the bus retain their own trunk-device type. All bus devices
+persist `supplyDcBusId` pointing to the bus device and a stable
 `supplyDcBusBranchId` identifying their fan-out branch. Devices before the bus omit
 these fields and remain in serial lane order, so a protection or junction box can
 precede the bus on either the side lane or any upper converter lane. The derived
 supply-assembly graph represents the bus as a `dc-bus` node with a multi-connection DC
-port; the trunk-device records remain the portable source of truth.
+port. A supply-bus domotica node keeps only its serial DC port; the trunk-device
+records remain the portable source of truth.
+A DC-DC converter or inverter on one of those fan-out branches may also persist
+`conversionProps.dcConnectionCount`. Devices after a widened branch converter retain the
+outer `supplyDcBusId` and `supplyDcBusBranchId`, and additionally use
+`converterDcConnection` to identify their local zero-based string lane. The outer
+`supplyConverterDcConnectionIndex` continues to identify the root supply converter lane;
+the two references describe distinct nesting levels.
 
 Situation-plan placements store their orientation in `rotationDeg` as clockwise degrees.
 User rotation commands use quarter-turns (`0`, `90`, `180`, or `270`); automatic
@@ -286,6 +436,49 @@ the panel's primary or implicit legacy bus. Incoming source capability and condu
 availability are derived from the targeted feed or handoff; the bus section's display
 role must not be interpreted as electrical source truth. Multiple uncoordinated
 incoming supplies to the same explicit section are invalid.
+For the generated normal-bus handoff of a switched root-feed assembly, the
+handoff and the root-feed record are two persisted projections of the same
+physical input and must not be counted as independent supplies.
+
+For a root feed with a modular changeover and inverter, the ordered trunk-device
+roles describe distinct physical branches rather than one flattened serial list.
+`converter-grid` with `converterGridPlacement: "input-leg"` is serial on the
+inverter's grid input; the default `"inline"` placement is serial on the continuing
+grid run before its split. `backup-output` is serial between the inverter backup
+output and the changeover backup input. `changeover-grid` is serial between the grid
+split and the normal-bus handoff; `changeoverGridPlacement: "input-leg"` places that
+serial protection on the vertical leg between the split and the changeover's grid port.
+Ordinary serial devices after the changeover record
+are on its load path before the backup-bus handoff. The supply-assembly graph persists
+the corresponding split node, both panel-bus handoffs, and these separate paths; a
+reader must not infer one electrical chain merely from trunk array order.
+
+DC supply-assembly connections are stored in energy-flow order. Solar and battery
+branches point through any intervening DC protection or distribution nodes toward the
+converter DC port. Storage ports may remain electrically bidirectional, but this does
+not reverse the branch's source-to-converter structural direction.
+
+When a direct inverter upgrades a simple root feed, the assembly records a separate
+root-feed handoff for that panel and shared-output handoffs for the other main panels.
+Root-feed protections retain their local branch ownership; they do not become shared
+because another panel references the same assembly diagram. Bare historical direct
+graphs without handoffs receive these connections on load; existing explicit common
+output and custom handoffs retain their original meaning.
+
+Supply-assembly connections and load handoffs are authoritative for the panel input
+or bus section they target, including historical `root-feed` targets. A matching
+`feedTopology` record is a projection, not an additional incoming connection.
+Readers must not replace a disconnected assembly handoff with a direct shared-feed
+or meter connection. Such a handoff is an explicit connectivity error, even when its
+node identity and conductor set are otherwise valid.
+
+Reconciliation preserves other panel handoffs and private branch connections when
+rebuilding an editor-managed supply path. Generated root-panel fan-outs follow the
+common load-path tail, including serial devices after the changeover. Older files
+with a recognizable generated root-panel handoff stranded by the historical writer
+are repaired on load; unknown disconnected handoffs are preserved for diagnosis.
+Physical `panelMounting` changes do not change electrical adjacency, connection
+order, or handoff ownership. No schema-version change is required for this repair.
 
 Phase choices are filtered by the installation's nominal voltage system: `3~` exposes
 only `L1`, `L2`, and `L3` combinations and never `N`. The phase assignment controls are
@@ -304,6 +497,9 @@ visibility, fire-class visibility, and optional length for one uninterrupted run
 between supply devices or terminals. Orthogonal drawing pieces around a corner share
 one key; a protection or other inline device starts a new run. Missing `wireSections`
 keeps the role-level main-supply defaults used by older projects.
+Cable specifications may use the stable `kind` values `battery-cable` and `twinflex`
+for DC battery wiring; these are portable data values and are localized only when
+displayed in the editor or drawing labels.
 
 Some current documents also require the reserved compatibility containers `collaboration`, `comments`, and `chronology`. Local implementations must preserve unknown members in these containers and use the neutral values produced by `createEmptyProjectV2` or the official migration code rather than constructing them by hand. They must not infer local permissions or enable features from their contents.
 
@@ -317,6 +513,11 @@ An importer may replace the root `project.id` when the imported identity collide
 
 Floor-plan images, processed images, vectors, and local installer artwork are stored in the project fields that own them. Binary payloads use standard data URLs; SVG content may be stored as SVG text where the schema permits it. Readers must preserve unrecognized asset metadata but must not fetch or execute unknown content automatically.
 
+Current writers externalize and hydrate floor-plan payloads through the native `assets` array and
+the asset IDs referenced by `building.floors`. Historical inline floor payloads are converted to
+those containers during import normalization; storage and ZIP asset adapters do not treat a
+top-level `floors` array as a second runtime asset authority.
+
 CAD-derived floor plans use imported-plan asset kind `cad-vector` (distinct from PDF vector imports). When present, `cadReference` stores versioned source-coordinate metadata: source units, uncropped asset size, per-floor crop in both asset and model space, import-session linkage for multi-floor splits, and the forward/inverse transform parameters captured at import. Legacy projects imported before this metadata existed do not carry `cadReference`.
 
 ## Compatibility and normalization
@@ -327,7 +528,7 @@ The loader accepts:
 - `2.0.0`, upgraded by adding the current scope contract;
 - `0.2.0`, migrated through the legacy V1-to-V2 importer.
 
-Other schema versions are rejected. New writers must emit the current version and serialize through `projectToStoredProjectV2`. Runtime-only compatibility aliases must not be written to `project.json`.
+Other schema versions are rejected. New writers must emit the current version and serialize through `projectToStoredProjectV2`. Historical top-level electrical, floor, wiring, annotation, and quarantine fields are accepted only as legacy import input: loaders normalize them once into the V2 containers, and neither the editor runtime nor `project.json` carries runtime compatibility aliases.
 
 Import validation requires, after normalization:
 
@@ -354,3 +555,5 @@ Archive producers should stay comfortably below these limits. Consumers must not
 Format changes must be forward-migratable and preserve existing local projects. A meaningful change includes adding or moving persisted fields, changing required defaults, changing asset-path behavior, accepting or rejecting a schema version, modifying archive entries used for loading, or changing an import limit.
 
 Every such change must update this document and add or adjust community archive round-trip tests or the relevant migration tests.
+
+Terminal strips physically placed in an auxiliary enclosure retain their original circuit occurrence and use `panelMounting: { kind: "auxiliary", enclosureId }`; their physical grid slot belongs to that enclosure. `terminalStripPanelId` remains the physical destination for ordinary electrical panel placement and is cleared for auxiliary placement. Moving a strip changes neither its circuit nor its electrical connections.

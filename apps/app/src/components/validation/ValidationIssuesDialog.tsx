@@ -3,13 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useValidationStore, type ValidationState } from '@/stores/validationStore'
 import { useProjectStore, type ProjectState } from '@/stores/projectStore'
 import { useUIStore } from '@/stores/uiStore'
-import {
-  AlertCircle,
-  AlertTriangle,
-  CheckCircle2,
-  RotateCcw,
-  CircleHelp,
-} from 'lucide-react'
+import { AlertCircle, AlertTriangle, CheckCircle2, RotateCcw, CircleHelp } from 'lucide-react'
 import { focusIssue } from '@/lib/validation/core/api'
 import type { Issue, ScopeType } from '@/lib/validation/core/types'
 import type { Selection } from '@/types/ui'
@@ -26,13 +20,13 @@ import {
   resolveLiveWireSegmentsForMinimumCrossSectionFocus,
 } from '@/lib/validation/circuitCableSection'
 import { DefaultQueryAPI } from '@/lib/validation/core/query-api'
-import { getOneWireSegmentsFromProject } from '@/lib/projectV2/annotations'
+import { queryOneWireSegments } from '@/lib/projectV2/annotations'
 import { getValidationAreiUrl } from '@/lib/validation/areiLinks'
 import { useSettingsStore } from '@/stores/settingsStore'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
-  getSupplyAssembliesFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
+  selectProjectSupplyAssemblies,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { findPanelById } from '@/lib/panel/panelTree'
@@ -88,7 +82,7 @@ function collectEndpointsForCircuit(
       walk(panel.subPanels ?? [])
     }
   }
-  walk(getElectricalPanelsFromProject(project))
+  walk(getProjectElectricalPanels(project))
   return out
 }
 
@@ -112,7 +106,7 @@ function collectDcCrossSectionHeuristicFocusEndpoints(
       walk(panel.subPanels ?? [])
     }
   }
-  walk(getElectricalPanelsFromProject(project))
+  walk(getProjectElectricalPanels(project))
   if (preferred.length > 0) return preferred
   return collectEndpointsForCircuit(project, circuitId)
 }
@@ -134,7 +128,7 @@ export function ValidationRevalidateButton() {
           trackGoogleAnalyticsEvent('validation_manual_revalidate', {
             source: 'validation_panel',
           })
-          validate(currentProject, undefined, 'manual_revalidate')
+          void validate(currentProject, undefined, 'manual_revalidate')
         }
       }}
       disabled={!currentProject || isLoading}
@@ -162,7 +156,10 @@ function ValidationIssuesDialog({
   const warningCount = useValidationStore((state: ValidationState) => state.getWarningCount())
   const setSelection = useUIStore((s) => s.setSelection)
   const eendraadWireSegments = useEendraadWireSegments()
-  const storedWireSegments = currentProject ? getOneWireSegmentsFromProject(currentProject) : []
+  const storedWireSegments = currentProject ? queryOneWireSegments(currentProject) : []
+  const validationDisabledOutsideBelgium =
+    currentProject != null && getProjectElectricalInstallation(currentProject)?.address.country !== 'BE'
+  const displayStatus = validationDisabledOutsideBelgium ? 'warning' : status
 
   const [severityFilter, setSeverityFilter] = useState<Record<string, boolean>>({
     error: true,
@@ -268,7 +265,7 @@ function ValidationIssuesDialog({
           walk(panel.subPanels ?? [])
         }
       }
-      walk(getElectricalPanelsFromProject(project))
+      walk(getProjectElectricalPanels(project))
     }
 
     const findCircuitById = (
@@ -311,7 +308,7 @@ function ValidationIssuesDialog({
         }
         return null
       }
-      return walk(getElectricalPanelsFromProject(project))
+      return walk(getProjectElectricalPanels(project))
     }
 
     // Scope primary label
@@ -321,7 +318,7 @@ function ValidationIssuesDialog({
         labels.add(found.circuit.code)
       }
     } else if (issue.scope.type === 'board') {
-      const panel = findPanelById(getElectricalPanelsFromProject(project), issue.scope.id)
+      const panel = findPanelById(getProjectElectricalPanels(project), issue.scope.id)
       if (panel?.name) labels.add(panel.name)
     }
 
@@ -347,7 +344,7 @@ function ValidationIssuesDialog({
           )
         }
       } else if (offender.kind === 'board') {
-        const panel = findPanelById(getElectricalPanelsFromProject(project), offender.id)
+        const panel = findPanelById(getProjectElectricalPanels(project), offender.id)
         if (panel?.name) labels.add(panel.name)
       }
     }
@@ -364,7 +361,10 @@ function ValidationIssuesDialog({
     })
   }
 
-  const handleIssueClick = (issue: Issue, interactionMethod: 'pointer' | 'keyboard' = 'pointer') => {
+  const handleIssueClick = (
+    issue: Issue,
+    interactionMethod: 'pointer' | 'keyboard' = 'pointer'
+  ) => {
     trackGoogleAnalyticsEvent('validation_issue_card_click', {
       rule_id: issue.ruleId,
       severity: issue.severity,
@@ -635,7 +635,7 @@ function ValidationIssuesDialog({
           walkPanelsForProtections(panel.subPanels ?? [])
         }
       }
-      walkPanelsForProtections(getElectricalPanelsFromProject(currentProject))
+      walkPanelsForProtections(getProjectElectricalPanels(currentProject))
 
       if (protectionIds.size > 0) {
         selectionType = 'protection'
@@ -766,7 +766,7 @@ function ValidationIssuesDialog({
             )
           : []
       if (issue.ruleId === 'be.areibook1.2025.backup-supply-rcd' && currentProject) {
-        const assembly = getSupplyAssembliesFromProject(currentProject).find(
+        const assembly = selectProjectSupplyAssemblies(currentProject).find(
           (candidate) => candidate.id === issue.scope.id
         )
         const backupPanelIds = new Set<string>()
@@ -785,9 +785,9 @@ function ValidationIssuesDialog({
           } else if (target.kind === 'panel-input' || target.kind === 'panel-bus-input') {
             backupPanelIds.add(target.panelId)
           } else if (target.kind === 'root-feed') {
-            const panelId = getElectricalInstallationFromProject(currentProject)?.feedTopology?.rootFeeds.find(
-              (feed) => feed.id === target.rootFeedId
-            )?.panelId
+            const panelId = getProjectElectricalInstallation(
+              currentProject
+            )?.feedTopology?.rootFeeds.find((feed) => feed.id === target.rootFeedId)?.panelId
             if (panelId) backupPanelIds.add(panelId)
           }
         }
@@ -847,7 +847,7 @@ function ValidationIssuesDialog({
     if (!selectionType) {
       if (currentProject && issue.scope.type === 'circuit') {
         let protectionId: string | null = null
-        outer: for (const panel of getElectricalPanelsFromProject(currentProject)) {
+        outer: for (const panel of getProjectElectricalPanels(currentProject)) {
           for (const protection of panel.protections) {
             if (protection.circuits?.some((c: Circuit) => c.id === issue.scope.id)) {
               protectionId = protection.id
@@ -910,7 +910,7 @@ function ValidationIssuesDialog({
             : severity === 'warning'
               ? 'Read more about this warning'
               : 'Read more about this message',
-      },
+      }
     )
 
   return (
@@ -921,17 +921,17 @@ function ValidationIssuesDialog({
             className={`flex min-w-0 items-center gap-3 ${onHeaderPointerDown ? 'cursor-grab active:cursor-grabbing select-none' : ''}`}
             onPointerDown={onHeaderPointerDown}
           >
-            {status === 'error' && (
+            {displayStatus === 'error' && (
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/30">
                 <AlertCircle className="w-5 h-5 text-red-500" />
               </div>
             )}
-            {status === 'warning' && (
+            {displayStatus === 'warning' && (
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-yellow-100 dark:bg-yellow-900/30">
                 <AlertTriangle className="w-5 h-5 text-yellow-500" />
               </div>
             )}
-            {status === 'ok' && (
+            {displayStatus === 'ok' && (
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
                 <CheckCircle2 className="w-5 h-5 text-green-500" />
               </div>
@@ -948,7 +948,17 @@ function ValidationIssuesDialog({
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-2 py-1.5 sm:px-4 sm:py-3">
-        {status === 'ok' && issues.length === 0 ? (
+        {validationDisabledOutsideBelgium ? (
+          <div className="flex flex-col items-center justify-center py-10 text-center">
+            <AlertTriangle className="mb-3 h-14 w-14 text-yellow-500" />
+            <h3 className="mb-1.5 text-lg font-semibold text-gray-900 dark:text-white">
+              {t('validation.disabledOutsideBelgium', { defaultValue: 'Validation disabled outside Belgium.' })}
+            </h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              {t('validation.belgianRulesOnly', { defaultValue: 'The app currently only checks AREI rules for Belgium.' })}
+            </p>
+          </div>
+        ) : status === 'ok' && issues.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">
             <CheckCircle2 className="mb-3 h-14 w-14 text-green-500" />
             <h3 className="mb-1.5 text-lg font-semibold text-gray-900 dark:text-white">
@@ -1196,7 +1206,7 @@ function ValidationIssuesDialog({
                                           }
                                           return null
                                         }
-                                        return walk(getElectricalPanelsFromProject(currentProject))
+                                        return walk(getProjectElectricalPanels(currentProject))
                                       })()
 
                                       logger.info('--- Live circuit snapshot ---')

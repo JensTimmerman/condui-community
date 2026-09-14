@@ -291,6 +291,8 @@ interface BaseCanvasProps {
   disableContentHitGraph?: boolean
   /** Optional transformed overlay rendered in its own top layer. */
   overlayChildren?: React.ReactNode
+  /** Add a tiny transformed layer for isolating high-frequency draggable nodes. */
+  enableIsolatedDragLayer?: boolean
   /** Fired when the canvas container is measured (CSS px); used e.g. for plan viewport–centered placement. */
   onViewportPixelSizeChange?: (size: CanvasSize) => void
   /** Optional max zoom used when fitting an active selection (e.g. keep plan fit at 100%). */
@@ -302,6 +304,8 @@ interface BaseCanvasProps {
 export interface BaseCanvasHandle {
   fitToView: () => boolean
   getStage: () => Konva.Stage | null
+  /** Current camera transform, including an in-progress gesture before React state commits. */
+  getLiveViewTransform: () => { pan: Point; zoom: number }
   /** Start a selection rectangle at the given pointer position (stage/screen coords). Used when shift/alt+click on content so rect-select works inside the canvas. */
   startSelectionRect: (pointer: { x: number; y: number }) => void
   /** Begin a deferred mouse-button pan (used for middle/right click and optional left-drag pan). */
@@ -345,6 +349,7 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
     onCanvasPrimaryClick,
     disableContentHitGraph = false,
     overlayChildren,
+    enableIsolatedDragLayer = false,
     onViewportPixelSizeChange,
     selectionFitMaxZoom,
     gestureZoomCanvas,
@@ -2750,12 +2755,19 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
     () => ({
       fitToView: handleFitToView,
       getStage: () => stageRef.current,
+      getLiveViewTransform,
       startSelectionRect: startSelectionRectImpl,
       beginDeferredMousePan: (clientX, clientY, modifiers) =>
         beginDeferredMousePan(clientX, clientY, 0, modifiers),
       startMousePan,
     }),
-    [handleFitToView, startSelectionRectImpl, beginDeferredMousePan, startMousePan]
+    [
+      handleFitToView,
+      getLiveViewTransform,
+      startSelectionRectImpl,
+      beginDeferredMousePan,
+      startMousePan,
+    ]
   )
 
   // Handle mouse up globally to catch mouse release outside canvas (rect-select). Mouse-button pan uses capture listeners on mousedown.
@@ -3844,7 +3856,7 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
 
     const strokeColor = lerpColor(actualBackgroundColor, gridColor, 0.3 + 0.7 * t)
 
-    const lines: JSX.Element[] = []
+    const lines: React.JSX.Element[] = []
 
     if (gridInTransformedLayer) {
       // Grid moves with canvas (for Plan canvas)
@@ -4124,6 +4136,19 @@ const BaseCanvas = forwardRef(function BaseCanvasImpl(
             {children}
           </SelectionPreviewProvider>
         </Layer>
+
+        {/* Draggable symbols can temporarily move here so Konva redraws only
+            this tiny layer instead of repainting the complete project scene. */}
+        {enableIsolatedDragLayer && (
+          <Layer
+            name="canvas-drag-layer"
+            x={safePan.x}
+            y={safePan.y}
+            scaleX={safeZoom}
+            scaleY={safeZoom}
+            listening={false}
+          />
+        )}
 
         {/* Optional transformed interaction overlay. Kept separate so heavy content
             can have hit graph disabled while tool overlay remains interactive. */}

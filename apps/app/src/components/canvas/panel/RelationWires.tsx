@@ -15,10 +15,17 @@ import { ensureInstallationFeedTopology, getPanelFeedProjection } from '@/lib/fe
 import { getPanelIncomingMainBusFeedDevice } from '@/lib/panel/subPanelFeed'
 import { findPanelById } from '@/lib/panel/panelTree'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
+import {
+  collectTerminalStripOccurrences,
+  getEffectiveTerminalStripOutgoingPin,
+  getTerminalStripId,
+  getTerminalStripPin,
+} from '@/lib/terminalStrip/labels'
+import { findTrunkDeviceInProject } from '@/utils/project'
 import { useIsMarqueeSelecting } from '@/contexts/SelectionPreviewContext'
 import { useUIStore } from '@/stores/uiStore'
 import { DEFAULT_PANEL_GRID_COLUMNS } from '@/lib/panel/panelGridDefaults'
@@ -43,6 +50,10 @@ export type PanelHierarchyRoute = {
 interface RelationWiresProps {
   placements: ModulePlacement[]
   selectedRef: PanelGridModuleRef | null
+  /** Side of the selected one-wire span on the focused panel device. */
+  selectedConnectionSide?: 'incoming' | 'outgoing'
+  /** Other placed endpoint of the selected one-wire span, when present. */
+  selectedConnectionPeerRef?: PanelGridModuleRef
   hoveredRef?: PanelGridModuleRef | null
   panel: Panel | null
   project: ProjectWithOptionalV2Electrical | null
@@ -231,11 +242,11 @@ export function buildRelationWireDiagnostics(
 
   let supplyFeedPosition: RelationWireDiagnostics['supplyFeedPosition'] = null
   if (ref.kind === 'trunkDevice' && ref.scope === 'supply') {
-    const installation = getElectricalInstallationFromProject(project)
+    const installation = getProjectElectricalInstallation(project)
     if (installation) {
       const topology = ensureInstallationFeedTopology(
         installation,
-        getElectricalPanelsFromProject(project)
+        getProjectElectricalPanels(project)
       )
       const sharedDevices = topology.sharedFeed.trunkDevices ?? []
       const idxInShared = sharedDevices.findIndex((d) => d.id === ref.id)
@@ -515,7 +526,11 @@ function applyWireTerminal(
 function buildModulePortCandidates(
   wires: RoutedWire[],
   placement: ModulePlacement,
-  lockDirectionalSides = false
+  lockDirectionalSides = false,
+  incomingSideOverride?: 'top' | 'bottom',
+  outgoingSideOverride?: 'top' | 'bottom',
+  incomingXOverride?: number,
+  outgoingXOverride?: number
 ): ModulePortCandidate[] {
   const centerX = placement.x + placement.width / 2
   const cloneWires = () => wires.map((wire) => ({ ...wire, points: [...wire.points] }))
@@ -538,13 +553,18 @@ function buildModulePortCandidates(
       const candidateWires = cloneWires()
       for (const wireIndex of [...incomingWireIndexes, ...outgoingWireIndexes]) {
         const wire = candidateWires[wireIndex]!
-        const side = wire.selectedEndpoint === 'target' ? incomingSide : outgoingSide
+        const side =
+          wire.selectedEndpoint === 'target'
+            ? (incomingSideOverride ?? incomingSide)
+            : (outgoingSideOverride ?? outgoingSide)
         const incomingIndex = incomingWireIndexes.indexOf(wireIndex)
         const terminalX =
           incomingIndex >= 0 && incomingWireIndexes.length > 1
             ? centerX +
               (incomingIndex - (incomingWireIndexes.length - 1) / 2) * SUPPLY_PORT_SPREAD * 2
-            : centerX
+            : wire.selectedEndpoint === 'target'
+              ? (incomingXOverride ?? centerX)
+              : (outgoingXOverride ?? centerX)
         applyWireTerminal(wire, wire.selectedEndpoint!, placement, side, terminalX)
       }
       return { wires: candidateWires, preferencePenalty: 0 }
@@ -564,7 +584,19 @@ function buildModulePortCandidates(
       const side = (assignment & (1 << groupIndex)) === 0 ? 'top' : 'bottom'
       for (const wireIndex of configurableGroups[groupIndex]!) {
         const wire = candidateWires[wireIndex]!
-        applyWireTerminal(wire, wire.selectedEndpoint!, placement, side, centerX)
+        const resolvedSide =
+          wire.selectedEndpoint === 'target'
+            ? (incomingSideOverride ?? side)
+            : (outgoingSideOverride ?? side)
+        applyWireTerminal(
+          wire,
+          wire.selectedEndpoint!,
+          placement,
+          resolvedSide,
+          wire.selectedEndpoint === 'target'
+            ? (incomingXOverride ?? centerX)
+            : (outgoingXOverride ?? centerX)
+        )
       }
     }
     candidates.push({ wires: candidateWires, preferencePenalty: 0 })
@@ -1545,7 +1577,7 @@ function findProtectionInProject(
     }
     return null
   }
-  for (const root of getElectricalPanelsFromProject(project)) {
+  for (const root of getProjectElectricalPanels(project)) {
     const hit = walk(root)
     if (hit) return hit
   }
@@ -1565,16 +1597,169 @@ function computeWires(
   mainBusRouteSide?: RelationWiresProps['mainBusRouteSide'],
   singlePanelCorridorY?: number | null,
   pathwayRegions?: PanelWirePathRegion[],
-  pathwayLinks?: WirePathSegment[]
+  pathwayLinks?: WirePathSegment[],
+  expandPhysicalTerminal = true
 ): ComputeWiresResult {
+  const physicalPlacement = placements.find(
+    (placement) => panelGridModuleRefKey(placement.ref) === panelGridModuleRefKey(ref)
+  )
+  if (expandPhysicalTerminal && (physicalPlacement?.terminalStripMemberRefs?.length ?? 0) > 1) {
+    const combined = physicalPlacement!.terminalStripMemberRefs!.map((memberRef) =>
+      computeWires(
+        memberRef,
+        placements,
+        panelFallback,
+        project,
+        dragOverride,
+        preserveRowForRefKeys,
+        supplyPanelRefKeys,
+        hierarchyRoute,
+        getHierarchyRoute,
+        mainBusRouteSide,
+        singlePanelCorridorY,
+        pathwayRegions,
+        pathwayLinks,
+        false
+      )
+    )
+    return {
+      wires: combined.flatMap((result) => result.wires),
+      labels: combined.flatMap((result) => result.labels),
+    }
+  }
   const panelForContext = findPanelContainingModuleRef(ref, project) ?? panelFallback
   if (!panelForContext) return { wires: [], labels: [] }
 
   const effective = dragOverride
     ? placements.map((p) => applyDragOverride(p, dragOverride, preserveRowForRefKeys))
     : placements
-  const placementByKey = new Map(effective.map((p) => [panelGridModuleRefKey(p.ref), p]))
-  const targetPlacement = placementByKey.get(panelGridModuleRefKey(ref))
+  const terminalOccurrences = collectTerminalStripOccurrences(project)
+  const getTerminalPinLead = (
+    placement: ModulePlacement,
+    connectionSide: 'incoming' | 'outgoing'
+  ): {
+    x: number
+    pinY: number
+    side: 'top' | 'bottom'
+    boundaryY: number
+    horizontal: boolean
+  } | null => {
+    if (placement.junctionPanelTerminal) {
+      const entersFromTop = placement.junctionPanelTerminal.feedFromTop
+      const useTop = connectionSide === 'incoming' ? entersFromTop : !entersFromTop
+      return {
+        x: placement.x + placement.width / 2,
+        pinY: placement.y + placement.height / 2,
+        side: useTop ? 'top' : 'bottom',
+        boundaryY: useTop ? placement.y : placement.y + placement.height,
+        horizontal: false,
+      }
+    }
+    if (placement.ref.kind !== 'trunkDevice') return null
+    const device = findTrunkDeviceInProject(project, placement.ref.id)
+    if (!device || (device.symbol !== 'terminal_strip' && device.type !== 'terminal_strip')) {
+      return null
+    }
+    const stripId = getTerminalStripId(device)
+    const pin =
+      connectionSide === 'outgoing'
+        ? getEffectiveTerminalStripOutgoingPin(project, device)
+        : (getTerminalStripPin(device) ?? 1)
+    const maxPin = Math.max(
+      2,
+      ...terminalOccurrences
+        .filter((occurrence) => occurrence.stripId.toUpperCase() === stripId.toUpperCase())
+        .map((occurrence) => occurrence.pin)
+    )
+    const reservedTop = placement.width < CELL_W * 0.55 ? 13 : 4
+    const horizontal = placement.terminalStripRail != null && placement.width > CELL_W * 2
+    const pinIndex = Math.min(maxPin, Math.max(1, pin))
+    const pinY = horizontal
+      ? placement.y + placement.height / 2
+      : placement.y + reservedTop + ((placement.height - reservedTop - 4) * pinIndex) / (maxPin + 1)
+    const side = pin <= maxPin / 2 ? 'top' : 'bottom'
+    return {
+      x: horizontal
+        ? placement.x + (placement.width * pinIndex) / (maxPin + 1)
+        : placement.x + placement.width / 2,
+      pinY,
+      side,
+      boundaryY: side === 'top' ? placement.y : placement.y + placement.height,
+      horizontal,
+    }
+  }
+  const attachTerminalPinLead = (
+    points: number[],
+    endpoint: 'source' | 'target',
+    lead: ReturnType<typeof getTerminalPinLead>
+  ): number[] => {
+    if (!lead) return points
+    if (endpoint === 'source') {
+      if (lead.horizontal && points.length >= 4) {
+        return [
+          lead.x,
+          lead.pinY,
+          lead.x,
+          lead.boundaryY,
+          lead.x,
+          points[3]!,
+          points[2]!,
+          points[3]!,
+          ...points.slice(4),
+        ]
+      }
+      return [lead.x, lead.pinY, lead.x, lead.boundaryY, ...points.slice(2)]
+    }
+    if (lead.horizontal && points.length >= 4) {
+      const previousX = points.at(-4)!
+      const previousY = points.at(-3)!
+      return [
+        ...points.slice(0, -4),
+        previousX,
+        previousY,
+        lead.x,
+        previousY,
+        lead.x,
+        lead.boundaryY,
+        lead.x,
+        lead.pinY,
+      ]
+    }
+    return [...points.slice(0, -2), lead.x, lead.boundaryY, lead.x, lead.pinY]
+  }
+  const simplifyAttachedLead = (points: number[]): number[] => {
+    const pairs: Array<{ x: number; y: number }> = []
+    for (let index = 0; index < points.length; index += 2) {
+      const point = { x: points[index]!, y: points[index + 1]! }
+      const previous = pairs.at(-1)
+      if (!previous || previous.x !== point.x || previous.y !== point.y) pairs.push(point)
+    }
+    if (pairs.length <= 2) return pairs.flatMap((point) => [point.x, point.y])
+    const simplified = [pairs[0]!]
+    for (let index = 1; index < pairs.length - 1; index += 1) {
+      const previous = simplified.at(-1)!
+      const current = pairs[index]!
+      const next = pairs[index + 1]!
+      if (
+        (previous.x === current.x && current.x === next.x) ||
+        (previous.y === current.y && current.y === next.y)
+      ) {
+        continue
+      }
+      simplified.push(current)
+    }
+    simplified.push(pairs.at(-1)!)
+    return simplified.flatMap((point) => [point.x, point.y])
+  }
+  const placementByKey = new Map<string, ModulePlacement>()
+  for (const placement of effective) {
+    placementByKey.set(panelGridModuleRefKey(placement.ref), placement)
+    for (const memberRef of placement.terminalStripMemberRefs ?? []) {
+      placementByKey.set(panelGridModuleRefKey(memberRef), { ...placement, ref: memberRef })
+    }
+  }
+  const rawTargetPlacement = placementByKey.get(panelGridModuleRefKey(ref))
+  const targetPlacement = rawTargetPlacement
   if (!targetPlacement) return { wires: [], labels: [] }
 
   const { parentRefs, childRefs, childPanelIds } = getRelationEdges(ref, panelForContext, project)
@@ -1590,8 +1775,8 @@ function computeWires(
   const hasBoth = parentPls.length > 0 && childPls.length > 0
   const inOff = hasBoth ? -WIRE_SPACING / 2 : 0
   const outOff = hasBoth ? WIRE_SPACING / 2 : 0
-  const installation = getElectricalInstallationFromProject(project)
-  const panels = getElectricalPanelsFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
+  const panels = getProjectElectricalPanels(project)
 
   const supplyDevices =
     panelForContext.isMain && installation
@@ -1614,7 +1799,12 @@ function computeWires(
       : []
   const sharedSupplyTrunkIds = new Set(
     sharedSupplyTrunkDevices
-      .filter((device) => device.type !== 'junction_box' && device.type !== 'junction_panel')
+      .filter(
+        (device) =>
+          device.type !== 'junction_box' &&
+          device.type !== 'junction_panel' &&
+          device.type !== 'terminal_strip'
+      )
       .map((device) => device.id)
   )
 
@@ -1724,7 +1914,7 @@ function computeWires(
       targetPlacement.ref.scope === 'circuit' &&
       panelFeed != null &&
       targetPlacement.ref.circuitId === panelFeed.circuit.id &&
-      targetPlacement.ref.id === panelFeed.device.id
+      targetPlacement.ref.id === panelFeed.incomingDevice.id
     const parentIsInternalProtectionToProtection =
       pl.ref.kind === 'protection' &&
       targetPlacement.ref.kind === 'protection' &&
@@ -1905,7 +2095,7 @@ function computeWires(
       pl.ref.scope === 'circuit' &&
       childPanelFeed != null &&
       pl.ref.circuitId === childPanelFeed.circuit.id &&
-      pl.ref.id === childPanelFeed.device.id
+      pl.ref.id === childPanelFeed.incomingDevice.id
     const supplyToMainCorridorRoute = sourceIsSupplyTrunk && childIsMainProtection
     const childIsMspf = isMspfProtectionEdge(targetPlacement.ref, pl.ref, downstreamPanel)
     const childIsInternalProtectionToProtection =
@@ -2192,6 +2382,8 @@ function computeWires(
         const remoteCenterX = wire.remotePlacement.x + wire.remotePlacement.width / 2
         const selectedPointIndex = wire.selectedEndpoint === 'source' ? 1 : wire.points.length - 1
         const selectedTerminalY = wire.points[selectedPointIndex]
+        const selectedConnectionSide = wire.selectedEndpoint === 'source' ? 'outgoing' : 'incoming'
+        const selectedTerminalLead = getTerminalPinLead(targetPlacement, selectedConnectionSide)
         const selectedSide =
           selectedTerminalY === targetPlacement.y
             ? 'top'
@@ -2201,16 +2393,23 @@ function computeWires(
         // A same-row relation belongs to one horizontal corridor end-to-end.
         // Letting its remote terminal choose the opposite side creates a large
         // loop around the panel even though both modules touch the same lane.
-        const lockedSameRowRegion = selectedSide
-          ? resolveSameRowLockedRegion(
-              targetPlacement,
-              wire.remotePlacement,
-              selectedSide,
-              pathwayRegions
-            )
-          : undefined
+        const lockedSameRowRegion =
+          selectedSide && !selectedTerminalLead
+            ? resolveSameRowLockedRegion(
+                targetPlacement,
+                wire.remotePlacement,
+                selectedSide,
+                pathwayRegions
+              )
+            : undefined
+        const remoteConnectionSide = remoteEndpoint === 'source' ? 'outgoing' : 'incoming'
+        const remoteTerminalLead = getTerminalPinLead(wire.remotePlacement, remoteConnectionSide)
         const remoteSides: Array<'top' | 'bottom'> =
-          lockedSameRowRegion && selectedSide ? [selectedSide] : ['top', 'bottom']
+          remoteTerminalLead != null
+            ? [remoteTerminalLead.side]
+            : lockedSameRowRegion && selectedSide
+              ? [selectedSide]
+              : ['top', 'bottom']
         return remoteSides.map((side) => {
           const option = { ...wire, points: [...wire.points] }
           applyWireTerminal(option, remoteEndpoint, wire.remotePlacement!, side, remoteCenterX)
@@ -2219,6 +2418,17 @@ function computeWires(
       })()
       const routedOptions = wireOptions.map((option) => {
         const lockedSameRowRegion = (() => {
+          const selectedConnectionSide =
+            option.selectedEndpoint === 'source' ? 'outgoing' : 'incoming'
+          if (getTerminalPinLead(targetPlacement, selectedConnectionSide)) return undefined
+          const remoteEndpoint = option.selectedEndpoint === 'source' ? 'target' : 'source'
+          const remoteConnectionSide = remoteEndpoint === 'source' ? 'outgoing' : 'incoming'
+          if (
+            option.remotePlacement &&
+            getTerminalPinLead(option.remotePlacement, remoteConnectionSide)
+          ) {
+            return undefined
+          }
           if (
             !option.remotePlacement ||
             !option.selectedEndpoint ||
@@ -2282,7 +2492,26 @@ function computeWires(
       }
       return {
         ...chosen.wire,
-        points: chosen.routed.points,
+        points: (() => {
+          if (!chosen.wire.selectedEndpoint) return chosen.routed.points
+          const selectedConnectionSide =
+            chosen.wire.selectedEndpoint === 'source' ? 'outgoing' : 'incoming'
+          const selectedLead = getTerminalPinLead(targetPlacement, selectedConnectionSide)
+          let points = attachTerminalPinLead(
+            chosen.routed.points,
+            chosen.wire.selectedEndpoint,
+            selectedLead
+          )
+          let hasHorizontalLead = selectedLead?.horizontal === true
+          if (chosen.wire.remotePlacement) {
+            const remoteEndpoint = chosen.wire.selectedEndpoint === 'source' ? 'target' : 'source'
+            const remoteConnectionSide = remoteEndpoint === 'source' ? 'outgoing' : 'incoming'
+            const remoteLead = getTerminalPinLead(chosen.wire.remotePlacement, remoteConnectionSide)
+            points = attachTerminalPinLead(points, remoteEndpoint, remoteLead)
+            hasHorizontalLead ||= remoteLead?.horizontal === true
+          }
+          return hasHorizontalLead ? simplifyAttachedLead(points) : points
+        })(),
         pathDebug: chosen.routed.debug,
       }
     })
@@ -2295,12 +2524,24 @@ function computeWires(
     ref.kind === 'trunkDevice' && ref.scope === 'supply'
       ? supplyDevices.find((device) => device.id === ref.id)
       : undefined
+  const selectedIncomingLead = getTerminalPinLead(targetPlacement, 'incoming')
+  const selectedOutgoingLead = getTerminalPinLead(targetPlacement, 'outgoing')
   const modulePortCandidates = buildModulePortCandidates(
     result,
     targetPlacement,
     selectedSupplyDevice?.symbol === 'source_changeover' ||
       (result.some((wire) => wire.selectedEndpoint === 'target') &&
-        result.some((wire) => wire.selectedEndpoint === 'source'))
+        result.some((wire) => wire.selectedEndpoint === 'source')),
+    selectedIncomingLead?.side,
+    selectedOutgoingLead?.side,
+    selectedIncomingLead?.horizontal &&
+      result.filter((wire) => wire.selectedEndpoint === 'target').length === 1
+      ? selectedIncomingLead.x
+      : undefined,
+    selectedOutgoingLead?.horizontal &&
+      result.filter((wire) => wire.selectedEndpoint === 'source').length === 1
+      ? selectedOutgoingLead.x
+      : undefined
   )
   const bundledCandidates = modulePortCandidates.filter(candidateKeepsOverlapGroupsTogether)
   const routedCandidates = (
@@ -2315,6 +2556,8 @@ function computeWires(
 export default function RelationWires({
   placements,
   selectedRef,
+  selectedConnectionSide,
+  selectedConnectionPeerRef,
   hoveredRef,
   panel,
   project,
@@ -2350,7 +2593,7 @@ export default function RelationWires({
   const wireState = useMemo(() => {
     if (suppressRelationWires) return { wires: [], labels: [] as RoutedWireLabel[] }
     if (!selectedRef || !project) return { wires: [], labels: [] as RoutedWireLabel[] }
-    return computeWires(
+    const result = computeWires(
       selectedRef,
       placements,
       panel,
@@ -2363,12 +2606,30 @@ export default function RelationWires({
       mainBusRouteSide,
       singlePanelCorridorY,
       pathwayRegions,
-      pathwayLinks
+      pathwayLinks,
+      selectedConnectionSide == null
     )
+    if (!selectedConnectionSide) return result
+    const selectedEndpoint = selectedConnectionSide === 'incoming' ? 'target' : 'source'
+    const peerKey = selectedConnectionPeerRef
+      ? panelGridModuleRefKey(selectedConnectionPeerRef)
+      : null
+    return {
+      wires: result.wires.filter(
+        (wire) =>
+          wire.selectedEndpoint === selectedEndpoint &&
+          (peerKey == null ||
+            (wire.remotePlacement != null &&
+              panelGridModuleRefKey(wire.remotePlacement.ref) === peerKey))
+      ),
+      labels: [],
+    }
   }, [
     suppressRelationWires,
     placements,
     selectedRef,
+    selectedConnectionSide,
+    selectedConnectionPeerRef,
     panel,
     project,
     dragOverride,
@@ -2386,6 +2647,7 @@ export default function RelationWires({
   const hoveredKey = hoveredRef ? panelGridModuleRefKey(hoveredRef) : null
   const hoverWireState = useMemo(() => {
     if (suppressRelationWires) return { wires: [], labels: [] as RoutedWireLabel[] }
+    if (selectedConnectionSide) return { wires: [], labels: [] as RoutedWireLabel[] }
     if (!hoveredRef || !project) return { wires: [], labels: [] as RoutedWireLabel[] }
     if (hoveredKey === selectedKey) return { wires: [], labels: [] as RoutedWireLabel[] }
     return computeWires(
@@ -2405,6 +2667,7 @@ export default function RelationWires({
     )
   }, [
     suppressRelationWires,
+    selectedConnectionSide,
     hoveredRef,
     hoveredKey,
     selectedKey,

@@ -1,12 +1,11 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Eye, EyeOff, SeparatorHorizontal, SeparatorVertical } from 'lucide-react'
+import { AlertTriangle, Eye, EyeOff, SeparatorHorizontal, SeparatorVertical } from 'lucide-react'
 import { DebouncedTextInput, DebouncedTextarea } from '@/components/forms'
 import { useDialogStore } from '@/stores/dialogStore'
 import { useProjectStore, type ProjectState } from '@/stores/projectStore'
 import type { Circuit, ProtectionDevice } from '@/types/schema'
-import { circuitExcludedFromEendraadAutoNamingLock } from '@/lib/eendraad/automaticMainBusNaming'
-import { installationHideFeederLetters } from '@/lib/eendraad/eendraadNamingInstall'
+import { getManualCircuitLabelWarnings } from '@/lib/eendraad/automaticMainBusNaming'
 import {
   buildProtectionInstallDateTargets,
   getInstallDateTargetInheritedYear,
@@ -22,7 +21,7 @@ import {
   type ProtectionLabelKey,
 } from '@/lib/protectionLabels'
 import { isProtectionOnSupplyPanel } from '@/components/canvas/panel/panelGridLayout'
-import { AutomaticNamingLockedField } from '../shared/AutomaticNamingLockedField'
+import { AutomaticNamingOverrideControl } from '../shared/AutomaticNamingOverrideControl'
 import {
   ProtectionDeviceElectricalFields,
   getProtectionTypeDropdownOptions,
@@ -32,10 +31,11 @@ import { installationDateUpdateFromYear } from '@/lib/installDates'
 import {
   ensureInstallDateTargetColors,
   labelClass,
+  panelStringT,
   selectClass,
   visibilityToggleClass,
 } from '../shared/propertiesSharedUtils'
-import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
+import { getProjectElectricalInstallation } from '@/lib/projectV2/electrical'
 // Protection Properties Component
 export function ProtectionProperties({
   protectionId,
@@ -53,10 +53,13 @@ export function ProtectionProperties({
   const { t } = useTranslation()
   const currentProject = useProjectStore((state: ProjectState) => state.currentProject)
   const installation = currentProject
-    ? getElectricalInstallationFromProject(currentProject)
+    ? getProjectElectricalInstallation(currentProject)
     : undefined
   const updateInstallation = useProjectStore((state: ProjectState) => state.updateInstallation)
   const withSingleUndoEntry = useProjectStore((state: ProjectState) => state.withSingleUndoEntry)
+  const applyAutomaticNaming = useProjectStore(
+    (state: ProjectState) => state.applyAutomaticEendraadNamingAllPanels
+  )
   const openDialog = useDialogStore((state) => state.openDialog)
   const panelForProtection = useProjectStore((state: ProjectState) =>
     state.getPanelForProtection(protectionId)
@@ -66,7 +69,89 @@ export function ProtectionProperties({
   const circuitsOfProtection = protection?.circuits
   const hasCircuits = Boolean(circuitsOfProtection?.length)
   const firstCircuit = circuitsOfProtection?.[0] ? getCircuitById(circuitsOfProtection[0].id) : null
-  const protectionTypeOptions = useMemo(() => getProtectionTypeDropdownOptions(t, 'panel'), [t])
+  const labelInputRef = useRef<HTMLInputElement>(null)
+  const [focusCustomLabel, setFocusCustomLabel] = useState(false)
+  const [labelDraft, setLabelDraft] = useState(protection?.label ?? '')
+  const protectionTypeOptions = useMemo(() => getProtectionTypeDropdownOptions(panelStringT(t), 'panel'), [t])
+
+  const autoNaming = !!installation?.eendraadAutomaticNaming
+  const manualLabelOverride =
+    circuitsOfProtection?.some(
+      (circuit) => getCircuitById(circuit.id)?.eendraadManualCodeLock === true
+    ) === true
+  /** Supply-strip protections stay manually editable; main-bus rows with circuits support automatic/custom naming. */
+  const automaticNamingRow =
+    autoNaming &&
+    hasCircuits &&
+    !isProtectionOnSupplyPanel(panelForProtection, protectionId)
+  const labelWarnings =
+    manualLabelOverride && currentProject && firstCircuit
+      ? getManualCircuitLabelWarnings(
+          panelForProtection,
+          firstCircuit.id,
+          currentProject,
+          labelDraft
+        )
+      : { nonStandard: false, duplicate: false }
+  const labelWarningText = labelWarnings.nonStandard
+    ? labelWarnings.duplicate
+      ? t(
+          'canvas.eendraadNaming.customLabelBothWarnings',
+          'This custom label is outside the A, B, C… sequence and is also used by another circuit on this panel.'
+        )
+      : t(
+          'canvas.eendraadNaming.customLabelNonStandardWarning',
+          'This custom label is outside the A, B, C… sequence.'
+        )
+    : labelWarnings.duplicate
+      ? t(
+          'canvas.eendraadNaming.customLabelDuplicateWarning',
+          'This label is also used by another circuit on this panel.'
+        )
+      : undefined
+
+  useEffect(() => {
+    if (!focusCustomLabel || !manualLabelOverride) return
+    labelInputRef.current?.focus()
+    labelInputRef.current?.select()
+    setFocusCustomLabel(false)
+  }, [focusCustomLabel, manualLabelOverride])
+
+  useEffect(() => {
+    setLabelDraft(protection?.label ?? '')
+  }, [protection?.label, protectionId])
+
+  const setCustomLabel = (focusInput = true) => {
+    withSingleUndoEntry(() => {
+      for (const circuit of circuitsOfProtection ?? []) {
+        updateCircuit(circuit.id, { eendraadManualCodeLock: true })
+      }
+      return true
+    })
+    if (focusInput) setFocusCustomLabel(true)
+  }
+
+  const useAutomaticLabel = () => {
+    withSingleUndoEntry(() => {
+      for (const circuit of circuitsOfProtection ?? []) {
+        updateCircuit(circuit.id, { eendraadManualCodeLock: undefined })
+      }
+      applyAutomaticNaming()
+      return true
+    })
+  }
+
+  const commitProtectionLabel = (value: string) => {
+    if (!automaticNamingRow && !manualLabelOverride) {
+      onUpdate(protectionId, { label: value })
+      return
+    }
+    withSingleUndoEntry(() => {
+      onUpdate(protectionId, { label: value })
+      applyAutomaticNaming()
+      return true
+    })
+  }
 
   if (!protection) {
     return (
@@ -75,20 +160,6 @@ export function ProtectionProperties({
       </div>
     )
   }
-
-  const autoNaming = !!installation?.eendraadAutomaticNaming
-  const hideFeederLetters = installationHideFeederLetters(installation)
-  const excludedFromAutoNamingLock = circuitExcludedFromEendraadAutoNamingLock(
-    firstCircuit,
-    hideFeederLetters,
-    protection
-  )
-  /** Supply-strip protections stay manually editable; main-bus rows with circuits are driven by automatic naming. */
-  const lockMainBusLetterFields =
-    autoNaming &&
-    hasCircuits &&
-    !excludedFromAutoNamingLock &&
-    !isProtectionOnSupplyPanel(panelForProtection, protectionId)
 
   const isProtectionLabelVisible = (key: ProtectionLabelKey) =>
     isProtectionLabelPartVisible(protection, key)
@@ -201,6 +272,20 @@ export function ProtectionProperties({
           <label className={`${labelClass} mb-0 flex-1`}>
             {t('protections.label', 'Label')}
           </label>
+          {automaticNamingRow ? (
+            <AutomaticNamingOverrideControl
+              custom={manualLabelOverride}
+              automaticLabel={t('canvas.eendraadNaming.automaticStatus', 'Automatic')}
+              customLabel={t('canvas.eendraadNaming.customStatus', 'Custom')}
+              setCustomLabel={t('canvas.eendraadNaming.setCustomLabel', 'Set custom label')}
+              useAutomaticLabel={t(
+                'canvas.eendraadNaming.useAutomaticLabel',
+                'Use automatic label'
+              )}
+              onSetCustom={() => setCustomLabel()}
+              onUseAutomatic={useAutomaticLabel}
+            />
+          ) : null}
           {firstCircuit ? (
             <button
               type="button"
@@ -221,22 +306,46 @@ export function ProtectionProperties({
             </button>
           ) : null}
         </div>
-        <AutomaticNamingLockedField locked={lockMainBusLetterFields}>
+        <div className="relative">
           <DebouncedTextInput
+            ref={labelInputRef}
             type="text"
             value={protection.label}
-            onCommit={(v) => onUpdate(protectionId, { label: v })}
+            onDraftChange={(value) => {
+              setLabelDraft(value)
+              if (automaticNamingRow && !manualLabelOverride) {
+                setCustomLabel(false)
+              }
+            }}
+            onCommit={commitProtectionLabel}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault()
                 e.currentTarget.blur()
               }
             }}
-            className={selectClass}
+            className={`${selectClass} ${
+              manualLabelOverride && (labelWarnings.nonStandard || labelWarnings.duplicate)
+                ? 'pr-10'
+                : ''
+            }`}
             placeholder={t('protections.label', 'Label')}
-            disabled={lockMainBusLetterFields}
           />
-        </AutomaticNamingLockedField>
+          {manualLabelOverride && (labelWarnings.nonStandard || labelWarnings.duplicate) ? (
+            <span
+              className="absolute right-3 top-1/2 -translate-y-1/2"
+              title={labelWarningText}
+              aria-label={labelWarningText}
+              role="img"
+              onMouseDown={(event) => {
+                event.preventDefault()
+                labelInputRef.current?.focus()
+              }}
+            >
+              <AlertTriangle className="h-4 w-4 text-amber-500" aria-hidden />
+            </span>
+          ) : null}
+        </div>
       </div>
       <ProtectionDeviceElectricalFields
         t={t}

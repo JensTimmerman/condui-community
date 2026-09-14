@@ -26,6 +26,18 @@ export type ProjectWithOptionalV2Building = ProjectWithCompatibilityBuilding & {
   elements?: ElementModelV2[]
 }
 
+type CompatibilityFloorsCacheEntry = {
+  assets: AssetModelV2[] | undefined
+  elements: ElementModelV2[] | undefined
+  floors: Floor[]
+}
+
+const compatibilityFloorsByNativeFloors = new WeakMap<
+  NonNullable<BuildingModelV2['floors']>,
+  CompatibilityFloorsCacheEntry
+>()
+const floorPlansByElements = new WeakMap<ElementModelV2[], Map<string, Floor['floorPlan']>>()
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
@@ -88,14 +100,18 @@ function sourceV1(element: ElementModelV2): unknown {
   return element.properties?.v1
 }
 
-function floorToV2(floor: Floor): FloorV2 {
+function floorToV2(floor: Floor & Partial<FloorV2>): FloorV2 {
+  const planAssetId = floor.planImportAsset?.id ?? floor.planAsset ?? floor.planAssetId
+  const retainsCanonicalAsset = planAssetId != null && planAssetId === floor.planAssetId
   const processedPlanAssetId =
+    (retainsCanonicalAsset ? floor.processedPlanAssetId : undefined) ??
     (floor.planImportAsset?.processedDataUrl ? `${floor.planImportAsset.id}-processed` : undefined) ??
-    floor.planAssetProcessed
+    floor.planAssetProcessed ??
+    floor.processedPlanAssetId
   return {
     id: floor.id,
     name: floor.name,
-    planAssetId: floor.planImportAsset?.id ?? floor.planAsset,
+    planAssetId,
     processedPlanAssetId,
     scale: floor.scale,
     planImageOffset: floor.planImageOffset,
@@ -157,7 +173,13 @@ function floorV2ToCompatibility(
   floor: Floor | FloorV2,
   document?: ProjectWithOptionalV2Building
 ): Floor {
-  if ('layers' in floor || 'floorPlan' in floor) {
+  if (
+    'layers' in floor ||
+    'floorPlan' in floor ||
+    'planAsset' in floor ||
+    'planAssetProcessed' in floor ||
+    'planImportAsset' in floor
+  ) {
     return floor as Floor
   }
   const v2Floor = floor as FloorV2
@@ -177,12 +199,15 @@ function floorV2ToCompatibility(
     hiddenSitplanPlacementIds: v2Floor.hiddenSitplanElementIds,
   }
 
-  const floorPlan = document ? getFloorPlanFromProject(document, v2Floor.id) : undefined
+  const floorPlan = document ? selectProjectFloorPlan(document, v2Floor.id) : undefined
   if (floorPlan) {
     compatibilityFloor.floorPlan = floorPlan
   }
 
-  return compatibilityFloor
+  // Keep the canonical V2 floor fields on the same runtime object while exposing the
+  // legacy-shaped editing properties needed by the remaining floor UI. This avoids a
+  // second top-level `floors` owner during the vertical floor migration.
+  return { ...v2Floor, ...compatibilityFloor } as Floor
 }
 
 function isFloorPlanAsset(asset: AssetModelV2): boolean {
@@ -306,10 +331,10 @@ function clonePlanScale(scale: Floor['scale']): Floor['scale'] {
 }
 
 /** Resolve the building-wide plan calibration, with old per-floor data as a fallback. */
-export function getPlanScaleFromProject(
+export function selectProjectPlanScale(
   document: ProjectWithOptionalV2Building,
 ): Floor['scale'] {
-  return document.building?.planScale ?? getCompatibilityFloorsFromProject(document).find((floor) => floor.scale)?.scale
+  return document.building?.planScale ?? readLegacyCompatibilityFloors(document).find((floor) => floor.scale)?.scale
 }
 
 /** Store one calibration for the building and mirror it to every floor compatibility view. */
@@ -323,9 +348,6 @@ export function setPlanScaleForProject(
     ...floor,
     scale: clonePlanScale(scale),
   }))
-  if (Array.isArray(document.floors)) {
-    for (const floor of document.floors) floor.scale = clonePlanScale(scale)
-  }
 }
 
 /** Upgrade old per-floor calibration to the shared building setting during editor hydration. */
@@ -358,12 +380,12 @@ export function healSharedPlanScale(document: ProjectWithOptionalV2Building): bo
   }
 
   const signature = JSON.stringify(fallback)
-  const compatibilityFloors = getMutableCompatibilityFloorsForProject(document)
+  const floorViews = compatibilityFloors(document)
   const needsHealing =
     legacyPdfImport ||
     JSON.stringify(building.planScale) !== signature ||
     building.floors.some((floor) => JSON.stringify(floor.scale) !== signature) ||
-    compatibilityFloors.some((floor) => JSON.stringify(floor.scale) !== signature)
+    floorViews.some((floor) => JSON.stringify(floor.scale) !== signature)
   if (!needsHealing) return false
 
   setPlanScaleForProject(document, fallback)
@@ -475,7 +497,12 @@ function nativeFloorPlanFromBuildingElements(
   document: ProjectWithOptionalV2Building,
   floorId: string
 ): Floor['floorPlan'] | undefined {
-  const elements = document.elements?.filter((element) => element.floorId === floorId) ?? []
+  const sourceElements = document.elements
+  if (sourceElements) {
+    const cached = floorPlansByElements.get(sourceElements)?.get(floorId)
+    if (cached !== undefined) return cached
+  }
+  const elements = sourceElements?.filter((element) => element.floorId === floorId) ?? []
   const walls: Wall[] = []
   const doors: Door[] = []
   const windows: Window[] = []
@@ -535,7 +562,7 @@ function nativeFloorPlanFromBuildingElements(
     return undefined
   }
 
-  return {
+  const floorPlan = {
     masterWallThickness: masterWallThickness ?? 20,
     walls,
     doors,
@@ -543,33 +570,65 @@ function nativeFloorPlanFromBuildingElements(
     stairs,
     graphicElements,
   }
+  if (sourceElements) {
+    let cache = floorPlansByElements.get(sourceElements)
+    if (!cache) {
+      cache = new Map()
+      floorPlansByElements.set(sourceElements, cache)
+    }
+    cache.set(floorId, floorPlan)
+  }
+  return floorPlan
 }
 
-export function getFloorPlanFromProject(
+export function selectProjectFloorPlan(
   document: ProjectWithOptionalV2Building,
   floorId: string
 ): Floor['floorPlan'] | undefined {
   const nativeFloorPlan = nativeFloorPlanFromBuildingElements(document, floorId)
   if (nativeFloorPlan) return nativeFloorPlan
-  return document.floors?.find((floor) => floor.id === floorId)?.floorPlan
+  return undefined
 }
 
-export function syncBuildingFloorsFromCompatibility(document: ProjectWithOptionalV2Building): void {
-  const floors = document.floors ?? []
+function compatibilityFloors(document: ProjectWithOptionalV2Building): Floor[] {
+  const nativeFloors = document.building?.floors
+  if (!nativeFloors) return []
+  const cached = compatibilityFloorsByNativeFloors.get(nativeFloors)
+  if (cached && cached.assets === document.assets && cached.elements === document.elements) {
+    return cached.floors
+  }
+  const floors = nativeFloors.map((floor) => floorV2ToCompatibility(floor, document))
+  compatibilityFloorsByNativeFloors.set(nativeFloors, {
+    assets: document.assets,
+    elements: document.elements,
+    floors,
+  })
+  return floors
+}
+
+export function replaceBuildingFloorsFromLegacyInput(
+  document: ProjectWithOptionalV2Building,
+  floors: readonly Floor[] = compatibilityFloors(document),
+): void {
   const building = ensureBuilding(document)
+  // Consume legacy-shaped geometry/assets before replacing the transitional floor objects with
+  // their canonical V2 records.
+  updateFloorPlanAssetsFromFloorViews(document, floors)
+  updateBuildingElementsFromFloorViews(document, floors)
   building.floors = floors.map((floor) => ({
     ...floorToV2(floor),
     scale: clonePlanScale(building.planScale ?? floor.scale),
   }))
-  syncFloorPlanAssetsFromCompatibility(document)
-  syncBuildingElementsFromCompatibility(document)
 }
 
-export function syncBuildingFloorFromCompatibility(
+export function commitBuildingFloorView(
   document: ProjectWithOptionalV2Building,
-  floorId: string
+  floorId: string,
+  editedFloor?: Floor,
 ): void {
-  const floor = document.floors?.find((candidate) => candidate.id === floorId)
+  const floor = editedFloor ?? compatibilityFloors(document).find(
+    (candidate) => candidate.id === floorId,
+  )
   if (!floor) return
 
   const building = ensureBuilding(document)
@@ -584,44 +643,100 @@ export function syncBuildingFloorFromCompatibility(
     ...building.floors[index],
     ...next,
   }
-  syncFloorPlanAssetsFromCompatibility(document)
+  const floorViews = compatibilityFloors(document).map((candidate) =>
+    candidate.id === floorId ? floor : candidate,
+  )
+  updateFloorPlanAssetsFromFloorViews(document, floorViews)
+  updateBuildingElementsFromFloorViews(document, floorViews)
+}
+
+/**
+ * Edit one projected floor view and immediately commit its canonical floor, assets, and elements.
+ * The projected `Floor` never becomes part of `building.floors`.
+ */
+export function mutateBuildingFloorView(
+  document: ProjectWithOptionalV2Building,
+  floorId: string,
+  mutate: (floor: Floor) => void,
+): Floor | undefined {
+  const floor = compatibilityFloors(document).find((candidate) => candidate.id === floorId)
+  if (!floor) return undefined
+  mutate(floor)
+  commitBuildingFloorView(document, floorId, floor)
+  return floor
+}
+
+/** Add a projected editor floor while storing only its canonical V2 representations. */
+export function addBuildingFloorView(
+  document: ProjectWithOptionalV2Building,
+  floor: Floor,
+): void {
+  const building = ensureBuilding(document)
+  const views = [...compatibilityFloors(document), floor]
+  building.floors.push(floorToV2(floor))
+  updateFloorPlanAssetsFromFloorViews(document, views)
+  updateBuildingElementsFromFloorViews(document, views)
+}
+
+/**
+ * Apply an atomic edit to all projected floor views, then replace their canonical representations.
+ * Use this for reorder/delete operations that need the full ordered collection.
+ */
+export function mutateBuildingFloorViews(
+  document: ProjectWithOptionalV2Building,
+  mutate: (floors: Floor[]) => void,
+): Floor[] {
+  const floors = compatibilityFloors(document)
+  mutate(floors)
+  replaceBuildingFloorsFromLegacyInput(document, floors)
+  return floors
 }
 
 export function removeBuildingFloor(document: ProjectWithOptionalV2Building, floorId: string): void {
   const building = ensureBuilding(document)
   building.floors = building.floors.filter((floor) => floor.id !== floorId)
-  syncFloorPlanAssetsFromCompatibility(document)
+  updateFloorPlanAssetsFromFloorViews(document)
   document.elements = ensureElements(document).filter(
     (element) => !(isBuildingElement(element) && element.floorId === floorId)
   )
 }
 
-export function reorderBuildingFloorsFromCompatibility(document: ProjectWithOptionalV2Building): void {
-  const building = ensureBuilding(document)
-  const byId = new Map(building.floors.map((floor) => [floor.id, floor]))
-  building.floors = (document.floors ?? []).map((floor) => byId.get(floor.id) ?? floorToV2(floor))
-}
-
-export function syncFloorPlanAssetsFromCompatibility(
-  document: ProjectWithOptionalV2Building
+function updateFloorPlanAssetsFromFloorViews(
+  document: ProjectWithOptionalV2Building,
+  floors: readonly Floor[] = compatibilityFloors(document),
 ): void {
-  const nonFloorPlanAssets = ensureAssets(document).filter((asset) => !isFloorPlanAsset(asset))
-  const floorPlanAssetsById = new Map<string, AssetModelV2>()
+  const referencedAssetIds = new Set(
+    (document.building?.floors ?? []).flatMap((floor) =>
+      [floor.planAssetId, floor.processedPlanAssetId].filter(
+        (id): id is string => typeof id === 'string',
+      ),
+    ),
+  )
+  const derivedAssets = floors.flatMap(assetsFromFloor)
+  const floorPlanAssetsById = new Map(
+    ensureAssets(document)
+      .filter(
+        (asset) =>
+          !isFloorPlanAsset(asset) ||
+          referencedAssetIds.has(asset.id) ||
+          !/^(?:data:|blob:|asset:)/.test(asset.id),
+      )
+      .map((asset) => [asset.id, asset] as const),
+  )
 
-  for (const floor of document.floors ?? []) {
-    for (const asset of assetsFromFloor(floor)) {
-      floorPlanAssetsById.set(asset.id, asset)
-    }
+  for (const asset of derivedAssets) {
+    floorPlanAssetsById.set(asset.id, asset)
   }
 
-  document.assets = [...nonFloorPlanAssets, ...floorPlanAssetsById.values()]
+  document.assets = [...floorPlanAssetsById.values()]
 }
 
-export function syncBuildingElementsFromCompatibility(
-  document: ProjectWithOptionalV2Building
+function updateBuildingElementsFromFloorViews(
+  document: ProjectWithOptionalV2Building,
+  floors: readonly Floor[] = compatibilityFloors(document),
 ): void {
   const nonBuildingElements = ensureElements(document).filter((element) => !isBuildingElement(element))
-  const buildingElements = (document.floors ?? []).flatMap(elementsFromFloor)
+  const buildingElements = floors.flatMap(elementsFromFloor)
   document.elements = [...nonBuildingElements, ...buildingElements]
 }
 
@@ -631,8 +746,8 @@ export function isProjectWithV2Building(
   return Array.isArray((document as ProjectWithOptionalV2Building).building?.floors)
 }
 
-export function getBuildingFloorIdsFromProject(document: ProjectWithOptionalV2Building): string[] {
-  return getBuildingFloorsFromProject(document).map((floor) => floor.id)
+export function selectProjectBuildingFloorIds(document: ProjectWithOptionalV2Building): string[] {
+  return selectProjectBuildingFloors(document).map((floor) => floor.id)
 }
 
 export function getBuildingFloorById(
@@ -659,31 +774,19 @@ export function getCadReferenceForBuildingFloor(
   return getPlanImportAssetForBuildingFloor(document, floorId)?.cadReference
 }
 
-export function getBuildingFloorsFromProject(
+export function selectProjectBuildingFloors(
   document: ProjectWithOptionalV2Building
 ): Array<Floor | FloorV2> {
   if (Array.isArray(document.building?.floors)) {
     return document.building.floors
   }
-  return document.floors ?? []
+  return []
 }
 
-export function getCompatibilityFloorsFromProject(
+export function readLegacyCompatibilityFloors(
   document: ProjectWithOptionalV2Building
 ): Floor[] {
-  if (Array.isArray(document.floors)) {
-    return document.floors
-  }
-  return (document.building?.floors ?? []).map((floor) => floorV2ToCompatibility(floor, document))
-}
-
-export function getMutableCompatibilityFloorsForProject(
-  document: ProjectWithOptionalV2Building
-): Floor[] {
-  if (!Array.isArray(document.floors)) {
-    document.floors = getCompatibilityFloorsFromProject(document)
-  }
-  return document.floors
+  return compatibilityFloors(document)
 }
 
 export function anonymizeFloorPlanSourcesForProject(document: ProjectWithOptionalV2Building): void {
@@ -709,21 +812,14 @@ export function anonymizeFloorPlanSourcesForProject(document: ProjectWithOptiona
     })
   }
 
-  if (!Array.isArray(document.floors)) return
-  document.floors = document.floors.map((floor, index) => {
-    const nextFloor = { ...floor }
-    nextFloor.name = `Floor ${index + 1}`
-    nextFloor.planAsset = undefined
-    nextFloor.planAssetProcessed = undefined
-    if (nextFloor.planImportAsset) {
-      nextFloor.planImportAsset = {
-        ...nextFloor.planImportAsset,
-        sourceName: undefined,
-        dataUrl: undefined,
-        processedDataUrl: undefined,
-        svgContent: undefined,
-      }
+  mutateBuildingFloorViews(document, (floors) => {
+    for (const [index, floor] of floors.entries()) {
+      const nextFloor = { ...floor }
+      nextFloor.name = `Floor ${index + 1}`
+      nextFloor.planAsset = undefined
+      nextFloor.planAssetProcessed = undefined
+      nextFloor.planImportAsset = undefined
+      floors[index] = nextFloor
     }
-    return nextFloor
   })
 }

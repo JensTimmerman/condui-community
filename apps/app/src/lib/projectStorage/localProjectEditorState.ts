@@ -1,4 +1,5 @@
 import type { CanvasType, PanelCanvasMode, Point, ViewportLayout } from '@/types/ui'
+import { isStructuralCanvasEnabled } from '@/lib/structuralCanvas/availability'
 
 export interface LocalCanvasViewTransform {
   zoom: number
@@ -16,7 +17,11 @@ export interface LocalProjectEditorState {
   canvasViews?: Partial<Record<CanvasType, LocalCanvasViewTransform>>
 }
 
-const CANVAS_TYPES: CanvasType[] = ['eendraad', 'plan', 'panel']
+function availableCanvasTypes(): CanvasType[] {
+  return isStructuralCanvasEnabled()
+    ? ['eendraad', 'plan', 'panel', 'structure']
+    : ['eendraad', 'plan', 'panel']
+}
 
 export function sanitizeLocalCanvasViews(
   value: unknown
@@ -25,7 +30,7 @@ export function sanitizeLocalCanvasViews(
   const source = value as Partial<Record<CanvasType, unknown>>
   const result: Partial<Record<CanvasType, LocalCanvasViewTransform>> = {}
 
-  for (const canvas of CANVAS_TYPES) {
+  for (const canvas of availableCanvasTypes()) {
     const candidate = source[canvas]
     if (!candidate || typeof candidate !== 'object') continue
     const view = candidate as { zoom?: unknown; pan?: { x?: unknown; y?: unknown } }
@@ -68,7 +73,10 @@ export function loadLocalProjectEditorState(projectId: string): LocalProjectEdit
   }
 }
 
-export function saveLocalProjectEditorState(projectId: string, state: LocalProjectEditorState): void {
+export function saveLocalProjectEditorState(
+  projectId: string,
+  state: LocalProjectEditorState
+): void {
   if (!canUseLocalStorage()) return
   try {
     window.localStorage.setItem(storageKey(projectId), JSON.stringify(state))

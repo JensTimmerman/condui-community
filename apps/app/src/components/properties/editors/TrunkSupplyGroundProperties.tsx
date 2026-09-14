@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Eye, EyeOff, Link as LinkIcon, List } from 'lucide-react'
+import {
+  Eye,
+  EyeOff,
+  Link as LinkIcon,
+  List,
+  SeparatorHorizontal,
+  SeparatorVertical,
+} from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { DebouncedTextInput, DebouncedTextarea } from '@/components/forms'
 import CustomDropdown from '@/components/common/CustomDropdown'
@@ -15,6 +22,7 @@ import type {
   ProtectionDevice,
   TransformerSafetyType,
   TrunkDevice,
+  DomoticaControlKey,
 } from '@/types/schema'
 import { CERTIFICATION_LISTING_VISIBILITY_KEY } from '@/lib/certificationLabels'
 import { isSymbolLabelVisible } from '@/lib/symbolLabels'
@@ -38,12 +46,29 @@ import {
 } from '@/lib/protectionLabels'
 import { getDerivedCircuitKind } from '@/lib/circuitKind'
 import { useEditionFeatureAvailability } from '@/hooks/useEditionFeatureAvailability'
-import { TRANSFORMER_OVERLAY_PATHS } from '@/lib/symbols'
+import { DOMOTICA_CONTROL_OVERLAY_PATHS, TRANSFORMER_OVERLAY_PATHS } from '@/lib/symbols'
+import { JunctionIdentityField } from '../shared/JunctionIdentityField'
+import {
+  assignTerminalStripPin,
+  assignTerminalStripPins,
+} from '@/handlers/terminalStripAssignments'
+import {
+  getEffectiveTerminalStripOutgoingPin,
+  getTerminalStripOutgoingPin,
+  getTerminalStripPin,
+} from '@/lib/terminalStrip/labels'
+import {
+  collectJunctionIdentities,
+  getJunctionIdentity,
+  isJunctionIdentityVisibleByDefault,
+} from '@/lib/junctionIdentity'
 import {
   SWITCH_TYPE_SYMBOLS,
   SwitchPolesGrid,
   SwitchTypeDropdown,
   TwoWayPolesGrid,
+  DOMOTICA_CONTROL_KEYS,
+  RelayDeviceFields,
 } from './EndpointControls'
 import { normalizeSwitchSymbol } from './endpointControlsUtils'
 import {
@@ -56,16 +81,18 @@ import {
   type SynergridCatalogEntry,
 } from '@/lib/synergridCatalog'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
-  getSupplyAssembliesFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
+  selectProjectSupplyAssemblies,
 } from '@/lib/projectV2/electrical'
-import { DEFAULT_PANEL_GRID_COLUMNS } from '@/lib/panel/panelGridDefaults'
+import { DEFAULT_PANEL_GRID_COLUMNS, DEFAULT_PANEL_GRID_ROWS } from '@/lib/panel/panelGridDefaults'
+import { getJunctionPanelGridView } from '@/lib/junctionPanel/grid'
 import { getInstallDateTargetInheritedYear } from '@/lib/installDatePropagation'
 import { InstallDateField } from '../shared/propertiesShared'
 import {
   getSynergridFocusForCircuit,
   labelClass,
+  panelStringT,
   selectClass,
   visibilityToggleClass,
 } from '../shared/propertiesSharedUtils'
@@ -114,6 +141,7 @@ import {
   supportsCircuitConverterDcConnections,
 } from '@/lib/layout/circuitConverterGeometry'
 import { resizeConverterDcConnections } from '@/lib/eendraad/resizeConverterDcConnections'
+import { isSupplyDeviceInDetachedFrame } from '@/lib/layout/supplyFrameDetachment'
 
 const SYNERGRID_AUTO_MATCH_DEBOUNCE_MS = 450
 export function TrunkDeviceProperties({
@@ -142,7 +170,7 @@ export function TrunkDeviceProperties({
     currentProject?.project.id
   )
   const supplyProtectionTypeOptions = useMemo(
-    () => getProtectionTypeDropdownOptions(t, 'supplyTrunk'),
+    () => getProtectionTypeDropdownOptions(panelStringT(t), 'supplyTrunk'),
     [t]
   )
   const result = useProjectStore(
@@ -154,6 +182,10 @@ export function TrunkDeviceProperties({
   )
   const updateGroundTrunkDevice = useProjectStore(
     (state: ProjectState) => state.updateGroundTrunkDevice
+  )
+  const updateInstallation = useProjectStore((state: ProjectState) => state.updateInstallation)
+  const updateJunctionPanelGrid = useProjectStore(
+    (state: ProjectState) => state.updateJunctionPanelGrid
   )
   const getProtectionForCircuit = useProjectStore(
     (state: ProjectState) => state.getProtectionForCircuit
@@ -181,14 +213,22 @@ export function TrunkDeviceProperties({
   const isSupplyDevice = result?.isSupplyDevice
   const isSharedSupplyDevice = isSupplyDevice && result?.supplyFeedScope === 'shared'
   const isGroundDevice = result?.isGroundDevice
+  const isDetachedSupplyAssemblyDevice =
+    !!isSupplyDevice &&
+    !!currentProject &&
+    isSupplyDeviceInDetachedFrame(currentProject, deviceId, result?.supplyPanelId)
   const isConversionSymbol =
     device?.symbol === 'transformer' ||
     device?.symbol === 'rectifier' ||
     device?.symbol === 'inverter' ||
     device?.symbol === 'dc_dc_converter'
   const installationSystem = currentProject
-    ? getElectricalInstallationFromProject(currentProject)?.nominalVoltage.system
+    ? getProjectElectricalInstallation(currentProject)?.nominalVoltage.system
     : undefined
+  const supplyTrunkNotesOrientation = currentProject
+    ? (getProjectElectricalInstallation(currentProject)?.supplyTrunkNotesOrientation ??
+      'horizontal')
+    : 'horizontal'
   const isInlineSwitch = device
     ? SWITCH_TYPE_SYMBOLS.includes(normalizeSwitchSymbol(device.symbol))
     : false
@@ -220,7 +260,12 @@ export function TrunkDeviceProperties({
   // Supply converters carry one explicit AC phase set shared by both AC ports.
   useEffect(() => {
     if (!isConversionSymbol || !device) return
-    if (isSupplyDevice && installationSystem && !device.conversionProps?.acPhaseAssignment) {
+    if (
+      isSupplyDevice &&
+      device.symbol !== 'dc_dc_converter' &&
+      installationSystem &&
+      !device.conversionProps?.acPhaseAssignment
+    ) {
       handleUpdate({
         conversionProps: {
           ...(device.conversionProps ?? {}),
@@ -308,7 +353,10 @@ export function TrunkDeviceProperties({
   const isSelectedSupplyUnit = isGroupedSupplyDevice && selectedSupplyUnitIndex >= 0
   const inverterMultiplier = getSupplyInverterMultiplier(device)
   const converterPhaseOptions =
-    isSupplyDevice && installationSystem && supportsExplicitPhaseSelection(installationSystem)
+    isSupplyDevice &&
+    device.symbol !== 'dc_dc_converter' &&
+    installationSystem &&
+    supportsExplicitPhaseSelection(installationSystem)
       ? getPhaseAssignmentOptions(installationSystem).filter((option) => {
           const kind = option.assignment?.kind
           return kind === 'single_phase' || kind === 'phase_to_phase' || kind === 'three_phase'
@@ -329,6 +377,133 @@ export function TrunkDeviceProperties({
       : -1
   const isGroupedInverter = device.symbol === 'inverter' && inverterMultiplier > 1
   const isSelectedInverterUnit = isGroupedInverter && selectedInverterUnitIndex >= 0
+  if (device.symbol === 'domotica') {
+    const domotica = device.domoticaProps ?? {}
+    const controlSet = new Set<DomoticaControlKey>(domotica.control ?? [])
+    const controlKeys = DOMOTICA_CONTROL_KEYS.filter(
+      (key): key is keyof typeof DOMOTICA_CONTROL_OVERLAY_PATHS =>
+        key in DOMOTICA_CONTROL_OVERLAY_PATHS
+    )
+    const toggleControl = (key: DomoticaControlKey) => {
+      const next = new Set(controlSet)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      handleUpdate({
+        domoticaProps: { ...domotica, control: Array.from(next) },
+      })
+    }
+    return (
+      <div className="space-y-4">
+        {!isSharedSupplyDevice && (
+          <InstallDateField
+            entity={device}
+            project={currentProject}
+            inheritedYear={
+              currentProject
+                ? getInstallDateTargetInheritedYear(currentProject, {
+                    id: device.id,
+                    type: 'trunkDevice',
+                  })
+                : undefined
+            }
+            onUpdate={(updates) => handleUpdate(updates)}
+          />
+        )}
+        <div>
+          <label className={labelClass}>{t('endpoints.label', 'Label')}</label>
+          <DebouncedTextInput
+            type="text"
+            value={device.label ?? ''}
+            onCommit={(label) => handleUpdate({ label })}
+            className={selectClass}
+          />
+        </div>
+        <div>
+          <label className={labelClass}>{t('endpoints.domotica.controlArea', 'Control')}</label>
+          <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {controlKeys.map((key) => {
+              const active = controlSet.has(key)
+              const labelKey =
+                key === 'programmed_control'
+                  ? 'control_programmed'
+                  : key === 'wireless_control'
+                    ? 'control_wireless'
+                    : key === 'detection_control'
+                      ? 'control_detection'
+                      : 'control_button'
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => toggleControl(key)}
+                  className={`flex flex-col items-center justify-center gap-1 rounded-md border-2 px-2 py-2 text-xs font-medium transition-colors ${
+                    active
+                      ? 'border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-300'
+                      : 'border-gray-300 bg-white text-gray-700 hover:border-sky-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300'
+                  }`}
+                >
+                  <div className="flex h-10 items-center justify-center">
+                    <img
+                      src={DOMOTICA_CONTROL_OVERLAY_PATHS[key]}
+                      alt=""
+                      className="h-10 w-10 dark:invert"
+                    />
+                  </div>
+                  <div className="mt-0.5 text-center text-[10px] leading-tight">
+                    {t(`endpoints.domotica.${labelKey}`, labelKey)}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+        <div>
+          <div className="mb-1 flex items-center gap-2">
+            <label className={`${labelClass} mb-0`}>{t('properties.notes', 'Notes')}</label>
+            <button
+              type="button"
+              onClick={() =>
+                handleUpdate({
+                  symbolLabelDisplay: {
+                    ...(device.symbolLabelDisplay ?? {}),
+                    visibility: {
+                      ...((device.symbolLabelDisplay?.visibility ?? {}) as Record<string, boolean>),
+                      trunkDeviceNotes: !isSymbolLabelVisible(
+                        device.symbolLabelDisplay,
+                        'trunkDeviceNotes',
+                        true
+                      ),
+                    },
+                  },
+                })
+              }
+              className={visibilityToggleClass(
+                isSymbolLabelVisible(device.symbolLabelDisplay, 'trunkDeviceNotes', true)
+              )}
+              title={
+                isSymbolLabelVisible(device.symbolLabelDisplay, 'trunkDeviceNotes', true)
+                  ? t('common.hide', 'Hide')
+                  : t('common.show', 'Show')
+              }
+            >
+              {isSymbolLabelVisible(device.symbolLabelDisplay, 'trunkDeviceNotes', true) ? (
+                <Eye className="h-4 w-4" />
+              ) : (
+                <EyeOff className="h-4 w-4" />
+              )}
+            </button>
+          </div>
+          <DebouncedTextarea
+            value={device.notes || ''}
+            onCommit={(notes) => handleUpdate({ notes })}
+            delayMs={500}
+            rows={2}
+            className={`${selectClass} resize-none`}
+          />
+        </div>
+      </div>
+    )
+  }
   const updateInverterSerialNumber = (index: number, serialNumber: string) => {
     const serialNumbers = [...inverterSerialNumbers]
     serialNumbers[index] = serialNumber
@@ -453,7 +628,7 @@ export function TrunkDeviceProperties({
         ) : (
           <div className="space-y-2">
             <div>
-              {diagramFieldLabel(t('endpoints.solarPanel.wattage', 'Wattage (W)'), 'solarPower')}
+              {diagramFieldLabel(t('endpoints.solarPanel.wattage', 'Wattage (Wp)'), 'solarPower')}
               <input
                 type="number"
                 min={0}
@@ -753,41 +928,47 @@ export function TrunkDeviceProperties({
 
   // Junction panel: label (matches multiple 1draad symbols to one sitplan placement) + pick existing
   if (device.symbol === 'junction_panel') {
+    const junctionPanelGrid = getJunctionPanelGridView(device)
     const set = new Set<string>()
-    const inst = currentProject ? getElectricalInstallationFromProject(currentProject) : undefined
-    const allJunctionDevices: { id: string; label: string | undefined }[] = []
+    const inst = currentProject ? getProjectElectricalInstallation(currentProject) : undefined
+    const allJunctionDevices: {
+      id: string
+      label: string | undefined
+      gridView?: PanelGridConfig
+    }[] = []
     inst?.mainSupply?.supplyTrunkDevices?.forEach((d: TrunkDevice) => {
       if (d.type === 'junction_panel') {
         if (d.label) set.add(d.label)
-        allJunctionDevices.push({ id: d.id, label: d.label })
+        allJunctionDevices.push({ id: d.id, label: d.label, gridView: d.junctionPanelGridView })
       }
     })
     inst?.groundTrunkDevices?.forEach((d: TrunkDevice) => {
       if (d.type === 'junction_panel') {
         if (d.label) set.add(d.label)
-        allJunctionDevices.push({ id: d.id, label: d.label })
+        allJunctionDevices.push({ id: d.id, label: d.label, gridView: d.junctionPanelGridView })
       }
     })
     inst?.junctionPanelPlacements?.forEach((jp: JunctionPanelPlacement) => set.add(jp.label))
-    ;(currentProject ? getElectricalPanelsFromProject(currentProject) : []).forEach(
-      (panel: Panel) => {
-        const circuits = [
-          ...(panel.circuits ?? []),
-          ...(panel.protections?.flatMap((pr: ProtectionDevice) => pr.circuits ?? []) ?? []),
-        ]
-        circuits.forEach((c: Circuit) =>
-          c.trunkDevices?.forEach((d: TrunkDevice) => {
-            if (d.type === 'junction_panel') {
-              if (d.label) set.add(d.label)
-              allJunctionDevices.push({ id: d.id, label: d.label })
-            }
-          })
-        )
-      }
-    )
+    ;(currentProject ? getProjectElectricalPanels(currentProject) : []).forEach((panel: Panel) => {
+      const circuits = [
+        ...(panel.circuits ?? []),
+        ...(panel.protections?.flatMap((pr: ProtectionDevice) => pr.circuits ?? []) ?? []),
+      ]
+      circuits.forEach((c: Circuit) =>
+        c.trunkDevices?.forEach((d: TrunkDevice) => {
+          if (d.type === 'junction_panel') {
+            if (d.label) set.add(d.label)
+            allJunctionDevices.push({ id: d.id, label: d.label, gridView: d.junctionPanelGridView })
+          }
+        })
+      )
+    })
+    if (currentProject) {
+      collectJunctionIdentities(currentProject, 'junction_panel').forEach((label) => set.add(label))
+    }
     const existingLabels = Array.from(set).sort()
 
-    const currentLabel = device.label || ''
+    const currentLabel = getJunctionIdentity(device)
     const linkedCount = currentLabel
       ? allJunctionDevices.filter((d) => d.label === currentLabel).length
       : 0
@@ -796,11 +977,15 @@ export function TrunkDeviceProperties({
     const onLabelChange = (value: string) => {
       const prevLabel = device.label || ''
       const wasLinked = linkedCount > 1
-      handleUpdate({ label: value })
+      handleUpdate({ label: value, junctionIdentity: value })
+      const existingGrid = allJunctionDevices.find(
+        (candidate) => candidate.id !== device.id && candidate.label === value
+      )?.gridView
+      if (existingGrid) updateJunctionPanelGrid(device.id, existingGrid)
 
       const stateAfter = useProjectStore.getState()
       const proj = stateAfter.currentProject
-      const instNow = proj ? getElectricalInstallationFromProject(proj) : undefined
+      const instNow = proj ? getProjectElectricalInstallation(proj) : undefined
       if (!proj || !instNow) {
         if (value) ensureJunctionPanelPlacementForLabel(value)
         return
@@ -843,7 +1028,7 @@ export function TrunkDeviceProperties({
         instNow.groundTrunkDevices?.forEach((d: TrunkDevice) => {
           if (d.type === 'junction_panel') remainingDevices.push({ id: d.id, label: d.label })
         })
-        getElectricalPanelsFromProject(proj).forEach((panel: Panel) => {
+        getProjectElectricalPanels(proj).forEach((panel: Panel) => {
           const circuits = [
             ...(panel.circuits ?? []),
             ...(panel.protections?.flatMap((pr: ProtectionDevice) => pr.circuits ?? []) ?? []),
@@ -880,7 +1065,7 @@ export function TrunkDeviceProperties({
         (jp: JunctionPanelPlacement) => jp.label === oldLabel
       )
 
-      handleUpdate({ label: next })
+      handleUpdate({ label: next, junctionIdentity: next })
 
       if (existingPlacement) {
         const offset = 40
@@ -931,7 +1116,39 @@ export function TrunkDeviceProperties({
           />
         )}
         <div>
-          <label className={labelClass}>{t('junctionPanel.label', 'Junction panel name')}</label>
+          <div className="mb-1 flex items-center gap-2">
+            <label className={`${labelClass} mb-0`}>
+              {t('junctionPanel.label', 'Junction panel name')}
+            </label>
+            <button
+              type="button"
+              onClick={() =>
+                handleUpdate({
+                  symbolLabelDisplay: {
+                    ...(device.symbolLabelDisplay ?? {}),
+                    visibility: {
+                      ...(device.symbolLabelDisplay?.visibility ?? {}),
+                      junctionIdentityLabel: !isSymbolLabelVisible(
+                        device.symbolLabelDisplay,
+                        'junctionIdentityLabel',
+                        true
+                      ),
+                    },
+                  },
+                })
+              }
+              className={visibilityToggleClass(
+                isSymbolLabelVisible(device.symbolLabelDisplay, 'junctionIdentityLabel', true)
+              )}
+              title={t('junctionIdentity.toggleVisibility', 'Show or hide identity on diagram')}
+            >
+              {isSymbolLabelVisible(device.symbolLabelDisplay, 'junctionIdentityLabel', true) ? (
+                <Eye className="h-4 w-4" />
+              ) : (
+                <EyeOff className="h-4 w-4" />
+              )}
+            </button>
+          </div>
           <div className="flex gap-1 items-stretch">
             <DebouncedTextInput
               type="text"
@@ -1014,6 +1231,266 @@ export function TrunkDeviceProperties({
             )}
           </p>
         </div>
+        <div className="border-t border-gray-200 pt-4 space-y-3 dark:border-gray-700">
+          <h4 className="text-sm font-semibold text-gray-900 dark:text-white">
+            {t('panelCanvas.panelLayout', 'Panel layout')}
+          </h4>
+          <button
+            type="button"
+            aria-pressed={junctionPanelGrid.terminalStripTopRail ?? false}
+            onClick={() =>
+              updateJunctionPanelGrid(device.id, {
+                terminalStripTopRail: !junctionPanelGrid.terminalStripTopRail,
+              })
+            }
+            className={`flex w-full items-center justify-center gap-3 rounded-md border-2 px-3 py-2 text-xs font-medium transition-colors ${
+              junctionPanelGrid.terminalStripTopRail
+                ? 'border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-300'
+                : 'border-gray-300 bg-white text-gray-700 hover:border-sky-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300'
+            }`}
+          >
+            <img
+              src="/symbols/junction/terminal_strip.svg"
+              alt=""
+              aria-hidden="true"
+              className="h-8 w-8 opacity-90 dark:invert"
+            />
+            <span>{t('panelCanvas.topTerminalStripRail', 'Top clamp rail')}</span>
+          </button>
+          <div className="flex items-center gap-2">
+            <span className="w-16 text-sm text-gray-700 dark:text-gray-300">
+              {t('panelCanvas.rows', 'Rows')}
+            </span>
+            <input
+              type="number"
+              min={1}
+              max={32}
+              value={junctionPanelGrid.rows ?? DEFAULT_PANEL_GRID_ROWS}
+              onChange={(event) =>
+                updateJunctionPanelGrid(device.id, {
+                  rows: Math.max(1, Math.min(32, Number(event.target.value) || 1)),
+                })
+              }
+              className="w-24 rounded-md border border-gray-300 bg-white px-3 py-2 text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-16 text-sm text-gray-700 dark:text-gray-300">
+              {t('panelCanvas.columns', 'Columns')}
+            </span>
+            <input
+              type="number"
+              min={1}
+              max={48}
+              value={junctionPanelGrid.columns ?? DEFAULT_PANEL_GRID_COLUMNS}
+              onChange={(event) =>
+                updateJunctionPanelGrid(device.id, {
+                  columns: Math.max(1, Math.min(48, Number(event.target.value) || 1)),
+                })
+              }
+              className="w-24 rounded-md border border-gray-300 bg-white px-3 py-2 text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+            />
+          </div>
+          <button
+            type="button"
+            aria-pressed={junctionPanelGrid.terminalStripBottomRail ?? false}
+            onClick={() =>
+              updateJunctionPanelGrid(device.id, {
+                terminalStripBottomRail: !junctionPanelGrid.terminalStripBottomRail,
+              })
+            }
+            className={`flex w-full items-center justify-center gap-3 rounded-md border-2 px-3 py-2 text-xs font-medium transition-colors ${
+              junctionPanelGrid.terminalStripBottomRail
+                ? 'border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-300'
+                : 'border-gray-300 bg-white text-gray-700 hover:border-sky-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300'
+            }`}
+          >
+            <img
+              src="/symbols/junction/terminal_strip.svg"
+              alt=""
+              aria-hidden="true"
+              className="h-8 w-8 opacity-90 dark:invert"
+            />
+            <span>{t('panelCanvas.bottomTerminalStripRail', 'Bottom clamp rail')}</span>
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (device.symbol === 'junction_box' || device.symbol === 'terminal_strip') {
+    const identity = getJunctionIdentity(device)
+    const visible = isSymbolLabelVisible(
+      device.symbolLabelDisplay,
+      'junctionIdentityLabel',
+      isJunctionIdentityVisibleByDefault(device.symbol)
+    )
+    return (
+      <div className="space-y-4">
+        {isSupplyDevice && (
+          <p className="text-xs text-gray-500 dark:text-gray-400 -mt-1">
+            {t('supply.trunkDevice', 'Supply wire device')}
+          </p>
+        )}
+        {isGroundDevice && (
+          <p className="text-xs text-gray-500 dark:text-gray-400 -mt-1">
+            {t('ground.trunkDevice', 'Ground wire device')}
+          </p>
+        )}
+        {!isSharedSupplyDevice && (
+          <InstallDateField
+            entity={device}
+            project={currentProject}
+            inheritedYear={
+              currentProject
+                ? getInstallDateTargetInheritedYear(currentProject, {
+                    id: device.id,
+                    type: 'trunkDevice',
+                  })
+                : undefined
+            }
+            onUpdate={(updates) =>
+              useProjectStore.getState().withSingleUndoEntry(() => {
+                handleUpdate(updates)
+                return true
+              })
+            }
+          />
+        )}
+        <JunctionIdentityField
+          value={identity}
+          options={currentProject ? collectJunctionIdentities(currentProject, device.symbol) : []}
+          visible={visible}
+          fixedPrefix={device.symbol === 'terminal_strip' ? 'X' : undefined}
+          onCommit={(junctionIdentity) => {
+            if (device.symbol === 'terminal_strip') {
+              const incomingPin = getTerminalStripPin(device) ?? 1
+              const outgoingPin = currentProject
+                ? getEffectiveTerminalStripOutgoingPin(currentProject, device)
+                : incomingPin + 1
+              assignTerminalStripPins(
+                useProjectStore.getState(),
+                device.id,
+                junctionIdentity,
+                incomingPin,
+                outgoingPin
+              )
+            } else {
+              handleUpdate({ junctionIdentity })
+            }
+          }}
+          onToggleVisible={() =>
+            handleUpdate({
+              symbolLabelDisplay: {
+                ...(device.symbolLabelDisplay ?? {}),
+                visibility: {
+                  ...(device.symbolLabelDisplay?.visibility ?? {}),
+                  junctionIdentityLabel: !visible,
+                },
+              },
+            })
+          }
+          label={t('junctionIdentity.label', 'Junction identity')}
+          pickTitle={t('junctionIdentity.pickExisting', 'Reuse an existing identity')}
+          toggleTitle={t('junctionIdentity.toggleVisibility', 'Show or hide identity on diagram')}
+          emptyText={t('junctionIdentity.noExisting', 'No existing identities')}
+        />
+        {device.symbol === 'terminal_strip' && (
+          <div>
+            <label className={labelClass}>{t('terminalStrip.pin', 'Pin')}</label>
+            <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-2">
+              <div className="min-w-0">
+                <label className={labelClass}>{t('terminalStrip.incomingPin', 'In')}</label>
+                <DebouncedTextInput
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={String(getTerminalStripPin(device) ?? 1)}
+                  onCommit={(value) => {
+                    const nextPin = Math.max(1, Math.round(Number(value) || 1))
+                    assignTerminalStripPin(
+                      useProjectStore.getState(),
+                      device.id,
+                      identity || '1',
+                      nextPin,
+                      getTerminalStripPin(device),
+                      'incoming'
+                    )
+                  }}
+                  className={`${selectClass} min-w-0`}
+                />
+              </div>
+              <span className="pb-2 text-muted-foreground">/</span>
+              <div className="min-w-0">
+                <label className={labelClass}>{t('terminalStrip.outgoingPin', 'Out')}</label>
+                <DebouncedTextInput
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={String(
+                    currentProject
+                      ? getEffectiveTerminalStripOutgoingPin(currentProject, device)
+                      : (getTerminalStripPin(device) ?? 1) + 1
+                  )}
+                  onCommit={(value) => {
+                    const nextPin = Math.max(1, Math.round(Number(value) || 1))
+                    assignTerminalStripPin(
+                      useProjectStore.getState(),
+                      device.id,
+                      identity || '1',
+                      nextPin,
+                      getTerminalStripOutgoingPin(device),
+                      'outgoing'
+                    )
+                  }}
+                  className={`${selectClass} min-w-0`}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <label className={labelClass + ' mb-0'}>{t('properties.notes', 'Notes')}</label>
+            <button
+              type="button"
+              onClick={() =>
+                handleUpdate({
+                  symbolLabelDisplay: {
+                    ...(device.symbolLabelDisplay ?? {}),
+                    visibility: {
+                      ...((device.symbolLabelDisplay?.visibility ?? {}) as Record<string, boolean>),
+                      trunkDeviceNotes: !(
+                        device.symbolLabelDisplay?.visibility?.trunkDeviceNotes ?? true
+                      ),
+                    },
+                  },
+                })
+              }
+              className={visibilityToggleClass(
+                device.symbolLabelDisplay?.visibility?.trunkDeviceNotes ?? true
+              )}
+              title={
+                (device.symbolLabelDisplay?.visibility?.trunkDeviceNotes ?? true)
+                  ? t('common.hide', 'Hide')
+                  : t('common.show', 'Show')
+              }
+            >
+              {(device.symbolLabelDisplay?.visibility?.trunkDeviceNotes ?? true) ? (
+                <Eye className="w-4 h-4" />
+              ) : (
+                <EyeOff className="w-4 h-4" />
+              )}
+            </button>
+          </div>
+          <DebouncedTextarea
+            value={device.notes || ''}
+            onCommit={(notes) => handleUpdate({ notes })}
+            delayMs={500}
+            className={selectClass + ' resize-none'}
+            rows={2}
+          />
+        </div>
       </div>
     )
   }
@@ -1054,7 +1531,7 @@ export function TrunkDeviceProperties({
       )}
       {/* Label — supply protections and inline switches can show their name above the symbol. */}
       <div>
-        {isSupplyDevice && device.type === 'protection' ? (
+        {isSupplyDevice && (device.type === 'protection' || device.symbol === 'relay') ? (
           <>
             <div className="flex items-center gap-2 mb-1">
               <label className={labelClass + ' mb-0'}>{t('endpoints.label', 'Label')}</label>
@@ -1159,9 +1636,18 @@ export function TrunkDeviceProperties({
         </>
       )}
 
+      {device.symbol === 'relay' && (
+        <RelayDeviceFields
+          relay={device.relayProps}
+          onChange={(relayProps) => handleUpdate({ relayProps })}
+          t={panelStringT(t)}
+        />
+      )}
+
       {/* Protection-specific properties (when type === 'protection') */}
       {device.type === 'protection' &&
         !isInlineSwitch &&
+        device.symbol !== 'relay' &&
         (() => {
           const isProtectionLabelVisible = (key: ProtectionLabelKey) =>
             isProtectionLabelPartVisible(device, key)
@@ -1757,35 +2243,56 @@ export function TrunkDeviceProperties({
       <div>
         <div className="flex items-center gap-2 mb-1">
           <label className={labelClass + ' mb-0'}>{t('properties.notes', 'Notes')}</label>
-          {device.type !== 'protection' && (
+          <button
+            type="button"
+            onClick={() =>
+              handleUpdate({
+                symbolLabelDisplay: {
+                  ...(device.symbolLabelDisplay ?? {}),
+                  visibility: {
+                    ...((device.symbolLabelDisplay?.visibility ?? {}) as Record<string, boolean>),
+                    trunkDeviceNotes: !(
+                      device.symbolLabelDisplay?.visibility?.trunkDeviceNotes ?? true
+                    ),
+                  },
+                },
+              })
+            }
+            className={visibilityToggleClass(
+              device.symbolLabelDisplay?.visibility?.trunkDeviceNotes ?? true
+            )}
+            title={
+              (device.symbolLabelDisplay?.visibility?.trunkDeviceNotes ?? true)
+                ? t('common.hide', 'Hide')
+                : t('common.show', 'Show')
+            }
+          >
+            {(device.symbolLabelDisplay?.visibility?.trunkDeviceNotes ?? true) ? (
+              <Eye className="w-4 h-4" />
+            ) : (
+              <EyeOff className="w-4 h-4" />
+            )}
+          </button>
+          {isSupplyDevice && !isDetachedSupplyAssemblyDevice && (
             <button
               type="button"
               onClick={() =>
-                handleUpdate({
-                  symbolLabelDisplay: {
-                    ...(device.symbolLabelDisplay ?? {}),
-                    visibility: {
-                      ...((device.symbolLabelDisplay?.visibility ?? {}) as Record<string, boolean>),
-                      trunkDeviceNotes: !(
-                        device.symbolLabelDisplay?.visibility?.trunkDeviceNotes ?? true
-                      ),
-                    },
-                  },
+                updateInstallation({
+                  supplyTrunkNotesOrientation:
+                    supplyTrunkNotesOrientation === 'vertical' ? 'horizontal' : 'vertical',
                 })
               }
-              className={visibilityToggleClass(
-                device.symbolLabelDisplay?.visibility?.trunkDeviceNotes ?? true
-              )}
+              className="one-wire-visibility-toggle p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-400"
               title={
-                (device.symbolLabelDisplay?.visibility?.trunkDeviceNotes ?? true)
-                  ? t('common.hide', 'Hide')
-                  : t('common.show', 'Show')
+                supplyTrunkNotesOrientation === 'vertical'
+                  ? t('circuits.notesHorizontal', 'Draw notes horizontally')
+                  : t('circuits.notesVertical', 'Draw notes vertically')
               }
             >
-              {(device.symbolLabelDisplay?.visibility?.trunkDeviceNotes ?? true) ? (
-                <Eye className="w-4 h-4" />
+              {supplyTrunkNotesOrientation === 'vertical' ? (
+                <SeparatorVertical className="w-4 h-4" />
               ) : (
-                <EyeOff className="w-4 h-4" />
+                <SeparatorHorizontal className="w-4 h-4" />
               )}
             </button>
           )}
@@ -1807,9 +2314,7 @@ export function GroundProperties() {
   const currentProject = useProjectStore((state: ProjectState) => state.currentProject)
   const updateInstallation = useProjectStore((state: ProjectState) => state.updateInstallation)
 
-  const installation = currentProject
-    ? getElectricalInstallationFromProject(currentProject)
-    : undefined
+  const installation = currentProject ? getProjectElectricalInstallation(currentProject) : undefined
   if (!installation) {
     return (
       <div className="p-4 text-center text-gray-500">
@@ -1865,9 +2370,7 @@ export function SupplyProperties({
     [t]
   )
 
-  const installation = currentProject
-    ? getElectricalInstallationFromProject(currentProject)
-    : undefined
+  const installation = currentProject ? getProjectElectricalInstallation(currentProject) : undefined
   if (!installation) {
     return (
       <div className="p-4 text-center text-gray-500">
@@ -1875,7 +2378,7 @@ export function SupplyProperties({
       </div>
     )
   }
-  const panels = currentProject ? getElectricalPanelsFromProject(currentProject) : []
+  const panels = currentProject ? getProjectElectricalPanels(currentProject) : []
   const panel = panelId
     ? findPanelById(panels, panelId)
     : panels.find((candidate) => candidate.isMain !== false)
@@ -1909,7 +2412,7 @@ export function SupplyProperties({
           panels,
           panel,
           selectedSection.id,
-          getSupplyAssembliesFromProject(currentProject)
+          selectProjectSupplyAssemblies(currentProject)
         ).assignment
       : undefined
 

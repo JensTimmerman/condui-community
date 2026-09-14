@@ -270,6 +270,19 @@ export function ValidationMenuIcon({ className }: IconProps) {
   )
 }
 
+export function MenuIcon({ className }: IconProps) {
+  return (
+    <StrokeIcon className={className}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={2}
+        d="M4 6h16M4 12h16M4 18h16"
+      />
+    </StrokeIcon>
+  )
+}
+
 export function SettingsIcon({ className }: IconProps) {
   return (
     <StrokeIcon className={className}>

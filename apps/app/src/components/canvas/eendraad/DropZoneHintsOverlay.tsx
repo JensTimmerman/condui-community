@@ -28,6 +28,7 @@ interface DropZoneHintsOverlayProps {
   activeDropTargetNodeId?: string | null
   activePosition?: Point | null
   relocation?: DropZoneHintRelocation | null
+  movingPanelAttachmentId?: string | null
 }
 
 export function DropZoneHintsOverlay({
@@ -38,11 +39,12 @@ export function DropZoneHintsOverlay({
   activeDropTargetNodeId = null,
   activePosition = null,
   relocation = null,
+  movingPanelAttachmentId = null,
 }: DropZoneHintsOverlayProps) {
   const hints = useMemo(() => {
     if (!layoutTree || !project || !symbol) return []
-    return collectDropZoneHints(symbol, layoutTree, project)
-  }, [layoutTree, project, symbol])
+    return collectDropZoneHints(symbol, layoutTree, project, { movingPanelAttachmentId })
+  }, [layoutTree, project, symbol, movingPanelAttachmentId])
 
   const activeHintNodeId = useMemo(
     () =>

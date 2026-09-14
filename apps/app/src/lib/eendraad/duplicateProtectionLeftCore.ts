@@ -27,8 +27,8 @@ import type {
 import { generateId } from '@/utils'
 import { excelColumnLabelFromZeroBasedIndex, getNextAvailableCircuitCode } from '@/utils/project'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { findPanelById } from '@/lib/panel/panelTree'
@@ -223,9 +223,29 @@ export interface DuplicateProtectionMainBusPlacement {
   mainBusInsertIndex: number
 }
 
+/** Panel Alt-drag creates only the protection module and an empty circuit behind it. */
+export interface DuplicateProtectionOptions {
+  copyCircuitContents?: boolean
+}
+
 interface DuplicateProtectionDraftState {
   currentProject?: ProjectWithOptionalV2Electrical | null
   isDirty?: boolean
+}
+
+function cloneCircuitShell(source: Circuit, newCircuitId: string, newCode: string): Circuit {
+  const clone: Circuit = {
+    ...JSON.parse(JSON.stringify(source)),
+    id: newCircuitId,
+    code: newCode,
+    endpoints: [],
+  }
+  delete clone.branches
+  delete clone.trunkDevices
+  delete clone.subCircuitIds
+  delete clone.sectionWireOverrides
+  delete clone.dcBusSource
+  return clone
 }
 
 export interface DuplicateProtectionLeftBridge {
@@ -248,13 +268,14 @@ export function runDuplicateProtectionLeft(
   protectionId: string,
   bridge: DuplicateProtectionLeftBridge,
   mainBusPlacement?: DuplicateProtectionMainBusPlacement,
+  options?: DuplicateProtectionOptions,
 ): string | null {
   let createdRootId: string | null = null
 
   const projectForLabel = bridge.getProject()
   const panelForLabel = projectForLabel
     ? findPanelDirectlyContainingProtection(
-        getElectricalPanelsFromProject(projectForLabel),
+        getProjectElectricalPanels(projectForLabel),
         protectionId
       )
     : undefined
@@ -268,7 +289,7 @@ export function runDuplicateProtectionLeft(
     const project = bridge.getProject()
     if (!project) return false
     const panel = findPanelDirectlyContainingProtection(
-      getElectricalPanelsFromProject(project),
+      getProjectElectricalPanels(project),
       protectionId
     )
     if (!panel) return false
@@ -277,13 +298,14 @@ export function runDuplicateProtectionLeft(
     const sourceCircuitId = rootProt.circuits?.[0]?.id
     if (!sourceCircuitId) return false
 
+    const copyCircuitContents = options?.copyCircuitContents !== false
     const secondaryOrderCircuitId = findSecondaryBusOrderingCircuitId(panel, rootProt)
-    const circuitClosure = collectCircuitClosureDownstreamFromProtection(panel, rootProt)
-    const protectionsOrdered = collectProtectionsOrderedForSubtreeMove(
-      panel,
-      circuitClosure,
-      rootProt,
-    )
+    const circuitClosure = copyCircuitContents
+      ? collectCircuitClosureDownstreamFromProtection(panel, rootProt)
+      : new Set([sourceCircuitId])
+    const protectionsOrdered = copyCircuitContents
+      ? collectProtectionsOrderedForSubtreeMove(panel, circuitClosure, rootProt)
+      : [rootProt]
     const orderedCircuitIds = sortCircuitIdsForClone(panel, circuitClosure)
     const maps: CircuitCloneIdMaps = {
       endpoint: new Map(),
@@ -320,8 +342,12 @@ export function runDuplicateProtectionLeft(
       if (!sourceCircuit) continue
       const newCircuitId = generateId()
       const newCode = takeNextAlphabeticCode()
-      const newCircuit = cloneCircuitContent(sourceCircuit, maps, newCircuitId, newCode)
-      wireClonedSubCircuitIds(sourceCircuit, newCircuit, maps)
+      const newCircuit = copyCircuitContents
+        ? cloneCircuitContent(sourceCircuit, maps, newCircuitId, newCode)
+        : cloneCircuitShell(sourceCircuit, newCircuitId, newCode)
+      if (copyCircuitContents) {
+        wireClonedSubCircuitIds(sourceCircuit, newCircuit, maps)
+      }
       clonedCircuits.set(oldCircuitId, newCircuit)
     }
 
@@ -352,7 +378,7 @@ export function runDuplicateProtectionLeft(
     bridge.setDraft((state) => {
       if (!state.currentProject) return
       const panelAfter = findPanelById(
-        getElectricalPanelsFromProject(state.currentProject),
+        getProjectElectricalPanels(state.currentProject),
         panel.id
       )
       if (!panelAfter) return
@@ -418,7 +444,7 @@ export function runDuplicateProtectionLeft(
           )
         }
       }
-      const installationAfter = getElectricalInstallationFromProject(state.currentProject)
+      const installationAfter = getProjectElectricalInstallation(state.currentProject)
       if (installationAfter?.eendraadAutomaticNaming) {
         applyAutomaticMainBusNamingToPanel(
           panelAfter,

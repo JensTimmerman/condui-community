@@ -1,23 +1,23 @@
 import type { Circuit, Endpoint, Floor, Panel, Placement, TrunkDevice } from '@/types/schema'
 import type { Selection } from '@/types/ui'
 import {
-  getSitplanNotesFromProject,
-  type ProjectWithOptionalV2Annotations,
+  querySitplanNotes,
+  type AnnotationProject,
 } from '@/lib/projectV2/annotations'
 import {
-  getBuildingFloorsFromProject,
+  selectProjectBuildingFloors,
   type ProjectWithOptionalV2Building,
 } from '@/lib/projectV2/buildingFloors'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  selectProjectElectricalInstallation,
+  selectProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { collectCircuits, findPanelById, findPanelByName, walkPanels } from '@/lib/panel/panelTree'
 
 type PlanFocusProject = ProjectWithOptionalV2Building &
   ProjectWithOptionalV2Electrical &
-  ProjectWithOptionalV2Annotations
+  AnnotationProject
 
 function orderedFloorsForEndpoint(ep: Endpoint): string[] {
   const seen = new Set<string>()
@@ -46,7 +46,7 @@ function findCircuitForEndpointInProject(
   project: PlanFocusProject,
   endpointId: string
 ): { circuit: Circuit; panel: Panel } | undefined {
-  for (const panel of getElectricalPanelsFromProject(project)) {
+  for (const panel of selectProjectElectricalPanels(project)) {
     for (const circuit of collectPanelTreeCircuits(panel)) {
       if (circuit.endpoints.some((endpoint) => endpoint.id === endpointId)) {
         return { circuit, panel }
@@ -63,9 +63,9 @@ function collectPlacementsOnFloorFromProject(
   const result: Array<
     Placement & { endpointId?: string; junctionPanelLabel?: string; isEarthing?: boolean }
   > = []
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = selectProjectElectricalInstallation(project)
 
-  for (const panel of getElectricalPanelsFromProject(project)) {
+  for (const panel of selectProjectElectricalPanels(project)) {
     for (const circuit of collectPanelTreeCircuits(panel)) {
       for (const endpoint of circuit.endpoints) {
         for (const placement of endpoint.placements) {
@@ -108,7 +108,7 @@ function collectPlacementsOnFloorFromProject(
 }
 
 function floorForPlacementId(project: PlanFocusProject, placementId: string): string[] {
-  for (const floor of getBuildingFloorsFromProject(project)) {
+  for (const floor of selectProjectBuildingFloors(project)) {
     const rows = collectPlacementsOnFloorFromProject(project, floor.id)
     if (rows.some((r) => r.id === placementId)) return [floor.id]
   }
@@ -120,7 +120,7 @@ function resolvePanelForDistributionEndpoint(
   endpoint: Pick<Endpoint, 'symbol' | 'label' | 'panelId'>
 ): Panel | null {
   if (endpoint.symbol !== 'panel_distribution') return null
-  const panels = getElectricalPanelsFromProject(project)
+  const panels = selectProjectElectricalPanels(project)
   if (endpoint.panelId) {
     const byId = findPanelById(panels, endpoint.panelId)
     if (byId) return byId
@@ -129,7 +129,7 @@ function resolvePanelForDistributionEndpoint(
 }
 
 function orderedFloorsForPanelId(project: PlanFocusProject, panelId: string): string[] {
-  for (const root of getElectricalPanelsFromProject(project)) {
+  for (const root of selectProjectElectricalPanels(project)) {
     for (const c of collectPanelTreeCircuits(root)) {
       for (const ep of c.endpoints) {
         if (ep.symbol !== 'panel_distribution') continue
@@ -151,7 +151,7 @@ function floorsForTrunkDevice(
   const label = r.device.label
   const seen = new Set<string>()
   const out: string[] = []
-  for (const jp of getElectricalInstallationFromProject(project)?.junctionPanelPlacements ?? []) {
+  for (const jp of selectProjectElectricalInstallation(project)?.junctionPanelPlacements ?? []) {
     if (jp.label === label && !seen.has(jp.floorId)) {
       seen.add(jp.floorId)
       out.push(jp.floorId)
@@ -161,7 +161,7 @@ function floorsForTrunkDevice(
 }
 
 function floorForSitplanNote(project: PlanFocusProject, noteId: string): string[] {
-  const n = getSitplanNotesFromProject(project).find((x) => x.id === noteId)
+  const n = querySitplanNotes(project).find((x) => x.id === noteId)
   if (!n?.floorId) return []
   return [n.floorId]
 }
@@ -171,7 +171,7 @@ function isLegacyFloorWithPlan(floor: Floor | { id: string; name: string }): flo
 }
 
 function floorForWall(project: PlanFocusProject, wallId: string): string[] {
-  for (const f of getBuildingFloorsFromProject(project)) {
+  for (const f of selectProjectBuildingFloors(project)) {
     if (!isLegacyFloorWithPlan(f)) continue
     if (f.floorPlan?.walls?.some((w) => w.id === wallId)) return [f.id]
   }
@@ -179,7 +179,7 @@ function floorForWall(project: PlanFocusProject, wallId: string): string[] {
 }
 
 function floorForDoor(project: PlanFocusProject, doorId: string): string[] {
-  for (const f of getBuildingFloorsFromProject(project)) {
+  for (const f of selectProjectBuildingFloors(project)) {
     if (!isLegacyFloorWithPlan(f)) continue
     if (f.floorPlan?.doors?.some((d) => d.id === doorId)) return [f.id]
   }
@@ -187,7 +187,7 @@ function floorForDoor(project: PlanFocusProject, doorId: string): string[] {
 }
 
 function floorForWindow(project: PlanFocusProject, windowId: string): string[] {
-  for (const f of getBuildingFloorsFromProject(project)) {
+  for (const f of selectProjectBuildingFloors(project)) {
     if (!isLegacyFloorWithPlan(f)) continue
     if (f.floorPlan?.windows?.some((w) => w.id === windowId)) return [f.id]
   }
@@ -195,7 +195,7 @@ function floorForWindow(project: PlanFocusProject, windowId: string): string[] {
 }
 
 function floorForStair(project: PlanFocusProject, stairId: string): string[] {
-  for (const f of getBuildingFloorsFromProject(project)) {
+  for (const f of selectProjectBuildingFloors(project)) {
     if (!isLegacyFloorWithPlan(f)) continue
     if (f.floorPlan?.stairs?.some((s) => s.id === stairId)) return [f.id]
   }
@@ -249,7 +249,7 @@ function floorsForSelectionId(
       return floorForStair(project, id)
     case 'ground':
       if (id !== 'ground') return []
-      return (getElectricalInstallationFromProject(project)?.earthingPlacements ?? []).map(
+      return (selectProjectElectricalInstallation(project)?.earthingPlacements ?? []).map(
         (p) => p.floorId
       )
     default:

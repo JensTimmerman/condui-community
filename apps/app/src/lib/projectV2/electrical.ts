@@ -1,49 +1,65 @@
 import type { Installation, Panel } from '@/types/schema'
-import type { DisciplineModelsV2 } from '@/types/projectV2'
-import type {
-  AuxiliaryElectricalEnclosure,
-  OffGridSupplyAssembly,
-} from '@/types/supplyAssembly'
+import type { DisciplineModelsV2, ElectricalModelV2 } from '@/types/projectV2'
+import type { AuxiliaryElectricalEnclosure, OffGridSupplyAssembly } from '@/types/supplyAssembly'
 
 export type ProjectWithOptionalV2Electrical = {
-  installation?: Installation
-  panels?: Panel[]
   disciplines?: Partial<DisciplineModelsV2>
 }
 
-const EMPTY_PANELS: Panel[] = []
-const EMPTY_SUPPLY_ASSEMBLIES: OffGridSupplyAssembly[] = []
-const EMPTY_AUXILIARY_ENCLOSURES: AuxiliaryElectricalEnclosure[] = []
-
-function hasCompatibilityPanelsField(document: ProjectWithOptionalV2Electrical): boolean {
-  return Object.prototype.hasOwnProperty.call(document, 'panels')
+/** Canonical electrical discipline query. Legacy inputs must normalize before calling this API. */
+export function getProjectElectrical(
+  document: ProjectWithOptionalV2Electrical
+): ElectricalModelV2 | undefined {
+  return document.disciplines?.electrical
 }
 
-export function getElectricalInstallationFromProject(
+/** Canonical installation query for ordinary runtime consumers. */
+export function getProjectElectricalInstallation(
   document: ProjectWithOptionalV2Electrical
 ): Installation | undefined {
-  return document.disciplines?.electrical?.installation ?? document.installation
+  return getProjectElectrical(document)?.installation
 }
 
-export function getElectricalPanelsFromProject(
+/** Canonical panel-tree query for ordinary runtime consumers. */
+export function getProjectElectricalPanels(document: ProjectWithOptionalV2Electrical): Panel[] {
+  return getProjectElectrical(document)?.panels ?? []
+}
+
+/** Canonical mutable installation boundary for store/domain mutations. */
+export function getEditableProjectElectricalInstallation(
+  document: ProjectWithOptionalV2Electrical
+): Installation | undefined {
+  return getProjectElectrical(document)?.installation
+}
+
+/** Canonical mutable panel-tree boundary for store/domain mutations. */
+export function getEditableProjectElectricalPanels(
   document: ProjectWithOptionalV2Electrical
 ): Panel[] {
-  return document.disciplines?.electrical?.panels ?? document.panels ?? EMPTY_PANELS
+  const electrical = getProjectElectrical(document)
+  if (!electrical) throw new Error('Electrical discipline is required to edit panels.')
+  return electrical.panels
 }
 
-export function getSupplyAssembliesFromProject(
+/** @deprecated Ordinary runtime code uses getProjectElectricalInstallation. */
+export const selectProjectElectricalInstallation = getProjectElectricalInstallation
+
+/** @deprecated Ordinary runtime code uses getProjectElectricalPanels. */
+export const selectProjectElectricalPanels = getProjectElectricalPanels
+
+export function selectProjectSupplyAssemblies(
   document: ProjectWithOptionalV2Electrical
 ): OffGridSupplyAssembly[] {
-  return document.disciplines?.electrical?.supplyAssemblies ?? EMPTY_SUPPLY_ASSEMBLIES
+  return document.disciplines?.electrical?.supplyAssemblies ?? []
 }
 
-export function getAuxiliaryElectricalEnclosuresFromProject(
+export function selectProjectAuxiliaryElectricalEnclosures(
   document: ProjectWithOptionalV2Electrical
 ): AuxiliaryElectricalEnclosure[] {
-  return document.disciplines?.electrical?.auxiliaryEnclosures ?? EMPTY_AUXILIARY_ENCLOSURES
+  return document.disciplines?.electrical?.auxiliaryEnclosures ?? []
 }
 
-export function getMutableSupplyAssembliesForProject(
+export function editProjectSupplyAssemblies(
   document: ProjectWithOptionalV2Electrical
 ): OffGridSupplyAssembly[] {
   const electrical = document.disciplines?.electrical
@@ -52,7 +68,7 @@ export function getMutableSupplyAssembliesForProject(
   return electrical.supplyAssemblies
 }
 
-export function getMutableAuxiliaryElectricalEnclosuresForProject(
+export function editProjectAuxiliaryElectricalEnclosures(
   document: ProjectWithOptionalV2Electrical
 ): AuxiliaryElectricalEnclosure[] {
   const electrical = document.disciplines?.electrical
@@ -63,24 +79,8 @@ export function getMutableAuxiliaryElectricalEnclosuresForProject(
   return electrical.auxiliaryEnclosures
 }
 
-export function getMutableElectricalInstallationForProject(
-  document: ProjectWithOptionalV2Electrical
-): Installation | undefined {
-  return document.disciplines?.electrical?.installation ?? document.installation
-}
+/** @deprecated Ordinary runtime code uses getEditableProjectElectricalInstallation. */
+export const editProjectElectricalInstallation = getEditableProjectElectricalInstallation
 
-export function getMutableElectricalPanelsForProject(
-  document: ProjectWithOptionalV2Electrical
-): Panel[] {
-  const electrical = document.disciplines?.electrical
-  if (electrical) {
-    if (!Array.isArray(electrical.panels)) electrical.panels = []
-    return electrical.panels
-  }
-  if (hasCompatibilityPanelsField(document)) {
-    if (!document.panels) document.panels = []
-    return document.panels
-  }
-  document.panels = []
-  return document.panels
-}
+/** @deprecated Ordinary runtime code uses getEditableProjectElectricalPanels. */
+export const editProjectElectricalPanels = getEditableProjectElectricalPanels

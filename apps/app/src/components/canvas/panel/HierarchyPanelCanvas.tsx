@@ -10,12 +10,14 @@ import {
   type ReactNode,
 } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Printer, Tag } from 'lucide-react'
 import { Group, Rect, Line, Text, Image as KonvaImage } from 'react-konva'
 import Konva from 'konva'
 import BaseCanvas, { type BaseCanvasHandle } from '../BaseCanvas'
 import ViewNavigationToolbar from '../ViewNavigationToolbar'
 import CanvasFloatingControlRail from '../CanvasFloatingControlRail'
 import { FloatingControl } from '../FloatingControls'
+import { openLabelStripExportDialog } from '@/lib/ui/labelStripExportDialog'
 
 import { AutoArrangeIcon } from '@/components/icons/UiIcons'
 import { SupplySymbol } from '../eendraad/SupplySymbol'
@@ -34,11 +36,16 @@ import {
   CELL_H,
   ROW_GAP,
   ROW_STRIDE,
+  TERMINAL_STRIP_RAIL_H,
+  getTerminalStripTopOffset,
+  getPanelMainHorizontalRoutingLanes,
+  snapTerminalStripPlacementCol,
   snapToGrid,
   type ModulePlacement,
 } from './panelGridLayout'
 import { getModuleDisplayInfo } from './getModuleDisplayInfo'
 import ModuleBox, { type ModuleTooltipData } from './ModuleBox'
+import { PanelLabelModeOverlay, type PanelLabelEntityUpdates } from './PanelLabelModeOverlay'
 import RelationWires, { type PanelHierarchyRoute } from './RelationWires'
 import type { PanelWirePathRegion, WirePathSegment } from './panelWireRouter'
 import { RewireTool } from './RewireTool'
@@ -54,19 +61,18 @@ import {
 } from '@/lib/panel/panelScene'
 import { applyPanelSceneFilter, type PanelSceneFilter } from '@/lib/panel/applyPanelSceneFilter'
 import { generateId } from '@/utils'
-import { getNextAvailableCircuitCode } from '@/utils/project'
+import { findTrunkDeviceInProject, getNextAvailableCircuitCode } from '@/utils/project'
 import { addToSelection } from '@/utils/selection'
-import { getPanelFeedProjection } from '@/lib/feedTopology'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
-  getMutableElectricalPanelsForProject,
+  getProjectElectricalPanels,
+  getEditableProjectElectricalPanels,
 } from '@/lib/projectV2/electrical'
 import {
   getPanelRewireOperation,
   isRootSupplyTailOrSharedSupplyTailRef,
   validatePanelRewireOperation,
 } from '@/lib/panel/panelRewire'
+import { isTerminalStripDevice } from '@/lib/eendraad/projectElectricalDomain'
 import {
   createDefaultAcCircuitCable,
   DEFAULT_AC_CIRCUIT_WIRE_LABEL_FLAGS,
@@ -104,13 +110,29 @@ import { polesFromConfig } from '@/constants/poleConfig'
 import { clamp, rectContainsRect } from '@/lib/geometry'
 import { isKeyboardTypingTarget } from '@/lib/ui/keyboardTypingTarget'
 import { upsertPanelGridSlotPosition } from '@/lib/panel/panelSupplySlots'
+import {
+  MIN_PANEL_GRID_MODULE_WIDTH,
+  normalizePanelModuleMeasure,
+} from '@/lib/panel/panelGridUnits'
 import { collectCircuits, getLastAssignableCircuit } from '@/lib/panel/panelTree'
 import {
   isAuxiliaryMountableSupplyDevice,
   planAuxiliarySupplyEnclosureGrid,
 } from '@/lib/panel/auxiliarySupplyEnclosures'
+import { resolvePanelWireSelectionFocus } from '@/lib/panel/panelWireSelection'
+import { duplicateEndpointOnCircuit } from '@/lib/eendraad/duplicateEndpoint'
 
 type Project = NonNullable<ProjectState['currentProject']>
+
+interface PanelFrameResizePreview {
+  panelId: string
+  axis: 'rows' | 'columns'
+  value: number
+  x: number
+  y: number
+  width: number
+  height: number
+}
 
 function ConverterBackupFeedMarker({
   surface,
@@ -187,7 +209,7 @@ function ConverterBackupFeedMarker({
           const layout = getConverterArtworkLayout(
             converter?.symbol === 'inverter' ? 'DC' : 'AC',
             converter?.symbol === 'inverter' ? 'AC' : 'DC',
-            SUPPLY_ASSEMBLY_CONNECTION_DOMAINS,
+            SUPPLY_ASSEMBLY_CONNECTION_DOMAINS
           )
           const domainPosition = (domain: 'AC' | 'DC') => {
             const corner = getConverterDomainCorner(layout, domain)
@@ -314,6 +336,17 @@ function moduleRefMatchesSelection(ref: PanelGridModuleRef, selection: CanvasSel
   return false
 }
 
+function placementMatchesSelection(
+  placement: Pick<ModulePlacement, 'ref' | 'terminalStripMemberRefs'>,
+  selection: CanvasSelection
+): boolean {
+  return (
+    moduleRefMatchesSelection(placement.ref, selection) ||
+    (placement.terminalStripMemberRefs?.some((ref) => moduleRefMatchesSelection(ref, selection)) ??
+      false)
+  )
+}
+
 function getModuleSelectionBounds(
   placements: Array<{
     x: number
@@ -321,6 +354,7 @@ function getModuleSelectionBounds(
     width: number
     height: number
     ref: PanelGridModuleRef
+    terminalStripMemberRefs?: PanelGridModuleRef[]
   }>,
   selection: CanvasSelection,
   padding = 0
@@ -332,7 +366,7 @@ function getModuleSelectionBounds(
   let found = false
 
   for (const placement of placements) {
-    if (!moduleRefMatchesSelection(placement.ref, selection)) continue
+    if (!placementMatchesSelection(placement, selection)) continue
     minX = Math.min(minX, placement.x)
     minY = Math.min(minY, placement.y)
     maxX = Math.max(maxX, placement.x + placement.width)
@@ -398,17 +432,20 @@ function applyPanelRewireOperation({
     return true
   }
 
-  if (operation.kind === 'promoteProtectionToSharedSupply') {
+  if (
+    operation.kind === 'promoteProtectionToSharedSupply' ||
+    operation.kind === 'promoteProtectionToRootSupply'
+  ) {
     const deviceId = generateId()
     const trunkDevice: TrunkDevice = { id: deviceId, ...operation.trunkDevice }
     useProjectStore.getState().addSupplyTrunkDevice(trunkDevice, operation.insertIndex, {
       panelId: panel.id,
-      feedScope: 'shared',
+      feedScope: operation.kind === 'promoteProtectionToRootSupply' ? 'root' : 'shared',
     })
     const nextProject = useProjectStore.getState().currentProject
     const nextPanel =
       nextProject != null
-        ? findPanelRecursive(getElectricalPanelsFromProject(nextProject), panel.id)
+        ? findPanelRecursive(getProjectElectricalPanels(nextProject), panel.id)
         : undefined
     if (nextProject && nextPanel) {
       const { mainSlots, supplySlots } = placeSupplyModuleAfterInsert(
@@ -424,7 +461,7 @@ function applyPanelRewireOperation({
     useProjectStore.setState((state: ProjectState) => {
       if (!state.currentProject) return
       const targetPanel = findPanelRecursive(
-        getMutableElectricalPanelsForProject(state.currentProject),
+        getEditableProjectElectricalPanels(state.currentProject),
         panel.id
       )
       if (!targetPanel) return
@@ -448,7 +485,7 @@ function applyPanelRewireOperation({
         for (const subPanel of candidate.subPanels) if (findAndRemove(subPanel)) return true
         return false
       }
-      for (const rootPanel of getMutableElectricalPanelsForProject(state.currentProject))
+      for (const rootPanel of getEditableProjectElectricalPanels(state.currentProject))
         if (findAndRemove(rootPanel)) break
       if (circuitRemoved) {
         if (!targetPanel.circuits) targetPanel.circuits = []
@@ -527,7 +564,7 @@ function findProtectionFeedingSubPanel(
     }
     return null
   }
-  return scan(getElectricalPanelsFromProject(project))
+  return scan(getProjectElectricalPanels(project))
 }
 
 function findCircuitFeedingSubPanel(pr: ProtectionDevice, subPanelId: string): Circuit | null {
@@ -635,18 +672,27 @@ function hierarchyRouteForHierarchySurface(
 
 function buildPanelWirePathRegions(surfaces: PanelSceneSurface[]): PanelWirePathRegion[] {
   const regions: PanelWirePathRegion[] = []
-  const addRegion = (id: string, surface: PanelSceneSurface, contentTop: number, rows: number) => {
+  const addRegion = (
+    id: string,
+    surface: PanelSceneSurface,
+    contentTop: number,
+    rows: number,
+    routingPanel?: Panel
+  ) => {
     const rowCount = Math.max(1, rows)
     regions.push({
       id,
+      surfaceId: surface.id,
       left: surface.x + PANEL_FRAME_MARGIN / 2,
       right: surface.x + surface.width - PANEL_FRAME_MARGIN / 2,
-      horizontalYs: Array.from({ length: rowCount + 1 }, (_, gapIndex) => {
-        const rowGapCenterY = contentTop - ROW_GAP / 2 + gapIndex * ROW_STRIDE
-        if (gapIndex === 0) return rowGapCenterY - ROW_GAP / 2
-        if (gapIndex === rowCount) return rowGapCenterY + ROW_GAP / 2
-        return rowGapCenterY
-      }),
+      horizontalYs: routingPanel
+        ? getPanelMainHorizontalRoutingLanes(routingPanel, contentTop, rowCount)
+        : Array.from({ length: rowCount + 1 }, (_, gapIndex) => {
+            const rowGapCenterY = contentTop - ROW_GAP / 2 + gapIndex * ROW_STRIDE
+            if (gapIndex === 0) return rowGapCenterY - ROW_GAP / 2
+            if (gapIndex === rowCount) return rowGapCenterY + ROW_GAP / 2
+            return rowGapCenterY
+          }),
     })
   }
 
@@ -660,16 +706,32 @@ function buildPanelWirePathRegions(surfaces: PanelSceneSurface[]): PanelWirePath
       )
       continue
     }
-    if (surface.kind === 'auxiliary') {
-      addRegion(`${surface.id}:auxiliary`, surface, surface.y + PANEL_FRAME_MARGIN, surface.rows)
+    if (surface.kind === 'auxiliary' || surface.kind === 'junction_panel') {
+      const routingPanel = surface.panel ??
+        (surface.enclosure
+          ? ({ gridView: surface.enclosure.gridView } as Panel)
+          : surface.junctionPanelGridView
+            ? ({ gridView: surface.junctionPanelGridView } as Panel)
+            : undefined)
+      addRegion(
+        `${surface.id}:enclosure`,
+        surface,
+        surface.y + PANEL_FRAME_MARGIN + getTerminalStripTopOffset(routingPanel),
+        surface.rows,
+        routingPanel
+      )
       continue
     }
-    addRegion(
-      `${surface.id}:main`,
-      surface,
-      surface.y + surface.mainPanelY + PANEL_FRAME_MARGIN,
-      surface.rows
-    )
+    const mainContentTop =
+      surface.y + surface.mainPanelY + PANEL_FRAME_MARGIN + getTerminalStripTopOffset(surface.panel)
+    const mainRegion = {
+      id: `${surface.id}:main`,
+      surfaceId: surface.id,
+      left: surface.x + PANEL_FRAME_MARGIN / 2,
+      right: surface.x + surface.width - PANEL_FRAME_MARGIN / 2,
+      horizontalYs: getPanelMainHorizontalRoutingLanes(surface.panel, mainContentTop, surface.rows),
+    }
+    regions.push(mainRegion)
     if (surface.supplyPanelVisible) {
       addRegion(
         `${surface.id}:supply`,
@@ -689,6 +751,10 @@ function buildPanelWirePathLinks(connectors: BuiltPanelScene['connectors']): Wir
       segments.push({
         from: { x: connector.points[index]!, y: connector.points[index + 1]! },
         to: { x: connector.points[index + 2]!, y: connector.points[index + 3]! },
+        fromPortal: index === 0,
+        toPortal: index === connector.points.length - 4,
+        fromSurfaceId: index === 0 ? connector.sourceSurfaceId : undefined,
+        toSurfaceId: index === connector.points.length - 4 ? connector.targetSurfaceId : undefined,
       })
     }
     return segments
@@ -702,6 +768,7 @@ interface HierarchyDragPreview {
   width: number
   height: number
   ref?: PanelGridModuleRef
+  isAltDuplicate?: boolean
   invalid?: boolean
   createAuxiliary?: boolean
   deviceIds?: string[]
@@ -800,9 +867,12 @@ export function HierarchyPanelCanvas({
   const openDialog = useDialogStore((s) => s.openDialog)
   const canPlaceSymbols = capabilities?.canPlaceSymbols ?? true
   const canDragItems = capabilities?.canDragItems ?? true
+  const canEditProject = capabilities?.canEditProject ?? true
   const canUseRewireTools = capabilities?.canUseRewireTools ?? true
   const leftDragPansCanvas = useSettingsStore((s) => s.leftDragPansCanvas)
   const updatePanelGridSlots = useProjectStore((s: ProjectState) => s.updatePanelGridSlots)
+  const updatePanelGrid = useProjectStore((s: ProjectState) => s.updatePanelGrid)
+  const updateJunctionPanelGrid = useProjectStore((s: ProjectState) => s.updateJunctionPanelGrid)
   const updateSupplyPanelSlots = useProjectStore((s: ProjectState) => s.updateSupplyPanelSlots)
   const createAuxiliarySupplyEnclosure = useProjectStore(
     (s: ProjectState) => s.createAuxiliarySupplyEnclosure
@@ -816,9 +886,18 @@ export function HierarchyPanelCanvas({
   const moveSupplyDeviceToGridEnclosure = useProjectStore(
     (s: ProjectState) => s.moveSupplyDeviceToGridEnclosure
   )
+  const moveTerminalStripToPanel = useProjectStore((s: ProjectState) => s.moveTerminalStripToPanel)
   const updateAuxiliaryElectricalEnclosure = useProjectStore(
     (s: ProjectState) => s.updateAuxiliaryElectricalEnclosure
   )
+  const updateProtection = useProjectStore((s: ProjectState) => s.updateProtection)
+  const getProtectionById = useProjectStore((s: ProjectState) => s.getProtectionById)
+  const updateCircuit = useProjectStore((s: ProjectState) => s.updateCircuit)
+  const updateEndpoint = useProjectStore((s: ProjectState) => s.updateEndpoint)
+  const updateTrunkDevice = useProjectStore((s: ProjectState) => s.updateTrunkDevice)
+  const updateSupplyTrunkDevice = useProjectStore((s: ProjectState) => s.updateSupplyTrunkDevice)
+  const updateGroundTrunkDevice = useProjectStore((s: ProjectState) => s.updateGroundTrunkDevice)
+  const getTrunkDeviceById = useProjectStore((s: ProjectState) => s.getTrunkDeviceById)
   const rewireModules = useProjectStore((s: ProjectState) => s.rewireModules)
   const [tooltip, setTooltip] = useState<ModuleTooltipData | null>(null)
   void tooltip
@@ -828,6 +907,9 @@ export function HierarchyPanelCanvas({
   const [dragPreview, setDragPreview] = useState<HierarchyDragPreview | null>(null)
   const [moduleDragPreview, setModuleDragPreview] = useState<HierarchyDragPreview | null>(null)
   const [moduleDragLive, setModuleDragLive] = useState<HierarchyDragPreview | null>(null)
+  const [panelFrameResizePreview, setPanelFrameResizePreview] =
+    useState<PanelFrameResizePreview | null>(null)
+  const panelFrameResizePreviewRef = useRef<PanelFrameResizePreview | null>(null)
   const hierarchyFeedFromTop = useMemo(
     () => panelOptions.find((option) => option.isRoot)?.panel.gridView?.feedFromTop ?? false,
     [panelOptions]
@@ -839,6 +921,51 @@ export function HierarchyPanelCanvas({
   const [rewireTargetRef, setRewireTargetRef] = useState<PanelGridModuleRef | null>(null)
   const [rewireTargetSurfaceId, setRewireTargetSurfaceId] = useState<string | null>(null)
   const [rewireTargetValid, setRewireTargetValid] = useState(true)
+  const [labelMode, setLabelMode] = useState(false)
+
+  const updateModuleLabel = useCallback(
+    (ref: PanelGridModuleRef, updates: PanelLabelEntityUpdates) => {
+      if (!canEditProject) return
+      if (ref.kind === 'protection') {
+        const notes = updates.notes
+        const protectionUpdates: PanelLabelEntityUpdates = { ...updates }
+        delete protectionUpdates.notes
+        const protection = getProtectionById(ref.id)
+        const firstCircuitId = protection?.circuits?.[0]?.id
+        if (notes !== undefined && firstCircuitId) updateCircuit(firstCircuitId, { notes })
+        else if (notes !== undefined) protectionUpdates.notes = notes
+        if (Object.keys(protectionUpdates).length > 0) {
+          updateProtection(ref.id, protectionUpdates)
+        }
+        return
+      }
+      if (ref.kind === 'domotica') {
+        updateEndpoint(ref.endpointId, updates)
+        return
+      }
+      if (ref.scope === 'supply' || getTrunkDeviceById(ref.id)?.isSupplyDevice) {
+        updateSupplyTrunkDevice(ref.id, updates)
+        return
+      }
+      if (ref.scope === 'ground' || getTrunkDeviceById(ref.id)?.isGroundDevice) {
+        updateGroundTrunkDevice(ref.id, updates)
+        return
+      }
+      const circuitId = ref.circuitId ?? getTrunkDeviceById(ref.id)?.circuit?.id
+      if (circuitId) updateTrunkDevice(circuitId, ref.id, updates)
+    },
+    [
+      canEditProject,
+      getProtectionById,
+      getTrunkDeviceById,
+      updateEndpoint,
+      updateGroundTrunkDevice,
+      updateProtection,
+      updateCircuit,
+      updateSupplyTrunkDevice,
+      updateTrunkDevice,
+    ]
+  )
 
   const fullScene = useMemo(() => {
     if (!currentProject) return null
@@ -924,7 +1051,7 @@ export function HierarchyPanelCanvas({
         walk(candidate.subPanels ?? [], depth + 1)
       }
     }
-    if (currentProject) walk(getElectricalPanelsFromProject(currentProject) ?? [], 0)
+    if (currentProject) walk(getProjectElectricalPanels(currentProject) ?? [], 0)
     return out
   }, [currentProject])
 
@@ -939,6 +1066,14 @@ export function HierarchyPanelCanvas({
       if (!originSurfaceId) return false
       const candidateSurfaceId = getSurfaceRewireId(candidate)
       if (candidateSurfaceId === originSurfaceId) return true
+      const originIsTerminalStrip =
+        currentProject != null &&
+        rewireOriginRef?.kind === 'trunkDevice' &&
+        rewireOriginRef.scope === 'circuit' &&
+        isTerminalStripDevice(findTrunkDeviceInProject(currentProject, rewireOriginRef.id))
+      if (originIsTerminalStrip && candidate.kind === 'panel' && candidate.panel != null) {
+        return true
+      }
       return (
         currentProject != null &&
         rewireOriginRef != null &&
@@ -971,6 +1106,12 @@ export function HierarchyPanelCanvas({
           rewireOriginRef != null &&
           isRootSupplyTailOrSharedSupplyTailRef(currentProject, rewireOriginRef) &&
           surface.panel.isMain !== true
+        ) &&
+        !(
+          currentProject != null &&
+          rewireOriginRef?.kind === 'trunkDevice' &&
+          rewireOriginRef.scope === 'circuit' &&
+          isTerminalStripDevice(findTrunkDeviceInProject(currentProject, rewireOriginRef.id))
         )
       ) {
         return null
@@ -988,6 +1129,34 @@ export function HierarchyPanelCanvas({
     setRewireTargetSurfaceId(null)
     setRewireTargetValid(true)
   }, [])
+  useEffect(() => {
+    if (!labelMode) return
+    setRewireMode(false)
+    resetHierarchyRewireState()
+    setSelection({ type: null, ids: [] })
+    setTooltip(null)
+    setHoveredModuleRef(null)
+  }, [labelMode, resetHierarchyRewireState, setSelection])
+  useEffect(() => {
+    if (!labelMode) return
+    const exitLabelMode = (event: KeyboardEvent | MouseEvent) => {
+      if (event instanceof KeyboardEvent) {
+        if (event.key !== 'Escape') return
+      } else {
+        const target = event.target
+        if (!(target instanceof Node) || !containerRef.current?.contains(target)) return
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      setLabelMode(false)
+    }
+    window.addEventListener('keydown', exitLabelMode)
+    window.addEventListener('contextmenu', exitLabelMode, true)
+    return () => {
+      window.removeEventListener('keydown', exitLabelMode)
+      window.removeEventListener('contextmenu', exitLabelMode, true)
+    }
+  }, [containerRef, labelMode])
   useEffect(() => {
     if (!rewireMode) return
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1360,9 +1529,10 @@ export function HierarchyPanelCanvas({
   const panelFramePointerDownRef = useRef<{ x: number; y: number } | null>(null)
   const pendingPanelFrameSelectCleanupRef = useRef<(() => void) | null>(null)
   const shouldIgnorePanelFrameClick = useCallback(
-    (event?: { clientX?: number; clientY?: number }) => {
+    (event?: { button?: number; clientX?: number; clientY?: number }) => {
       const start = panelFramePointerDownRef.current
       panelFramePointerDownRef.current = null
+      if (event?.button != null && event.button !== 0) return true
       if (!start || event?.clientX == null || event?.clientY == null) return false
       return (
         Math.hypot(event.clientX - start.x, event.clientY - start.y) > PANEL_FRAME_DRAG_THRESHOLD
@@ -1605,7 +1775,12 @@ export function HierarchyPanelCanvas({
   const detectHierarchyModuleDropTarget = useCallback(
     (position: Point, ref: PanelGridModuleRef) => {
       if (!scene || !currentProject) return null
-      if (ref.kind !== 'trunkDevice' || ref.scope !== 'supply') return null
+      const device =
+        ref.kind === 'trunkDevice' ? findTrunkDeviceInProject(currentProject, ref.id) : undefined
+      const isTerminalStrip =
+        ref.kind === 'trunkDevice' && ref.scope === 'circuit' && isTerminalStripDevice(device)
+      if (!isTerminalStrip && !(ref.kind === 'trunkDevice' && ref.scope === 'supply')) return null
+      if (!isTerminalStrip && !isAuxiliaryMountableSupplyDevice(currentProject, ref.id)) return null
 
       for (const surface of scene.surfaces) {
         if (surface.kind === 'auxiliary' && surface.enclosure) {
@@ -1618,11 +1793,12 @@ export function HierarchyPanelCanvas({
           const ownerPanelId = surface.enclosure.ownerPanelId
           const ownerPanel = ownerPanelId
             ? panelOptions.find((option) => option.panel.id === ownerPanelId)?.panel
-            : undefined
-          if (!ownerPanel || !isAuxiliaryMountableSupplyDevice(currentProject, ref.id)) return null
+            : panelOptions[0]?.panel
+          if (!ownerPanel || (!isTerminalStrip && !isAuxiliaryMountableSupplyDevice(currentProject, ref.id))) return null
           return { surface, panel: ownerPanel, area: 'auxiliary' as const }
         }
         if (surface.kind === 'shared_supply') {
+          if (isTerminalStrip) continue
           const frameLeft = surface.x
           const frameRight = surface.x + surface.width
           const frameTop = surface.y
@@ -1636,16 +1812,7 @@ export function HierarchyPanelCanvas({
             const rootPanel = panelOptions.find(
               (option) => option.isRoot && option.panel.isMain
             )?.panel
-            const installation = getElectricalInstallationFromProject(currentProject)
-            const panels = getElectricalPanelsFromProject(currentProject)
-            const knownSupply = rootPanel
-              ? installation
-                ? getPanelFeedProjection(installation, panels, rootPanel)?.devices.some(
-                    (device) => device.id === ref.id
-                  ) === true
-                : false
-              : false
-            if (!rootPanel || !knownSupply) return null
+            if (!rootPanel) return null
             return { surface, panel: rootPanel, area: 'supply' as const }
           }
           continue
@@ -1662,13 +1829,6 @@ export function HierarchyPanelCanvas({
           position.y >= mainTop &&
           position.y <= mainBottom
         ) {
-          if (
-            ref.kind === 'trunkDevice' &&
-            ref.scope === 'supply' &&
-            surface.panel.isMain !== true
-          ) {
-            return null
-          }
           return { surface, panel: surface.panel, area: 'main' as const }
         }
 
@@ -1681,14 +1841,7 @@ export function HierarchyPanelCanvas({
           position.y >= supplyTop &&
           position.y <= supplyBottom
         ) {
-          const installation = getElectricalInstallationFromProject(currentProject)
-          const panels = getElectricalPanelsFromProject(currentProject)
-          const knownSupply = installation
-            ? getPanelFeedProjection(installation, panels, surface.panel)?.devices.some(
-                (device) => device.id === ref.id
-              ) === true
-            : false
-          if (!knownSupply) return null
+          if (isTerminalStrip) return null
           return { surface, panel: surface.panel, area: 'supply' as const }
         }
       }
@@ -1711,7 +1864,12 @@ export function HierarchyPanelCanvas({
       }
 
       const localX = position.x - targetSurface.x - PANEL_FRAME_MARGIN
-      const localY = position.y - targetSurface.y - targetSurface.mainPanelY - PANEL_FRAME_MARGIN
+      const localY =
+        position.y -
+        targetSurface.y -
+        targetSurface.mainPanelY -
+        PANEL_FRAME_MARGIN -
+        getTerminalStripTopOffset(targetSurface.panel)
       const widthCols = getLibraryDropWidthCols(symbol, currentProject)
       const col = Math.max(
         0,
@@ -1726,7 +1884,12 @@ export function HierarchyPanelCanvas({
       setDragPreview({
         panelId: targetSurface.panel.id,
         x: targetSurface.x + PANEL_FRAME_MARGIN + col * CELL_W,
-        y: targetSurface.y + targetSurface.mainPanelY + PANEL_FRAME_MARGIN + row * ROW_STRIDE,
+        y:
+          targetSurface.y +
+          targetSurface.mainPanelY +
+          PANEL_FRAME_MARGIN +
+          getTerminalStripTopOffset(targetSurface.panel) +
+          row * ROW_STRIDE,
         width: widthCols * CELL_W,
         height: CELL_H,
       })
@@ -1749,7 +1912,12 @@ export function HierarchyPanelCanvas({
       const isEnergyMeter = symbol.id === 'energy_meter'
 
       const localX = position.x - targetSurface.x - PANEL_FRAME_MARGIN
-      const localY = position.y - targetSurface.y - targetSurface.mainPanelY - PANEL_FRAME_MARGIN
+      const localY =
+        position.y -
+        targetSurface.y -
+        targetSurface.mainPanelY -
+        PANEL_FRAME_MARGIN -
+        getTerminalStripTopOffset(targetSurface.panel)
       const droppedModuleWidthCols = getLibraryDropWidthCols(symbol, currentProject)
       const snapped = snapToGrid(localX, localY + CELL_H / 2)
       const row = clamp(snapped.row, 0, targetSurface.rows - 1)
@@ -1814,7 +1982,7 @@ export function HierarchyPanelCanvas({
         useProjectStore.getState().addTrunkDevice(targetCircuit.id, trunkDevice)
         const projectAfterMeter = useProjectStore.getState().currentProject
         const persistedPanel = projectAfterMeter
-          ? findPanelRecursive(getElectricalPanelsFromProject(projectAfterMeter), targetPanel.id)
+          ? findPanelRecursive(getProjectElectricalPanels(projectAfterMeter), targetPanel.id)
           : undefined
         const persistedCircuit = persistedPanel
           ? collectCircuits(persistedPanel).find((circuit) => circuit.id === targetCircuit.id)
@@ -1858,10 +2026,18 @@ export function HierarchyPanelCanvas({
           return placement.ref.kind === 'protection' && placement.ref.id === id
         }
         if (selection.type === 'trunkDevice') {
-          return placement.ref.kind === 'trunkDevice' && placement.ref.id === id
+          return (
+            (placement.ref.kind === 'trunkDevice' && placement.ref.id === id) ||
+            placement.terminalStripMemberRefs?.some(
+              (ref) => ref.kind === 'trunkDevice' && ref.id === id
+            ) === true
+          )
         }
         if (selection.type === 'endpoint') {
           return placement.ref.kind === 'domotica' && placement.ref.endpointId === id
+        }
+        if (selection.type === 'junctionPanelTerminal') {
+          return placement.junctionPanelTerminal?.terminalId === id
         }
         return false
       })
@@ -1869,6 +2045,110 @@ export function HierarchyPanelCanvas({
     }
     return null
   }, [scene, selection])
+  const panelWireSelectionFocus = useMemo(() => {
+    if (!scene || !currentProject) return null
+    return resolvePanelWireSelectionFocus(
+      selection,
+      scene.surfaces.flatMap((surface) => surface.placements)
+    )
+  }, [currentProject, scene, selection])
+
+  const previewPanelFrameResize = useCallback(
+    (surface: HierarchySurface & { panel: Panel }, axis: 'rows' | 'columns', delta: number) => {
+      const rows = surface.panel.gridView?.rows ?? surface.rows
+      const columns = surface.panel.gridView?.columns ?? surface.cols
+      const nextRows = axis === 'rows' ? Math.max(1, rows + Math.round(delta / ROW_STRIDE)) : rows
+      const nextColumns =
+        axis === 'columns' ? Math.max(1, Math.round(columns + delta / CELL_W)) : columns
+      const nextWidth = nextColumns * CELL_W + PANEL_FRAME_MARGIN * 2
+      const mainContentHeight = nextRows * CELL_H + Math.max(0, nextRows - 1) * ROW_GAP
+      const nextHeight =
+        getTerminalStripTopOffset(surface.panel) +
+        mainContentHeight +
+        (surface.panel.gridView?.terminalStripBottomRail ? TERMINAL_STRIP_RAIL_H + ROW_GAP : 0) +
+        PANEL_FRAME_MARGIN * 2
+      const preview: PanelFrameResizePreview = {
+        panelId: surface.panel.id,
+        axis,
+        value: axis === 'rows' ? nextRows : nextColumns,
+        x: 0,
+        y:
+          axis === 'rows'
+            ? surface.mainPanelY + surface.panelFrameHeight - nextHeight
+            : surface.mainPanelY,
+        width: axis === 'columns' ? nextWidth : surface.width,
+        height: axis === 'rows' ? nextHeight : surface.panelFrameHeight,
+      }
+      panelFrameResizePreviewRef.current = preview
+      setPanelFrameResizePreview(preview)
+    },
+    []
+  )
+
+  const commitPanelFrameResize = useCallback(
+    (surface: HierarchySurface & { panel: Panel }) => {
+      const preview = panelFrameResizePreviewRef.current
+      panelFrameResizePreviewRef.current = null
+      setPanelFrameResizePreview(null)
+      if (!preview || preview.panelId !== surface.panel.id) return
+      updatePanelGrid(surface.panel.id, {
+        [preview.axis]: preview.value,
+      })
+    },
+    [updatePanelGrid]
+  )
+
+  const previewJunctionPanelFrameResize = useCallback(
+    (surface: HierarchySurface, axis: 'rows' | 'columns', delta: number) => {
+      const gridView = surface.junctionPanelGridView ?? surface.enclosure?.gridView
+      if (!gridView) return
+      const rows = gridView.rows ?? surface.rows
+      const columns = gridView.columns ?? surface.cols
+      const nextRows = axis === 'rows' ? Math.max(1, rows + Math.round(delta / ROW_STRIDE)) : rows
+      const nextColumns =
+        axis === 'columns' ? Math.max(1, Math.round(columns + delta / CELL_W)) : columns
+      const layoutPanel = { gridView } as Panel
+      const mainContentHeight = nextRows * CELL_H + Math.max(0, nextRows - 1) * ROW_GAP
+      const nextHeight =
+        getTerminalStripTopOffset(layoutPanel) +
+        mainContentHeight +
+        (gridView.terminalStripBottomRail ? TERMINAL_STRIP_RAIL_H + ROW_GAP : 0) +
+        PANEL_FRAME_MARGIN * 2
+      const preview: PanelFrameResizePreview = {
+        panelId: surface.id,
+        axis,
+        value: axis === 'rows' ? nextRows : nextColumns,
+        x: 0,
+        y: axis === 'rows' ? surface.height - nextHeight : 0,
+        width: axis === 'columns' ? nextColumns * CELL_W + PANEL_FRAME_MARGIN * 2 : surface.width,
+        height: axis === 'rows' ? nextHeight : surface.height,
+      }
+      panelFrameResizePreviewRef.current = preview
+      setPanelFrameResizePreview(preview)
+    },
+    []
+  )
+
+  const commitJunctionPanelFrameResize = useCallback(
+    (surface: HierarchySurface) => {
+      const preview = panelFrameResizePreviewRef.current
+      panelFrameResizePreviewRef.current = null
+      setPanelFrameResizePreview(null)
+      if (!preview || preview.panelId !== surface.id) return
+      if (surface.kind === 'auxiliary' && surface.enclosure) {
+        updateAuxiliaryElectricalEnclosure(surface.id, {
+          gridView: { ...surface.enclosure.gridView, [preview.axis]: preview.value },
+        })
+        return
+      }
+      const representative = surface.placements.find(
+        (placement) => placement.ref.kind === 'trunkDevice'
+      )
+      if (representative?.ref.kind !== 'trunkDevice') return
+      updateJunctionPanelGrid(representative.ref.id, { [preview.axis]: preview.value })
+    },
+    [updateAuxiliaryElectricalEnclosure, updateJunctionPanelGrid]
+  )
 
   const isHierarchyRefInSelection = useCallback(
     (ref: PanelGridModuleRef) => {
@@ -1876,11 +2156,27 @@ export function HierarchyPanelCanvas({
       // Keep hierarchy drag-select behavior aligned with BaseCanvas drag-rect:
       // mixed-type selections may carry IDs from multiple kinds under one selection.type.
       if (ref.kind === 'protection') return selection.ids.includes(ref.id)
-      if (ref.kind === 'trunkDevice') return selection.ids.includes(ref.id)
+      if (ref.kind === 'trunkDevice') {
+        const placement = scene?.surfaces
+          .flatMap((surface) => surface.placements)
+          .find(
+            (candidate) =>
+              panelGridModuleRefKey(candidate.ref) === panelGridModuleRefKey(ref) ||
+              candidate.terminalStripMemberRefs?.some(
+                (member) => panelGridModuleRefKey(member) === panelGridModuleRefKey(ref)
+              )
+          )
+        return (
+          selection.ids.includes(ref.id) ||
+          placement?.terminalStripMemberRefs?.some(
+            (member) => member.kind === 'trunkDevice' && selection.ids.includes(member.id)
+          ) === true
+        )
+      }
       if (ref.kind === 'domotica') return selection.ids.includes(ref.endpointId)
       return false
     },
-    [selection]
+    [scene, selection]
   )
 
   const handleHierarchyModuleDragMove = useCallback(
@@ -1888,14 +2184,23 @@ export function HierarchyPanelCanvas({
       surface: HierarchySurface,
       placement: ModulePlacement & { inSupplyPanel?: boolean },
       rawX: number,
-      rawY: number
+      rawY: number,
+      shiftKey = false,
+      altKey = false
     ) => {
+      const isAltDuplicate =
+        altKey &&
+        !placement.inSupplyPanel &&
+        (placement.ref.kind === 'protection' || placement.ref.kind === 'domotica')
       const surfaceTargetId = surface.panel?.id ?? surface.id
       const key = panelGridModuleRefKey(placement.ref)
-      const moduleCols = Math.max(1, Math.round(placement.width / CELL_W))
+      const moduleCols = Math.max(
+        MIN_PANEL_GRID_MODULE_WIDTH,
+        normalizePanelModuleMeasure(placement.width / CELL_W)
+      )
       const maxCol = Math.max(0, surface.cols - moduleCols)
       const selectedPlacements =
-        selection.ids.length >= 2 && isHierarchyRefInSelection(placement.ref)
+        !isAltDuplicate && selection.ids.length >= 2 && isHierarchyRefInSelection(placement.ref)
           ? surface.placements.filter(
               (other) =>
                 other.inSupplyPanel === placement.inSupplyPanel &&
@@ -1921,7 +2226,11 @@ export function HierarchyPanelCanvas({
           const localY =
             target.area === 'supply'
               ? canvasPos.y - target.surface.y - target.surface.supplyPanelY - PANEL_FRAME_MARGIN
-              : canvasPos.y - target.surface.y - target.surface.mainPanelY - PANEL_FRAME_MARGIN
+              : canvasPos.y -
+                target.surface.y -
+                target.surface.mainPanelY -
+                PANEL_FRAME_MARGIN -
+                getTerminalStripTopOffset(target.surface.panel)
           const snapped = snapToGrid(localX, localY + CELL_H / 2)
           const row =
             target.area === 'supply'
@@ -1934,7 +2243,11 @@ export function HierarchyPanelCanvas({
                 target.surface.supplyPanelY +
                 PANEL_FRAME_MARGIN +
                 row * ROW_STRIDE
-              : target.surface.y + target.surface.mainPanelY + PANEL_FRAME_MARGIN + row * ROW_STRIDE
+              : target.surface.y +
+                target.surface.mainPanelY +
+                PANEL_FRAME_MARGIN +
+                getTerminalStripTopOffset(target.surface.panel) +
+                row * ROW_STRIDE
           const invalid = target.surface.placements.some((other) => {
             const otherArea =
               target.surface.kind === 'auxiliary'
@@ -1945,7 +2258,10 @@ export function HierarchyPanelCanvas({
             if (otherArea !== target.area) return false
             if (panelGridModuleRefKey(other.ref) === key) return false
             if (other.row !== row) return false
-            const otherCols = Math.max(1, Math.round(other.width / CELL_W))
+            const otherCols = Math.max(
+              MIN_PANEL_GRID_MODULE_WIDTH,
+              normalizePanelModuleMeasure(other.width / CELL_W)
+            )
             return col < other.col + otherCols && other.col < col + moduleCols
           })
           setModuleDragLive({
@@ -1999,7 +2315,12 @@ export function HierarchyPanelCanvas({
           const fallbackColumns = Math.max(
             1,
             creationPlacements.reduce(
-              (sum, candidate) => sum + Math.max(1, Math.round(candidate.width / CELL_W)),
+              (sum, candidate) =>
+                sum +
+                Math.max(
+                  MIN_PANEL_GRID_MODULE_WIDTH,
+                  normalizePanelModuleMeasure(candidate.width / CELL_W)
+                ),
               0
             )
           )
@@ -2056,6 +2377,104 @@ export function HierarchyPanelCanvas({
         }
       }
 
+      const terminalDevice =
+        placement.ref.kind === 'trunkDevice' && currentProject
+          ? findTrunkDeviceInProject(currentProject, placement.ref.id)
+          : undefined
+      const isTerminalStrip = !placement.inSupplyPanel && isTerminalStripDevice(terminalDevice)
+      if (isTerminalStrip) {
+        const canvasPos = { x: surface.x + rawX, y: surface.y + rawY }
+        const target = detectHierarchyModuleDropTarget(canvasPos, placement.ref)
+        const currentSurfaceId = surface.panel?.id ?? surface.id
+        const targetSurfaceId = target?.surface.panel?.id ?? target?.surface.id
+        if (
+          (target?.area === 'main' || target?.area === 'auxiliary') &&
+          (targetSurfaceId !== currentSurfaceId || target.area === 'auxiliary')
+        ) {
+          const targetPanel = target.surface.enclosure
+            ? { ...target.panel, gridView: target.surface.enclosure.gridView }
+            : target.panel
+          const targetMaxCol = Math.max(0, target.surface.cols - moduleCols)
+          const localX = canvasPos.x - target.surface.x - PANEL_FRAME_MARGIN
+          const panelLocalY = canvasPos.y - target.surface.y - target.surface.mainPanelY
+          const topRail =
+            targetPanel.gridView?.terminalStripTopRail === true &&
+            panelLocalY <= PANEL_FRAME_MARGIN + TERMINAL_STRIP_RAIL_H + ROW_GAP / 2
+          const bottomRail =
+            targetPanel.gridView?.terminalStripBottomRail === true &&
+            panelLocalY >=
+              target.surface.panelFrameHeight -
+                PANEL_FRAME_MARGIN -
+                TERMINAL_STRIP_RAIL_H -
+                ROW_GAP / 2
+          const targetRail = topRail ? 'top' : bottomRail ? 'bottom' : undefined
+          const localY = panelLocalY - PANEL_FRAME_MARGIN - getTerminalStripTopOffset(targetPanel)
+          const snapped = snapToGrid(localX, localY + CELL_H / 2)
+          const row = clamp(snapped.row, 0, target.surface.rows - 1)
+          const col = snapTerminalStripPlacementCol(
+            localX,
+            moduleCols,
+            targetMaxCol,
+            row,
+            target.surface.placements.filter(
+              (other) =>
+                panelGridModuleRefKey(other.ref) !== key &&
+                !other.terminalStripMemberRefs?.some(
+                  (member) => panelGridModuleRefKey(member) === key
+                )
+            ),
+            shiftKey,
+            targetRail
+          )
+          const invalid = target.surface.placements.some((other) => {
+            if ((other.inSupplyPanel && target.area !== 'auxiliary') || other.terminalStripRail !== targetRail) return false
+            if (
+              panelGridModuleRefKey(other.ref) === key ||
+              other.terminalStripMemberRefs?.some((member) => panelGridModuleRefKey(member) === key)
+            )
+              return false
+            if (!targetRail && other.row !== row) return false
+            const otherCols = Math.max(
+              MIN_PANEL_GRID_MODULE_WIDTH,
+              normalizePanelModuleMeasure(other.width / CELL_W)
+            )
+            return col < other.col + otherCols && other.col < col + moduleCols
+          })
+          const previewY =
+            targetRail === 'top'
+              ? target.surface.y + target.surface.mainPanelY + PANEL_FRAME_MARGIN
+              : targetRail === 'bottom'
+                ? target.surface.y +
+                  target.surface.mainPanelY +
+                  target.surface.panelFrameHeight -
+                  PANEL_FRAME_MARGIN -
+                  TERMINAL_STRIP_RAIL_H
+                : target.surface.y +
+                  target.surface.mainPanelY +
+                  PANEL_FRAME_MARGIN +
+                  getTerminalStripTopOffset(targetPanel) +
+                  row * ROW_STRIDE
+          setModuleDragLive({
+            panelId: targetSurfaceId ?? currentSurfaceId,
+            x: canvasPos.x,
+            y: canvasPos.y,
+            width: placement.width,
+            height: placement.height,
+            ref: placement.ref,
+          })
+          setModuleDragPreview({
+            panelId: targetSurfaceId ?? currentSurfaceId,
+            x: target.surface.x + PANEL_FRAME_MARGIN + col * CELL_W,
+            y: previewY,
+            width: placement.width,
+            height: targetRail ? TERMINAL_STRIP_RAIL_H : CELL_H,
+            ref: placement.ref,
+            invalid,
+          })
+          return
+        }
+      }
+
       if (placement.inSupplyPanel) {
         const dx = rawX - placement.x
         const dy = rawY - placement.y
@@ -2098,7 +2517,10 @@ export function HierarchyPanelCanvas({
           }))
           const invalid =
             previewItems.some((item) => {
-              const widthCols = Math.max(1, Math.round(item.width / CELL_W))
+              const widthCols = Math.max(
+                MIN_PANEL_GRID_MODULE_WIDTH,
+                normalizePanelModuleMeasure(item.width / CELL_W)
+              )
               return item.col < 0 || item.col > surface.cols - widthCols
             }) ||
             surface.placements.some((other) => {
@@ -2111,9 +2533,15 @@ export function HierarchyPanelCanvas({
               ) {
                 return false
               }
-              const otherCols = Math.max(1, Math.round(other.width / CELL_W))
+              const otherCols = Math.max(
+                MIN_PANEL_GRID_MODULE_WIDTH,
+                normalizePanelModuleMeasure(other.width / CELL_W)
+              )
               return previewItems.some((item) => {
-                const widthCols = Math.max(1, Math.round(item.width / CELL_W))
+                const widthCols = Math.max(
+                  MIN_PANEL_GRID_MODULE_WIDTH,
+                  normalizePanelModuleMeasure(item.width / CELL_W)
+                )
                 return item.col < other.col + otherCols && other.col < item.col + widthCols
               })
             })
@@ -2138,7 +2566,10 @@ export function HierarchyPanelCanvas({
         const invalid = surface.placements.some((other) => {
           if (!other.inSupplyPanel) return false
           if (panelGridModuleRefKey(other.ref) === key) return false
-          const otherCols = Math.max(1, Math.round(other.width / CELL_W))
+          const otherCols = Math.max(
+            MIN_PANEL_GRID_MODULE_WIDTH,
+            normalizePanelModuleMeasure(other.width / CELL_W)
+          )
           return col < other.col + otherCols && other.col < col + moduleCols
         })
         setModuleDragPreview({
@@ -2154,10 +2585,44 @@ export function HierarchyPanelCanvas({
       }
 
       const localX = rawX - PANEL_FRAME_MARGIN
-      const localY = rawY - surface.mainPanelY - PANEL_FRAME_MARGIN
+      const panelLocalY = rawY - surface.mainPanelY
+      const panel =
+        surface.panel ??
+        (surface.enclosure && panelOptions[0]
+          ? { ...panelOptions[0].panel, gridView: surface.enclosure.gridView }
+          : null)
+      const previewDevice =
+        placement.ref.kind === 'trunkDevice' && currentProject
+          ? findTrunkDeviceInProject(currentProject, placement.ref.id)
+          : undefined
+      const previewIsTerminal =
+        previewDevice?.symbol === 'terminal_strip' || previewDevice?.type === 'terminal_strip'
+      const previewTopRail =
+        previewIsTerminal &&
+        panel?.gridView?.terminalStripTopRail === true &&
+        panelLocalY <= PANEL_FRAME_MARGIN + TERMINAL_STRIP_RAIL_H + ROW_GAP / 2
+      const previewBottomRail =
+        previewIsTerminal &&
+        panel?.gridView?.terminalStripBottomRail === true &&
+        panelLocalY >=
+          surface.panelFrameHeight - PANEL_FRAME_MARGIN - TERMINAL_STRIP_RAIL_H - ROW_GAP / 2
+      const previewRail = previewTopRail ? 'top' : previewBottomRail ? 'bottom' : undefined
+      const localY = panelLocalY - PANEL_FRAME_MARGIN - getTerminalStripTopOffset(panel)
       const snapped = snapToGrid(localX, localY + CELL_H / 2)
       const row = clamp(snapped.row, 0, surface.rows - 1)
-      const col = clamp(maxCol, 0, snapped.col)
+      const col = previewIsTerminal
+        ? snapTerminalStripPlacementCol(
+            localX,
+            moduleCols,
+            maxCol,
+            row,
+            surface.placements.filter(
+              (other) => panelGridModuleRefKey(other.ref) !== key && !other.inSupplyPanel
+            ),
+            shiftKey,
+            previewRail
+          )
+        : clamp(maxCol, 0, snapped.col)
       const dx = rawX - placement.x
       const dy = rawY - placement.y
       if (selectedPlacements.length >= 2) {
@@ -2178,6 +2643,7 @@ export function HierarchyPanelCanvas({
         })
       } else {
         setModuleDragLive({
+          isAltDuplicate,
           panelId: surfaceTargetId,
           x: surface.x + rawX,
           y: surface.y + rawY,
@@ -2198,13 +2664,17 @@ export function HierarchyPanelCanvas({
             surface.y +
             surface.mainPanelY +
             PANEL_FRAME_MARGIN +
+            getTerminalStripTopOffset(panel) +
             (selectedPlacement.row + deltaRow) * ROW_STRIDE,
           width: selectedPlacement.width,
           height: selectedPlacement.height,
         }))
         const invalid =
           previewItems.some((item) => {
-            const widthCols = Math.max(1, Math.round(item.width / CELL_W))
+            const widthCols = Math.max(
+              MIN_PANEL_GRID_MODULE_WIDTH,
+              normalizePanelModuleMeasure(item.width / CELL_W)
+            )
             return (
               item.row < 0 ||
               item.row >= surface.rows ||
@@ -2222,9 +2692,15 @@ export function HierarchyPanelCanvas({
             ) {
               return false
             }
-            const otherCols = Math.max(1, Math.round(other.width / CELL_W))
+            const otherCols = Math.max(
+              MIN_PANEL_GRID_MODULE_WIDTH,
+              normalizePanelModuleMeasure(other.width / CELL_W)
+            )
             return previewItems.some((item) => {
-              const widthCols = Math.max(1, Math.round(item.width / CELL_W))
+              const widthCols = Math.max(
+                MIN_PANEL_GRID_MODULE_WIDTH,
+                normalizePanelModuleMeasure(item.width / CELL_W)
+              )
               if (item.row !== other.row) return false
               return item.col < other.col + otherCols && other.col < item.col + widthCols
             })
@@ -2232,7 +2708,12 @@ export function HierarchyPanelCanvas({
         setModuleDragPreview({
           panelId: surfaceTargetId,
           x: surface.x + PANEL_FRAME_MARGIN + col * CELL_W,
-          y: surface.y + surface.mainPanelY + PANEL_FRAME_MARGIN + row * ROW_STRIDE,
+          y:
+            surface.y +
+            surface.mainPanelY +
+            PANEL_FRAME_MARGIN +
+            getTerminalStripTopOffset(panel) +
+            row * ROW_STRIDE,
           width: placement.width,
           height: placement.height,
           ref: placement.ref,
@@ -2244,16 +2725,28 @@ export function HierarchyPanelCanvas({
       const invalid = surface.placements.some((other) => {
         if (other.inSupplyPanel) return false
         if (panelGridModuleRefKey(other.ref) === key) return false
-        if (other.row !== row) return false
-        const otherCols = Math.max(1, Math.round(other.width / CELL_W))
+        if (other.terminalStripRail !== previewRail) return false
+        if (!previewRail && other.row !== row) return false
+        const otherCols = Math.max(
+          MIN_PANEL_GRID_MODULE_WIDTH,
+          normalizePanelModuleMeasure(other.width / CELL_W)
+        )
         return col < other.col + otherCols && other.col < col + moduleCols
       })
       setModuleDragPreview({
         panelId: surfaceTargetId,
         x: surface.x + PANEL_FRAME_MARGIN + col * CELL_W,
-        y: surface.y + surface.mainPanelY + PANEL_FRAME_MARGIN + row * ROW_STRIDE,
+        y:
+          surface.y +
+          surface.mainPanelY +
+          PANEL_FRAME_MARGIN +
+          (previewRail === 'top'
+            ? 0
+            : previewRail === 'bottom'
+              ? surface.panelFrameHeight - PANEL_FRAME_MARGIN * 2 - TERMINAL_STRIP_RAIL_H
+              : getTerminalStripTopOffset(panel) + row * ROW_STRIDE),
         width: placement.width,
-        height: placement.height,
+        height: previewRail ? TERMINAL_STRIP_RAIL_H : CELL_H,
         ref: placement.ref,
         invalid,
       })
@@ -2273,7 +2766,8 @@ export function HierarchyPanelCanvas({
       surface: HierarchySurface,
       placement: ModulePlacement & { inSupplyPanel?: boolean },
       rawX: number,
-      rawY: number
+      rawY: number,
+      shiftKey = false
     ) => {
       logger.warn('[PanelCanvas hierarchy drag] handleHierarchyModuleDragEnd:start', {
         surfaceId: surface.id,
@@ -2286,7 +2780,8 @@ export function HierarchyPanelCanvas({
       const preview = moduleDragPreview
       setModuleDragPreview(null)
       setModuleDragLive(null)
-      const panel = surface.panel
+      const panel = surface.panel ?? (surface.enclosure && panelOptions[0]
+        ? { ...panelOptions[0].panel, gridView: surface.enclosure.gridView } : null)
       const surfaceTargetId = panel?.id ?? surface.id
       if (
         preview &&
@@ -2301,7 +2796,10 @@ export function HierarchyPanelCanvas({
       const key = panelGridModuleRefKey(placement.ref)
       const totalCols = placement.inSupplyPanel ? surface.supplyCols : surface.cols
       const totalRows = surface.rows
-      const moduleCols = Math.max(1, Math.round(placement.width / CELL_W))
+      const moduleCols = Math.max(
+        MIN_PANEL_GRID_MODULE_WIDTH,
+        normalizePanelModuleMeasure(placement.width / CELL_W)
+      )
       const maxCol = Math.max(0, totalCols - moduleCols)
       const selectedPlacements =
         selection.ids.length >= 2 && isHierarchyRefInSelection(placement.ref)
@@ -2408,7 +2906,10 @@ export function HierarchyPanelCanvas({
           const collidedSlot = existingSupplySlots.find((slot) => {
             const slotKey = panelGridModuleRefKey(slot.module)
             if (slotKey === key) return false
-            const width = Math.max(1, resolveModuleWidthCols(slot.module, currentProject, slot))
+            const width = Math.max(
+              MIN_PANEL_GRID_MODULE_WIDTH,
+              resolveModuleWidthCols(slot.module, currentProject, slot)
+            )
             return snappedCol < slot.col + width && slot.col < snappedCol + moduleCols
           })
           const reorderedSupplySlots = existingSupplySlots.map((slot) => {
@@ -2524,7 +3025,10 @@ export function HierarchyPanelCanvas({
         }
         const collidedSlot = existingSupplySlots.find((slot) => {
           if (panelGridModuleRefKey(slot.module) === key) return false
-          const width = Math.max(1, resolveModuleWidthCols(slot.module, currentProject, slot))
+          const width = Math.max(
+            MIN_PANEL_GRID_MODULE_WIDTH,
+            resolveModuleWidthCols(slot.module, currentProject, slot)
+          )
           return col < slot.col + width && slot.col < col + moduleCols
         })
         const reorderedSupplySlots = existingSupplySlots.map((slot) => {
@@ -2556,15 +3060,105 @@ export function HierarchyPanelCanvas({
       }
 
       if (!panel) return
+
+      const terminalRef = placement.ref.kind === 'trunkDevice' ? placement.ref : null
+      const terminalDevice =
+        terminalRef && currentProject
+          ? findTrunkDeviceInProject(currentProject, terminalRef.id)
+          : undefined
+      const isTerminalStrip = terminalRef != null && isTerminalStripDevice(terminalDevice)
+      if (terminalRef && isTerminalStrip) {
+        const canvasPos = { x: surface.x + rawX, y: surface.y + rawY }
+        const target = detectHierarchyModuleDropTarget(canvasPos, terminalRef)
+        const targetSurfaceId = target?.surface.panel?.id ?? target?.surface.id
+        const currentSurfaceId = surface.panel?.id ?? surface.id
+        if (
+          (target?.area === 'main' || target?.area === 'auxiliary') &&
+          (targetSurfaceId !== currentSurfaceId || target.area === 'auxiliary')
+        ) {
+          if (preview?.invalid) return
+          const targetPanel = target.surface.enclosure
+            ? { ...target.panel, gridView: target.surface.enclosure.gridView }
+            : target.panel
+          const localX = canvasPos.x - target.surface.x - PANEL_FRAME_MARGIN
+          const panelLocalY = canvasPos.y - target.surface.y - target.surface.mainPanelY
+          const topRail =
+            targetPanel.gridView?.terminalStripTopRail === true &&
+            panelLocalY <= PANEL_FRAME_MARGIN + TERMINAL_STRIP_RAIL_H + ROW_GAP / 2
+          const bottomRail =
+            targetPanel.gridView?.terminalStripBottomRail === true &&
+            panelLocalY >=
+              target.surface.panelFrameHeight -
+                PANEL_FRAME_MARGIN -
+                TERMINAL_STRIP_RAIL_H -
+                ROW_GAP / 2
+          const targetRail = topRail ? 'top' : bottomRail ? 'bottom' : undefined
+          const localY = panelLocalY - PANEL_FRAME_MARGIN - getTerminalStripTopOffset(targetPanel)
+          const snapped = snapToGrid(localX, localY + CELL_H / 2)
+          const row = clamp(snapped.row, 0, target.surface.rows - 1)
+          const col = snapTerminalStripPlacementCol(
+            localX,
+            moduleCols,
+            Math.max(0, target.surface.cols - moduleCols),
+            row,
+            target.surface.placements.filter((other) => panelGridModuleRefKey(other.ref) !== key),
+            shiftKey,
+            targetRail
+          )
+          const sourceSlot = panel.gridView?.slots?.find(
+            (candidate) => panelGridModuleRefKey(candidate.module) === key
+          )
+          const targetSlot: PanelGridSlot = {
+            row: targetRail ? 0 : row,
+            col,
+            module: placement.ref,
+            ...(targetRail ? { terminalStripRail: targetRail } : {}),
+            ...(sourceSlot?.moduleWidthManual === true
+              ? {
+                  moduleWidth: sourceSlot.moduleWidth,
+                  moduleWidthManual: true,
+                }
+              : {}),
+          }
+          if (moveTerminalStripToPanel(terminalRef.id, targetPanel.id, targetSlot, target.surface.enclosure?.id)) {
+            setSelection({ type: 'trunkDevice', ids: [terminalRef.id] })
+          }
+          return
+        }
+      }
+
       const existingMainSlots = panel.gridView?.slots ?? []
       const previousSlot = existingMainSlots.find(
         (slot) => panelGridModuleRefKey(slot.module) === key
       )
       const localX = rawX - PANEL_FRAME_MARGIN
-      const localY = rawY - surface.mainPanelY - PANEL_FRAME_MARGIN
+      const panelLocalY = rawY - surface.mainPanelY
+      const topRail =
+        isTerminalStrip &&
+        panel.gridView?.terminalStripTopRail === true &&
+        panelLocalY <= PANEL_FRAME_MARGIN + TERMINAL_STRIP_RAIL_H + ROW_GAP / 2
+      const bottomRail =
+        isTerminalStrip &&
+        panel.gridView?.terminalStripBottomRail === true &&
+        panelLocalY >=
+          surface.panelFrameHeight - PANEL_FRAME_MARGIN - TERMINAL_STRIP_RAIL_H - ROW_GAP / 2
+      const targetTerminalRail = topRail ? 'top' : bottomRail ? 'bottom' : undefined
+      const localY = panelLocalY - PANEL_FRAME_MARGIN - getTerminalStripTopOffset(panel)
       const snapped = snapToGrid(localX, localY + CELL_H / 2)
       const row = clamp(snapped.row, 0, totalRows - 1)
-      const col = clamp(maxCol, 0, snapped.col)
+      const col = isTerminalStrip
+        ? snapTerminalStripPlacementCol(
+            localX,
+            moduleCols,
+            maxCol,
+            row,
+            surface.placements.filter(
+              (other) => panelGridModuleRefKey(other.ref) !== key && !other.inSupplyPanel
+            ),
+            shiftKey,
+            targetTerminalRail
+          )
+        : clamp(maxCol, 0, snapped.col)
       if (selectedPlacements.length >= 2) {
         const selectedKeys = new Set(
           selectedPlacements.map((selected) => panelGridModuleRefKey(selected.ref))
@@ -2600,8 +3194,12 @@ export function HierarchyPanelCanvas({
       }
       const collidedSlot = existingMainSlots.find((slot) => {
         if (panelGridModuleRefKey(slot.module) === key) return false
-        const width = Math.max(1, resolveModuleWidthCols(slot.module, currentProject, slot))
-        if (slot.row !== row) return false
+        const width = Math.max(
+          MIN_PANEL_GRID_MODULE_WIDTH,
+          resolveModuleWidthCols(slot.module, currentProject, slot)
+        )
+        if (slot.terminalStripRail !== targetTerminalRail) return false
+        if (!targetTerminalRail && slot.row !== row) return false
         return col < slot.col + width && slot.col < col + moduleCols
       })
       const reorderedMainSlots = existingMainSlots.map((slot) => {
@@ -2619,7 +3217,13 @@ export function HierarchyPanelCanvas({
         }
         return slot
       })
-      const nextMainSlots = upsertPanelGridSlotPosition(reorderedMainSlots, placement.ref, row, col)
+      const nextMainSlots = upsertPanelGridSlotPosition(
+        reorderedMainSlots,
+        placement.ref,
+        targetTerminalRail ? 0 : row,
+        col,
+        targetTerminalRail
+      )
       updatePanelGridSlots(panel.id, nextMainSlots)
       logger.warn('[PanelCanvas hierarchy drag] commit:main-single', {
         afterCount: nextMainSlots.length,
@@ -2634,12 +3238,111 @@ export function HierarchyPanelCanvas({
       moveSupplyDeviceToAuxiliaryEnclosure,
       moveSupplyDeviceToGridEnclosure,
       moveSupplyDeviceToPanelEnclosure,
+      moveTerminalStripToPanel,
       panelOptions,
       selection.ids.length,
       updatePanelGridSlots,
       updateSupplyPanelSlots,
       setSelection,
     ]
+  )
+
+  /**
+   * Panel-grid Alt-drag is deliberately limited to circuit-owned modules. Protection
+   * duplication uses the established circuit-clone command; endpoint modules reuse the
+   * normal endpoint duplication rules (including same-branch switches). Supply and
+   * trunk devices are topology owners, so copying them here would create broken feeds.
+   */
+  const handleHierarchyModuleAltDuplicate = useCallback(
+    (
+      surface: HierarchySurface,
+      placement: ModulePlacement & { inSupplyPanel?: boolean },
+      rawX: number,
+      rawY: number
+    ) => {
+      const preview = moduleDragPreview
+      setModuleDragPreview(null)
+      setModuleDragLive(null)
+      const sourcePanel = surface.panel
+      if (
+        !currentProject ||
+        !sourcePanel ||
+        placement.inSupplyPanel ||
+        preview?.invalid ||
+        preview?.panelId !== sourcePanel.id
+      ) {
+        return
+      }
+
+      // No slot is created until the existing collision preview is valid.
+      const localX = rawX - PANEL_FRAME_MARGIN
+      const localY =
+        rawY - surface.mainPanelY - PANEL_FRAME_MARGIN - getTerminalStripTopOffset(sourcePanel)
+      const snapped = snapToGrid(localX, localY + CELL_H / 2)
+      const moduleCols = Math.max(
+        MIN_PANEL_GRID_MODULE_WIDTH,
+        normalizePanelModuleMeasure(placement.width / CELL_W)
+      )
+      const row = clamp(snapped.row, 0, surface.rows - 1)
+      const col = clamp(Math.max(0, surface.cols - moduleCols), 0, snapped.col)
+
+      const store = useProjectStore.getState()
+      let duplicateRef: PanelGridModuleRef | null = null
+
+      if (placement.ref.kind === 'protection') {
+        const protection = store.getProtectionById(placement.ref.id)
+        if (!protection) return
+        const protectionOwner = store.getPanelForProtection(placement.ref.id)
+        if (protectionOwner?.id !== sourcePanel.id) return
+        const newProtectionId = store.duplicateProtectionLeft(placement.ref.id, undefined, {
+          copyCircuitContents: false,
+        })
+        if (!newProtectionId) return
+        duplicateRef = { kind: 'protection', id: newProtectionId }
+      } else if (placement.ref.kind === 'domotica') {
+        const result = duplicateEndpointOnCircuit(
+          currentProject,
+          {
+            circuitId: placement.ref.circuitId,
+            sourceEndpointId: placement.ref.endpointId,
+            context: 'plan',
+          },
+          {
+            getCircuitById: store.getCircuitById,
+            getEndpointById: store.getEndpointById,
+            addEndpoint: store.addEndpoint,
+            updateCircuit: store.updateCircuit,
+            setSelection: undefined,
+          }
+        )
+        if (!result.ok || !result.newEndpointId) return
+        duplicateRef = {
+          kind: 'domotica',
+          endpointId: result.newEndpointId,
+          circuitId: placement.ref.circuitId,
+        }
+      } else {
+        return
+      }
+
+      const panelAfterDuplicate = store.getPanelById(sourcePanel.id)
+      if (!panelAfterDuplicate) return
+      const newKey = panelGridModuleRefKey(duplicateRef)
+      const existingSlots = panelAfterDuplicate.gridView?.slots ?? []
+      const nextSlots = existingSlots.map((slot) =>
+        panelGridModuleRefKey(slot.module) === newKey ? { ...slot, row, col } : slot
+      )
+      if (!nextSlots.some((slot) => panelGridModuleRefKey(slot.module) === newKey)) {
+        nextSlots.push({ row, col, module: duplicateRef })
+      }
+      store.updatePanelGridSlots(sourcePanel.id, nextSlots)
+      setSelection(
+        duplicateRef.kind === 'protection'
+          ? { type: 'protection', ids: [duplicateRef.id] }
+          : { type: 'endpoint', ids: [duplicateRef.endpointId] }
+      )
+    },
+    [currentProject, moduleDragPreview, setSelection]
   )
 
   const handleHierarchyModuleResize = useCallback(
@@ -2799,17 +3502,29 @@ export function HierarchyPanelCanvas({
               name={`hierarchy-surface hierarchy-surface-${surface.id}`}
             >
               {surface.kind === 'shared_supply' ? (
-                <Group listening={false}>
+                <Group>
                   <Rect
                     x={0}
                     y={0}
                     width={surface.width}
                     height={surface.height}
-                    stroke={colors.panelSupplyStroke}
+                    stroke={selectedSupplyPanelIds.includes(PANEL_SCENE_SHARED_SUPPLY_ID)
+                      ? colors.moduleBorderSelected : colors.panelSupplyStroke}
                     strokeWidth={3}
                     fill={colors.panelFrameFill}
                     cornerRadius={4}
-                    listening={false}
+                    listening={!labelMode}
+                    name={`supplyPanel-${PANEL_SCENE_SHARED_SUPPLY_ID}`}
+                    onMouseDown={startPanelFrameSelectionRect}
+                    onClick={(event) => {
+                      event.cancelBubble = true
+                      if (shouldIgnorePanelFrameClick(event.evt)) return
+                      setSelection({ type: 'supplyPanel', ids: [PANEL_SCENE_SHARED_SUPPLY_ID] })
+                    }}
+                    onTap={(event) => {
+                      event.cancelBubble = true
+                      setSelection({ type: 'supplyPanel', ids: [PANEL_SCENE_SHARED_SUPPLY_ID] })
+                    }}
                   />
                   <Text
                     x={8}
@@ -2872,7 +3587,7 @@ export function HierarchyPanelCanvas({
                     )
                   })()}
                 </Group>
-              ) : surface.kind === 'auxiliary' ? (
+              ) : surface.kind === 'auxiliary' || surface.kind === 'junction_panel' ? (
                 <>
                   <Rect
                     x={0}
@@ -2880,27 +3595,80 @@ export function HierarchyPanelCanvas({
                     width={surface.width}
                     height={surface.height}
                     stroke={
-                      selectedAuxiliaryEnclosureIds.includes(surface.id)
+                      (surface.kind === 'auxiliary' &&
+                        selectedAuxiliaryEnclosureIds.includes(surface.id)) ||
+                      (surface.kind === 'junction_panel' &&
+                        surface.placements.some(
+                          (placement) =>
+                            placement.ref.kind === 'trunkDevice' &&
+                            selection.type === 'trunkDevice' &&
+                            selection.ids.includes(placement.ref.id)
+                        ))
                         ? colors.moduleBorderSelected
                         : colors.panelSupplyStroke
                     }
-                    strokeWidth={selectedAuxiliaryEnclosureIds.includes(surface.id) ? 3 : 2}
+                    strokeWidth={
+                      (surface.kind === 'auxiliary' &&
+                        selectedAuxiliaryEnclosureIds.includes(surface.id)) ||
+                      (surface.kind === 'junction_panel' &&
+                        surface.placements.some(
+                          (placement) =>
+                            placement.ref.kind === 'trunkDevice' &&
+                            selection.type === 'trunkDevice' &&
+                            selection.ids.includes(placement.ref.id)
+                        ))
+                        ? 3
+                        : 2
+                    }
                     fill={colors.panelFrameFill}
                     cornerRadius={4}
-                    name={`auxiliaryEnclosure-${surface.id}`}
-                    onMouseDown={startPanelFrameSelectionRect}
-                    onClick={(event) => {
-                      if (shouldIgnorePanelFrameClick(event.evt)) {
-                        event.cancelBubble = true
-                        return
-                      }
-                      event.cancelBubble = true
-                      setSelection({ type: 'auxiliaryEnclosure', ids: [surface.id] })
-                    }}
-                    onTap={(event) => {
-                      event.cancelBubble = true
-                      setSelection({ type: 'auxiliaryEnclosure', ids: [surface.id] })
-                    }}
+                    listening={!labelMode}
+                    name={
+                      surface.kind === 'auxiliary' ? `auxiliaryEnclosure-${surface.id}` : undefined
+                    }
+                    onMouseDown={
+                      surface.kind === 'auxiliary' ? startPanelFrameSelectionRect : undefined
+                    }
+                    onClick={
+                      surface.kind === 'auxiliary'
+                        ? (event) => {
+                            if (shouldIgnorePanelFrameClick(event.evt)) {
+                              event.cancelBubble = true
+                              return
+                            }
+                            event.cancelBubble = true
+                            setSelection({ type: 'auxiliaryEnclosure', ids: [surface.id] })
+                          }
+                        : surface.kind === 'junction_panel'
+                          ? (event) => {
+                              event.cancelBubble = true
+                              setSelection({
+                                type: 'trunkDevice',
+                                ids: surface.placements.flatMap((placement) =>
+                                  placement.ref.kind === 'trunkDevice' ? [placement.ref.id] : []
+                                ),
+                              })
+                            }
+                          : undefined
+                    }
+                    onTap={
+                      surface.kind === 'auxiliary'
+                        ? (event) => {
+                            event.cancelBubble = true
+                            setSelection({ type: 'auxiliaryEnclosure', ids: [surface.id] })
+                          }
+                        : surface.kind === 'junction_panel'
+                          ? (event) => {
+                              event.cancelBubble = true
+                              setSelection({
+                                type: 'trunkDevice',
+                                ids: surface.placements.flatMap((placement) =>
+                                  placement.ref.kind === 'trunkDevice' ? [placement.ref.id] : []
+                                ),
+                              })
+                            }
+                          : undefined
+                    }
                   />
                   <Text
                     x={8}
@@ -2913,11 +3681,34 @@ export function HierarchyPanelCanvas({
                     fill={colors.panelFrameStroke}
                     listening={false}
                   />
+                  {((surface.kind === 'junction_panel' &&
+                    surface.junctionPanelGridView?.terminalStripTopRail) ||
+                    (surface.kind === 'auxiliary' && surface.enclosure?.gridView.terminalStripTopRail)) && (
+                      <Rect
+                        x={PANEL_FRAME_MARGIN}
+                        y={PANEL_FRAME_MARGIN}
+                        width={surface.contentWidth}
+                        height={TERMINAL_STRIP_RAIL_H}
+                        fill="transparent"
+                        stroke={colors.panelFrameStroke}
+                        opacity={0.2}
+                        strokeWidth={1}
+                        listening={false}
+                      />
+                    )}
                   {Array.from({ length: surface.rows }).map((_, rowIndex) => (
                     <Rect
                       key={`auxiliary-rail-${surface.id}-${rowIndex}`}
                       x={PANEL_FRAME_MARGIN}
-                      y={PANEL_FRAME_MARGIN + rowIndex * ROW_STRIDE}
+                      y={
+                        PANEL_FRAME_MARGIN +
+                        ((surface.kind === 'junction_panel' &&
+                        surface.junctionPanelGridView?.terminalStripTopRail) ||
+                        (surface.kind === 'auxiliary' && surface.enclosure?.gridView.terminalStripTopRail)
+                          ? TERMINAL_STRIP_RAIL_H + ROW_GAP
+                          : 0) +
+                        rowIndex * ROW_STRIDE
+                      }
                       width={surface.contentWidth}
                       height={CELL_H}
                       fill="transparent"
@@ -2933,9 +3724,22 @@ export function HierarchyPanelCanvas({
                         key={`auxiliary-grid-${surface.id}-${rowIndex}-${colIndex}`}
                         points={[
                           PANEL_FRAME_MARGIN + colIndex * CELL_W,
-                          PANEL_FRAME_MARGIN + rowIndex * ROW_STRIDE,
+                          PANEL_FRAME_MARGIN +
+                            ((surface.kind === 'junction_panel' &&
+                            surface.junctionPanelGridView?.terminalStripTopRail) ||
+                            (surface.kind === 'auxiliary' && surface.enclosure?.gridView.terminalStripTopRail)
+                              ? TERMINAL_STRIP_RAIL_H + ROW_GAP
+                              : 0) +
+                            rowIndex * ROW_STRIDE,
                           PANEL_FRAME_MARGIN + colIndex * CELL_W,
-                          PANEL_FRAME_MARGIN + rowIndex * ROW_STRIDE + CELL_H,
+                          PANEL_FRAME_MARGIN +
+                            ((surface.kind === 'junction_panel' &&
+                            surface.junctionPanelGridView?.terminalStripTopRail) ||
+                            (surface.kind === 'auxiliary' && surface.enclosure?.gridView.terminalStripTopRail)
+                              ? TERMINAL_STRIP_RAIL_H + ROW_GAP
+                              : 0) +
+                            rowIndex * ROW_STRIDE +
+                            CELL_H,
                         ]}
                         stroke={colors.panelFrameStroke}
                         opacity={0.08}
@@ -2944,6 +3748,145 @@ export function HierarchyPanelCanvas({
                       />
                     ))
                   )}
+                  {((surface.kind === 'junction_panel' &&
+                    surface.junctionPanelGridView?.terminalStripBottomRail) ||
+                    (surface.kind === 'auxiliary' && surface.enclosure?.gridView.terminalStripBottomRail)) && (
+                      <Rect
+                        x={PANEL_FRAME_MARGIN}
+                        y={surface.height - PANEL_FRAME_MARGIN - TERMINAL_STRIP_RAIL_H}
+                        width={surface.contentWidth}
+                        height={TERMINAL_STRIP_RAIL_H}
+                        fill="transparent"
+                        stroke={colors.panelFrameStroke}
+                        opacity={0.2}
+                        strokeWidth={1}
+                        listening={false}
+                      />
+                    )}
+                  {(surface.kind === 'junction_panel' || surface.kind === 'auxiliary') &&
+                    canDragItems &&
+                    (surface.kind === 'auxiliary'
+                      ? selectedAuxiliaryEnclosureIds.includes(surface.id)
+                      : surface.placements.some(
+                          (placement) =>
+                            placement.ref.kind === 'trunkDevice' &&
+                            selection.type === 'trunkDevice' &&
+                            selection.ids.includes(placement.ref.id)
+                        )) && (
+                      <>
+                        {panelFrameResizePreview?.panelId === surface.id && (
+                          <>
+                            <Rect
+                              x={panelFrameResizePreview.x}
+                              y={panelFrameResizePreview.y}
+                              width={panelFrameResizePreview.width}
+                              height={panelFrameResizePreview.height}
+                              fill="transparent"
+                              stroke={colors.moduleBorderSelected}
+                              strokeWidth={2}
+                              dash={[7, 5]}
+                              cornerRadius={4}
+                              listening={false}
+                            />
+                            <Group
+                              x={
+                                panelFrameResizePreview.axis === 'columns'
+                                  ? panelFrameResizePreview.width + 10
+                                  : panelFrameResizePreview.width / 2 - 30
+                              }
+                              y={
+                                panelFrameResizePreview.axis === 'columns'
+                                  ? panelFrameResizePreview.height / 2 - 10
+                                  : panelFrameResizePreview.y - 26
+                              }
+                              listening={false}
+                            >
+                              <Rect
+                                width={60}
+                                height={20}
+                                fill={colors.panelFrameFill}
+                                stroke={colors.moduleBorderSelected}
+                                strokeWidth={1}
+                                cornerRadius={6}
+                              />
+                              <Text
+                                x={4}
+                                y={4}
+                                width={52}
+                                height={12}
+                                text={`${panelFrameResizePreview.axis === 'rows' ? t('panelCanvas.rows', 'Rows') : t('panelCanvas.columns', 'Columns')} ${panelFrameResizePreview.value}`}
+                                fontSize={8}
+                                fontStyle="bold"
+                                fontFamily={fontFamily}
+                                fill={colors.moduleText}
+                                align="center"
+                              />
+                            </Group>
+                          </>
+                        )}
+                        <Rect
+                          x={surface.width - 3}
+                          y={surface.height / 2 - 16}
+                          width={6}
+                          height={32}
+                          fill="#0284c7"
+                          cornerRadius={3}
+                          draggable
+                          onDragMove={(event) => {
+                            event.cancelBubble = true
+                            previewJunctionPanelFrameResize(
+                              surface,
+                              'columns',
+                              event.target.x() - (surface.width - 3)
+                            )
+                            event.target.y(surface.height / 2 - 16)
+                          }}
+                          onDragEnd={(event) => {
+                            event.cancelBubble = true
+                            event.target.position({
+                              x: surface.width - 3,
+                              y: surface.height / 2 - 16,
+                            })
+                            commitJunctionPanelFrameResize(surface)
+                          }}
+                          onMouseEnter={(event) => {
+                            const stage = event.target.getStage()
+                            if (stage) stage.container().style.cursor = 'ew-resize'
+                          }}
+                          onMouseLeave={(event) => {
+                            const stage = event.target.getStage()
+                            if (stage) stage.container().style.cursor = ''
+                          }}
+                        />
+                        <Rect
+                          x={surface.width / 2 - 16}
+                          y={-3}
+                          width={32}
+                          height={6}
+                          fill="#0284c7"
+                          cornerRadius={3}
+                          draggable
+                          onDragMove={(event) => {
+                            event.cancelBubble = true
+                            previewJunctionPanelFrameResize(surface, 'rows', -event.target.y() - 3)
+                            event.target.x(surface.width / 2 - 16)
+                          }}
+                          onDragEnd={(event) => {
+                            event.cancelBubble = true
+                            event.target.position({ x: surface.width / 2 - 16, y: -3 })
+                            commitJunctionPanelFrameResize(surface)
+                          }}
+                          onMouseEnter={(event) => {
+                            const stage = event.target.getStage()
+                            if (stage) stage.container().style.cursor = 'ns-resize'
+                          }}
+                          onMouseLeave={(event) => {
+                            const stage = event.target.getStage()
+                            if (stage) stage.container().style.cursor = ''
+                          }}
+                        />
+                      </>
+                    )}
                 </>
               ) : (
                 <>
@@ -2970,6 +3913,7 @@ export function HierarchyPanelCanvas({
                     strokeWidth={0}
                     cornerRadius={4}
                     name={`panel-${surface.panel?.id ?? surface.id}`}
+                    listening={!labelMode}
                     onMouseDown={startPanelFrameSelectionRect}
                     onClick={(e) => {
                       if (!surface.panel) return
@@ -3076,8 +4020,10 @@ export function HierarchyPanelCanvas({
                         stroke="transparent"
                         strokeWidth={0}
                         cornerRadius={4}
-                        onMouseDown={startPanelFrameSelectionRect}
+                        listening={!labelMode}
+                        onMouseDown={labelMode ? undefined : startPanelFrameSelectionRect}
                         onClick={(e) => {
+                          if (labelMode) return
                           if (!surface.panel) return
                           if (shouldIgnorePanelFrameClick(e.evt)) {
                             e.cancelBubble = true
@@ -3087,6 +4033,7 @@ export function HierarchyPanelCanvas({
                           setSelection({ type: 'supplyPanel', ids: [surface.panel.id] })
                         }}
                         onTap={(e) => {
+                          if (labelMode) return
                           if (!surface.panel) return
                           e.cancelBubble = true
                           setSelection({ type: 'supplyPanel', ids: [surface.panel.id] })
@@ -3116,11 +4063,28 @@ export function HierarchyPanelCanvas({
                       fill={colors.panelFrameStroke}
                       listening={false}
                     />
+                    {surface.panel?.gridView?.terminalStripTopRail && (
+                      <Rect
+                        x={PANEL_FRAME_MARGIN}
+                        y={PANEL_FRAME_MARGIN}
+                        width={surface.contentWidth}
+                        height={TERMINAL_STRIP_RAIL_H}
+                        fill="transparent"
+                        stroke={colors.panelFrameStroke}
+                        opacity={0.18}
+                        strokeWidth={1}
+                        listening={false}
+                      />
+                    )}
                     {Array.from({ length: surface.rows }).map((_, rowIndex) => (
                       <Rect
                         key={`rail-${surface.id}-${rowIndex}`}
                         x={PANEL_FRAME_MARGIN}
-                        y={PANEL_FRAME_MARGIN + rowIndex * (CELL_H + ROW_GAP)}
+                        y={
+                          PANEL_FRAME_MARGIN +
+                          getTerminalStripTopOffset(surface.panel) +
+                          rowIndex * (CELL_H + ROW_GAP)
+                        }
                         width={surface.contentWidth}
                         height={CELL_H}
                         fill="transparent"
@@ -3136,9 +4100,14 @@ export function HierarchyPanelCanvas({
                           key={`grid-${surface.id}-${rowIndex}-${colIndex}`}
                           points={[
                             PANEL_FRAME_MARGIN + colIndex * CELL_W,
-                            PANEL_FRAME_MARGIN + rowIndex * (CELL_H + ROW_GAP),
+                            PANEL_FRAME_MARGIN +
+                              getTerminalStripTopOffset(surface.panel) +
+                              rowIndex * (CELL_H + ROW_GAP),
                             PANEL_FRAME_MARGIN + colIndex * CELL_W,
-                            PANEL_FRAME_MARGIN + rowIndex * (CELL_H + ROW_GAP) + CELL_H,
+                            PANEL_FRAME_MARGIN +
+                              getTerminalStripTopOffset(surface.panel) +
+                              rowIndex * (CELL_H + ROW_GAP) +
+                              CELL_H,
                           ]}
                           stroke={colors.panelFrameStroke}
                           opacity={0.08}
@@ -3146,6 +4115,19 @@ export function HierarchyPanelCanvas({
                           listening={false}
                         />
                       ))
+                    )}
+                    {surface.panel?.gridView?.terminalStripBottomRail && (
+                      <Rect
+                        x={PANEL_FRAME_MARGIN}
+                        y={surface.panelFrameHeight - PANEL_FRAME_MARGIN - TERMINAL_STRIP_RAIL_H}
+                        width={surface.contentWidth}
+                        height={TERMINAL_STRIP_RAIL_H}
+                        fill="transparent"
+                        stroke={colors.panelFrameStroke}
+                        opacity={0.18}
+                        strokeWidth={1}
+                        listening={false}
+                      />
                     )}
                   </Group>
                   <Rect
@@ -3163,6 +4145,146 @@ export function HierarchyPanelCanvas({
                     cornerRadius={4}
                     listening={false}
                   />
+                  {surface.panel && selectedPanelIds.includes(surface.panel.id) && canDragItems && (
+                    <>
+                      {panelFrameResizePreview?.panelId === surface.panel.id && (
+                        <>
+                          <Rect
+                            x={panelFrameResizePreview.x}
+                            y={panelFrameResizePreview.y}
+                            width={panelFrameResizePreview.width}
+                            height={panelFrameResizePreview.height}
+                            fill="transparent"
+                            stroke={colors.moduleBorderSelected}
+                            strokeWidth={2}
+                            dash={[7, 5]}
+                            cornerRadius={4}
+                            listening={false}
+                          />
+                          <Group
+                            x={
+                              panelFrameResizePreview.axis === 'columns'
+                                ? panelFrameResizePreview.width + 10
+                                : panelFrameResizePreview.width / 2 - 30
+                            }
+                            y={
+                              panelFrameResizePreview.axis === 'columns'
+                                ? panelFrameResizePreview.y +
+                                  panelFrameResizePreview.height / 2 -
+                                  10
+                                : panelFrameResizePreview.y - 26
+                            }
+                            listening={false}
+                          >
+                            <Rect
+                              width={60}
+                              height={20}
+                              fill={colors.panelFrameFill}
+                              stroke={colors.moduleBorderSelected}
+                              strokeWidth={1}
+                              cornerRadius={6}
+                            />
+                            <Text
+                              x={4}
+                              y={4}
+                              width={52}
+                              height={12}
+                              text={`${panelFrameResizePreview.axis === 'rows' ? t('panelCanvas.rows', 'Rows') : t('panelCanvas.columns', 'Columns')} ${panelFrameResizePreview.value}`}
+                              fontSize={8}
+                              fontStyle="bold"
+                              fontFamily={fontFamily}
+                              fill={colors.moduleText}
+                              align="center"
+                            />
+                          </Group>
+                        </>
+                      )}
+                      <Rect
+                        x={surface.width - 3}
+                        y={surface.mainPanelY + surface.panelFrameHeight / 2 - 16}
+                        width={6}
+                        height={32}
+                        fill="#0284c7"
+                        cornerRadius={3}
+                        draggable
+                        onMouseDown={(event) => {
+                          event.cancelBubble = true
+                        }}
+                        onDragStart={(event) => {
+                          event.cancelBubble = true
+                          panelFrameResizePreviewRef.current = null
+                          setPanelFrameResizePreview(null)
+                        }}
+                        onDragMove={(event) => {
+                          event.cancelBubble = true
+                          previewPanelFrameResize(
+                            surface as HierarchySurface & { panel: Panel },
+                            'columns',
+                            event.target.x() - (surface.width - 3)
+                          )
+                          event.target.y(surface.mainPanelY + surface.panelFrameHeight / 2 - 16)
+                        }}
+                        onDragEnd={(event) => {
+                          event.cancelBubble = true
+                          event.target.position({
+                            x: surface.width - 3,
+                            y: surface.mainPanelY + surface.panelFrameHeight / 2 - 16,
+                          })
+                          commitPanelFrameResize(surface as HierarchySurface & { panel: Panel })
+                        }}
+                        onMouseEnter={(event) => {
+                          const stage = event.target.getStage()
+                          if (stage) stage.container().style.cursor = 'ew-resize'
+                        }}
+                        onMouseLeave={(event) => {
+                          const stage = event.target.getStage()
+                          if (stage) stage.container().style.cursor = ''
+                        }}
+                      />
+                      <Rect
+                        x={surface.width / 2 - 16}
+                        y={surface.mainPanelY - 3}
+                        width={32}
+                        height={6}
+                        fill="#0284c7"
+                        cornerRadius={3}
+                        draggable
+                        onMouseDown={(event) => {
+                          event.cancelBubble = true
+                        }}
+                        onDragStart={(event) => {
+                          event.cancelBubble = true
+                          panelFrameResizePreviewRef.current = null
+                          setPanelFrameResizePreview(null)
+                        }}
+                        onDragMove={(event) => {
+                          event.cancelBubble = true
+                          previewPanelFrameResize(
+                            surface as HierarchySurface & { panel: Panel },
+                            'rows',
+                            surface.mainPanelY - 3 - event.target.y()
+                          )
+                          event.target.x(surface.width / 2 - 16)
+                        }}
+                        onDragEnd={(event) => {
+                          event.cancelBubble = true
+                          event.target.position({
+                            x: surface.width / 2 - 16,
+                            y: surface.mainPanelY - 3,
+                          })
+                          commitPanelFrameResize(surface as HierarchySurface & { panel: Panel })
+                        }}
+                        onMouseEnter={(event) => {
+                          const stage = event.target.getStage()
+                          if (stage) stage.container().style.cursor = 'ns-resize'
+                        }}
+                        onMouseLeave={(event) => {
+                          const stage = event.target.getStage()
+                          if (stage) stage.container().style.cursor = ''
+                        }}
+                      />
+                    </>
+                  )}
                   {hierarchyRewirePreviewWire?.promotionPanelId === surface.panel?.id && (
                     <Rect
                       x={0}
@@ -3218,116 +4340,195 @@ export function HierarchyPanelCanvas({
                           }
                         : null))
                     : null
+                const isAltDuplicatePreview =
+                  moduleDragLive?.isAltDuplicate === true &&
+                  !!previewItem &&
+                  moduleDragLive.ref != null &&
+                  panelGridModuleRefKey(moduleDragLive.ref) === panelGridModuleRefKey(placement.ref)
                 return (
-                  <ModuleBox
-                    key={`${surface.id}-${panelGridModuleRefKey(placement.ref)}`}
-                    moduleRef={placement.ref}
-                    x={previewItem ? previewItem.x - surface.x : placement.x}
-                    y={previewItem ? previewItem.y - surface.y : placement.y}
-                    width={placement.width}
-                    height={placement.height}
-                    info={getModuleDisplayInfo(placement.ref, currentProject)}
-                    draggable={canDragItems}
-                    onDragMove={
-                      canDragItems
-                        ? (_ref, x, y) =>
-                            handleHierarchyModuleDragMove(
-                              surface as HierarchySurface & { panel: Panel },
-                              placement,
-                              x,
-                              y
-                            )
-                        : undefined
-                    }
-                    onDragEnd={
-                      canDragItems
-                        ? (_ref, x, y) =>
-                            handleHierarchyModuleDragEnd(
-                              surface as HierarchySurface & { panel: Panel },
-                              placement,
-                              x,
-                              y
-                            )
-                        : undefined
-                    }
-                    onHoverChange={setTooltip}
-                    onHoverRefChange={setHoveredModuleRef}
-                    debugMode={panelRelationDebug}
-                    debugSupplyTrunkKind={
-                      panelRelationDebug && scene?.sharedSupplyTrunkRefKeys
-                        ? placement.ref.kind === 'trunkDevice' && placement.ref.scope === 'supply'
-                          ? scene.sharedSupplyTrunkRefKeys.has(panelGridModuleRefKey(placement.ref))
-                            ? 'shared'
-                            : 'unique'
+                  <>
+                    <ModuleBox
+                      key={`${surface.id}-${panelGridModuleRefKey(placement.ref)}`}
+                      moduleRef={placement.ref}
+                      terminalStripMemberRefs={placement.terminalStripMemberRefs}
+                      terminalStripRail={placement.terminalStripRail}
+                      selectionOverride={
+                        placement.junctionPanelTerminal
+                          ? {
+                              type: 'junctionPanelTerminal',
+                              ids: [placement.junctionPanelTerminal.terminalId],
+                              junctionPanelTerminalOwnerId:
+                                placement.ref.kind === 'trunkDevice' ? placement.ref.id : undefined,
+                            }
                           : undefined
-                        : undefined
-                    }
-                    onResizeEnd={
-                      canDragItems
-                        ? (_ref, newWidthCols) =>
-                            handleHierarchyModuleResize(
-                              surface as HierarchySurface & { panel: Panel },
-                              placement,
-                              newWidthCols
-                            )
-                        : undefined
-                    }
-                    isResizeWidthValid={
-                      canDragItems
-                        ? (_ref, newWidthCols) =>
-                            isHierarchyResizeWidthValid(
-                              surface as HierarchySurface & { panel: Panel },
-                              placement,
-                              newWidthCols
-                            )
-                        : undefined
-                    }
-                    maxWidthCols={getHierarchyMaxWidth(
-                      surface as HierarchySurface & { panel: Panel },
-                      placement
+                      }
+                      x={
+                        previewItem && !isAltDuplicatePreview
+                          ? previewItem.x - surface.x
+                          : placement.x
+                      }
+                      y={
+                        previewItem && !isAltDuplicatePreview
+                          ? previewItem.y - surface.y
+                          : placement.y
+                      }
+                      width={placement.width}
+                      height={placement.height}
+                      info={
+                        placement.junctionPanelTerminal
+                          ? {
+                              label: placement.junctionPanelTerminal.label,
+                              specLines: [],
+                              terminalStrip: {
+                                stripId: placement.junctionPanelTerminal.label.replace(/^X/i, ''),
+                                incomingPin: 1,
+                                outgoingPin: 1,
+                                maxPin: placement.junctionPanelTerminal.pinCount,
+                                connectedPins: Array.from(
+                                  { length: placement.junctionPanelTerminal.pinCount },
+                                  (_, index) => index + 1
+                                ),
+                              },
+                              tooltipText: placement.junctionPanelTerminal.label,
+                              kind: 'trunkDevice' as const,
+                            }
+                          : getModuleDisplayInfo(placement.ref, currentProject)
+                      }
+                      draggable={canDragItems && !labelMode}
+                      interactive={!labelMode}
+                      resetPositionOnAltDrag
+                      compactLabelMode={labelMode}
+                      onDragMove={
+                        canDragItems
+                          ? (_ref, x, y, shiftKey, altKey) =>
+                              handleHierarchyModuleDragMove(
+                                surface as HierarchySurface & { panel: Panel },
+                                placement,
+                                x,
+                                y,
+                                shiftKey,
+                                altKey
+                              )
+                          : undefined
+                      }
+                      onDragEnd={
+                        canDragItems
+                          ? (_ref, x, y, shiftKey, altKey) => {
+                              if (altKey) {
+                                handleHierarchyModuleAltDuplicate(
+                                  surface as HierarchySurface & { panel: Panel },
+                                  placement,
+                                  x,
+                                  y
+                                )
+                                return
+                              }
+                              handleHierarchyModuleDragEnd(
+                                surface as HierarchySurface & { panel: Panel },
+                                placement,
+                                x,
+                                y,
+                                shiftKey
+                              )
+                            }
+                          : undefined
+                      }
+                      onHoverChange={setTooltip}
+                      onHoverRefChange={setHoveredModuleRef}
+                      debugMode={panelRelationDebug}
+                      debugSupplyTrunkKind={
+                        panelRelationDebug && scene?.sharedSupplyTrunkRefKeys
+                          ? placement.ref.kind === 'trunkDevice' && placement.ref.scope === 'supply'
+                            ? scene.sharedSupplyTrunkRefKeys.has(
+                                panelGridModuleRefKey(placement.ref)
+                              )
+                              ? 'shared'
+                              : 'unique'
+                            : undefined
+                          : undefined
+                      }
+                      onResizeEnd={
+                        canDragItems
+                          ? (_ref, newWidthCols) =>
+                              handleHierarchyModuleResize(
+                                surface as HierarchySurface & { panel: Panel },
+                                placement,
+                                newWidthCols
+                              )
+                          : undefined
+                      }
+                      isResizeWidthValid={
+                        canDragItems
+                          ? (_ref, newWidthCols) =>
+                              isHierarchyResizeWidthValid(
+                                surface as HierarchySurface & { panel: Panel },
+                                placement,
+                                newWidthCols
+                              )
+                          : undefined
+                      }
+                      maxWidthCols={getHierarchyMaxWidth(
+                        surface as HierarchySurface & { panel: Panel },
+                        placement
+                      )}
+                      onRewireDragStart={
+                        canUseRewireTools && rewireMode
+                          ? (ref) => handleHierarchyRewireDragStart(surface, ref)
+                          : undefined
+                      }
+                      onRewireDragMove={
+                        canUseRewireTools && rewireMode
+                          ? (stage, pointerPos) =>
+                              handleHierarchyRewireDragMove(surface, stage, pointerPos)
+                          : undefined
+                      }
+                      onRewireDragEnd={
+                        canUseRewireTools && rewireMode ? handleHierarchyRewireDragEnd : undefined
+                      }
+                      onSelectionIntent={createHierarchySelectionResolver(surface, placement)}
+                      onAssignTargetClick={
+                        assignToCircuitMode && onAssignTargetClick ? onAssignTargetClick : undefined
+                      }
+                      isRewireOrigin={
+                        rewireMode &&
+                        rewireOriginRef != null &&
+                        rewireOriginSurfaceId === getSurfaceRewireId(surface) &&
+                        panelGridModuleRefKey(placement.ref) ===
+                          panelGridModuleRefKey(rewireOriginRef)
+                      }
+                      isRewireTarget={
+                        rewireMode &&
+                        rewireTargetRef != null &&
+                        rewireTargetSurfaceId === getSurfaceRewireId(surface) &&
+                        panelGridModuleRefKey(placement.ref) ===
+                          panelGridModuleRefKey(rewireTargetRef)
+                      }
+                      isRewireTargetValid={
+                        rewireMode &&
+                        rewireTargetRef != null &&
+                        rewireTargetSurfaceId === getSurfaceRewireId(surface) &&
+                        panelGridModuleRefKey(placement.ref) ===
+                          panelGridModuleRefKey(rewireTargetRef)
+                          ? rewireTargetValid
+                          : true
+                      }
+                    />
+                    {isAltDuplicatePreview && previewItem && (
+                      <ModuleBox
+                        key={`alt-duplicate-ghost-${surface.id}-${panelGridModuleRefKey(placement.ref)}`}
+                        moduleRef={placement.ref}
+                        terminalStripMemberRefs={placement.terminalStripMemberRefs}
+                        terminalStripRail={placement.terminalStripRail}
+                        x={previewItem.x - surface.x}
+                        y={previewItem.y - surface.y}
+                        width={placement.width}
+                        height={placement.height}
+                        info={getModuleDisplayInfo(placement.ref, currentProject)}
+                        interactive={false}
+                        opacity={0.72}
+                      />
                     )}
-                    onRewireDragStart={
-                      canUseRewireTools && rewireMode
-                        ? (ref) => handleHierarchyRewireDragStart(surface, ref)
-                        : undefined
-                    }
-                    onRewireDragMove={
-                      canUseRewireTools && rewireMode
-                        ? (stage, pointerPos) =>
-                            handleHierarchyRewireDragMove(surface, stage, pointerPos)
-                        : undefined
-                    }
-                    onRewireDragEnd={
-                      canUseRewireTools && rewireMode ? handleHierarchyRewireDragEnd : undefined
-                    }
-                    onSelectionIntent={createHierarchySelectionResolver(surface, placement)}
-                    onAssignTargetClick={
-                      assignToCircuitMode && onAssignTargetClick ? onAssignTargetClick : undefined
-                    }
-                    isRewireOrigin={
-                      rewireMode &&
-                      rewireOriginRef != null &&
-                      rewireOriginSurfaceId === getSurfaceRewireId(surface) &&
-                      panelGridModuleRefKey(placement.ref) ===
-                        panelGridModuleRefKey(rewireOriginRef)
-                    }
-                    isRewireTarget={
-                      rewireMode &&
-                      rewireTargetRef != null &&
-                      rewireTargetSurfaceId === getSurfaceRewireId(surface) &&
-                      panelGridModuleRefKey(placement.ref) ===
-                        panelGridModuleRefKey(rewireTargetRef)
-                    }
-                    isRewireTargetValid={
-                      rewireMode &&
-                      rewireTargetRef != null &&
-                      rewireTargetSurfaceId === getSurfaceRewireId(surface) &&
-                      panelGridModuleRefKey(placement.ref) ===
-                        panelGridModuleRefKey(rewireTargetRef)
-                        ? rewireTargetValid
-                        : true
-                    }
-                  />
+                  </>
                 )
               })}
               {moduleDragPreview &&
@@ -3412,7 +4613,7 @@ export function HierarchyPanelCanvas({
 
             const sharedSurface = scene.surfaces.find((item) => item.kind === 'shared_supply')
             const auxiliarySurfaces = scene.surfaces.filter(
-              (surface) => surface.kind === 'auxiliary'
+              (surface) => surface.kind === 'auxiliary' || surface.kind === 'junction_panel'
             )
             const mergedPlacements = [
               ...(sharedSurface
@@ -3456,7 +4657,9 @@ export function HierarchyPanelCanvas({
               <Group key="hierarchy-relation-wires-merged" listening={false}>
                 <RelationWires
                   placements={mergedPlacements}
-                  selectedRef={selectedRef}
+                  selectedRef={panelWireSelectionFocus?.ref ?? selectedRef}
+                  selectedConnectionSide={panelWireSelectionFocus?.side}
+                  selectedConnectionPeerRef={panelWireSelectionFocus?.peerRef}
                   hoveredRef={hoveredModuleRef}
                   panel={primarySurface.panel}
                   project={currentProject}
@@ -3503,6 +4706,18 @@ export function HierarchyPanelCanvas({
         </Group>
       </BaseCanvas>
 
+      {labelMode && (
+        <PanelLabelModeOverlay
+          scene={scene}
+          project={currentProject}
+          canvasRef={canvasRef}
+          panelZoom={panelZoom}
+          panelPan={panelPan}
+          canEdit={canEditProject}
+          onUpdateModuleLabel={updateModuleLabel}
+        />
+      )}
+
       <ViewNavigationToolbar
         zoom={panelZoom}
         onZoomChange={handleZoomChange}
@@ -3522,7 +4737,9 @@ export function HierarchyPanelCanvas({
             {canUseRewireTools && (
               <RewireTool
                 isActive={rewireMode}
+                disabled={labelMode}
                 onToggle={() => {
+                  if (labelMode) return
                   setRewireMode((prev) => !prev)
                   resetHierarchyRewireState()
                 }}
@@ -3536,7 +4753,27 @@ export function HierarchyPanelCanvas({
                 variant="tool"
                 side="left"
                 triggerTestId="e2e-panel-auto-arrange"
+                disabled={labelMode}
                 onClick={handleHierarchyAutoArrange}
+              />
+            )}
+            <FloatingControl
+              icon={<Tag className="h-6 w-6" />}
+              label={t('panelCanvas.labelMode', 'Label mode')}
+              variant="tool"
+              side="left"
+              active={labelMode}
+              triggerTestId="e2e-panel-label-mode"
+              onClick={() => setLabelMode((previous) => !previous)}
+            />
+            {labelMode && (
+              <FloatingControl
+                icon={<Printer className="h-6 w-6" />}
+                label={t('menu.exportLabels', 'Export labels')}
+                variant="tool"
+                side="left"
+                triggerTestId="e2e-panel-label-export"
+                onClick={openLabelStripExportDialog}
               />
             )}
           </>

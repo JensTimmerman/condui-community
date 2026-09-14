@@ -24,7 +24,29 @@ function parseBranchIndex(branchId: string | undefined, circuitId: string): numb
 
 function resolveTargetBranchIndex(circuit: Circuit, target: DropTarget): number | null {
   const branches = circuit.branches ?? []
-  if (target.circuitId !== circuit.id || branches.length === 0) return null
+  if (target.circuitId !== circuit.id) return null
+
+  // A DC rail's insertion index is relative to the rail branches, not to all
+  // branches in the circuit. Convert that slot to the absolute branch index
+  // used by the reorder algorithm. Without this conversion, selection moves
+  // lose the rail target and the generic append path wins.
+  if (target.dcBusId && typeof target.secondaryBusInsertIndex === 'number') {
+    const dcBusBranchIndexes = branches.flatMap((branch, index) =>
+      branch.dcBusId === target.dcBusId ? [index] : []
+    )
+    const requestedIndex = Math.max(
+      0,
+      Math.min(target.secondaryBusInsertIndex, dcBusBranchIndexes.length)
+    )
+    return requestedIndex < dcBusBranchIndexes.length
+      ? dcBusBranchIndexes[requestedIndex]!
+      : (dcBusBranchIndexes.at(-1) ?? branches.length - 1) + 1
+  }
+
+  // A circuit-area drop is also a valid destination for an empty circuit. The
+  // moved selection becomes its first branch; endpoint/branch hit targets still
+  // require an existing branch to resolve against.
+  if (branches.length === 0) return target.type === 'circuit' ? 0 : null
 
   const parsed = parseBranchIndex(target.branchId, circuit.id)
   if (parsed !== null) return Math.max(0, Math.min(parsed, branches.length))
@@ -135,7 +157,8 @@ function movingBranchGroupsForSelection(
  * Move selected endpoint branch groups within one circuit.
  *
  * The canvas still falls back to the existing single-endpoint move for partial
- * selections, domotica slot moves, and cross-circuit drops.
+ * selections and domotica slot moves. Complete domotica parent groups use this
+ * path for ordinary moves so their children remain attached.
  */
 export function moveEndpointSelectionOnCircuit(
   circuit: Circuit,
@@ -182,10 +205,17 @@ export function moveEndpointSelectionOnCircuit(
   )
   const safeInsertIndex = insertIndex >= 0 ? insertIndex : remainingEntries.length
   const remainingBranches = remainingEntries.map(({ branch }) => branch)
+  const movingBranches = moving.movingBranches.map((branch) => {
+    const { dcBusId: _sourceDcBusId, ...withoutSourceDcBus } = branch
+    return {
+      ...withoutSourceDcBus,
+      ...(target.dcBusId ? { dcBusId: target.dcBusId } : {}),
+    }
+  })
 
   const nextBranches = [
     ...remainingBranches.slice(0, safeInsertIndex),
-    ...moving.movingBranches,
+    ...movingBranches,
     ...remainingBranches.slice(safeInsertIndex),
   ]
 
@@ -237,9 +267,13 @@ export function moveEndpointSelectionBetweenCircuits(
   const insertIndex = Math.max(0, Math.min(targetIndex, targetBranches.length))
 
   const movingTargetBranches = moving.movingBranches.map((branch) => ({
-    ...branch,
+    ...(() => {
+      const { dcBusId: _sourceDcBusId, ...withoutSourceDcBus } = branch
+      return withoutSourceDcBus
+    })(),
     id: generateId(),
     label: '',
+    ...(target.dcBusId ? { dcBusId: target.dcBusId } : {}),
   }))
   const nextTargetBranches = [
     ...targetBranches

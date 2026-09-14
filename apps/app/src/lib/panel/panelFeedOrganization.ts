@@ -2,10 +2,10 @@ import { trackSupplyAssemblyMutation } from '@/lib/analytics/supplyAssemblyAnaly
 import { ensureInstallationFeedTopology } from '@/lib/feedTopology'
 import { getMainBusOrder } from '@/lib/eendraad/mainBusOrder'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
-  getMutableSupplyAssembliesForProject,
-  getSupplyAssembliesFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
+  editProjectSupplyAssemblies,
+  selectProjectSupplyAssemblies,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { findPanelById } from '@/lib/panel/panelTree'
@@ -21,11 +21,13 @@ import {
 import {
   buildDirectConverterSupplyAssembly,
   reconcileChangeoverSupplyAssembly,
+  reconcileDirectConverterDcDevices,
   reconcileInverterUnitMultiplier,
+  reconcileSupplyAssemblyBranchProtections,
   reconcileSupplyAssemblyAcConductorFlow,
 } from '@/lib/supplyAssembly/editorIntegration'
 import { getDefaultSupplyConverterAcPhaseAssignment } from '@/lib/supplyAssembly/supplyConverterPhases'
-import { generateId } from '@/utils'
+import { generateId } from '@/utils/id'
 import {
   getCircuitBusSectionId,
   getPrimaryPanelBusSectionId,
@@ -49,11 +51,11 @@ function assemblyRootFeedTargetsPanel(
   rootFeedId: string,
   panelId: string,
 ): boolean {
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   if (!installation) return false
   return ensureInstallationFeedTopology(
     installation,
-    getElectricalPanelsFromProject(project),
+    getProjectElectricalPanels(project),
   ).rootFeeds.some((feed) => feed.id === rootFeedId && feed.panelId === panelId)
 }
 
@@ -97,7 +99,7 @@ export function findPanelSupplyAssembly(
   project: ProjectWithOptionalV2Electrical,
   panelId: string
 ): OffGridSupplyAssembly | undefined {
-  return getSupplyAssembliesFromProject(project).find((assembly) =>
+  return selectProjectSupplyAssemblies(project).find((assembly) =>
     assemblyTargetsPanel(project, assembly, panelId)
   )
 }
@@ -117,7 +119,7 @@ export function panelHasBackupOutput(
   project: ProjectWithOptionalV2Electrical,
   panelId: string
 ): boolean {
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   const assembly = findPanelSupplyAssembly(project, panelId)
   if (!installation || !assembly) return false
   const panelHandoffIds = new Set(
@@ -169,8 +171,8 @@ function ensureMinimalDirectInverterAssembly(
 ): OffGridSupplyAssembly | undefined {
   const existing = findPanelSupplyAssembly(project, panelId)
   if (existing) return existing
-  const installation = getElectricalInstallationFromProject(project)
-  const panels = getElectricalPanelsFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
+  const panels = getProjectElectricalPanels(project)
   const panel = findPanelById(panels, panelId)
   if (!installation || !panel || panel.isMain === false) return undefined
 
@@ -202,7 +204,7 @@ function ensureMinimalDirectInverterAssembly(
   }
 
   const assembly = buildDirectConverterSupplyAssembly(project, panelId, inverter)
-  getMutableSupplyAssembliesForProject(project).push(assembly)
+  editProjectSupplyAssemblies(project).push(assembly)
   trackSupplyAssemblyMutation('create', assembly, {
     source: 'panel_feed_organization',
   })
@@ -214,7 +216,7 @@ export function reconcileInvalidPanelFeedOrganizationsInProject(
   project: ProjectWithOptionalV2Electrical
 ): boolean {
   let changed = false
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   const presentLinePhases = installation
     ? getInstallationPhases(installation.nominalVoltage.system).filter(
         (phase): phase is 'L1' | 'L2' | 'L3' =>
@@ -225,9 +227,11 @@ export function reconcileInvalidPanelFeedOrganizationsInProject(
   if (installation) {
     const topology = ensureInstallationFeedTopology(
       installation,
-      getElectricalPanelsFromProject(project)
+      getProjectElectricalPanels(project)
     )
     for (const feed of topology.rootFeeds) {
+      if (reconcileDirectConverterDcDevices(project, feed.panelId)) changed = true
+      if (reconcileSupplyAssemblyBranchProtections(project, feed.panelId)) changed = true
       for (const device of feed.trunkDevices ?? []) {
         if (
           device.symbol === 'inverter' &&
@@ -250,12 +254,12 @@ export function reconcileInvalidPanelFeedOrganizationsInProject(
       }
     }
   }
-  for (const panel of getElectricalPanelsFromProject(project)) {
+  for (const panel of getProjectElectricalPanels(project)) {
     let repairedPanelHandoff = false
     if (panel.isMain !== false && hasExplicitPanelBusSections(panel)) {
       const backupSection = panel.busSections?.find((section) => section.role === 'backup')
       if (backupSection && presentLinePhases.length > 0) {
-        for (const assembly of getMutableSupplyAssembliesForProject(project)) {
+        for (const assembly of editProjectSupplyAssemblies(project)) {
           const backedUpHandoffIds = new Set(
             deriveHandoffPhaseSupplyPaths(assembly, presentLinePhases)
               .filter((path) => path.backupConnectionIds.length > 0)
@@ -365,8 +369,8 @@ export function syncPanelBackupBusPhaseOrderInProject(
   project: ProjectWithOptionalV2Electrical,
   panelId: string
 ): boolean {
-  const installation = getElectricalInstallationFromProject(project)
-  const panel = findPanelById(getElectricalPanelsFromProject(project), panelId)
+  const installation = getProjectElectricalInstallation(project)
+  const panel = findPanelById(getProjectElectricalPanels(project), panelId)
   const backupSection = panel?.busSections?.find((section) => section.role === 'backup')
   const assembly = panel ? findPanelSupplyAssembly(project, panelId) : undefined
   const handoff = assembly?.loadHandoffs.find(
@@ -402,11 +406,11 @@ export function setPanelFeedOrganizationInProject(
   panelId: string,
   organization: PanelFeedOrganization
 ): boolean {
-  const panels = getElectricalPanelsFromProject(project)
+  const panels = getProjectElectricalPanels(project)
   const panel = findPanelById(panels, panelId)
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   if (!panel || !installation || panel.isMain === false) return false
-  const assemblies = getMutableSupplyAssembliesForProject(project)
+  const assemblies = editProjectSupplyAssemblies(project)
 
   if (organization === 'single') {
     if (panelRequiresSplitFeed(project, panelId)) return false
@@ -505,13 +509,12 @@ export function applyPanelBusFeedBoundaryInProject(
   kind: PanelBusFeedKind,
   mainBusInsertIndex: number,
 ): boolean {
-  const panel = findPanelById(getElectricalPanelsFromProject(project), panelId)
+  const panel = findPanelById(getProjectElectricalPanels(project), panelId)
   if (!panel) return false
   let changed = false
   if (!hasExplicitPanelBusSections(panel)) {
-    // An unsplit panel is already entirely grid-fed. A grid marker is therefore a no-op;
-    // the first backup marker is the action that creates and splits a minimal backup setup.
-    if (kind === 'grid') return false
+    // Dropping either feed marker onto an unsplit bus is an explicit split action. The
+    // dropped marker's side is assigned below; seed the rest of the bus on the opposite side.
     changed = setPanelFeedOrganizationInProject(
       project,
       panelId,

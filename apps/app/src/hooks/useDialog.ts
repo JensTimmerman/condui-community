@@ -2,10 +2,10 @@ import { useDialogStore, type DialogConfig } from '@/stores/dialogStore'
 
 /**
  * Hook for easily showing dialogs throughout the application
- * 
+ *
  * @example
  * const dialog = useDialog()
- * 
+ *
  * // Show a confirmation dialog
  * dialog.confirm({
  *   title: 'Delete Item?',
@@ -15,7 +15,7 @@ import { useDialogStore, type DialogConfig } from '@/stores/dialogStore'
  *     // Handle deletion
  *   }
  * })
- * 
+ *
  * // Show a prompt dialog
  * dialog.prompt({
  *   title: 'Enter Name',
@@ -95,7 +95,9 @@ export function useDialog() {
      * Show a custom dialog with custom content and buttons
      */
     custom: (config: {
+      id?: string
       title?: string
+      titleIcon?: React.ReactNode
       content: React.ReactNode
       buttons?: Array<{
         label: string

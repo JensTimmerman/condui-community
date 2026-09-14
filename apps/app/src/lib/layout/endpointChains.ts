@@ -228,9 +228,11 @@ export function getCircuitBranches(circuit: { endpoints: Endpoint[]; branches?: 
  * Group endpoints into branches for layout (fallback when branches not stored)
  * Rules:
  * - In-between devices (switches, relay, domotica, energy_meter) and the first actual endpoint go on the same branch
- * - Each subsequent actual endpoint gets its own branch
+ * - A single static device may follow a socket on that same branch
+ * - Each other subsequent actual endpoint gets its own branch
  * - Example: [switch1, domotica, light1] -> branch1: [switch1, domotica, light1]
  * - Example: [switch1, light1, light2] -> branch1: [switch1, light1], branch2: [light2]
+ * - Example: [socket1, rectifier] -> branch1: [socket1, rectifier]
  */
 export function groupEndpointsIntoBranches(endpoints: Endpoint[]): Endpoint[][] {
   if (endpoints.length === 0) {
@@ -251,8 +253,15 @@ export function groupEndpointsIntoBranches(endpoints: Endpoint[]): Endpoint[][] 
       // Switches, relay, domotica, energy_meter always go on the current branch (before endpoint)
       currentBranch.push(endpoint)
     } else {
-      // Actual endpoint (socket, light, appliance)
-      if (!hasActualEndpointInBranch) {
+      // Actual endpoint (socket, light, appliance). A static device (including
+      // a branch-local conversion device) may be the one terminal load after a
+      // socket, matching the explicit branch insertion rules.
+      const staticDeviceAfterSocket =
+        endpoint.type === 'fixed_appliance' &&
+        currentBranch.some(ep => ep.type === 'socket') &&
+        !currentBranch.some(ep => ep.type === 'fixed_appliance')
+
+      if (!hasActualEndpointInBranch || staticDeviceAfterSocket) {
         // First actual endpoint goes on the same branch as in-between devices
         currentBranch.push(endpoint)
         hasActualEndpointInBranch = true

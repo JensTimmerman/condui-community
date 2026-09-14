@@ -1,6 +1,6 @@
 /**
  * Symbol Library Catalog
- * 
+ *
  * Metadata for all electrical symbols in Eendra
  * Based on Belgian electrical diagram standards (AREI/RGIE)
  */
@@ -103,7 +103,20 @@ export const symbols: SymbolMetadata[] = [
     category: 'grid',
     scope: 'both',
     svgPath: '/symbols/grid/panel_distribution.svg',
-    tags: ['panel', 'board', 'distribution', 'verdeelbord', 'tableau de distribution', 'hoofdbord', 'subbord', 'zekeringkast', 'kast', 'coffret', 'tableau électrique', 'fuse box'],
+    tags: [
+      'panel',
+      'board',
+      'distribution',
+      'verdeelbord',
+      'tableau de distribution',
+      'hoofdbord',
+      'subbord',
+      'zekeringkast',
+      'kast',
+      'coffret',
+      'tableau électrique',
+      'fuse box',
+    ],
   },
   {
     id: 'junction_box',
@@ -123,7 +136,37 @@ export const symbols: SymbolMetadata[] = [
     category: 'grid',
     scope: 'both',
     svgPath: '/symbols/junction/junction_panel.svg',
-    tags: ['junction', 'panel', 'verbindingspaneel', 'panneau de jonction', 'supply', 'ground', 'label'],
+    tags: [
+      'junction',
+      'panel',
+      'verbindingspaneel',
+      'panneau de jonction',
+      'supply',
+      'ground',
+      'label',
+    ],
+  },
+  {
+    id: 'terminal_strip',
+    name: 'Terminal Strip',
+    nameNL: 'Klemmenstrook',
+    nameFR: 'Bornier',
+    category: 'grid',
+    scope: 'both',
+    svgPath: '/symbols/junction/terminal_strip.svg',
+    tags: [
+      'terminal',
+      'strip',
+      'terminal block',
+      'wago',
+      'clamp',
+      'klemmenstrook',
+      'klem',
+      'bornier',
+      'borne',
+      'supply',
+      'ground',
+    ],
   },
 
   // Protection Devices
@@ -135,7 +178,17 @@ export const symbols: SymbolMetadata[] = [
     category: 'protection',
     scope: 'eendraad',
     svgPath: '/symbols/protection/mcb.svg',
-    tags: ['breaker', 'protection', 'MCB', 'automaat', 'automatische schakelaar', 'beveiligingsschakelaar', 'disjoncteur', 'beveiligingstoestel', 'circuit breaker'],
+    tags: [
+      'breaker',
+      'protection',
+      'MCB',
+      'automaat',
+      'automatische schakelaar',
+      'beveiligingsschakelaar',
+      'disjoncteur',
+      'beveiligingstoestel',
+      'circuit breaker',
+    ],
   },
   {
     id: 'rcd',
@@ -145,7 +198,14 @@ export const symbols: SymbolMetadata[] = [
     category: 'protection',
     scope: 'eendraad',
     svgPath: '/symbols/protection/rcd.svg',
-    tags: ['RCD', 'differential', 'protection', 'differentieelschakelaar', 'disjoncteur différentiel', 'beveiligingstoestel'],
+    tags: [
+      'RCD',
+      'differential',
+      'protection',
+      'differentieelschakelaar',
+      'disjoncteur différentiel',
+      'beveiligingstoestel',
+    ],
   },
   {
     id: 'rcbo',
@@ -155,7 +215,14 @@ export const symbols: SymbolMetadata[] = [
     category: 'protection',
     scope: 'eendraad',
     svgPath: '/symbols/protection/rcbo.svg',
-    tags: ['RCBO', 'combined', 'protection', 'differentieelautomaat', 'disjoncteur différentiel combiné', 'beveiligingstoestel'],
+    tags: [
+      'RCBO',
+      'combined',
+      'protection',
+      'differentieelautomaat',
+      'disjoncteur différentiel combiné',
+      'beveiligingstoestel',
+    ],
   },
   {
     id: 'fuse',
@@ -292,17 +359,42 @@ export const symbols: SymbolMetadata[] = [
     category: 'outlets',
     scope: 'both',
     svgPath: '/symbols/outlets/socket_gnd_child.svg',
-    tags: ['socket', 'outlet', 'contactdoos', 'stopcontact', 'prise', 'prise de courant', 'grounded', 'child protection', 'geaard', 'kinderbescherming'],
+    tags: [
+      'socket',
+      'outlet',
+      'contactdoos',
+      'stopcontact',
+      'prise',
+      'prise de courant',
+      'grounded',
+      'child protection',
+      'geaard',
+      'kinderbescherming',
+    ],
   },
   {
     id: 'double_socket_gnd_child',
     name: 'Double socket with protective conductor contact and child protection',
     nameNL: 'Dubbele contactdoos met contact voor beschermingsgeleider en met kinderbescherming',
-    nameFR: 'Double prise de courant avec contact pour conducteur de protection et protection enfant',
+    nameFR:
+      'Double prise de courant avec contact pour conducteur de protection et protection enfant',
     category: 'outlets',
     scope: 'both',
     svgPath: '/symbols/outlets/double_socket_gnd_child.svg',
-    tags: ['socket', 'outlet', 'double', 'dubbel', 'contactdoos', 'stopcontact', 'prise', 'grounded', 'child protection', 'geaard', 'kinderbescherming', '2'],
+    tags: [
+      'socket',
+      'outlet',
+      'double',
+      'dubbel',
+      'contactdoos',
+      'stopcontact',
+      'prise',
+      'grounded',
+      'child protection',
+      'geaard',
+      'kinderbescherming',
+      '2',
+    ],
     libraryPreset: true,
   },
   {
@@ -313,7 +405,16 @@ export const symbols: SymbolMetadata[] = [
     category: 'outlets',
     scope: 'both',
     svgPath: '/symbols/outlets/socket_child.svg',
-    tags: ['socket', 'outlet', 'contactdoos', 'stopcontact', 'prise', 'prise de courant', 'child protection', 'kinderbescherming'],
+    tags: [
+      'socket',
+      'outlet',
+      'contactdoos',
+      'stopcontact',
+      'prise',
+      'prise de courant',
+      'child protection',
+      'kinderbescherming',
+    ],
   },
   {
     id: 'double_socket_child',
@@ -323,7 +424,18 @@ export const symbols: SymbolMetadata[] = [
     category: 'outlets',
     scope: 'both',
     svgPath: '/symbols/outlets/double_socket_child.svg',
-    tags: ['socket', 'outlet', 'double', 'dubbel', 'contactdoos', 'stopcontact', 'prise', 'child protection', 'kinderbescherming', '2'],
+    tags: [
+      'socket',
+      'outlet',
+      'double',
+      'dubbel',
+      'contactdoos',
+      'stopcontact',
+      'prise',
+      'child protection',
+      'kinderbescherming',
+      '2',
+    ],
     libraryPreset: true,
   },
   {
@@ -334,7 +446,16 @@ export const symbols: SymbolMetadata[] = [
     category: 'outlets',
     scope: 'both',
     svgPath: '/symbols/outlets/socket_gnd.svg',
-    tags: ['socket', 'outlet', 'contactdoos', 'stopcontact', 'prise', 'prise de courant', 'grounded', 'geaard'],
+    tags: [
+      'socket',
+      'outlet',
+      'contactdoos',
+      'stopcontact',
+      'prise',
+      'prise de courant',
+      'grounded',
+      'geaard',
+    ],
     hiddenFromLibrary: true,
   },
   {
@@ -428,7 +549,15 @@ export const symbols: SymbolMetadata[] = [
     category: 'switches',
     scope: 'both',
     svgPath: '/symbols/switches/motion_detector.svg',
-    tags: ['switch', 'motion', 'detector', 'presence', 'bewegingsdetector', 'bewegingsmelder', 'IR'],
+    tags: [
+      'switch',
+      'motion',
+      'detector',
+      'presence',
+      'bewegingsdetector',
+      'bewegingsmelder',
+      'IR',
+    ],
   },
   {
     id: 'smoke_detector',
@@ -652,7 +781,31 @@ export const symbols: SymbolMetadata[] = [
     category: 'hvac',
     scope: 'both',
     svgPath: '/symbols/appliances/ventilation.svg',
-    tags: ['appliance', 'ventilation'],
+    tags: [
+      'appliance',
+      'ventilation',
+      'ventilator',
+      'ventilatie-unit',
+      'ventilatie unit',
+      'afzuigventilator',
+      'dampkap',
+      'afzuigkap',
+      'mechanische ventilatie',
+      'kitchen hood',
+      'range hood',
+      'extractor hood',
+      'ventilation fan',
+      'exhaust fan',
+      'extractor fan',
+      'ventilation unit',
+      'hotte',
+      'hotte aspirante',
+      'hotte de cuisine',
+      'ventilateur',
+      "extracteur d'air",
+      "ventilateur d'extraction",
+      'VMC',
+    ],
   },
   {
     id: 'door_lock',
@@ -867,7 +1020,7 @@ export const symbols: SymbolMetadata[] = [
     id: 'energy_meter',
     name: 'Energy Meter',
     nameNL: 'Energiemeter',
-    nameFR: 'Compteur d\'énergie',
+    nameFR: "Compteur d'énergie",
     category: 'metering',
     scope: 'eendraad',
     svgPath: '/symbols/metering/energy_meter.svg',
@@ -1139,7 +1292,10 @@ export type SymbolPortDomains = readonly [ElectricalDomain, ElectricalDomain]
  * Get input and output electrical domain for a symbol. Conversion components use their
  * inputDomain/outputDomain; all others default to AC for both.
  */
-export function getDomainForSymbol(symbolId: string): { inputDomain: ElectricalDomain; outputDomain: ElectricalDomain } {
+export function getDomainForSymbol(symbolId: string): {
+  inputDomain: ElectricalDomain
+  outputDomain: ElectricalDomain
+} {
   const meta = getSymbolById(symbolId)
   const portDomains = getPortDomainsForSymbol(symbolId)
   const inputDomain = meta?.inputDomain ?? portDomains[0]
@@ -1171,6 +1327,7 @@ export function symbolInheritsWireDomain(symbolId: string): boolean {
     'rotating_switch',
     'junction_box',
     'junction_panel',
+    'terminal_strip',
     'energy_meter',
     'switch',
     'switch_1p_twoway',
@@ -1182,11 +1339,10 @@ export function symbolInheritsWireDomain(symbolId: string): boolean {
 }
 
 /** Whether a symbol can connect to the requested wire domain. */
-export function symbolSupportsWireDomain(
-  symbolId: string,
-  wireDomain: ElectricalDomain
-): boolean {
-  return symbolInheritsWireDomain(symbolId) || getPortDomainsForSymbol(symbolId).includes(wireDomain)
+export function symbolSupportsWireDomain(symbolId: string, wireDomain: ElectricalDomain): boolean {
+  return (
+    symbolInheritsWireDomain(symbolId) || getPortDomainsForSymbol(symbolId).includes(wireDomain)
+  )
 }
 
 /**
@@ -1195,7 +1351,7 @@ export function symbolSupportsWireDomain(
  */
 export function resolveSymbolPortsForWire(
   symbolId: string,
-  wireDomain: ElectricalDomain,
+  wireDomain: ElectricalDomain
 ): {
   matched: boolean
   connectedPortIndex: 0 | 1 | null
@@ -1261,12 +1417,14 @@ export function getSwitchSymbolPaths(
           : poles === 4
             ? '/symbols/switches/switch_4p.svg'
             : poles === 3
-            ? '/symbols/switches/switch_3p.svg'
-            : '/symbols/switches/switch_1p.svg'
+              ? '/symbols/switches/switch_3p.svg'
+              : '/symbols/switches/switch_1p.svg'
       if (verklikkerlamp) overlayPath = SWITCH_OVERLAY_PATHS.overlayLight
       break
     case 'switch_1p_twoway':
-      basePath = twoPole ? '/symbols/switches/switch_2p_twoway.svg' : '/symbols/switches/switch_1p_twoway.svg'
+      basePath = twoPole
+        ? '/symbols/switches/switch_2p_twoway.svg'
+        : '/symbols/switches/switch_1p_twoway.svg'
       break
     case 'switch_2p_twoway':
       basePath = '/symbols/switches/switch_2p_twoway.svg'

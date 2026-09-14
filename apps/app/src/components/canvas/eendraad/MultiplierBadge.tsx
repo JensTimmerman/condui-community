@@ -1,16 +1,18 @@
 import { useState } from 'react'
 import { Group, Rect, Text } from 'react-konva'
+import {
+  getMultiplierBadgePosition,
+  getMultiplierBadgeText,
+  getMultiplierBadgeWidth,
+  MULTIPLIER_BADGE_FONT_SIZE,
+  MULTIPLIER_BADGE_HEIGHT,
+} from '@/lib/eendraad/multiplierBadgeGeometry'
 import { useCanvasPanOrClickGesture } from './CanvasPanOrClickGesture'
-
-const FONT_SIZE = 8
-function getMultiplierBadgeTextWidth(text: string): number {
-  return Math.max(9, Math.ceil(text.length * FONT_SIZE * 0.58))
-}
 
 interface MultiplierBadgeProps {
   count: number
-  x: number
-  y: number
+  anchorX: number
+  anchorY: number
   fill: string
   fontFamily?: string
   onActivate: () => void
@@ -18,22 +20,23 @@ interface MultiplierBadgeProps {
 
 export function MultiplierBadge({
   count,
-  x,
-  y,
+  anchorX,
+  anchorY,
   fill,
   fontFamily,
   onActivate,
 }: MultiplierBadgeProps) {
   const [hovered, setHovered] = useState(false)
-  const text = `${count}x`
-  const width = getMultiplierBadgeTextWidth(text)
-  const height = FONT_SIZE + 2
+  const text = getMultiplierBadgeText(count)
+  const width = getMultiplierBadgeWidth(count)
+  const height = MULTIPLIER_BADGE_HEIGHT
+  const position = getMultiplierBadgePosition({ x: anchorX, y: anchorY }, count)
   const gestureHandlers = useCanvasPanOrClickGesture(() => onActivate())
 
   return (
     <Group
-      x={x}
-      y={y}
+      x={position.x}
+      y={position.y}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       {...gestureHandlers}
@@ -53,7 +56,7 @@ export function MultiplierBadge({
         text={text}
         width={width}
         height={height}
-        fontSize={FONT_SIZE}
+        fontSize={MULTIPLIER_BADGE_FONT_SIZE}
         fontStyle="bold"
         fontFamily={fontFamily}
         fill={fill}

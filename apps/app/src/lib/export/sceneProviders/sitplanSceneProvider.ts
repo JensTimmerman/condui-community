@@ -28,6 +28,7 @@ import {
 } from '../sitplanExportStrip'
 import { collectAndRemoveSymbolImagesForExport } from '../symbolSvgInject'
 import { adjustSymbolImagesForExport } from './symbolImageExport'
+import { stripInteractiveOverlaysForExport } from '../interactiveOverlayExport'
 
 const SITPLAN_EXPORT_BOUNDS_PADDING = 80
 
@@ -169,6 +170,7 @@ export async function prepareSitplanScene(
 
   stripWallPointHandlesForExport(clonedGroup)
   stripPlanWireEditOverlayForExport(clonedGroup)
+  stripInteractiveOverlaysForExport(clonedGroup)
 
   const planGraphicExports = await collectAndRemovePlanGraphicElementsForExport(
     clonedGroup,

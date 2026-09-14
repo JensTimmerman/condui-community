@@ -14,8 +14,8 @@ import {
 import type { PlanVisibilityState } from '@/types/ui'
 import type { Placement, PlanWireRouteStyle, SymbolKey, PlanWiringVisibility } from '@/types/schema'
 import { resolvePlanWiringVisibility } from '@/lib/plan/planWiring'
-import { getPlanWiringFromProject } from '@/lib/projectV2/planWiring'
-import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
+import { selectProjectPlanWiringProjection } from '@/lib/projectV2/planWiring'
+import { selectProjectElectricalPanels } from '@/lib/projectV2/electrical'
 import { getPanelDisplayName } from '@/utils/panelNames'
 import { clamp } from '@/lib/geometry'
 import { openHiddenSituationPlanDialogForFloor } from '@/components/plan/openHiddenSituationPlanDialog'
@@ -145,19 +145,16 @@ export default function SitplanVisibilityPanel({ readOnly = false }: { readOnly?
   const getFloorById = useProjectStore((s: ProjectState) => s.getFloorById)
   const updateFloor = useProjectStore((s: ProjectState) => s.updateFloor)
   const planWiring = useMemo(
-    () => (currentProject ? getPlanWiringFromProject(currentProject) : undefined),
-    [currentProject],
+    () => (currentProject ? selectProjectPlanWiringProjection(currentProject) : undefined),
+    [currentProject]
   )
-  const planWiringVisibility = useMemo(
-    () => resolvePlanWiringVisibility(planWiring),
-    [planWiring],
-  )
+  const planWiringVisibility = useMemo(() => resolvePlanWiringVisibility(planWiring), [planWiring])
   const setPlanWiringVisibility = useCallback(
     (updates: Partial<PlanWiringVisibility>) => {
       if (readOnly) return
       updatePlanWiringVisibility(updates)
     },
-    [readOnly, updatePlanWiringVisibility],
+    [readOnly, updatePlanWiringVisibility]
   )
 
   const masterCheckRef = useRef<HTMLInputElement>(null)
@@ -229,7 +226,7 @@ export default function SitplanVisibilityPanel({ readOnly = false }: { readOnly?
         otherVisible: on,
       })
     },
-    [setPlanVisibility, setPlanWiringVisibility],
+    [setPlanVisibility, setPlanWiringVisibility]
   )
 
   const allChecked =
@@ -279,8 +276,8 @@ export default function SitplanVisibilityPanel({ readOnly = false }: { readOnly?
   const hoverBg = isDark ? 'hover:bg-gray-700' : 'hover:bg-gray-100'
 
   const panels = useMemo(
-    () => (currentProject ? getElectricalPanelsFromProject(currentProject) : []),
-    [currentProject],
+    () => (currentProject ? selectProjectElectricalPanels(currentProject) : []),
+    [currentProject]
   )
 
   const hiddenItemCount = useMemo(
@@ -515,9 +512,7 @@ export default function SitplanVisibilityPanel({ readOnly = false }: { readOnly?
             ))}
           </div>
           <div className={`mt-2 pl-6 ${wiresDisabled ? 'opacity-50 pointer-events-none' : ''}`}>
-            <div className={`mb-1 text-xs ${muted}`}>
-              {t('sitplanVisibility.wireStyle')}
-            </div>
+            <div className={`mb-1 text-xs ${muted}`}>{t('sitplanVisibility.wireStyle')}</div>
             <div className="grid grid-cols-2 gap-1">
               {[
                 {

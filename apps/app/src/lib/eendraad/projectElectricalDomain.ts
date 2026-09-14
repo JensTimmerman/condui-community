@@ -1,4 +1,6 @@
 import { logger } from '@/lib/logger'
+import { symbolCanAppearInPanelGrid } from '@/lib/panel/panelGridSymbolEligibility'
+export { symbolCanAppearInPanelGrid } from '@/lib/panel/panelGridSymbolEligibility'
 import type {
   Circuit,
   DomoticaOutputWireProps,
@@ -11,6 +13,7 @@ import type {
   ProtectionDevice,
   TrunkDevice,
 } from '@/types/schema'
+import type { ElementModelV2, RelationshipModelV2 } from '@/types/projectV2'
 import { clamp } from '@/lib/geometry'
 import {
   assignManualInstallYearToTarget as assignManualInstallYear,
@@ -22,22 +25,22 @@ import {
   type SupplyFeedScope,
 } from '@/lib/feedTopology'
 import {
-  getBuildingFloorsFromProject,
+  selectProjectBuildingFloors,
   type ProjectWithOptionalV2Building,
 } from '@/lib/projectV2/buildingFloors'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
-import {
-  getEendraadFramesFromProject,
-  replaceEendraadFramesForProject,
-} from '@/lib/projectV2/annotations'
+import { getTerminalStripId } from '@/lib/terminalStrip/labels'
+import { removeSupplyAssemblyHandoffsForTargets } from '@/lib/supplyAssembly/repairDanglingReferences'
+import { queryOneWireFrames, replaceOneWireFrames } from '@/lib/projectV2/annotations'
 import { findParentCircuitInfo } from '@/lib/eendraad/findParentCircuitInfo'
 import {
   findPanelOwnDistributionEndpoint,
   resolvePanelSupplyLinkForPanel,
+  resolvePanelSupplyLinkForPanelInPanels,
 } from '@/lib/eendraad/panelSupplyLink'
 import { syncPlugInPropsForDcEndpoints } from '@/lib/eendraad/endpointInsertAfter'
 import { relabelDomoticaChildRows } from '@/lib/eendraad/domoticaOutputOrdering'
@@ -48,15 +51,11 @@ import {
 import {
   dedupeAllPanelsProtectionsInProject,
   dedupePanelProtectionsInPanelTree,
-  reorderPanelMainBusProtectionsFromMainGridSlots,
 } from '@/lib/eendraad/mainBusOrder'
 import { findPanelById, findPanelByName } from '@/lib/panel/panelTree'
 import { findPanelGridDuplicateFindings } from '@/lib/panel/panelGridDuplicates'
 import { DEFAULT_RCBO_SENSITIVITY_MA } from '@/lib/protectionDefaults'
-import {
-  DEFAULT_PANEL_GRID_COLUMNS,
-  DEFAULT_PANEL_GRID_ROWS,
-} from '@/lib/panel/panelGridDefaults'
+import { DEFAULT_PANEL_GRID_COLUMNS, DEFAULT_PANEL_GRID_ROWS } from '@/lib/panel/panelGridDefaults'
 import { generateId } from '@/utils/project'
 
 export type ElectricalDomainProject = ProjectWithOptionalV2Electrical &
@@ -69,10 +68,13 @@ export type ElectricalDomainProject = ProjectWithOptionalV2Electrical &
     }
   }
 
-export function maybeApplyAutomaticEendraadNamingForPanel(project: ElectricalDomainProject, panelId: string): void {
-  const installation = getElectricalInstallationFromProject(project)
+export function maybeApplyAutomaticEendraadNamingForPanel(
+  project: ElectricalDomainProject,
+  panelId: string
+): void {
+  const installation = getProjectElectricalInstallation(project)
   if (!installation?.eendraadAutomaticNaming) return
-  const panels = getElectricalPanelsFromProject(project)
+  const panels = getProjectElectricalPanels(project)
   const panel = findPanelById(panels, panelId)
   if (!panel) return
   dedupePanelProtectionsInPanelTree(panel)
@@ -83,9 +85,12 @@ export function maybeApplyAutomaticEendraadNamingForPanel(project: ElectricalDom
   )
 }
 
-export function findPanelOwningSupplyDevice(project: ElectricalDomainProject, deviceId: string): Panel | undefined {
-  const installation = getElectricalInstallationFromProject(project)
-  const projectPanels = getElectricalPanelsFromProject(project)
+export function findPanelOwningSupplyDevice(
+  project: ElectricalDomainProject,
+  deviceId: string
+): Panel | undefined {
+  const installation = getProjectElectricalInstallation(project)
+  const projectPanels = getProjectElectricalPanels(project)
   if (!installation) return undefined
   const visit = (panels: Panel[]): Panel | undefined => {
     for (const panel of panels) {
@@ -132,7 +137,7 @@ export function isSharedSupplyTrunkModuleRef(
   ref: PanelGridModuleRef
 ): boolean {
   if (!panel.isMain || ref.kind !== 'trunkDevice' || ref.scope !== 'supply') return false
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   if (!installation) return false
   const key = panelGridModuleRefKey(ref)
   const sharedDevices = [
@@ -163,75 +168,20 @@ export function arePanelGridSlotsEqual(
   return true
 }
 
-/**
- * True only when every module whose persisted panel slot changed is a protection.
- * Non-protection layout changes must never feed back into one-wire protection order.
- */
-export function panelGridSlotMutationOnlyChangesProtections(
-  before: PanelGridSlot[] | undefined,
-  after: PanelGridSlot[] | undefined
-): boolean {
-  const beforeByKey = new Map(
-    (before ?? []).map((slot) => [panelGridModuleRefKey(slot.module), slot] as const)
-  )
-  const afterByKey = new Map(
-    (after ?? []).map((slot) => [panelGridModuleRefKey(slot.module), slot] as const)
-  )
-  const keys = new Set([...beforeByKey.keys(), ...afterByKey.keys()])
-  const changedRefs: PanelGridModuleRef[] = []
-
-  for (const key of keys) {
-    const previous = beforeByKey.get(key)
-    const next = afterByKey.get(key)
-    const unchanged =
-      previous != null &&
-      next != null &&
-      previous.row === next.row &&
-      previous.col === next.col &&
-      previous.moduleWidth === next.moduleWidth &&
-      previous.moduleWidthManual === next.moduleWidthManual
-    if (unchanged) continue
-    const ref = next?.module ?? previous?.module
-    if (ref) changedRefs.push(ref)
-  }
-
-  return changedRefs.length > 0 && changedRefs.every((ref) => ref.kind === 'protection')
-}
-
-/**
- * After panel grid slots change, sync `panel.protections` order from slot geometry then re-run naming.
- * Single entry point for drag-and-drop / auto-arrange so bus letters track visual order.
- */
-export function flushAutomaticEendraadNamingAfterPanelGridMutation(
-  project: ElectricalDomainProject,
-  panelId: string
+export function applyAutomaticEendraadNamingAllPanelsInProject(
+  project: ElectricalDomainProject
 ): void {
-  const installation = getElectricalInstallationFromProject(project)
-  if (!installation?.eendraadAutomaticNaming) return
-  const panel = findPanelById(getElectricalPanelsFromProject(project), panelId)
-  if (!panel) return
-  dedupePanelProtectionsInPanelTree(panel)
-  reorderPanelMainBusProtectionsFromMainGridSlots(panel)
-  applyAutomaticMainBusNamingToPanel(
-    panel,
-    resolveAutomaticNamingOptsFromInstallation(installation),
-    project
-  )
-}
-
-export function applyAutomaticEendraadNamingAllPanelsInProject(project: ElectricalDomainProject): void {
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   if (!installation?.eendraadAutomaticNaming) return
   dedupeAllPanelsProtectionsInProject(project)
   const opts = resolveAutomaticNamingOptsFromInstallation(installation)
   const walk = (panels: Panel[]) => {
     for (const p of panels) {
-      reorderPanelMainBusProtectionsFromMainGridSlots(p)
       applyAutomaticMainBusNamingToPanel(p, opts, project)
       if (p.subPanels?.length) walk(p.subPanels)
     }
   }
-  walk(getElectricalPanelsFromProject(project))
+  walk(getProjectElectricalPanels(project))
 }
 
 function supplyFeedListForPanelAndScope(
@@ -239,9 +189,9 @@ function supplyFeedListForPanelAndScope(
   panelId?: string,
   scope: SupplyFeedScope = 'shared'
 ): TrunkDevice[] {
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   if (!installation) return []
-  const panels = getElectricalPanelsFromProject(project)
+  const panels = getProjectElectricalPanels(project)
   if (scope === 'shared' || !panelId) {
     if (!installation.mainSupply.supplyTrunkDevices) {
       installation.mainSupply.supplyTrunkDevices = []
@@ -256,12 +206,12 @@ function supplyFeedListForPanelAndScope(
 }
 
 export function findSupplyDeviceContainer(
-  project: ElectricalDomainProject,
+  project: ProjectWithOptionalV2Electrical & ProjectWithOptionalV2Building,
   deviceId: string
 ): { devices: TrunkDevice[]; scope: SupplyFeedScope; panelId?: string } | null {
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   if (!installation) return null
-  const panels = getElectricalPanelsFromProject(project)
+  const panels = getProjectElectricalPanels(project)
   const legacyDevices = installation.mainSupply?.supplyTrunkDevices ?? []
   if (legacyDevices.some((device) => device.id === deviceId)) {
     return { devices: legacyDevices, scope: 'shared' }
@@ -358,7 +308,7 @@ export function syncLinkedSubPanelHierarchy(project: ElectricalDomainProject): b
     }
   }
 
-  const panels = getElectricalPanelsFromProject(project)
+  const panels = getProjectElectricalPanels(project)
   collect(panels)
 
   for (const link of links) {
@@ -383,7 +333,7 @@ export function findProtectionSupplyingPanel(
   panels: Panel[],
   panelId: string
 ): { panel: Panel; protection: ProtectionDevice } | null {
-  const link = resolvePanelSupplyLinkForPanel({ panels } as ElectricalDomainProject, panelId)
+  const link = resolvePanelSupplyLinkForPanelInPanels(panels, panelId)
   return link ? { panel: link.sourcePanel, protection: link.protection } : null
 }
 
@@ -392,7 +342,7 @@ export function deleteLinkedSubPanelsIfOrphaned(
   project: ElectricalDomainProject,
   candidateSubPanelIds: Iterable<string>
 ): void {
-  const panels = getElectricalPanelsFromProject(project)
+  const panels = getProjectElectricalPanels(project)
   for (const panelId of candidateSubPanelIds) {
     if (!findProtectionSupplyingPanel(panels, panelId)) {
       deletePanelFromProject(project, panelId)
@@ -424,15 +374,14 @@ export function findCircuitOwner(
 }
 
 export function deletePanelFromProject(project: ElectricalDomainProject, panelId: string): boolean {
-  const panels = getElectricalPanelsFromProject(project)
+  const panels = getProjectElectricalPanels(project)
   const targetPanel = findPanelById(panels, panelId)
   if (!targetPanel) return false
   if (targetPanel.isMain) {
     const countMainPanels = (panelList: Panel[]): number =>
       panelList.reduce(
-        (count, panel) =>
-          count + (panel.isMain ? 1 : 0) + countMainPanels(panel.subPanels ?? []),
-        0,
+        (count, panel) => count + (panel.isMain ? 1 : 0) + countMainPanels(panel.subPanels ?? []),
+        0
       )
     if (countMainPanels(panels) <= 1) return false
   }
@@ -448,6 +397,13 @@ export function deletePanelFromProject(project: ElectricalDomainProject, panelId
   }
   const panelIdsToDelete = collectPanelIds(panelId)
   const panelIdSet = new Set(panelIdsToDelete)
+  const deletedRootFeedIds = new Set(
+    (getProjectElectricalInstallation(project)?.feedTopology?.rootFeeds ?? [])
+      .filter((feed) => panelIdSet.has(feed.panelId))
+      .map((feed) => feed.id)
+  )
+
+  removeSupplyAssemblyHandoffsForTargets(project, panelIdSet, deletedRootFeedIds)
 
   const unlinkProtectionsWithSubPanel = (panels: Panel[]) => {
     for (const panel of panels) {
@@ -489,10 +445,10 @@ export function deletePanelFromProject(project: ElectricalDomainProject, panelId
   }
   cleanupPanelCircuits(panels)
 
-  const frames = getEendraadFramesFromProject(project)
+  const frames = queryOneWireFrames(project)
   const keptFrames = frames.filter((frame) => !panelIdSet.has(frame.panelId))
   if (keptFrames.length !== frames.length) {
-    replaceEendraadFramesForProject(project, keptFrames)
+    replaceOneWireFrames(project, keptFrames)
   }
 
   const removePanel = (panels: Panel[], id: string): boolean => {
@@ -509,10 +465,10 @@ export function deletePanelFromProject(project: ElectricalDomainProject, panelId
 
   const removed = removePanel(panels, panelId)
   if (removed) {
-    const installation = getElectricalInstallationFromProject(project)
+    const installation = getProjectElectricalInstallation(project)
     if (installation?.feedTopology) {
       installation.feedTopology.rootFeeds = installation.feedTopology.rootFeeds.filter(
-        (feed) => !panelIdSet.has(feed.panelId),
+        (feed) => !panelIdSet.has(feed.panelId)
       )
       ensureInstallationFeedTopology(installation, panels)
     }
@@ -533,7 +489,10 @@ export function findProtectionById(panel: Panel, id: string): ProtectionDevice |
 }
 
 /** The panel whose `protections` array contains this device (not an ancestor root panel). */
-export function findPanelOwningProtection(panels: Panel[], protectionId: string): Panel | undefined {
+export function findPanelOwningProtection(
+  panels: Panel[],
+  protectionId: string
+): Panel | undefined {
   for (const panel of panels) {
     if (panel.protections?.some((p) => p.id === protectionId)) {
       return panel
@@ -567,12 +526,16 @@ export function rewirePanelGridProtectionModuleId(
   for (const slot of slots) {
     const m = slot.module
     if (m?.kind === 'protection' && m.id === fromProtectionId) {
-      (m as { kind: 'protection'; id: string }).id = toProtectionId
+      const protectionModule = m as { kind: 'protection'; id: string }
+      protectionModule.id = toProtectionId
     }
   }
 }
 
-export function removePanelGridDuplicateRefs(project: ElectricalDomainProject, panel: Panel): boolean {
+export function removePanelGridDuplicateRefs(
+  project: ElectricalDomainProject,
+  panel: Panel
+): boolean {
   if (!panel.gridView) return false
 
   const mainSlots = panel.gridView.slots ?? []
@@ -632,7 +595,7 @@ export function removePanelGridDuplicateRefsInProject(project: ElectricalDomainP
     if (removePanelGridDuplicateRefs(project, panel)) changed = true
     for (const subPanel of panel.subPanels ?? []) visit(subPanel)
   }
-  for (const panel of getElectricalPanelsFromProject(project)) visit(panel)
+  for (const panel of getProjectElectricalPanels(project)) visit(panel)
   return changed
 }
 
@@ -651,7 +614,7 @@ export function pruneStalePanelGridProtectionReferencesInProject(
     }
     for (const subPanel of panel.subPanels ?? []) collectProtectionKeys(subPanel)
   }
-  const panels = getElectricalPanelsFromProject(project)
+  const panels = getProjectElectricalPanels(project)
   for (const panel of panels) collectProtectionKeys(panel)
 
   let changed = false
@@ -741,10 +704,7 @@ export function rewirePromotedIncomingProtectionGridRef(
     const rewritten: PanelGridSlot[] = []
     for (const slot of slots ?? []) {
       const key = panelGridModuleRefKey(slot.module)
-      const nextSlot =
-        key === oldKey
-          ? { ...slot, module: { ...newRef } }
-          : slot
+      const nextSlot = key === oldKey ? { ...slot, module: { ...newRef } } : slot
       const nextKey = panelGridModuleRefKey(nextSlot.module)
       if (key === oldKey) changed = true
       if (seen.has(nextKey)) {
@@ -774,9 +734,7 @@ export function rewirePromotedIncomingProtectionGridRef(
 }
 
 /** Repair stale protection-kind panel slots left by older incoming-wire promotion builds. */
-export function healPromotedIncomingProtectionGridRefs(
-  project: ElectricalDomainProject
-): boolean {
+export function healPromotedIncomingProtectionGridRefs(project: ElectricalDomainProject): boolean {
   let changed = false
   const visit = (panel: Panel) => {
     const panelCircuit = panel.circuits.find((circuit) => circuit.code === 'PANEL')
@@ -792,16 +750,20 @@ export function healPromotedIncomingProtectionGridRefs(
     }
     for (const subPanel of panel.subPanels ?? []) visit(subPanel)
   }
-  for (const panel of getElectricalPanelsFromProject(project)) visit(panel)
+  for (const panel of getProjectElectricalPanels(project)) visit(panel)
   return changed
 }
 
-export function removePromotedIncomingProtectionsFromSubPanels(project: ElectricalDomainProject): boolean {
+export function removePromotedIncomingProtectionsFromSubPanels(
+  project: ElectricalDomainProject
+): boolean {
   void project
   return false
 }
 
-export function ensureLinkedSubPanelsHaveOwnPanelEndpoint(project: ElectricalDomainProject): boolean {
+export function ensureLinkedSubPanelsHaveOwnPanelEndpoint(
+  project: ElectricalDomainProject
+): boolean {
   let changed = false
 
   const visit = (panels: Panel[]) => {
@@ -843,7 +805,7 @@ export function ensureLinkedSubPanelsHaveOwnPanelEndpoint(project: ElectricalDom
     }
   }
 
-  visit(getElectricalPanelsFromProject(project))
+  visit(getProjectElectricalPanels(project))
   return changed
 }
 
@@ -984,27 +946,75 @@ export function getAllEndpoints(panel: Panel): Endpoint[] {
   return endpoints
 }
 
+/**
+ * Remove canonical endpoint records that no longer have a compatibility endpoint owner.
+ * Electrical editing mutates the panel tree, so deleted endpoints must also disappear from
+ * materialized V2 records or the structure graph reports them as unsupported orphans.
+ */
+export function pruneStaleElectricalEndpointRecords(
+  project: ElectricalDomainProject & {
+    elements?: ElementModelV2[]
+    relationships?: RelationshipModelV2[]
+  }
+): boolean {
+  const electrical = project.disciplines?.electrical
+  if (!electrical) return false
+
+  const liveEndpointIds = new Set(
+    getProjectElectricalPanels(project).flatMap((panel) =>
+      getAllEndpoints(panel).map(({ id }) => id)
+    )
+  )
+  const isPanelDevice = (device: { legacyEndpointId: string }) =>
+    device.legacyEndpointId.startsWith('panel_')
+  const staleDevices = electrical.devices.filter(
+    (device) => !liveEndpointIds.has(device.legacyEndpointId) && !isPanelDevice(device)
+  )
+  const staleElementIds = new Set(staleDevices.flatMap((device) => device.elementIds))
+
+  const endpointIdFromElement = (element: ElementModelV2): string | undefined => {
+    const propertyEndpointId = element.properties?.endpointId
+    if (typeof propertyEndpointId === 'string') return propertyEndpointId
+    return element.sourceRefs?.find((ref) => ref.path?.includes('endpoints'))?.id
+  }
+
+  for (const element of project.elements ?? []) {
+    const endpointId = endpointIdFromElement(element)
+    if (endpointId && !liveEndpointIds.has(endpointId)) staleElementIds.add(element.id)
+  }
+
+  let changed = staleDevices.length > 0
+  if (changed) {
+    electrical.devices = electrical.devices.filter(
+      (device) => liveEndpointIds.has(device.legacyEndpointId) || isPanelDevice(device)
+    )
+  }
+
+  if (staleElementIds.size > 0 && project.elements) {
+    const nextElements = project.elements.filter((element) => !staleElementIds.has(element.id))
+    changed ||= nextElements.length !== project.elements.length
+    project.elements = nextElements
+  }
+
+  if (staleElementIds.size > 0 && project.relationships) {
+    const nextRelationships = project.relationships.filter(
+      (relationship) =>
+        !staleElementIds.has(relationship.fromElementId) &&
+        !staleElementIds.has(relationship.toElementId)
+    )
+    changed ||= nextRelationships.length !== project.relationships.length
+    project.relationships = nextRelationships
+  }
+
+  return changed
+}
+
 export function getAllProtections(panel: Panel): ProtectionDevice[] {
   const protections: ProtectionDevice[] = [...panel.protections]
   for (const subPanel of panel.subPanels) {
     protections.push(...getAllProtections(subPanel))
   }
   return protections
-}
-
-const OPTIONAL_PANEL_ENDPOINT_SYMBOLS = new Set([
-  'domotica',
-  'energy_meter',
-  'relay',
-  'transformer',
-  'rectifier',
-  'inverter',
-  'dc_dc_converter',
-])
-
-/** Symbols whose endpoint representation may be shown in the distribution-panel grid. */
-export function symbolCanAppearInPanelGrid(symbol: string | undefined): boolean {
-  return symbol != null && OPTIONAL_PANEL_ENDPOINT_SYMBOLS.has(symbol)
 }
 
 /** Endpoints that users may explicitly include in the panel view. */
@@ -1015,11 +1025,14 @@ export function endpointCanAppearInPanelGrid(endpoint: Endpoint): boolean {
 /** One-wire trunk devices that have a physical representation in the panel view. */
 export function trunkDeviceCanAppearInPanelGrid(device: TrunkDevice): boolean {
   return (
+    device.type === 'relay' || device.symbol === 'relay' ||
     device.type === 'protection' ||
     device.type === 'energy_meter' ||
     device.type === 'conversion' ||
     device.type === 'changeover' ||
-    device.type === 'dc_bus'
+    device.type === 'dc_bus' ||
+    device.type === 'domotica' ||
+    device.type === 'terminal_strip'
   )
 }
 
@@ -1076,7 +1089,113 @@ export function getDefaultPanelGridModuleRefs(
       }
     }
   }
-  return refs
+
+  // A terminal strip can be physically mounted on another panel without moving its
+  // circuit occurrence. Keep the circuit ref so one-wire ownership and relation edges
+  // remain intact, but project the physical module onto its assigned panel.
+  const existingKeys = new Set(refs.map((ref) => panelGridModuleRefKey(ref)))
+  for (const candidatePanel of allPanels) {
+    for (const candidateCircuit of getAllCircuits(candidatePanel)) {
+      for (const device of candidateCircuit.trunkDevices ?? []) {
+        if (!isTerminalStripDevice(device) || device.terminalStripPanelId !== panel.id) {
+          continue
+        }
+        const ref: PanelGridModuleRef = {
+          kind: 'trunkDevice',
+          id: device.id,
+          scope: 'circuit',
+          circuitId: candidateCircuit.id,
+        }
+        const key = panelGridModuleRefKey(ref)
+        if (!existingKeys.has(key)) {
+          refs.push(ref)
+          existingKeys.add(key)
+        }
+      }
+    }
+  }
+  return refs.filter((ref) => {
+    if (ref.kind !== 'trunkDevice' || ref.scope !== 'circuit') return true
+    const device = allPanels
+      .flatMap((candidatePanel) => getAllCircuits(candidatePanel))
+      .flatMap((candidateCircuit) => candidateCircuit.trunkDevices ?? [])
+      .find((candidate) => candidate.id === ref.id)
+    if (device?.panelMounting?.kind === 'auxiliary') return false
+    const assignedPanelId = getTerminalStripPanelId(device)
+    return assignedPanelId == null || assignedPanelId === panel.id
+  })
+}
+
+export function isTerminalStripDevice(
+  device: TrunkDevice | null | undefined
+): device is TrunkDevice {
+  return device != null && (device.type === 'terminal_strip' || device.symbol === 'terminal_strip')
+}
+
+export function getTerminalStripPanelId(
+  device: TrunkDevice | null | undefined
+): string | undefined {
+  return isTerminalStripDevice(device) ? device?.terminalStripPanelId : undefined
+}
+
+/**
+ * Set the physical panel-canvas owner for a circuit terminal strip. Equal
+ * `junctionIdentity` values represent one physical strip, so all occurrences
+ * move together while their circuit ownership remains unchanged.
+ */
+export function setTerminalStripPanelId(
+  project: ElectricalDomainProject,
+  deviceId: string,
+  panelId: string | undefined,
+  enclosureId?: string
+): boolean {
+  const panels = getProjectElectricalPanels(project)
+  let target: TrunkDevice | undefined
+  let targetIdentity: string | undefined
+  const devices: TrunkDevice[] = []
+  const seenCircuitIds = new Set<string>()
+
+  for (const rootPanel of panels) {
+    for (const circuit of getAllCircuits(rootPanel)) {
+      if (seenCircuitIds.has(circuit.id)) continue
+      seenCircuitIds.add(circuit.id)
+      for (const device of circuit.trunkDevices ?? []) {
+        if (!isTerminalStripDevice(device)) continue
+        devices.push(device)
+        if (device.id === deviceId) {
+          target = device
+          targetIdentity = getTerminalStripIdentity(device)
+        }
+      }
+    }
+  }
+
+  if (!target) return false
+  const changed = devices.reduce((didChange, device) => {
+    if (
+      device !== target &&
+      targetIdentity &&
+      getTerminalStripIdentity(device) !== targetIdentity
+    ) {
+      return didChange
+    }
+    if (enclosureId) {
+      delete device.terminalStripPanelId
+      device.panelMounting = { kind: 'auxiliary', enclosureId }
+      return true
+    }
+    const removedMounting = device.panelMounting != null
+    delete device.panelMounting
+    if (device.terminalStripPanelId === panelId) return didChange || removedMounting
+    if (panelId) device.terminalStripPanelId = panelId
+    else delete device.terminalStripPanelId
+    return true
+  }, false)
+  return changed
+}
+
+function getTerminalStripIdentity(device: TrunkDevice): string {
+  return (getTerminalStripId(device) || device.id).trim().toUpperCase()
 }
 
 /** Protections are visible by default; every other eligible device is opt-in. */
@@ -1103,9 +1222,21 @@ export function panelGridModuleIsVisibleByDefault(
   } else if (ref.scope === 'ground') {
     device = installation?.groundTrunkDevices?.find((d) => d.id === ref.id)
   } else if (ref.scope === 'circuit') {
-    const circuit = getAllCircuits(panel).find((candidate) => candidate.id === ref.circuitId)
-    device = circuit?.trunkDevices?.find((d) => d.id === ref.id)
+    const localCircuit = getAllCircuits(panel).find((candidate) => candidate.id === ref.circuitId)
+    device = localCircuit?.trunkDevices?.find((d) => d.id === ref.id)
+    if (!device) {
+      for (const candidatePanel of allPanels) {
+        const circuit = getAllCircuits(candidatePanel).find(
+          (candidate) => candidate.id === ref.circuitId
+        )
+        device = circuit?.trunkDevices?.find((d) => d.id === ref.id)
+        if (device) break
+      }
+    }
   }
+  // Direct supply converters are physical panel modules when created on the
+  // converter branch. Other supply inverters remain opt-in.
+  if (device?.symbol === 'inverter' && device.supplyPath !== 'converter-branch') return false
   if (
     device?.type === 'protection' &&
     device.protectionType === 'FUSE' &&
@@ -1115,10 +1246,10 @@ export function panelGridModuleIsVisibleByDefault(
   }
   if (device?.type === 'protection') return true
   if (device?.type === 'changeover' || device?.symbol === 'source_changeover') return true
+  if (device?.type === 'terminal_strip' || device?.symbol === 'terminal_strip') return true
   return (
     ref.scope === 'supply' &&
-    (device?.supplyPath === 'backup' ||
-      device?.supplyPath === 'converter-branch')
+    (device?.supplyPath === 'backup' || device?.supplyPath === 'converter-branch')
   )
 }
 export function panelGridModuleRefKey(ref: PanelGridModuleRef): string {
@@ -1136,7 +1267,7 @@ export function rewriteRelocatedCircuitTrunkDeviceGridRef(
 ): void {
   if (sourceCircuitId === targetCircuitId) return
 
-  const panels = getElectricalPanelsFromProject(project)
+  const panels = getProjectElectricalPanels(project)
   const sourcePanel = panels
     .map((panel) => findPanelContainingCircuit(panel, sourceCircuitId))
     .find((panel): panel is Panel => panel != null)
@@ -1146,7 +1277,10 @@ export function rewriteRelocatedCircuitTrunkDeviceGridRef(
   if (!sourcePanel?.gridView || !targetPanel) return
 
   const oldRef: PanelGridModuleRef = {
-    kind: 'trunkDevice', id: deviceId, scope: 'circuit', circuitId: sourceCircuitId,
+    kind: 'trunkDevice',
+    id: deviceId,
+    scope: 'circuit',
+    circuitId: sourceCircuitId,
   }
   const newRef: PanelGridModuleRef = { ...oldRef, circuitId: targetCircuitId }
   const oldKey = panelGridModuleRefKey(oldRef)
@@ -1156,14 +1290,14 @@ export function rewriteRelocatedCircuitTrunkDeviceGridRef(
 
   const rewriteKeys = (keys: string[] | undefined): string[] | undefined => {
     if (!keys) return undefined
-    const next = [...new Set(keys.map((key) => key === oldKey ? newKey : key))]
+    const next = [...new Set(keys.map((key) => (key === oldKey ? newKey : key)))]
     return next.length > 0 ? next : undefined
   }
   if (sourcePanel === targetPanel) {
     const rewriteSlots = (slots: PanelGridSlot[] | undefined): PanelGridSlot[] =>
-      (slots ?? []).map((slot) => panelGridModuleRefKey(slot.module) === oldKey
-        ? { ...slot, module: newRef }
-        : slot)
+      (slots ?? []).map((slot) =>
+        panelGridModuleRefKey(slot.module) === oldKey ? { ...slot, module: newRef } : slot
+      )
     sourcePanel.gridView.slots = rewriteSlots(sourcePanel.gridView.slots)
     sourcePanel.gridView.supplyPanelSlots = rewriteSlots(sourcePanel.gridView.supplyPanelSlots)
     sourcePanel.gridView.shownModuleKeys = rewriteKeys(sourcePanel.gridView.shownModuleKeys)
@@ -1198,9 +1332,12 @@ export function rewriteRelocatedCircuitTrunkDeviceGridRef(
 }
 
 /** Check if a module ref references an existing device/endpoint/protection in the project */
-export function isModuleRefValid(ref: PanelGridModuleRef, project: ElectricalDomainProject): boolean {
-  const panels = getElectricalPanelsFromProject(project)
-  const installation = getElectricalInstallationFromProject(project)
+export function isModuleRefValid(
+  ref: PanelGridModuleRef,
+  project: ElectricalDomainProject
+): boolean {
+  const panels = getProjectElectricalPanels(project)
+  const installation = getProjectElectricalInstallation(project)
   if (ref.kind === 'protection') {
     for (const panel of panels) {
       const protection = findProtectionById(panel, ref.id)
@@ -1244,7 +1381,10 @@ export function isModuleRefValid(ref: PanelGridModuleRef, project: ElectricalDom
 }
 
 /** Remove panel grid slots and hidden keys that reference a deleted device */
-export function cleanupPanelGridSlotsForDevice(panels: Panel[], deviceRef: PanelGridModuleRef): void {
+export function cleanupPanelGridSlotsForDevice(
+  panels: Panel[],
+  deviceRef: PanelGridModuleRef
+): void {
   try {
     const deviceKey = panelGridModuleRefKey(deviceRef)
     for (const panel of panels) {
@@ -1306,7 +1446,7 @@ export function normalizeDomoticaCount(value: number | undefined, fallback: numb
 }
 
 export function isDomoticaParentEndpoint(endpoint: Endpoint): boolean {
-  return endpoint.symbol === 'domotica' && !endpoint.domoticaChildProps
+  return endpoint.symbol === 'domotica'
 }
 
 export function removeEndpointIdsFromCircuit(circuit: Circuit, ids: Set<string>): void {
@@ -1317,7 +1457,7 @@ export function removeEndpointIdsFromCircuit(circuit: Circuit, ids: Set<string>)
         ...branch,
         endpointIds: branch.endpointIds.filter((endpointId) => !ids.has(endpointId)),
       }))
-      .filter((branch) => branch.endpointIds.length > 0)
+      .filter((branch) => branch.endpointIds.length > 0 || (branch.branchDevices?.length ?? 0) > 0)
   }
 }
 
@@ -1479,7 +1619,7 @@ export function normalizeDomoticaCircuit(circuit: Circuit): void {
 }
 
 export function normalizeDomoticaProject(project: ElectricalDomainProject): void {
-  for (const panel of getElectricalPanelsFromProject(project)) {
+  for (const panel of getProjectElectricalPanels(project)) {
     const circuits = getAllCircuits(panel)
     for (const circuit of circuits) {
       normalizeDomoticaCircuit(circuit)
@@ -1495,7 +1635,7 @@ export function normalizeDomoticaProject(project: ElectricalDomainProject): void
 }
 
 export function normalizeFloorPlanAssets(project: ElectricalDomainProject): void {
-  getBuildingFloorsFromProject(project).forEach((floor) => {
+  selectProjectBuildingFloors(project).forEach((floor) => {
     if ('planAsset' in floor && !floor.planImportAsset && floor.planAsset) {
       const importedAsset: ImportedPlanAsset = {
         id: floor.id,
@@ -1515,6 +1655,32 @@ export function getDomoticaChildEndpointIds(endpoint: Endpoint): string[] {
   const props = endpoint.domoticaProps
   if (!props) return []
   return [...(props.endpointChildEndpointIds ?? [])]
+}
+
+/** Expand endpoint deletion roots through the complete domotica output tree. */
+export function collectDomoticaEndpointIdsForDeletion(
+  circuit: Circuit,
+  rootEndpointIds: Iterable<string>
+): Set<string> {
+  const byId = new Map(circuit.endpoints.map((endpoint) => [endpoint.id, endpoint]))
+  const ids = new Set(rootEndpointIds)
+  const queue = [...ids]
+
+  while (queue.length > 0) {
+    const parentId = queue.shift()!
+    const parent = byId.get(parentId)
+    const childIds = new Set(parent ? getDomoticaChildEndpointIds(parent) : [])
+    for (const endpoint of circuit.endpoints) {
+      if (endpoint.domoticaChildProps?.parentEndpointId === parentId) childIds.add(endpoint.id)
+    }
+    for (const childId of childIds) {
+      if (!childId || !byId.has(childId) || ids.has(childId)) continue
+      ids.add(childId)
+      queue.push(childId)
+    }
+  }
+
+  return ids
 }
 
 /**
@@ -1557,6 +1723,37 @@ export function migrateCircuitContentToParent(circuit: Circuit, parentCircuit: C
 }
 
 /**
+ * Remove a circuit from its parent's chain while promoting its direct children
+ * into the same position. Circuit content stays with the removed circuit and
+ * is therefore deleted with its protection.
+ *
+ * A{B{C}} → delete B → A{C}
+ *
+ * Must be called inside an immer mutation callback so all changes are tracked.
+ */
+export function promoteCircuitSubcircuitsToParent(circuit: Circuit, parentCircuit: Circuit): void {
+  const parentSubCircuitIds = parentCircuit.subCircuitIds
+  if (!parentSubCircuitIds) return
+
+  const index = parentSubCircuitIds.indexOf(circuit.id)
+  if (index === -1) return
+
+  const promotedIds = (circuit.subCircuitIds ?? []).filter(
+    (subCircuitId) => subCircuitId && subCircuitId !== circuit.id
+  )
+  const nextIds: string[] = []
+  for (const subCircuitId of [
+    ...parentSubCircuitIds.slice(0, index),
+    ...promotedIds,
+    ...parentSubCircuitIds.slice(index + 1),
+  ]) {
+    if (!subCircuitId || subCircuitId === circuit.id || nextIds.includes(subCircuitId)) continue
+    nextIds.push(subCircuitId)
+  }
+  parentCircuit.subCircuitIds = nextIds
+}
+
+/**
  * When deleting a protection whose circuit is a subcircuit of another circuit,
  * move the subcircuit's content back into the parent circuit so nothing is lost.
  * Also transfers subPanelId back to the parent protection if applicable.
@@ -1564,7 +1761,10 @@ export function migrateCircuitContentToParent(circuit: Circuit, parentCircuit: C
  * Must be called BEFORE the protection is actually removed from the panel,
  * inside an immer mutation callback so all changes are tracked.
  */
-export function migrateSubCircuitContentToParent(protection: ProtectionDevice, panels: Panel[]): void {
+export function migrateSubCircuitContentToParent(
+  protection: ProtectionDevice,
+  panels: Panel[]
+): void {
   if (!protection.circuits) return
 
   for (const circuit of protection.circuits) {

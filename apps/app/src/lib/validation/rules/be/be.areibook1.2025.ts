@@ -516,10 +516,10 @@ export const beAreiBook1_2025: RulePack = {
         {
           code: 'AREI',
           title: 'Algemeen Reglement op de Elektrische Installaties',
-          section: '§ 4.2.4.3(b), § 7.22.4.1',
+          section: '§ 4.2.4.3(b), § 5.3.5.3(f), § 7.22.4.1',
         },
       ],
-      tags: ['rcd', 'circuits', 'protection'],
+      tags: ['rcd', 'circuits', 'protection', 'ev', 'dc-residual-current'],
     },
     // Rule 5 (neutral isolation) not implemented: single-wire model does not model neutral bus separation per RCD group.
     {

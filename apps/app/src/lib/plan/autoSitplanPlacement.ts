@@ -9,11 +9,11 @@ import type { Point, ViewportLayout } from '@/types/ui'
 import type { Placement } from '@/types/schema'
 import { collectPlacementsOnFloor, findCircuitForEndpointInProject } from '@/utils/project'
 import {
-  getBuildingFloorsFromProject,
+  selectProjectBuildingFloors,
   type ProjectWithOptionalV2Building,
 } from '@/lib/projectV2/buildingFloors'
 import {
-  getElectricalPanelsFromProject,
+  selectProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { getAllCircuits } from '@/lib/eendraad/projectElectricalDomain'
@@ -131,13 +131,13 @@ export function buildAutoSitplanPlacement(
   project: AutoSitplanPlacementProject,
   opts: AutoSitplanPlacementOpts,
 ): Placement | null {
-  const floor = getBuildingFloorsFromProject(project).find((f) => f.id === opts.floorId)
+  const floor = selectProjectBuildingFloors(project).find((f) => f.id === opts.floorId)
   if (!floor) return null
 
   const layer = 'layers' in floor && Array.isArray(floor.layers) ? floor.layers[0] ?? 'electrical' : 'electrical'
   const allPlacements = collectPlacementsOnFloor(project, opts.floorId)
   const trunkCircuitIdByDeviceId = new Map<string, string>()
-  for (const panel of getElectricalPanelsFromProject(project)) {
+  for (const panel of selectProjectElectricalPanels(project)) {
     for (const circuit of getAllCircuits(panel)) {
       for (const device of circuit.trunkDevices ?? []) {
         trunkCircuitIdByDeviceId.set(device.id, circuit.id)

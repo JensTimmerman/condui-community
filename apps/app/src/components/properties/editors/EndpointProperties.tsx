@@ -16,8 +16,8 @@ import type {
 } from '@/types/schema'
 import { getDerivedCircuitKind } from '@/lib/circuitKind'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
 } from '@/lib/projectV2/electrical'
 import { TRANSFORMER_OVERLAY_PATHS, SWITCH_SYMBOLS_WITH_VERKLIKKERLAMP } from '@/lib/symbols'
 import {
@@ -41,6 +41,14 @@ import {
 } from '@/lib/eendraad/syncEndpointMultiplierCount'
 import AddCircuitDialog from '../AddCircuitDialog'
 import { InstallDateField } from '../shared/propertiesShared'
+import { JunctionIdentityField } from '../shared/JunctionIdentityField'
+import {
+  collectJunctionIdentities,
+  getJunctionIdentity,
+  isJunctionIdentityVisibleByDefault,
+  isSharedJunctionSymbol,
+} from '@/lib/junctionIdentity'
+import { isSymbolLabelVisible } from '@/lib/symbolLabels'
 import {
   getSynergridFocusForCircuit,
   labelClass,
@@ -50,6 +58,8 @@ import {
 } from '../shared/propertiesSharedUtils'
 import { EndpointCertificationSection } from './EndpointControls'
 import { AutomaticNamingLockedField } from '../shared/AutomaticNamingLockedField'
+import { assignTerminalStripPin } from '@/handlers/terminalStripAssignments'
+import { getTerminalStripPin } from '@/lib/terminalStrip/labels'
 import {
   ApplianceTypeDropdown,
   DomoticaEndpointFields,
@@ -88,7 +98,7 @@ export function EndpointProperties({
   const eendraadAutomaticNaming = useProjectStore(
     (state: ProjectState) =>
       !!(state.currentProject
-        ? getElectricalInstallationFromProject(state.currentProject)?.eendraadAutomaticNaming
+        ? getProjectElectricalInstallation(state.currentProject)?.eendraadAutomaticNaming
         : false)
   )
   const findCircuitForEndpoint = useProjectStore(
@@ -287,7 +297,7 @@ export function EndpointProperties({
   // Get all circuits for the dropdown (deduplicated by id to avoid React duplicate-key warnings)
   const circuits: Circuit[] = project
     ? deduplicateCircuitsById(
-        getElectricalPanelsFromProject(project).flatMap((panel) => collectCircuits(panel))
+        getProjectElectricalPanels(project).flatMap((panel) => collectCircuits(panel))
       )
     : []
   const selectableCircuits = circuits.filter((circuit) => circuit.code !== 'PANEL')
@@ -346,16 +356,86 @@ export function EndpointProperties({
       />
       <div>
         <label className={labelClass}>{t('endpoints.label', 'Label')}</label>
-        <AutomaticNamingLockedField locked={endpointBranchLabelLocked}>
-          <DebouncedTextInput
-            type="text"
-            value={endpoint.label}
-            resetKey={endpointId}
-            onCommit={(v) => onUpdate(endpointId, { label: v })}
-            className={selectClass}
-            disabled={endpointBranchLabelLocked}
+        {isSharedJunctionSymbol(endpoint.symbol) ? (
+          <JunctionIdentityField
+            value={getJunctionIdentity(endpoint)}
+            options={project ? collectJunctionIdentities(project, endpoint.symbol!) : []}
+            visible={isSymbolLabelVisible(
+              endpoint.symbolLabelDisplay,
+              'junctionIdentityLabel',
+              isJunctionIdentityVisibleByDefault(endpoint.symbol)
+            )}
+            fixedPrefix={endpoint.symbol === 'terminal_strip' ? 'X' : undefined}
+            onCommit={(junctionIdentity) => {
+              if (endpoint.symbol === 'terminal_strip') {
+                const currentPin = getTerminalStripPin(endpoint) ?? 1
+                assignTerminalStripPin(
+                  useProjectStore.getState(),
+                  endpointId,
+                  junctionIdentity,
+                  currentPin,
+                  getJunctionIdentity(endpoint).toUpperCase() === junctionIdentity.toUpperCase()
+                    ? currentPin
+                    : undefined
+                )
+              } else {
+                onUpdate(endpointId, { junctionIdentity })
+              }
+            }}
+            onToggleVisible={() =>
+              onUpdate(endpointId, {
+                symbolLabelDisplay: {
+                  ...(endpoint.symbolLabelDisplay ?? {}),
+                  visibility: {
+                    ...(endpoint.symbolLabelDisplay?.visibility ?? {}),
+                    junctionIdentityLabel: !isSymbolLabelVisible(
+                      endpoint.symbolLabelDisplay,
+                      'junctionIdentityLabel',
+                      isJunctionIdentityVisibleByDefault(endpoint.symbol)
+                    ),
+                  },
+                },
+              })
+            }
+            label={t('junctionIdentity.label', 'Junction identity')}
+            pickTitle={t('junctionIdentity.pickExisting', 'Reuse an existing identity')}
+            toggleTitle={t('junctionIdentity.toggleVisibility', 'Show or hide identity on diagram')}
+            emptyText={t('junctionIdentity.noExisting', 'No existing identities')}
           />
-        </AutomaticNamingLockedField>
+        ) : (
+          <AutomaticNamingLockedField locked={endpointBranchLabelLocked}>
+            <DebouncedTextInput
+              type="text"
+              value={endpoint.label}
+              resetKey={endpointId}
+              onCommit={(v) => onUpdate(endpointId, { label: v })}
+              className={selectClass}
+              disabled={endpointBranchLabelLocked}
+            />
+          </AutomaticNamingLockedField>
+        )}
+        {endpoint.symbol === 'terminal_strip' && (
+          <div className="mt-3">
+            <label className={labelClass}>{t('terminalStrip.pin', 'Pin')}</label>
+            <DebouncedTextInput
+              type="number"
+              min={1}
+              step={1}
+              value={String(getTerminalStripPin(endpoint) ?? 1)}
+              onCommit={(value) => {
+                const nextPin = Math.max(1, Math.round(Number(value) || 1))
+                assignTerminalStripPin(
+                  useProjectStore.getState(),
+                  endpointId,
+                  getJunctionIdentity(endpoint) || '1',
+                  nextPin,
+                  getTerminalStripPin(endpoint)
+                )
+              }}
+              className={selectClass}
+            />
+          </div>
+        )}
       </div>
 
       <div>
@@ -365,10 +445,9 @@ export function EndpointProperties({
           onChange={(newCircuitId) => {
             if (newCircuitId === '__add_new__') {
               const panelId =
-                (project ? getElectricalPanelsFromProject(project) : []).find((p) => p.isMain)
-                  ?.id ??
+                (project ? getProjectElectricalPanels(project) : []).find((p) => p.isMain)?.id ??
                 circuitInfo?.panel?.id ??
-                (project ? getElectricalPanelsFromProject(project) : [])[0]?.id
+                (project ? getProjectElectricalPanels(project) : [])[0]?.id
               if (panelId) {
                 openDialog({
                   type: 'custom',
@@ -1064,6 +1143,7 @@ export function EndpointProperties({
         !isInBetweenEndpoint(endpoint) &&
         symbol !== 'junction_box' &&
         symbol !== 'junction_panel' &&
+        symbol !== 'terminal_strip' &&
         symbol !== 'domotica' &&
         symbol !== 'energy_meter' &&
         symbol !== 'solar_panel' &&
@@ -1247,7 +1327,7 @@ export function EndpointProperties({
           <div>
             <div className="flex items-center gap-2 mb-1">
               <label className={labelClass + ' mb-0'}>
-                {t('endpoints.solarPanel.wattage', 'Wattage (W)')}
+                {t('endpoints.solarPanel.wattage', 'Wattage (Wp)')}
               </label>
               <button
                 type="button"
@@ -1502,24 +1582,28 @@ export function EndpointProperties({
       <div>
         <div className="flex items-center gap-2 mb-1">
           <label className={labelClass + ' mb-0'}>{t('endpoints.notes', 'Notes')}</label>
-          <button
-            type="button"
-            onClick={() =>
-              onUpdate(endpointId, { notesVisible: endpoint.notesVisible !== false ? false : true })
-            }
-            className={visibilityToggleClass(endpoint.notesVisible !== false)}
-            title={
-              endpoint.notesVisible !== false
-                ? t('circuits.notesHide', 'Hide on diagram')
-                : t('circuits.notesShow', 'Show on diagram')
-            }
-          >
-            {endpoint.notesVisible !== false ? (
-              <Eye className="w-4 h-4" />
-            ) : (
-              <EyeOff className="w-4 h-4" />
-            )}
-          </button>
+          {!endpoint.domoticaChildProps && (
+            <button
+              type="button"
+              onClick={() =>
+                onUpdate(endpointId, {
+                  notesVisible: endpoint.notesVisible !== false ? false : true,
+                })
+              }
+              className={visibilityToggleClass(endpoint.notesVisible !== false)}
+              title={
+                endpoint.notesVisible !== false
+                  ? t('circuits.notesHide', 'Hide on diagram')
+                  : t('circuits.notesShow', 'Show on diagram')
+              }
+            >
+              {endpoint.notesVisible !== false ? (
+                <Eye className="w-4 h-4" />
+              ) : (
+                <EyeOff className="w-4 h-4" />
+              )}
+            </button>
+          )}
         </div>
         <DebouncedTextarea
           value={endpoint.notes ?? ''}

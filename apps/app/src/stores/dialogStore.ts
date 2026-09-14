@@ -15,6 +15,7 @@ export interface DialogButton {
 export interface BaseDialogConfig {
   id?: string
   title: string
+  titleIcon?: React.ReactNode
   message?: string
   type?: DialogType
   size?: 'sm' | 'md' | 'lg' | 'xl'

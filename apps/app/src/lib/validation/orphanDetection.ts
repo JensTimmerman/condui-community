@@ -29,8 +29,14 @@ import { logger } from '@/lib/logger'
  *    One-line layout may skip the circuit while plan-drop pickers still list it.
  */
 
-import type { Panel, Circuit, PanelGridModuleRef } from '@/types/schema'
-import i18next from '@/i18n'
+import type {
+  Panel,
+  Circuit,
+  PanelGridModuleRef,
+  ProtectionDevice,
+  TrunkDevice,
+} from '@/types/schema'
+import i18next from '@/lib/validation/validationI18n'
 import type { OrphanReason } from '@/types/schema'
 import type { Issue, Offender } from './core/types'
 import { findCircuitInProject, resolveFrameContentItems } from '@/lib/eendraad/frameContent'
@@ -38,7 +44,7 @@ import { endpointSupportsMultiplier } from '@/utils/endpointMultipliers'
 import { isActualEndpoint } from '@/utils/symbolMapping'
 import { symbolRequiresSituationPlanPlacement } from '@/lib/plan/situationPlanSymbolEligibility'
 import { resolvePanelForDistributionEndpoint } from '@/lib/plan/panelDistributionEndpoint'
-import { panelGridModuleRefKey } from '@/components/canvas/panel/panelGridLayout'
+import { panelGridModuleRefKey } from '@/lib/panel/panelGridModuleRef'
 import {
   findPanelGridDuplicateFindings,
   isSupplyBusProtectionLabelCollision,
@@ -48,27 +54,87 @@ import {
   resolvePanelSupplyLinkForPanel,
   resolvePanelSupplyLinkForProtection,
 } from '@/lib/eendraad/panelSupplyLink'
-import { getPanelFeedProjection } from '@/lib/feedTopology'
 import {
-  getEendraadFramesFromProject,
-  type ProjectWithOptionalV2Annotations,
-} from '@/lib/projectV2/annotations'
+  getAllSupplyTrunkDevices,
+  getPanelFeedProjection,
+} from '@/lib/feedTopology'
+import { queryOneWireFrames, type AnnotationProject } from '@/lib/projectV2/annotations'
 import {
-  getBuildingFloorIdsFromProject,
+  selectProjectBuildingFloorIds,
   type ProjectWithOptionalV2Building,
 } from '@/lib/projectV2/buildingFloors'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
+  selectProjectAuxiliaryElectricalEnclosures,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
-import { collectCircuits, findPanelById } from '@/lib/panel/panelTree'
+import { collectCircuits, findPanelById, walkPanels } from '@/lib/panel/panelTree'
 import { hasExplicitPanelBusSections } from '@/lib/panel/panelBusSections'
 import { panelHasBackupOutput } from '@/lib/panel/panelFeedOrganization'
+import { resolveSupplyDeviceMounting } from '@/lib/panel/auxiliarySupplyEnclosures'
+import { isInverterPanelDevice, isSupplyDeviceVisibleInPanel } from '@/lib/panel/supplyPanelVisibility'
+import { trunkDeviceCanAppearInPanelGrid } from '@/lib/eendraad/projectElectricalDomain'
 
 type OrphanDetectionProject = ProjectWithOptionalV2Electrical &
   ProjectWithOptionalV2Building &
-  ProjectWithOptionalV2Annotations
+  AnnotationProject
+
+type PlanPlacementOwner = {
+  kind: 'endpoint' | 'trunkDevice'
+  id: string
+  label: string
+}
+
+type PlanPlacementIdentityConflict = {
+  placementId: string
+  owners: PlanPlacementOwner[]
+}
+
+function collectPlanPlacementIdentityConflicts(
+  project: OrphanDetectionProject
+): PlanPlacementIdentityConflict[] {
+  const ownersByPlacementId = new Map<string, PlanPlacementOwner[]>()
+  const add = (placementId: string, owner: PlanPlacementOwner) => {
+    const owners = ownersByPlacementId.get(placementId) ?? []
+    owners.push(owner)
+    ownersByPlacementId.set(placementId, owners)
+  }
+  const addDevice = (device: TrunkDevice) => {
+    for (const placement of device.placements ?? []) {
+      add(placement.id, { kind: 'trunkDevice', id: device.id, label: device.label || device.id })
+    }
+  }
+  const visit = (panels: Panel[]) => {
+    for (const panel of panels) {
+      for (const circuit of collectCircuits(panel)) {
+        for (const endpoint of circuit.endpoints) {
+          for (const placement of endpoint.placements) {
+            add(placement.id, {
+              kind: 'endpoint',
+              id: endpoint.id,
+              label: endpoint.label || endpoint.id,
+            })
+          }
+        }
+        for (const device of circuit.trunkDevices ?? []) addDevice(device)
+        for (const branch of circuit.branches ?? []) {
+          for (const device of branch.branchDevices ?? []) addDevice(device)
+        }
+      }
+      visit(panel.subPanels ?? [])
+    }
+  }
+  visit(getProjectElectricalPanels(project))
+  for (const device of getAllSupplyTrunkDevices(project)) addDevice(device)
+  for (const device of getProjectElectricalInstallation(project)?.groundTrunkDevices ?? []) {
+    addDevice(device)
+  }
+
+  return [...ownersByPlacementId.entries()]
+    .filter(([, owners]) => owners.length > 1)
+    .map(([placementId, owners]) => ({ placementId, owners }))
+}
 
 function validationUnnamedCircuitLabel(): string {
   return i18next.t('validation.labels.unnamedCircuit', {
@@ -110,6 +176,61 @@ function compatibleMultiplierMerge(
 /** Optional plan symbols are valid with zero placements and must never be reported as orphans. */
 function endpointExpectedOnSitplan(ep: Circuit['endpoints'][number]): boolean {
   return symbolRequiresSituationPlanPlacement(ep.symbol)
+}
+
+type SupplyTrunkVisualPlacementMissingReason =
+  | 'missingPanel'
+  | 'missingAuxiliaryEnclosure'
+  | 'wrongRootFeed'
+
+function supplyTrunkModuleKey(deviceId: string): string {
+  return panelGridModuleRefKey({ kind: 'trunkDevice', id: deviceId, scope: 'supply' })
+}
+
+/**
+ * A hidden panel module is an explicit user visibility choice, not an orphan. The key is checked
+ * across the panel tree because shared supply visibility is synchronized between occurrences.
+ */
+function isSupplyTrunkDeviceManuallyHidden(
+  project: OrphanDetectionProject,
+  deviceId: string
+): boolean {
+  const key = supplyTrunkModuleKey(deviceId)
+  return [...walkPanels(getProjectElectricalPanels(project))].some((panel) =>
+    panel.gridView?.hiddenModuleKeys?.includes(key)
+  )
+}
+
+/**
+ * Return a reason only when an eligible supply device has a mounting that the panel canvas cannot
+ * reach. Unslotted root-panel devices and grid/auxiliary devices are auto-placed by the renderer.
+ */
+function findSupplyTrunkVisualPlacementMissingReason(
+  project: OrphanDetectionProject,
+  device: TrunkDevice
+): SupplyTrunkVisualPlacementMissingReason | undefined {
+  if (!trunkDeviceCanAppearInPanelGrid(device)) return undefined
+  if (isInverterPanelDevice(device) && !isSupplyDeviceVisibleInPanel(project, device.id)) return undefined
+  if (isSupplyTrunkDeviceManuallyHidden(project, device.id)) return undefined
+
+  const mounting = resolveSupplyDeviceMounting(project, device.id)
+  if (!mounting) return 'wrongRootFeed'
+
+  if (mounting.kind === 'grid') return undefined
+  if (mounting.kind === 'auxiliary') {
+    return selectProjectAuxiliaryElectricalEnclosures(project).some(
+      (enclosure) => enclosure.id === mounting.enclosureId
+    )
+      ? undefined
+      : 'missingAuxiliaryEnclosure'
+  }
+
+  const targetPanel = findPanelById(getProjectElectricalPanels(project), mounting.panelId)
+  if (!targetPanel) return 'missingPanel'
+
+  // The panel selector includes mounted supply devices from every electrical feed.
+  // Existing main and secondary enclosures can auto-place them without owning their input.
+  return undefined
 }
 
 /** Single detected orphan for UI: banner, inspector, focus and quarantine */
@@ -217,9 +338,22 @@ function buildCircuitMap(panel: Panel): Map<string, Circuit> {
  * deliberately start a trunk even though it does not count as functional protection for AREI
  * validation or hardware tallies.
  */
+function isUnprotectedDirectDcBusFeeder(
+  protection: ProtectionDevice,
+  circuit: Circuit,
+): boolean {
+  return (
+    protection.type === 'OTHER' &&
+    protection.directDcBusFeeder === true &&
+    protection.dcBusId != null &&
+    circuit.dcBusSource?.busId === protection.dcBusId
+  )
+}
+
 function hasDirectCircuitOwner(panel: Panel, circuitId: string): boolean {
   for (const protection of panel.protections) {
-    if (protection.circuits?.some((circuit) => circuit.id === circuitId)) {
+    const circuit = protection.circuits?.find((candidate) => candidate.id === circuitId)
+    if (circuit && !isUnprotectedDirectDcBusFeeder(protection, circuit)) {
       return true
     }
   }
@@ -312,6 +446,8 @@ export interface OrphanReport {
     violation: 'missingFloor' | 'duplicatePlacementId'
     floorId?: string
   }>
+  /** Multiple plan symbols share one global placement id, breaking plan selection and labels. */
+  planPlacementIdentityConflict: Array<PlanPlacementIdentityConflict>
   /** Domotica parent slot list references an endpoint whose reverse child link is missing/wrong. */
   domoticaChildLinkMismatch: Array<{
     circuitId: string
@@ -390,6 +526,12 @@ export interface OrphanReport {
     row: number
     col: number
   }>
+  /** Supply trunk device has a physical mounting that cannot produce a panel-canvas placement. */
+  supplyTrunkVisualPlacementMissing: Array<{
+    trunkDeviceId: string
+    label: string
+    reason: SupplyTrunkVisualPlacementMissingReason
+  }>
   /** Main panel has several bus sections but no connected backup path capable of supplying one. */
   splitBusWithoutBackupSupply: Array<{
     panelId: string
@@ -414,6 +556,7 @@ export function detectPanelOrphans(project: OrphanDetectionProject, panelId: str
     endpointOnPanelCircuit: [],
     endpointMultipleFloorPlacements: [],
     endpointPlacementIntegrity: [],
+    planPlacementIdentityConflict: [],
     domoticaChildLinkMismatch: [],
     endpointMissingPlanPlacement: [],
     panelDistributionLabelDrift: [],
@@ -421,14 +564,18 @@ export function detectPanelOrphans(project: OrphanDetectionProject, panelId: str
     branchMultiplierEndpointsSplit: [],
     panelGridDuplicateModule: [],
     supplyTrunkMisplacedInMainGrid: [],
+    supplyTrunkVisualPlacementMissing: [],
     splitBusWithoutBackupSupply: [],
   }
 
-  const projectPanels = getElectricalPanelsFromProject(project)
-  const projectInstallation = getElectricalInstallationFromProject(project)
+  const projectPanels = getProjectElectricalPanels(project)
+  const projectInstallation = getProjectElectricalInstallation(project)
   const panel = findPanelById(projectPanels, panelId)
   if (!panel) return report
   const currentPanel = panel
+  if (currentPanel.isMain === true) {
+    report.planPlacementIdentityConflict = collectPlanPlacementIdentityConflicts(project)
+  }
   if (
     currentPanel.isMain !== false &&
     hasExplicitPanelBusSections(currentPanel) &&
@@ -487,7 +634,7 @@ export function detectPanelOrphans(project: OrphanDetectionProject, panelId: str
 
   const circuitMap = buildCircuitMap(currentPanel)
   const circuits = collectCircuits(currentPanel)
-  const knownFloorIds = new Set(getBuildingFloorIdsFromProject(project))
+  const knownFloorIds = new Set(selectProjectBuildingFloorIds(project))
 
   const describePanelGridModule = (
     ref: NonNullable<Panel['gridView']>['slots'][number]['module']
@@ -565,10 +712,13 @@ export function detectPanelOrphans(project: OrphanDetectionProject, panelId: str
   const sharedSupplyKeys =
     currentPanel.isMain && projectInstallation
       ? new Set(
-          (getPanelFeedProjection(projectInstallation, projectPanels, currentPanel)?.sharedFeed
-            .trunkDevices ?? []).map((device) =>
-            panelGridModuleRefKey({ kind: 'trunkDevice', id: device.id, scope: 'supply' }),
-          ),
+          (
+            getPanelFeedProjection(projectInstallation, projectPanels, currentPanel)?.sharedFeed
+              .trunkDevices ?? []
+          ).filter((device) => !isInverterPanelDevice(device) || isSupplyDeviceVisibleInPanel(project, device.id))
+          .filter((device) => device.panelMounting?.kind !== 'panel' || device.panelMounting.panelId !== currentPanel.id).map((device) =>
+            panelGridModuleRefKey({ kind: 'trunkDevice', id: device.id, scope: 'supply' })
+          )
         )
       : new Set<string>()
 
@@ -587,6 +737,23 @@ export function detectPanelOrphans(project: OrphanDetectionProject, panelId: str
           col: slot.col,
         })
       }
+    }
+  }
+
+  // Supply-device visual placement is project-level, but each panel invokes this detector. Keep
+  // one canonical report on the first main/root panel so the same missing module is not repeated
+  // once per panel in the orphan inspector.
+  const supplyPlacementReportPanelId =
+    projectPanels.find((candidate) => candidate.isMain === true)?.id ?? projectPanels[0]?.id
+  if (currentPanel.id === supplyPlacementReportPanelId) {
+    for (const device of getAllSupplyTrunkDevices(project)) {
+      const reason = findSupplyTrunkVisualPlacementMissingReason(project, device)
+      if (!reason) continue
+      report.supplyTrunkVisualPlacementMissing.push({
+        trunkDeviceId: device.id,
+        label: device.label || device.id,
+        reason,
+      })
     }
   }
 
@@ -643,10 +810,7 @@ export function detectPanelOrphans(project: OrphanDetectionProject, panelId: str
     const endpointCount = circuit.endpoints.filter(
       (endpoint) => endpoint.symbol !== 'panel_distribution'
     ).length
-    if (
-      circuit.code !== 'PANEL' &&
-      !hasDirectCircuitOwner(currentPanel, circuit.id)
-    ) {
+    if (circuit.code !== 'PANEL' && !hasDirectCircuitOwner(currentPanel, circuit.id)) {
       report.circuitMissingProtection.push({
         circuitId: circuit.id,
         circuitCode: validationCircuitCode(circuit.code),
@@ -659,7 +823,7 @@ export function detectPanelOrphans(project: OrphanDetectionProject, panelId: str
     const inBranchIds = new Set<string>()
 
     for (const parent of circuit.endpoints) {
-      if (parent.symbol !== 'domotica' || parent.domoticaChildProps || !parent.domoticaProps)
+      if (parent.symbol !== 'domotica' || !parent.domoticaProps)
         continue
       const checkSlots = (ids: string[] | undefined, outputGroup: 'endpoint' | 'control') => {
         for (const [outputIndex, endpointId] of (ids ?? []).entries()) {
@@ -871,7 +1035,7 @@ export function detectPanelOrphans(project: OrphanDetectionProject, panelId: str
   }
 
   // 5. Frame content orphans (frames that belong to this panel)
-  const frames = getEendraadFramesFromProject(project).filter((f) => f.panelId === panelId)
+  const frames = queryOneWireFrames(project).filter((f) => f.panelId === panelId)
   const allEndpointIds = new Set<string>()
   const allProtectionIds = new Set<string>()
   const allTrunkDeviceIds = new Set<string>()
@@ -977,7 +1141,7 @@ export function detectPanelOrphans(project: OrphanDetectionProject, panelId: str
  */
 export function getDetectedOrphans(project: OrphanDetectionProject): DetectedOrphan[] {
   const out: DetectedOrphan[] = []
-  const projectPanels = getElectricalPanelsFromProject(project)
+  const projectPanels = getProjectElectricalPanels(project)
   if (projectPanels.length === 0) return out
   const panelIds = collectPanelIds(projectPanels)
   const seenPanelMissingOneWireIds = new Set<string>()
@@ -1013,7 +1177,7 @@ export function getDetectedOrphans(project: OrphanDetectionProject): DetectedOrp
           originalParentId: item.listedUnderProtectionId,
           originalRefId: item.parentCircuitId,
         },
-    })
+      })
     }
     for (const item of report.protectionReferenceConflict) {
       out.push({
@@ -1162,6 +1326,25 @@ export function getDetectedOrphans(project: OrphanDetectionProject): DetectedOrp
         focusSelection: { type: 'endpoint', ids: [item.endpointId] },
       })
     }
+    for (const item of report.planPlacementIdentityConflict) {
+      const trunkDeviceIds = [...new Set(
+        item.owners.filter((owner) => owner.kind === 'trunkDevice').map((owner) => owner.id)
+      )]
+      const endpointIds = [...new Set(
+        item.owners.filter((owner) => owner.kind === 'endpoint').map((owner) => owner.id)
+      )]
+      const focusSelection = trunkDeviceIds.length > 0
+        ? { type: 'trunkDevice' as const, ids: trunkDeviceIds }
+        : { type: 'endpoint' as const, ids: endpointIds }
+      out.push({
+        id: `plan-placement-conflict-${item.placementId}`,
+        kind: 'circuit',
+        reason: 'planPlacementIdentityConflict',
+        summary: `Situation-plan placement "${item.placementId}" is shared by ${item.owners.map((owner) => owner.label).join(', ')}`,
+        panelId,
+        focusSelection,
+      })
+    }
     for (const item of report.domoticaChildLinkMismatch) {
       out.push({
         id: `domotica-child-link-${item.circuitId}-${item.endpointId}-${item.outputGroup}-${item.outputIndex}`,
@@ -1282,6 +1465,16 @@ export function getDetectedOrphans(project: OrphanDetectionProject): DetectedOrp
         },
       })
     }
+    for (const item of report.supplyTrunkVisualPlacementMissing) {
+      out.push({
+        id: `supply-trunk-visual-placement-${item.trunkDeviceId}`,
+        kind: 'circuit',
+        reason: 'supplyTrunkVisualPlacementMissing',
+        summary: `Supply device "${item.label}" has no reachable panel-canvas placement`,
+        panelId,
+        focusSelection: { type: 'trunkDevice', ids: [item.trunkDeviceId] },
+      })
+    }
     for (const item of report.splitBusWithoutBackupSupply) {
       out.push({
         id: `split-bus-without-backup-${item.panelId}`,
@@ -1321,7 +1514,7 @@ const ORPHAN_LOG_PREFIX = '[Eendraad Orphan]'
  * Call this when loading a project or when running validation so you're notified immediately.
  */
 export function logOrphanReport(project: OrphanDetectionProject): void {
-  const projectPanels = getElectricalPanelsFromProject(project)
+  const projectPanels = getProjectElectricalPanels(project)
   if (projectPanels.length === 0) return
 
   const panelIds = collectPanelIds(projectPanels)
@@ -1341,6 +1534,7 @@ export function logOrphanReport(project: OrphanDetectionProject): void {
       report.endpointOnPanelCircuit.length +
       report.endpointMultipleFloorPlacements.length +
       report.endpointPlacementIntegrity.length +
+      report.planPlacementIdentityConflict.length +
       report.domoticaChildLinkMismatch.length +
       report.endpointMissingPlanPlacement.length +
       report.panelDistributionLabelDrift.length +
@@ -1348,6 +1542,7 @@ export function logOrphanReport(project: OrphanDetectionProject): void {
       report.branchMultiplierEndpointsSplit.length +
       report.panelGridDuplicateModule.length +
       report.supplyTrunkMisplacedInMainGrid.length +
+      report.supplyTrunkVisualPlacementMissing.length +
       report.splitBusWithoutBackupSupply.length
     if (count === 0) continue
 
@@ -1357,7 +1552,7 @@ export function logOrphanReport(project: OrphanDetectionProject): void {
       const msg = `${ORPHAN_LOG_PREFIX} Circuit missing protection: circuit "${item.circuitCode}" (id: ${item.circuitId}) has no owning protection (${item.endpointCount} endpoint(s)).`
       logger.error(msg)
       logger.error(
-        `${ORPHAN_LOG_PREFIX} Likely cause: circuit exists only in panel.circuits and was never attached to any protection.circuits. The one-wire layout creates MCB nodes from protections, so this circuit will be invisible.`,
+        `${ORPHAN_LOG_PREFIX} Likely cause: circuit has no renderable protective owner — it may exist only in panel.circuits, or be held by a legacy OTHER/directDcBusFeeder carrier. The one-wire layout creates protection nodes from real protection rows, so this circuit will be invisible.`,
         {
           type: 'circuitMissingProtection',
           circuitId: item.circuitId,
@@ -1537,6 +1732,16 @@ export function logOrphanReport(project: OrphanDetectionProject): void {
       )
     }
 
+    for (const item of report.planPlacementIdentityConflict) {
+      logger.error(
+        `${ORPHAN_LOG_PREFIX} Situation-plan placement identity conflict: placement "${item.placementId}" is shared by ${item.owners.length} symbols (${item.owners.map((owner) => `${owner.label} [${owner.id}]`).join(', ')}). Selection and labels may jump or disappear.`
+      )
+      logger.error(
+        `${ORPHAN_LOG_PREFIX} Likely cause: a duplicate operation copied a trunk-device or endpoint placement without generating a new placement id. Delete and recreate the affected duplicated symbols, or assign each symbol a unique placement record.`,
+        { type: 'planPlacementIdentityConflict', placementId: item.placementId, owners: item.owners, panelId }
+      )
+    }
+
     for (const item of report.domoticaChildLinkMismatch) {
       const msg = `${ORPHAN_LOG_PREFIX} Domotica child link mismatch: endpoint "${item.endpointLabel}" (${item.endpointId}) is listed on parent "${item.parentLabel}" (${item.parentEndpointId}) ${item.outputGroup} output ${item.outputIndex + 1}, but its domoticaChildProps do not match.`
       logger.error(msg)
@@ -1625,6 +1830,15 @@ export function logOrphanReport(project: OrphanDetectionProject): void {
       )
     }
 
+    for (const item of report.supplyTrunkVisualPlacementMissing) {
+      const msg = `${ORPHAN_LOG_PREFIX} Supply trunk visual placement missing: "${item.label}" (id: ${item.trunkDeviceId}) has no reachable panel-canvas placement (${item.reason}).`
+      logger.error(msg)
+      logger.error(
+        `${ORPHAN_LOG_PREFIX} Likely cause: a supply device was moved to a panel/virtual enclosure but its panel-canvas placement was not carried along, or the target panel cannot render supply modules. A manually hidden module is excluded from this check.`,
+        { type: 'supplyTrunkVisualPlacementMissing', ...item, panelId }
+      )
+    }
+
     for (const item of report.splitBusWithoutBackupSupply) {
       logger.error(
         `${ORPHAN_LOG_PREFIX} Split bus without backup supply: panel "${item.panelName}" (id: ${item.panelId}) retains ${item.busSectionCount} bus sections but no connected backup path.`
@@ -1664,12 +1878,14 @@ export function orphanReportToIssues(
     endpointOnPanelCircuit: (opts: Record<string, string>) => string
     endpointMultipleFloorPlacements: (opts: Record<string, string>) => string
     endpointPlacementIntegrity: (opts: Record<string, string>) => string
+    planPlacementIdentityConflict: (opts: Record<string, string>) => string
     domoticaChildLinkMismatch?: (opts: Record<string, string>) => string
     endpointMissingPlanPlacement: (opts: Record<string, string>) => string
     panelDistributionLabelDrift: (opts: Record<string, string>) => string
     panelMissingOneWireSymbol: (opts: Record<string, string>) => string
     panelGridDuplicateModule: (opts: Record<string, string>) => string
     supplyTrunkMisplacedInMainGrid: (opts: Record<string, string>) => string
+    supplyTrunkVisualPlacementMissing: (opts: Record<string, string>) => string
     splitBusWithoutBackupSupply: (opts: Record<string, string>) => string
   }
 ): Issue[] {
@@ -1916,6 +2132,29 @@ export function orphanReportToIssues(
     })
   }
 
+  for (const item of report.planPlacementIdentityConflict) {
+    issues.push({
+      id: `${ruleId}:board:${panelId}:plan-placement-conflict:${item.placementId}`,
+      ruleId,
+      severity: 'error',
+      jurisdiction,
+      rulesetVersion,
+      scope: { type: 'board', id: panelId },
+      offenders: item.owners.map((owner) => ({
+        kind: owner.kind === 'trunkDevice' ? 'device' : 'endpoint',
+        id: owner.id,
+        viewHint: 'both',
+      })),
+      message: msg.planPlacementIdentityConflict({
+        placementId: item.placementId,
+        ownerLabels: item.owners.map((owner) => owner.label).join(', '),
+      }),
+      details: undefined,
+      citations: [],
+      tags: ['orphan', 'sitplan', 'consistency'],
+    })
+  }
+
   for (const item of report.domoticaChildLinkMismatch) {
     issues.push({
       id: `${ruleId}:board:${panelId}:domotica-child-link:${item.circuitId}:${item.endpointId}:${item.outputGroup}:${item.outputIndex}`,
@@ -2082,6 +2321,22 @@ export function orphanReportToIssues(
       details: undefined,
       citations: [],
       tags: ['orphan', 'panel-grid', 'consistency'],
+    })
+  }
+
+  for (const item of report.supplyTrunkVisualPlacementMissing) {
+    issues.push({
+      id: `${ruleId}:board:${panelId}:supply-trunk-visual-placement:${item.trunkDeviceId}`,
+      ruleId,
+      severity: 'warning',
+      jurisdiction,
+      rulesetVersion,
+      scope: { type: 'board', id: panelId },
+      offenders: [{ kind: 'device', id: item.trunkDeviceId, viewHint: 'both' }],
+      message: msg.supplyTrunkVisualPlacementMissing({ label: item.label }),
+      details: undefined,
+      citations: [],
+      tags: ['orphan', 'panel-grid', 'supply', 'consistency'],
     })
   }
 

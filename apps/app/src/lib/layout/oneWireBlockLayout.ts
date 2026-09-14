@@ -3,6 +3,8 @@ export interface OneWireLayoutRect {
   y: number
   width: number
   height: number
+  /** Optional clearance used when this rectangle is an obstacle for a placed block. */
+  clearance?: number
 }
 
 export type OneWireLayoutBlockKind =
@@ -67,6 +69,8 @@ export function arrangeBottomRightBlock(params: {
   clearance: number
   /** Keep related short feed stubs visually above the block instead of beside it. */
   preferBelow?: boolean
+  /** Maximum side-step as a fraction of block width before area decides placement. */
+  sideStepLimitRatio?: number
 }): BottomRightBlockArrangement {
   const {
     frameLeft,
@@ -79,14 +83,20 @@ export function arrangeBottomRightBlock(params: {
     obstacles,
     clearance,
     preferBelow = false,
+    sideStepLimitRatio = 0.75,
   } = params
+  const obstacleClearance = (obstacle: OneWireLayoutRect) => obstacle.clearance ?? clearance
   const compact: OneWireLayoutRect = {
     x: initialFrameRight - frameMargin - blockWidth,
     y: initialFrameBottom - frameMargin - blockHeight,
     width: blockWidth,
     height: blockHeight,
   }
-  if (!obstacles.some((obstacle) => layoutRectsOverlap(compact, obstacle, clearance))) {
+  if (
+    !obstacles.some((obstacle) =>
+      layoutRectsOverlap(compact, obstacle, obstacleClearance(obstacle))
+    )
+  ) {
     return {
       block: compact,
       frameRight: initialFrameRight,
@@ -100,9 +110,10 @@ export function arrangeBottomRightBlock(params: {
     ...obstacles
       .filter(
         (obstacle) =>
-          bottom(obstacle) + clearance > compact.y && obstacle.y < bottom(compact) + clearance
+          bottom(obstacle) + obstacleClearance(obstacle) > compact.y &&
+          obstacle.y < bottom(compact) + obstacleClearance(obstacle)
       )
-      .map((obstacle) => right(obstacle) + clearance)
+      .map((obstacle) => right(obstacle) + obstacleClearance(obstacle))
   )
   const rightBlock = { ...compact, x: rightX }
   const rightFrameRight = right(rightBlock) + frameMargin
@@ -112,9 +123,10 @@ export function arrangeBottomRightBlock(params: {
     ...obstacles
       .filter(
         (obstacle) =>
-          right(obstacle) + clearance > compact.x && obstacle.x < right(compact) + clearance
+          right(obstacle) + obstacleClearance(obstacle) > compact.x &&
+          obstacle.x < right(compact) + obstacleClearance(obstacle)
       )
-      .map((obstacle) => bottom(obstacle) + clearance)
+      .map((obstacle) => bottom(obstacle) + obstacleClearance(obstacle))
   )
   const belowBlock = { ...compact, y: belowY }
   const belowFrameBottom = bottom(belowBlock) + frameMargin
@@ -125,10 +137,13 @@ export function arrangeBottomRightBlock(params: {
     Math.max(1, initialFrameRight - frameLeft) * Math.max(1, belowFrameBottom - frameTop)
   const rightGrowth = rightFrameRight - initialFrameRight
 
-  // A modest side-step preserves the established shallow one-wire frame and
-  // is easier to paginate than introducing an entire lower row. Once the
-  // side-step approaches the width of the block itself, compare total area.
-  if (!preferBelow && (rightGrowth <= blockWidth * 0.75 || rightArea <= belowArea)) {
+  // A bounded side-step preserves the established shallow one-wire frame and
+  // is easier to paginate than introducing an entire lower row. Beyond the
+  // caller's limit, compare total area.
+  if (
+    !preferBelow &&
+    (rightGrowth <= blockWidth * sideStepLimitRatio || rightArea <= belowArea)
+  ) {
     return {
       block: rightBlock,
       frameRight: rightFrameRight,

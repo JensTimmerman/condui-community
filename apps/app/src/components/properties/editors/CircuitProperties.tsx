@@ -1,16 +1,14 @@
 import React from 'react'
 import { useTranslation } from 'react-i18next'
-import { Eye, EyeOff, SeparatorHorizontal, SeparatorVertical } from 'lucide-react'
+import { AlertTriangle, Eye, EyeOff, SeparatorHorizontal, SeparatorVertical } from 'lucide-react'
 import { DebouncedTextInput, DebouncedTextarea } from '@/components/forms'
 import CustomDropdown from '@/components/common/CustomDropdown'
 import { useDialogStore } from '@/stores/dialogStore'
 import { useProjectStore, type ProjectState } from '@/stores/projectStore'
 import type { Circuit } from '@/types/schema'
 import { getDerivedCircuitKind } from '@/lib/circuitKind'
-import { circuitExcludedFromEendraadAutoNamingLock } from '@/lib/eendraad/automaticMainBusNaming'
-import { installationHideFeederLetters } from '@/lib/eendraad/eendraadNamingInstall'
+import { getManualCircuitLabelWarnings } from '@/lib/eendraad/automaticMainBusNaming'
 import { logger } from '@/lib/logger'
-import { collectCircuits as collectPanelCircuits, walkPanels } from '@/lib/panel/panelTree'
 import {
   buildCircuitInstallDateTargets,
   getInstallDateTargetInheritedYear,
@@ -20,12 +18,9 @@ import {
 import { isProtectionOnSupplyPanel } from '@/components/canvas/panel/panelGridLayout'
 import { InstallDateField } from '../shared/propertiesShared'
 import { ensureInstallDateTargetColors, visibilityToggleClass } from '../shared/propertiesSharedUtils'
-import { AutomaticNamingLockedField } from '../shared/AutomaticNamingLockedField'
+import { AutomaticNamingOverrideControl } from '../shared/AutomaticNamingOverrideControl'
 import { installationDateUpdateFromYear } from '@/lib/installDates'
-import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
-} from '@/lib/projectV2/electrical'
+import { getProjectElectricalInstallation } from '@/lib/projectV2/electrical'
 // Circuit kind options for dropdown (order: general first, then special)
 const CIRCUIT_KIND_OPTIONS: Array<{ value: Circuit['kind']; labelKey: string }> = [
   { value: 'lighting', labelKey: 'circuits.lighting' },
@@ -59,7 +54,7 @@ export function CircuitProperties({
   const { openDialog } = useDialogStore()
   const currentProject = useProjectStore((state: ProjectState) => state.currentProject)
   const installation = useProjectStore((state: ProjectState) =>
-    state.currentProject ? getElectricalInstallationFromProject(state.currentProject) : undefined
+    state.currentProject ? getProjectElectricalInstallation(state.currentProject) : undefined
   )
   const findPanelForCircuit = useProjectStore((state: ProjectState) => state.findPanelForCircuit)
   const getProtectionForCircuit = useProjectStore(
@@ -68,28 +63,51 @@ export function CircuitProperties({
   const updateEndpoint = useProjectStore((state: ProjectState) => state.updateEndpoint)
   const updateInstallation = useProjectStore((state: ProjectState) => state.updateInstallation)
   const withSingleUndoEntry = useProjectStore((state: ProjectState) => state.withSingleUndoEntry)
+  const applyAutomaticNaming = useProjectStore(
+    (state: ProjectState) => state.applyAutomaticEendraadNamingAllPanels
+  )
   const [localCode, setLocalCode] = React.useState(circuit?.code || '')
+  const codeInputRef = React.useRef<HTMLInputElement>(null)
+  const [focusCustomLabel, setFocusCustomLabel] = React.useState(false)
   const derivedKind = circuit
     ? getDerivedCircuitKind(circuit, getProtectionForCircuit(circuitId))
     : 'other'
 
   const protectionForCircuit = getProtectionForCircuit(circuitId)
   const panelForCircuit = findPanelForCircuit(circuitId)
-  const hideFeederLetters = installationHideFeederLetters(installation)
   const circuitNotesOrientation = installation?.circuitNotesOrientation ?? 'horizontal'
-  const excludedFromAutoNamingLock = circuitExcludedFromEendraadAutoNamingLock(
-    circuit,
-    hideFeederLetters,
-    protectionForCircuit
-  )
-  const lockMainBusLetterFields =
+  const manualLabelOverride =
+    (protectionForCircuit?.circuits?.some(
+      (rowCircuit) => rowCircuit.eendraadManualCodeLock === true
+    ) ?? false) || circuit?.eendraadManualCodeLock === true
+  const automaticNamingRow =
     !!installation?.eendraadAutomaticNaming &&
-    !excludedFromAutoNamingLock &&
+    circuit?.code !== 'PANEL' &&
     !(
       protectionForCircuit &&
       panelForCircuit &&
       isProtectionOnSupplyPanel(panelForCircuit, protectionForCircuit.id)
     )
+  const labelWarnings =
+    manualLabelOverride && currentProject
+      ? getManualCircuitLabelWarnings(panelForCircuit, circuitId, currentProject, localCode)
+      : { nonStandard: false, duplicate: false }
+  const labelWarningText = labelWarnings.nonStandard
+    ? labelWarnings.duplicate
+      ? t(
+          'canvas.eendraadNaming.customLabelBothWarnings',
+          'This custom label is outside the A, B, C… sequence and is also used by another circuit on this panel.'
+        )
+      : t(
+          'canvas.eendraadNaming.customLabelNonStandardWarning',
+          'This custom label is outside the A, B, C… sequence.'
+        )
+    : labelWarnings.duplicate
+      ? t(
+          'canvas.eendraadNaming.customLabelDuplicateWarning',
+          'This label is also used by another circuit on this panel.'
+        )
+      : undefined
 
   React.useEffect(() => {
     if (circuit?.code !== localCode) {
@@ -97,9 +115,41 @@ export function CircuitProperties({
     }
   }, [circuit?.code, localCode])
 
+  React.useEffect(() => {
+    if (!focusCustomLabel || !manualLabelOverride) return
+    codeInputRef.current?.focus()
+    codeInputRef.current?.select()
+    setFocusCustomLabel(false)
+  }, [focusCustomLabel, manualLabelOverride])
+
+  const setCustomLabel = (focusInput = true) => {
+    const rowCircuits = protectionForCircuit?.circuits ?? (circuit ? [circuit] : [])
+    withSingleUndoEntry(() => {
+      for (const rowCircuit of rowCircuits) {
+        onUpdate(rowCircuit.id, { eendraadManualCodeLock: true })
+      }
+      return true
+    })
+    if (focusInput) setFocusCustomLabel(true)
+  }
+
+  const useAutomaticLabel = () => {
+    const rowCircuits = protectionForCircuit?.circuits ?? (circuit ? [circuit] : [])
+    withSingleUndoEntry(() => {
+      for (const rowCircuit of rowCircuits) {
+        onUpdate(rowCircuit.id, { eendraadManualCodeLock: undefined })
+      }
+      applyAutomaticNaming()
+      return true
+    })
+  }
+
   const handleCodeChange = (value: string) => {
     // Don't trim here - preserve user input until they commit
     setLocalCode(value)
+    if (automaticNamingRow && !manualLabelOverride) {
+      setCustomLabel(false)
+    }
   }
 
   const commitCodeChange = (raw = localCode) => {
@@ -120,40 +170,16 @@ export function CircuitProperties({
       return
     }
 
-    // Check if code already exists (excluding current circuit)
-    // Get all circuits from hierarchy
-    const allCircuits: Circuit[] = []
-    if (currentProject) {
-      for (const panel of getElectricalPanelsFromProject(currentProject)) {
-        allCircuits.push(
-          ...[...walkPanels([panel])].flatMap((currentPanel) => collectPanelCircuits(currentPanel))
-        )
-      }
-    }
-    const codeExists = allCircuits.some(
-      (c) => c.id !== circuitId && c.code.trim().toUpperCase() === newCode.toUpperCase()
-    )
-
-    if (codeExists) {
-      // Show warning dialog
-      openDialog({
-        type: 'info',
-        title: t('circuits.duplicateCodeTitle', 'Duplicate Circuit Code'),
-        message: t(
-          'circuits.duplicateCodeMessage',
-          `A circuit with code "${newCode}" already exists. Please choose a different code.`
-        ),
-        variant: 'warning',
-        confirmLabel: t('common.ok', 'OK'),
-        onConfirm: () => {
-          setLocalCode(circuit.code) // Revert to original
-        },
-      })
+    if (!automaticNamingRow && !manualLabelOverride) {
+      onUpdate(circuitId, { code: newCode })
       return
     }
 
-    // Code is valid, update it
-    onUpdate(circuitId, { code: newCode })
+    withSingleUndoEntry(() => {
+      onUpdate(circuitId, { code: newCode })
+      applyAutomaticNaming()
+      return true
+    })
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -286,6 +312,20 @@ export function CircuitProperties({
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-0 flex-1">
             {t('circuits.code', 'Code')}
           </label>
+          {automaticNamingRow ? (
+            <AutomaticNamingOverrideControl
+              custom={manualLabelOverride}
+              automaticLabel={t('canvas.eendraadNaming.automaticStatus', 'Automatic')}
+              customLabel={t('canvas.eendraadNaming.customStatus', 'Custom')}
+              setCustomLabel={t('canvas.eendraadNaming.setCustomLabel', 'Set custom label')}
+              useAutomaticLabel={t(
+                'canvas.eendraadNaming.useAutomaticLabel',
+                'Use automatic label'
+              )}
+              onSetCustom={() => setCustomLabel()}
+              onUseAutomatic={useAutomaticLabel}
+            />
+          ) : null}
           <button
             type="button"
             onClick={() =>
@@ -303,18 +343,36 @@ export function CircuitProperties({
             )}
           </button>
         </div>
-        <AutomaticNamingLockedField locked={lockMainBusLetterFields}>
+        <div className="relative">
           <DebouncedTextInput
+            ref={codeInputRef}
             type="text"
             value={localCode}
             onDraftChange={handleCodeChange}
             onCommit={(v) => commitCodeChange(v)}
             onKeyDown={handleKeyDown}
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
+            className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 ${
+              manualLabelOverride && (labelWarnings.nonStandard || labelWarnings.duplicate)
+                ? 'pr-10'
+                : ''
+            }`}
             placeholder={t('circuits.code', 'Code')}
-            disabled={lockMainBusLetterFields}
           />
-        </AutomaticNamingLockedField>
+          {manualLabelOverride && (labelWarnings.nonStandard || labelWarnings.duplicate) ? (
+            <span
+              className="absolute right-3 top-1/2 -translate-y-1/2"
+              title={labelWarningText}
+              aria-label={labelWarningText}
+              role="img"
+              onMouseDown={(event) => {
+                event.preventDefault()
+                codeInputRef.current?.focus()
+              }}
+            >
+              <AlertTriangle className="h-4 w-4 text-amber-500" aria-hidden />
+            </span>
+          ) : null}
+        </div>
       </div>
 
       <div>

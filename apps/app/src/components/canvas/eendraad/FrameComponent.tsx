@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo } from 'react'
+import { memo, useCallback, useDeferredValue, useMemo } from 'react'
 import { ZOOM_100 } from '@/constants/canvasConstants'
 import { Group, Text, Line } from 'react-konva'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -6,6 +6,7 @@ import { useCanvasFontFamily, useEffectiveCanvasZoom } from '@/editions/communit
 import { useUIStore } from '@/stores/uiStore'
 import { useIsTypeAndIdSelected, useSetSelection } from '@/editions/community/communityHooks'
 import { useProjectStore, type ProjectState } from '@/stores/projectStore'
+import { getEendraadRenderProjectRevision } from '@/lib/layout/eendraadDerivedLayout'
 import {
   getFrameColor,
   getTextColor,
@@ -46,7 +47,10 @@ export const FrameComponent = memo(function FrameComponent({ frame, panelLayout 
   const isSelected = useIsTypeAndIdSelected('frame', frame.id)
   const canvasZoom = useEffectiveCanvasZoom(ZOOM_100, 'eendraad')
   const getEndpointById = useProjectStore((s: ProjectState) => s.getEndpointById)
-  const currentProject = useProjectStore((s: ProjectState) => s.currentProject)
+  const liveProject = useProjectStore((s: ProjectState) =>
+    s.currentProject ? getEendraadRenderProjectRevision(s.currentProject) : null
+  )
+  const currentProject = useDeferredValue(liveProject)
   const isDark = theme.mode === 'dark'
   const frameColor = getFrameColor(isDark)
   const textColor = getTextColor(isDark)

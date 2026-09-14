@@ -1,6 +1,6 @@
-import { getCompatibilityFloorsFromProject } from '@/lib/projectV2/buildingFloors'
+import { readLegacyCompatibilityFloors } from '@/lib/projectV2/buildingFloors'
 import {
-  getElectricalPanelsFromProject,
+  selectProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import type { ProjectWithOptionalV2Building } from '@/lib/projectV2/buildingFloors'
@@ -30,7 +30,7 @@ export interface HiddenSituationPlanPlacement {
 export function getHiddenSituationPlanPlacements(
   project: ProjectWithSituationPlanPlacements
 ): HiddenSituationPlanPlacement[] {
-  const floors = getCompatibilityFloorsFromProject(project)
+  const floors = readLegacyCompatibilityFloors(project)
   const hiddenByFloor = new Map(
     floors.map((floor) => [floor.id, new Set(floor.hiddenSitplanPlacementIds ?? [])])
   )
@@ -92,7 +92,7 @@ export function getHiddenSituationPlanPlacements(
     }
   }
 
-  visitPanels(getElectricalPanelsFromProject(project))
+  visitPanels(selectProjectElectricalPanels(project))
   return hidden.sort(
     (a, b) =>
       a.floorName.localeCompare(b.floorName) ||

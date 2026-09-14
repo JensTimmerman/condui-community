@@ -11,6 +11,7 @@ export const symbolTooltipsFrBE = {
   panel_distribution: 'Tableau ou coffret de distribution.',
   junction_box: 'Boîte de jonction ou de connexion.',
   junction_panel: 'Panneau de jonction sans modules de protection.',
+  terminal_strip: 'Bornier ou borne de connexion.',
 
   // Protection
   mcb: 'Disjoncteur contre surcharge et court-circuit.',
@@ -36,7 +37,8 @@ export const symbolTooltipsFrBE = {
   switch_1p_pull: 'Interrupteur à tirage, souvent au plafond.',
   switch_impulse: 'Bouton poussoir ou impulsionnel pour télérupteur ou domotique.',
   motion_detector: 'Détecteur de mouvement qui commande un circuit.',
-  smoke_detector: 'Détecteur de fumée, gaz, chaleur ou incendie ; choisissez le type dans les propriétés.',
+  smoke_detector:
+    'Détecteur de fumée, gaz, chaleur ou incendie ; choisissez le type dans les propriétés.',
   relay: 'Relais pour commander un circuit.',
 
   // Lighting
@@ -80,8 +82,10 @@ export const symbolTooltipsFrBE = {
   energy_meter: "Compteur d'énergie ou compteur kWh.",
   transformer: 'Transformateur qui convertit la tension.',
   rectifier: 'Redresseur de courant alternatif vers continu.',
-  inverter: 'Onduleur de courant continu vers alternatif. Adapté aux panneaux solaires et batteries.',
-  dc_dc_converter: 'Convertisseur DC-DC, utilisable directement entre panneaux solaires et batteries.',
+  inverter:
+    'Onduleur de courant continu vers alternatif. Adapté aux panneaux solaires et batteries.',
+  dc_dc_converter:
+    'Convertisseur DC-DC, utilisable directement entre panneaux solaires et batteries.',
   dc_bus: 'Jeu de barres CC pour distribuer des circuits en courant continu.',
   solar_panel: 'Chaîne PV ou panneau solaire en courant continu.',
   battery: 'Stockage batterie en courant continu.',

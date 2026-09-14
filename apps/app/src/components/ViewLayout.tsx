@@ -1,10 +1,4 @@
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from 'react'
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { useUIStore } from '@/stores/uiStore'
 import { EendraadCanvas, PlanCanvas, PanelCanvas } from '@/components/canvas'
 import { CanvasSwitcher } from '@/components/viewport/CanvasSwitcher'
@@ -18,6 +12,10 @@ import {
   getViewportDividerSpecs,
   getViewportPanelZones,
 } from '@/components/layout/viewportGeometry'
+
+const StructuralCanvas =
+  
+  null
 
 type MultiFingerSwipeHandler = (
   direction: 'left' | 'right' | 'up' | 'down',
@@ -41,6 +39,12 @@ function CanvasForType({
       return <PlanCanvas onMultiFingerSwipe={onMultiFingerSwipe} capabilities={capabilities} />
     case 'panel':
       return <PanelCanvas onMultiFingerSwipe={onMultiFingerSwipe} capabilities={capabilities} />
+    case 'structure':
+      return StructuralCanvas ? (
+        <Suspense fallback={null}>
+          <StructuralCanvas onMultiFingerSwipe={onMultiFingerSwipe} />
+        </Suspense>
+      ) : null
   }
 }
 

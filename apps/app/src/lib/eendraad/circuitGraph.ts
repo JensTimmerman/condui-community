@@ -1,6 +1,6 @@
 import type { Circuit, Panel, ProtectionDevice } from '@/types/schema'
 import {
-  getElectricalPanelsFromProject,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 
@@ -62,7 +62,7 @@ export function buildCircuitGraphIndex(project: ProjectWithOptionalV2Electrical)
     }
   }
 
-  visitPanels(getElectricalPanelsFromProject(project))
+  visitPanels(getProjectElectricalPanels(project))
   return index
 }
 

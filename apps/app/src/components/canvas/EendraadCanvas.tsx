@@ -1,7 +1,8 @@
 import { memo, useCallback, useRef, useEffect, useMemo, useState } from 'react'
 import { Circle, Group, Line, Rect } from 'react-konva'
+import type Konva from 'konva'
 import { useTranslation } from 'react-i18next'
-import { CalendarDays, CornerDownLeft, Trash2 } from 'lucide-react'
+import { CalendarDays, CornerDownLeft, RotateCcw, Trash2 } from 'lucide-react'
 import { useUIStore } from '@/stores/uiStore'
 import { useProjectStore, type ProjectState } from '@/stores/projectStore'
 import { useDialogStore } from '@/stores/dialogStore'
@@ -52,8 +53,9 @@ import { endpointSupportsMultiplier } from '@/utils/endpointMultipliers'
 import { supportsSupplyDeviceMultiplier } from '@/lib/supplyAssembly/inverterMultipliers'
 import {
   findSameSymbolAddMoreLayoutTargets,
-  incrementSameSymbolAddMoreTarget,
+  incrementSameSymbolAddMoreTargetWithUndo,
   positionHitsMultiplierBadge,
+  type SameSymbolAddMoreTarget,
 } from '@/lib/eendraad/sameSymbolAddMore'
 import {
   createSyncEndpointMultiplierDeps,
@@ -70,7 +72,6 @@ import {
 import {
   useEendraadLayout,
   useEendraadWireSegments,
-  useEendraadEndpoints,
   useDropTargetDetection,
   useEendraadDragPreview,
   useLayoutTree,
@@ -80,12 +81,17 @@ import { computeEendraadCircuitFocusBounds } from '@/lib/eendraad/focusCircuit'
 import { pickRepresentativeCircuitIdForMainBusMove } from '@/lib/eendraad/mainBusOrder'
 import { resolveSecondaryBusEjectSelection } from '@/lib/eendraad/secondaryBusEjectEligibility'
 import { normalizeProtectionPlacementDropTarget } from '@/lib/eendraad/protectionPlacementDropTarget'
-import { useEendraadPreviewGraph } from '@/hooks/eendraad/useEendraadPreviewGraph'
+import {
+  getEendraadPreviewIntentKey,
+  useEendraadPreviewGraph,
+} from '@/hooks/eendraad/useEendraadPreviewGraph'
 import { resolveOffscreenSupplyPreviewDirection } from '@/lib/layout/offscreenSupplyPreviewIndicator'
-import type { LayoutNode } from '@/lib/layout/layoutTree'
+import type { LayoutNode, LayoutTree } from '@/lib/layout/layoutTree'
+import { getEendraadRenderProjectRevision } from '@/lib/layout/eendraadDerivedLayout'
 import type { DropZoneHintRelocation } from '@/lib/layout/collectDropZoneHints'
 import {
   findDomoticaOutputDropTarget,
+  findDropTarget,
   findDropTargetWithDebug,
   ensureCircuitTrunkWireSegmentOnDropTarget,
   getHitZoneBounds,
@@ -123,14 +129,18 @@ import {
 import { resolveSitplanTargetFloorId } from '@/lib/plan/sitplanTargetFloor'
 import { ensureEarthingSitplanPlacement } from '@/lib/plan/earthingSitplanPlacement'
 import { confirmDeleteEarthing, performDeleteEarthing } from '@/lib/installation/deleteEarthing'
-import { reconcileSupplyAssemblyBranchProtections } from '@/lib/supplyAssembly/editorIntegration'
+import {
+  reconcileDirectConverterDcDevices,
+  reconcileSupplyAssemblyBranchProtections,
+} from '@/lib/supplyAssembly/editorIntegration'
 import { confirmDeleteSupplyTrunkDevice } from '@/lib/supplyAssembly/deleteSupplyTrunkDevice'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
-  getMutableElectricalPanelsForProject,
-  getSupplyAssembliesFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
+  getEditableProjectElectricalPanels,
+  selectProjectSupplyAssemblies,
 } from '@/lib/projectV2/electrical'
+import { collectDomoticaEndpointIdsForDeletion } from '@/lib/eendraad/projectElectricalDomain'
 import {
   canDuplicateEendraadSelection,
   doEendraadDuplicate,
@@ -142,16 +152,20 @@ import {
 } from '@/lib/eendraad/deleteSelection'
 import { isEendraadDeleteKey } from '@/lib/eendraad/deleteKeyboardKey'
 import {
+  isPanelAttachmentDropTargetTerminal,
   movePanelAttachmentOnRcdBus,
   movePanelAttachmentOnSecondaryBus,
   movePanelAttachmentToMainBus,
 } from '@/lib/eendraad/panelAttachmentMove'
+import { resolvePanelSupplyLinkForPanel } from '@/lib/eendraad/panelSupplyLink'
 import {
+  duplicateCircuitDcBranchDeviceAtDropTarget,
   repositionDuplicatedProtectionToDropTarget,
   protectionDropTargetHitsSource,
   resolveProtectionDropTargetForPosition,
   runEendraadEndpointAltDragDuplicate,
 } from '@/lib/eendraad/eendraadAltDragDuplicate'
+import { clonePlacementsForDuplicate } from '@/lib/eendraad/duplicateSitplanHelpers'
 import { reorderDomoticaChildEndpoint } from '@/lib/eendraad/domoticaOutputOrdering'
 import {
   moveEndpointSelectionBetweenCircuits,
@@ -166,6 +180,7 @@ import {
 } from '@/lib/eendraad/multiSelectionMove'
 import { mutateTrunkDeviceRelocation } from '@/lib/layout/eendraadPreviewSimulation'
 import {
+  moveEndpointToSupplyDcBus,
   isSupplyTrunkDeviceDropTarget,
   moveSupplyTrunkDeviceAtDropTarget,
   resolveSupplyDropMounting,
@@ -176,6 +191,7 @@ import { getPanelDiagramId, type BottomUpPanelLayout } from '@/lib/layout/bottom
 import {
   filterProtectionRelocationPreviewWires,
   getChangedPreviewWireSegments,
+  getPreviewPanelTranslation,
 } from '@/lib/layout/eendraadPreviewWires'
 import { resolvePanelAttachmentPreviewGeometry } from '@/lib/layout/panelAttachmentPreview'
 import { resolveProtectionNestPreviewCircuitId } from '@/lib/layout/eendraadPreviewTarget'
@@ -184,9 +200,11 @@ import {
   DOMOTICA_MAX_ENDPOINT_OUTPUTS,
   DOMOTICA_OUTPUT_SPACING,
 } from '@/lib/domoticaLayout'
+
 import {
   applyAutomaticMainBusNamingToPanel,
   automaticMainBusNamingWouldChangeProject,
+  projectHasManualEendraadLabelOverrides,
   resolveAutomaticNamingOptsFromInstallation,
 } from '@/lib/eendraad/automaticMainBusNaming'
 import { installationHideFeederLetters } from '@/lib/eendraad/eendraadNamingInstall'
@@ -217,12 +235,38 @@ import {
   type InstallDatePropagationMode,
   type InstallDateTarget,
 } from '@/lib/installDatePropagation'
-import { getEendraadNotesFromProject } from '@/lib/projectV2/annotations'
+import { queryOneWireNotes } from '@/lib/projectV2/annotations'
 import { clamp } from '@/lib/geometry'
 import {
   resolveCircuitWireSegmentByMetadata,
   resolveSupplyWireSegmentByMetadata,
 } from '@/lib/eendraad/wireSelectionIdentity'
+
+function findProtectionDragTarget(tree: LayoutTree, position: Point): { target: DropTarget } {
+  return {
+    target: findDropTarget(tree, position, {
+      preferMainBusOverGroundWire: true,
+      preferMainBusOverSupplyWire: false,
+      preferSecondaryBusForNestedProtection: true,
+    }),
+  }
+}
+
+type ViewportHitBounds = { left: number; top: number; right: number; bottom: number }
+
+const VIEWPORT_HIT_CULLABLE_SELECTOR = '.eendraad-hit-cullable'
+const VIEWPORT_HIT_BOUNDS_ATTRIBUTE = 'eendraadViewportHitBounds'
+// Keep a generous screen-space gutter interactive while the camera is moving.
+const VIEWPORT_HIT_OVERSCAN_PX = 160
+
+function boundsIntersect(left: ViewportHitBounds, right: ViewportHitBounds): boolean {
+  return !(
+    left.right < right.left ||
+    left.left > right.right ||
+    left.bottom < right.top ||
+    left.top > right.bottom
+  )
+}
 
 const EMPTY_PANELS: Panel[] = []
 
@@ -299,6 +343,25 @@ interface EendraadCanvasProps {
   capabilities?: EditorCapabilities
 }
 
+function findEndpointRenderTarget(
+  panelNodes: LayoutNode[],
+  endpointId: string
+): { node: LayoutNode; panelNode: LayoutNode } | null {
+  const findInNode = (node: LayoutNode): LayoutNode | null => {
+    if (node.type === 'endpoint' && node.domainId === endpointId) return node
+    for (const child of node.children) {
+      const found = findInNode(child)
+      if (found) return found
+    }
+    return null
+  }
+  for (const panelNode of panelNodes) {
+    const node = findInNode(panelNode)
+    if (node) return { node, panelNode }
+  }
+  return null
+}
+
 function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanvasProps = {}) {
   const { t, i18n } = useTranslation()
   const eendraadView = useUIStore((s) => s.eendraadView)
@@ -308,9 +371,11 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   eendraadViewRef.current = eendraadView
   const setEendraadView = useUIStore((s) => s.setEendraadView)
   const setSelection = useUIStore((s) => s.setSelection)
-  const currentProject = useProjectStore((s: ProjectState) => s.currentProject)
+  const currentProject = useProjectStore((s: ProjectState) =>
+    s.currentProject ? getEendraadRenderProjectRevision(s.currentProject) : null
+  )
   const eendraadNotes = useMemo(
-    () => (currentProject ? getEendraadNotesFromProject(currentProject) : []),
+    () => (currentProject ? queryOneWireNotes(currentProject) : []),
     [currentProject]
   )
   const currentProjectStorageMode = useProjectStore(
@@ -373,10 +438,20 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   const applyAutomaticEendraadNamingAllPanels = useProjectStore(
     (s: ProjectState) => s.applyAutomaticEendraadNamingAllPanels
   )
+  const resetAllEendraadLabelOverrides = useProjectStore(
+    (s: ProjectState) => s.resetAllEendraadLabelOverrides
+  )
   const updateEendraadNote = useProjectStore((s: ProjectState) => s.updateEendraadNote)
   const getFramesByPanel = useProjectStore((s: ProjectState) => s.getFramesByPanel)
   const openDialog = useDialogStore((s) => s.openDialog)
   const canvasRef = useRef<BaseCanvasHandle>(null)
+  const viewportHitRefreshTimerRef = useRef<number | null>(null)
+  const viewportHitNeedsRemeasureRef = useRef(false)
+  const viewportHitViewRef = useRef({
+    pan: eendraadView.pan,
+    zoom: eendraadView.zoom,
+    viewport: { width: 0, height: 0 } as CanvasSize,
+  })
   const beginInteractiveOverlayPan = useCallback((clientX: number, clientY: number) => {
     canvasRef.current?.beginDeferredMousePan(clientX, clientY)
   }, [])
@@ -393,6 +468,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   const suppressKonvaDragEndRef = useRef(false)
   const altDuplicatePointerCleanupRef = useRef<(() => void) | null>(null)
   const draggingProtectionIdRef = useRef<string | null>(null)
+  const movingPanelAttachmentIdRef = useRef<string | null>(null)
   const internalDragElementIdRef = useRef<string | null>(null)
   const [internalDragPlacement, setInternalDragPlacement] = useState<
     (DropZoneHintRelocation & { symbol: SymbolMetadata }) | null
@@ -402,12 +478,14 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   const [openEendraadMenu, setOpenEendraadMenu] = useState<'naming' | null>(null)
   const [namingGuidanceHighlighted, setNamingGuidanceHighlighted] = useState(false)
   const currentInstallation = currentProject
-    ? getElectricalInstallationFromProject(currentProject)
+    ? getProjectElectricalInstallation(currentProject)
     : undefined
-  const currentPanels = currentProject
-    ? getElectricalPanelsFromProject(currentProject)
-    : EMPTY_PANELS
+  const currentPanels = currentProject ? getProjectElectricalPanels(currentProject) : EMPTY_PANELS
   const eendraadAutoNaming = !!currentInstallation?.eendraadAutomaticNaming
+  const hasCustomEendraadLabels = useMemo(
+    () => !!currentProject && projectHasManualEendraadLabelOverrides(currentProject),
+    [currentProject]
+  )
 
   useEffect(() => {
     let highlightTimeout: number | undefined
@@ -425,9 +503,12 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   }, [])
   
   const eendraadHideFeederLetters = installationHideFeederLetters(currentInstallation)
-  const { installationDates } = useEditionFeatureAvailability(currentProject?.project.id, {
-    storageMode: currentProjectStorageMode,
-  })
+  const { advancedPanelLabels, installationDates } = useEditionFeatureAvailability(
+    currentProject?.project.id,
+    {
+      storageMode: currentProjectStorageMode,
+    }
+  )
   const isDemoProject = isDemoProjectId(currentProject?.project.id)
   const canUseInstallDates = canEditProject && (isDemoProject || installationDates)
   const installDatesVisible =
@@ -438,6 +519,11 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   const [dateToolDay, setDateToolDay] = useState(1)
   const [dateToolCalendarOpen, setDateToolCalendarOpen] = useState(false)
   const [viewportPixelSize, setViewportPixelSize] = useState<CanvasSize>({ width: 0, height: 0 })
+  viewportHitViewRef.current = {
+    pan: eendraadView.pan,
+    zoom: eendraadView.zoom,
+    viewport: viewportPixelSize,
+  }
   const [closedDateToolSelectionKey, setClosedDateToolSelectionKey] = useState<string | null>(null)
   const [dateToolFrameSelection, setDateToolFrameSelection] = useState<{
     year: number
@@ -512,7 +598,98 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   const layout = useEendraadLayout()
   const layoutTree = useLayoutTree() // Tree-based rendering and operations
   const wireSegments = useEendraadWireSegments() // Tree-based wire generation
-  const allEndpoints = useEendraadEndpoints()
+
+  const refreshViewportHitGraph = useCallback((remeasure: boolean) => {
+    const stage = canvasRef.current?.getStage()
+    const contentGroup = stage?.findOne('.canvas-content')
+    if (!stage || !contentGroup) return
+
+    const { pan, zoom, viewport } = viewportHitViewRef.current
+    if (viewport.width <= 0 || viewport.height <= 0 || !Number.isFinite(zoom) || zoom <= 0) {
+      return
+    }
+
+    const overscan = VIEWPORT_HIT_OVERSCAN_PX / zoom
+    const visibleBounds: ViewportHitBounds = {
+      left: -pan.x / zoom - overscan,
+      top: -pan.y / zoom - overscan,
+      right: (viewport.width - pan.x) / zoom + overscan,
+      bottom: (viewport.height - pan.y) / zoom + overscan,
+    }
+    let changed = false
+
+    stage.find(VIEWPORT_HIT_CULLABLE_SELECTOR).forEach((node) => {
+      let hitBounds = remeasure
+        ? undefined
+        : (node.getAttr(VIEWPORT_HIT_BOUNDS_ATTRIBUTE) as ViewportHitBounds | undefined)
+      if (!hitBounds) {
+        const rect = node.getClientRect({ relativeTo: contentGroup as Konva.Container })
+        if (
+          !Number.isFinite(rect.x) ||
+          !Number.isFinite(rect.y) ||
+          !Number.isFinite(rect.width) ||
+          !Number.isFinite(rect.height)
+        ) {
+          return
+        }
+        hitBounds = {
+          left: rect.x,
+          top: rect.y,
+          right: rect.x + rect.width,
+          bottom: rect.y + rect.height,
+        }
+        node.setAttr(VIEWPORT_HIT_BOUNDS_ATTRIBUTE, hitBounds)
+      }
+
+      const shouldListen = boundsIntersect(hitBounds, visibleBounds)
+      if (node.listening() === shouldListen) return
+      node.listening(shouldListen)
+      changed = true
+    })
+
+    // Only the pixel hit canvas changed; avoid repainting the visible scene.
+    if (changed) contentGroup.getLayer()?.drawHit()
+  }, [])
+
+  const scheduleViewportHitGraphRefresh = useCallback(
+    (remeasure: boolean) => {
+      viewportHitNeedsRemeasureRef.current ||= remeasure
+      if (viewportHitRefreshTimerRef.current != null) {
+        window.clearTimeout(viewportHitRefreshTimerRef.current)
+      }
+      viewportHitRefreshTimerRef.current = window.setTimeout(() => {
+        viewportHitRefreshTimerRef.current = null
+        const needsRemeasure = viewportHitNeedsRemeasureRef.current
+        viewportHitNeedsRemeasureRef.current = false
+        refreshViewportHitGraph(needsRemeasure)
+      }, 100)
+    },
+    [refreshViewportHitGraph]
+  )
+
+  useEffect(() => {
+    scheduleViewportHitGraphRefresh(true)
+  }, [layoutTree, scheduleViewportHitGraphRefresh, wireSegments])
+
+  useEffect(() => {
+    scheduleViewportHitGraphRefresh(false)
+  }, [
+    eendraadView.pan.x,
+    eendraadView.pan.y,
+    eendraadView.zoom,
+    scheduleViewportHitGraphRefresh,
+    viewportPixelSize.height,
+    viewportPixelSize.width,
+  ])
+
+  useEffect(
+    () => () => {
+      if (viewportHitRefreshTimerRef.current != null) {
+        window.clearTimeout(viewportHitRefreshTimerRef.current)
+      }
+    },
+    []
+  )
 
   // Ensure the main panel is visible on first render when no saved view exists.
   // This runs from layout data alone — no Konva dependency — so it fires
@@ -708,6 +885,15 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
     {
       draggingProtectionIdRef,
       getProtectionById: (id) => getProtectionById(id),
+      movingPanelAttachmentIdRef,
+      isPanelAttachmentDropAllowed: (panelId, target) =>
+        currentProject
+          ? isPanelAttachmentDropTargetTerminal(
+              getProjectElectricalPanels(currentProject),
+              panelId,
+              target
+            )
+          : false,
       resolveSameSymbolAddMore: (position, symbol) => {
         if (!layoutTree) return null
         const target = findSameSymbolAddMoreLayoutTargets(symbol.id, layoutTree, position)[0]
@@ -719,6 +905,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
         layoutTree ? positionHitsMultiplierBadge(layoutTree, position) : false,
     }
   )
+  const protectionMainBusCursorRef = useRef<Konva.Circle | null>(null)
 
   // Keep an internally dragged symbol active independently from the currently
   // hovered target. Relocation may clear dragPreview while the pointer is
@@ -736,7 +923,6 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
       ...(activePlacementSymbolId !== 'earthing_separator'
         ? { preferMainBusOverGroundWire: true }
         : {}),
-      ...(draggingProtectionIdRef.current ? { preferMainBusOverSupplyWire: true } : {}),
       ...(activePlacementSymbolId &&
       PROTECTION_SYMBOL_IDS.includes(
         activePlacementSymbolId as (typeof PROTECTION_SYMBOL_IDS)[number]
@@ -921,7 +1107,9 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
       previewGraph.createdProtectionIds.length > 0 ||
       previewGraph.createdTrunkDeviceIds.length > 0)
   const showLegacyDragPreview =
-    !!dragPreview && (preferLegacyDragPreview || !hasSimulatedPreviewVisuals)
+    !!dragPreview &&
+    activePlacementSymbolId !== 'dc_bus' &&
+    (preferLegacyDragPreview || !hasSimulatedPreviewVisuals)
   const showSimulatedDragPreview = hasSimulatedPreviewVisuals && !preferLegacyDragPreview
   const offscreenSupplyPreviewDirection = useMemo(() => {
     if (!layout || !previewGraph || !showSimulatedDragPreview) return null
@@ -1816,6 +2004,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
               preferMainBusOverGroundWire: true,
               preferMainBusOverSupplyWire: Boolean(symbol.busFeedKind) || isProtectionPlacement,
               preferSecondaryBusForNestedProtection: isProtectionPlacement,
+              ...(symbol.id === 'dc_bus' ? { preferCircuitTrunkWire: true } : {}),
               ...(symbol.id === 'source_changeover'
                 ? { normalizeDirectConverterChangeoverDrop: true }
                 : {}),
@@ -1831,42 +2020,37 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
       const sameSymbolTrunkDevice =
         directSameSymbolTarget?.target.trunkDevice ??
         (matchedDomainId ? getTrunkDeviceById(matchedDomainId)?.device : undefined)
-      const sameSymbolAddMoreResult: {
-        current: ReturnType<typeof incrementSameSymbolAddMoreTarget>
-      } = { current: 'not-applicable' }
-      const didAddMore = withSingleUndoEntry(
-        () => {
-          const target = sameSymbolEndpoint
-            ? { endpoint: sameSymbolEndpoint }
-            : sameSymbolTrunkDevice
-              ? { trunkDevice: sameSymbolTrunkDevice }
-              : null
-          if (!target) return false
-          sameSymbolAddMoreResult.current = incrementSameSymbolAddMoreTarget(symbol.id, target, {
-            updateSocketCount: (endpointId, count) => {
-              const latest = useProjectStore.getState().getEndpointById(endpointId)
-              if (!latest) return
-              useProjectStore.getState().updateEndpoint(endpointId, {
-                socketProps: {
-                  ...latest.socketProps,
-                  socketCount: count <= 1 ? undefined : count,
-                },
-              })
-            },
-            syncEndpointCount: (endpointId, count) =>
-              syncEndpointMultiplierCount(createSyncEndpointMultiplierDeps(), endpointId, count),
-            syncSupplyDeviceCount: (deviceId, count) =>
-              syncSupplyDeviceMultiplierCount(
-                createSyncSupplyInverterMultiplierDeps(),
-                deviceId,
-                count
-              ),
-          })
-          return sameSymbolAddMoreResult.current === 'incremented'
-        },
-        { sessionLabel: 'add more by dropping same symbol' }
+      const sameSymbolTarget: SameSymbolAddMoreTarget | null = sameSymbolEndpoint
+        ? { endpoint: sameSymbolEndpoint }
+        : sameSymbolTrunkDevice
+          ? { trunkDevice: sameSymbolTrunkDevice }
+          : null
+      const sameSymbolAddMoreResult = incrementSameSymbolAddMoreTargetWithUndo(
+        symbol.id,
+        sameSymbolTarget,
+        {
+          updateSocketCount: (endpointId, count) => {
+            const latest = useProjectStore.getState().getEndpointById(endpointId)
+            if (!latest) return
+            useProjectStore.getState().updateEndpoint(endpointId, {
+              socketProps: {
+                ...latest.socketProps,
+                socketCount: count <= 1 ? undefined : count,
+              },
+            })
+          },
+          syncEndpointCount: (endpointId, count) =>
+            syncEndpointMultiplierCount(createSyncEndpointMultiplierDeps(), endpointId, count),
+          syncSupplyDeviceCount: (deviceId, count) =>
+            syncSupplyDeviceMultiplierCount(
+              createSyncSupplyInverterMultiplierDeps(),
+              deviceId,
+              count
+            ),
+          withSingleUndoEntry,
+        }
       )
-      if (didAddMore) {
+      if (sameSymbolAddMoreResult === 'incremented') {
         trackSymbolPlace({
           canvas: 'eendraad',
           symbol,
@@ -1875,7 +2059,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
         })
         return
       }
-      if (sameSymbolAddMoreResult.current === 'blocked') {
+      if (sameSymbolAddMoreResult === 'blocked') {
         logger.warn(`[drop-diag] Add-more blocked for symbol=${symbol.id}`)
         return
       }
@@ -2002,6 +2186,28 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
 
       dropTarget = normalizeProtectionPlacementDropTarget(symbol, dropTarget)
 
+      if (isProtectionPlacement && dropTarget.type === 'circuit' && dropTarget.circuitId) {
+        const targetCircuit = getCircuitById(dropTarget.circuitId)
+        const orderedDevices = [...(targetCircuit?.trunkDevices ?? [])].sort(
+          (left, right) => (left.trunkPosition ?? 0) - (right.trunkPosition ?? 0)
+        )
+        const junctionPanelIndex = orderedDevices.findIndex(
+          (device) => device.type === 'junction_panel' || device.symbol === 'junction_panel'
+        )
+        const isRotatingSwitchBranch =
+          symbol.id === 'rotating_switch' && (dropTarget.branchEndpoints?.length ?? 0) > 0
+        const insertsBeforeBoundary =
+          typeof dropTarget.circuitTrunkSegmentIndex === 'number' &&
+          dropTarget.circuitTrunkSegmentIndex <= junctionPanelIndex
+        if (junctionPanelIndex >= 0 && !isRotatingSwitchBranch && !insertsBeforeBoundary) {
+          logger.info('[EendraadCanvas] blocked protection after junction-panel boundary', {
+            symbolId: symbol.id,
+            circuitId: dropTarget.circuitId,
+          })
+          return
+        }
+      }
+
       logger.info(
         `[drop-diag] Executing drop: symbol=${symbol.id}, target=${JSON.stringify({ type: dropTarget.type, panelId: dropTarget.panelId, circuitId: dropTarget.circuitId, protectionId: dropTarget.protectionId })}`
       )
@@ -2019,6 +2225,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
             addCircuit,
             addCircuitToProtection,
             addEndpoint,
+            updateEndpoint,
             addPlacement,
             setSelection,
             dropCanvasPosition: position,
@@ -2105,6 +2312,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
       getEndpointById,
       getTrunkDeviceById,
       updateCircuit,
+      updateEndpoint,
       updateProtection,
       updateInstallation,
       moveCircuitOnMainBus,
@@ -2137,6 +2345,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
     altDuplicatePointerCleanupRef.current?.()
     altDuplicatePointerCleanupRef.current = null
     draggingProtectionIdRef.current = null
+    movingPanelAttachmentIdRef.current = null
     suppressKonvaDragEndRef.current = false
     setAltDuplicatePointerDragActive(false)
     internalDragElementIdRef.current = null
@@ -2198,17 +2407,10 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   const handleElementDragMove = useCallback(
     (elementId: string, elementType: string, newPos: Point) => {
       if (elementType === 'panelAttachment') {
+        movingPanelAttachmentIdRef.current = elementId
         const symbolMeta = getSymbolById('panel_distribution')
         if (!symbolMeta) return
         handleDragOver(newPos, symbolMeta)
-        setDragPreview((preview) =>
-          preview
-            ? {
-                ...preview,
-                movingPanelAttachment: { panelId: elementId },
-              }
-            : preview
-        )
         return
       }
 
@@ -2263,7 +2465,6 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
         const symbolMeta = getSymbolById(symbolId)
         if (!symbolMeta) return
 
-        handleDragOver(newPos, symbolMeta)
         const sourcePanel = useProjectStore.getState().getPanelForProtection(elementId)
         const circuitId = sourcePanel
           ? pickRepresentativeCircuitIdForMainBusMove(sourcePanel, protection)
@@ -2273,12 +2474,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
             ? resolveProtectionDropTargetForPosition(
                 layoutTree,
                 newPos,
-                (tree, pos) =>
-                  findDropTargetWithDebug(tree, pos, {
-                    preferMainBusOverGroundWire: true,
-                    preferMainBusOverSupplyWire: true,
-                    preferSecondaryBusForNestedProtection: true,
-                  }),
+                findProtectionDragTarget,
                 (panelId) => getPanelById(panelId),
                 elementId,
                 (id) => getProtectionById(id),
@@ -2289,14 +2485,19 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
             setDragPreview(null)
             return
           }
+          if (!resolvedTarget) return
+          protectionMainBusCursorRef.current?.position(newPos)
+          protectionMainBusCursorRef.current?.getLayer()?.batchDraw()
+          const nextPreview = {
+            position: newPos,
+            symbolData: symbolMeta,
+            dropTarget: resolvedTarget,
+            movingProtection: { protectionId: elementId, circuitId },
+          }
           setDragPreview((preview) =>
-            preview
-              ? {
-                  ...preview,
-                  ...(resolvedTarget ? { dropTarget: resolvedTarget } : {}),
-                  movingProtection: { protectionId: elementId, circuitId },
-                }
-              : preview
+            getEendraadPreviewIntentKey(preview) === getEendraadPreviewIntentKey(nextPreview)
+              ? { ...preview!, position: newPos, dropTarget: resolvedTarget }
+              : nextPreview
           )
         }
         return
@@ -2381,6 +2582,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   // a boolean so the symbol can snap back when the drop was invalid.
   const handleElementDragEnd = useCallback(
     (elementId: string, elementType: string, position: Point) => {
+      movingPanelAttachmentIdRef.current = null
       internalDragElementIdRef.current = null
       setInternalDragPlacement(null)
       const isDuplicateDrag = elementDragModeRef.current === 'duplicate'
@@ -2447,12 +2649,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
           const target = resolveProtectionDropTargetForPosition(
             layoutTree,
             position,
-            (tree, pos) =>
-              findDropTargetWithDebug(tree, pos, {
-                preferMainBusOverGroundWire: true,
-                preferMainBusOverSupplyWire: true,
-                preferSecondaryBusForNestedProtection: true,
-              }),
+            findProtectionDragTarget,
             (panelId) => store.getPanelById(panelId),
             undefined,
             undefined,
@@ -2612,9 +2809,19 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
         const target =
           releaseTarget.type === 'mainBus' ||
           releaseTarget.type === 'circuit' ||
-          releaseTarget.type === 'rcd'
+          releaseTarget.type === 'rcd' ||
+          releaseTarget.type === 'endpoint'
             ? releaseTarget
             : (dragPreview?.dropTarget ?? releaseTarget)
+        const canMoveToEndpoint =
+          target.type === 'endpoint' &&
+          !!target.endpointId &&
+          !!target.circuitId
+        const canMoveToCircuitTop =
+          target.type === 'circuit' &&
+          !!target.circuitId &&
+          target.insertAfterCircuitContent === true &&
+          typeof target.secondaryBusInsertIndex !== 'number'
         const canMoveToSecondary =
           target.type === 'circuit' &&
           !!target.circuitId &&
@@ -2627,8 +2834,47 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
           target.type === 'rcd' &&
           !!target.protectionId &&
           typeof target.secondaryBusInsertIndex === 'number'
-        if (!canMoveToSecondary && !canMoveToMain && !canMoveToRcd) {
+        if (
+          !canMoveToSecondary &&
+          !canMoveToMain &&
+          !canMoveToRcd &&
+          !canMoveToEndpoint &&
+          !canMoveToCircuitTop
+        ) {
           return false
+        }
+        if (
+          !isPanelAttachmentDropTargetTerminal(
+            getProjectElectricalPanels(currentProject),
+            elementId,
+            target
+          )
+        ) {
+          return false
+        }
+
+        if (canMoveToEndpoint || canMoveToCircuitTop) {
+          return withSingleUndoEntry(
+            () => {
+              const before = resolvePanelSupplyLinkForPanel(currentProject, elementId)
+              if (!before) return false
+              useProjectStore.getState().movePanelSupply(elementId, {
+                type: 'circuit',
+                circuitId: target.circuitId!,
+              })
+              const afterProject = useProjectStore.getState().currentProject
+              const after = afterProject
+                ? resolvePanelSupplyLinkForPanel(afterProject, elementId)
+                : null
+              const moved =
+                !!after &&
+                (after.sourcePanel.id !== before.sourcePanel.id ||
+                  after.protection.id !== before.protection.id)
+              if (moved) setSelection({ type: 'panel', ids: [elementId] })
+              return moved
+            },
+            { sessionLabel: 'move distribution board to circuit endpoint' }
+          )
         }
 
         return withSingleUndoEntry(
@@ -2636,7 +2882,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
             let moved = false
             useProjectStore.setState((state: ProjectState) => {
               if (!state.currentProject) return
-              const panels = getMutableElectricalPanelsForProject(state.currentProject)
+              const panels = getEditableProjectElectricalPanels(state.currentProject)
               const result = canMoveToSecondary
                 ? movePanelAttachmentOnSecondaryBus(
                     panels,
@@ -2696,6 +2942,22 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                     : null
                 },
                 getProtectionById: (protectionId) => getProtectionById(protectionId) || null,
+                updateEndpointSocketCount: (endpointId, count) => {
+                  const latest = useProjectStore.getState().getEndpointById(endpointId)
+                  if (!latest) return
+                  useProjectStore.getState().updateEndpoint(endpointId, {
+                    socketProps: {
+                      ...latest.socketProps,
+                      socketCount: count <= 1 ? undefined : count,
+                    },
+                  })
+                },
+                syncEndpointMultiplierCount: (endpointId, count) =>
+                  syncEndpointMultiplierCount(
+                    createSyncEndpointMultiplierDeps(),
+                    endpointId,
+                    count,
+                  ),
               }),
             { sessionLabel: 'duplicate endpoint via alt-drag' }
           )
@@ -2765,9 +3027,62 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
 
             logger.info('[EendraadCanvas] endpoint drag dropTarget final', dropTarget)
 
+            if (dropTarget.type === 'supplyConverterDcWire' && sourceCircuitId) {
+              let movedToSupplyDcBus = false
+              useProjectStore.setState((state) => {
+                const project = state.currentProject
+                if (!project) return
+                const result = moveEndpointToSupplyDcBus(
+                  project,
+                  elementId,
+                  sourceCircuitId,
+                  dropTarget
+                )
+                if (!result) return
+                for (const panelId of new Set([result.sourcePanelId, result.targetPanelId])) {
+                  if (!panelId) continue
+                  reconcileDirectConverterDcDevices(project, panelId)
+                  reconcileSupplyAssemblyBranchProtections(project, panelId)
+                }
+                state.isDirty = true
+                movedToSupplyDcBus = true
+              })
+              if (movedToSupplyDcBus) {
+                setSelection({ type: 'trunkDevice', ids: [elementId] })
+                return true
+              }
+              return false
+            }
+
             const targetEndpoint = dropTarget.endpointId
               ? store.getEndpointById(dropTarget.endpointId)
               : null
+            const isDomoticaParentMove =
+              sourceEndpoint.symbol === 'domotica' && !sourceEndpoint.domoticaChildProps
+            const domoticaGroupEndpointIds = isDomoticaParentMove && sourceCircuitInfo?.circuit
+              ? [
+                  ...collectDomoticaEndpointIdsForDeletion(
+                    sourceCircuitInfo.circuit,
+                    [elementId]
+                  ),
+                ].filter((id) => !!store.getEndpointById(id))
+              : []
+            if (isDomoticaParentMove && !sourceCircuitId) {
+              // Never send a domotica parent without a resolvable owning circuit
+              // through the single-endpoint fallback.
+              return false
+            }
+            if (
+              isDomoticaParentMove &&
+              (targetEndpoint?.domoticaChildProps || dropTarget.domoticaOutput)
+            ) {
+              dropTarget = {
+                ...dropTarget,
+                domoticaOutput: undefined,
+                domoticaChildDropIntent: undefined,
+                insertAfterEndpointId: targetEndpoint?.id ?? dropTarget.insertAfterEndpointId,
+              }
+            }
             if (
               sourceEndpoint.domoticaChildProps &&
               !dropTarget.domoticaOutput &&
@@ -2807,6 +3122,94 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
               })
               setSelection({ type: 'endpoint', ids: [elementId] })
               return true
+            }
+
+            if (isDomoticaParentMove) {
+              if (!sourceCircuitId || !dropTarget.circuitId) {
+                // A parent with children must never be handled as a standalone
+                // endpoint when the target is not a circuit-aware drop.
+                return false
+              }
+              const sourceCircuit = store.getCircuitById(sourceCircuitId)
+              const targetCircuit = store.getCircuitById(dropTarget.circuitId)
+              if (!sourceCircuit || !targetCircuit) return false
+
+              const groupEndpointIds = domoticaGroupEndpointIds
+              const groupEndpointIdSet = new Set(groupEndpointIds)
+              const sourceGroupBranch = (sourceCircuit.branches ?? []).find((branch) =>
+                groupEndpointIds.some((id) => branch.endpointIds.includes(id))
+              )
+              const targetBranchIds =
+                dropTarget.branchEndpoints ??
+                (targetEndpoint?.id ? [targetEndpoint.id] : undefined)
+              const targetBranch = (targetCircuit.branches ?? []).find((branch) =>
+                targetBranchIds?.some((id) => branch.endpointIds.includes(id))
+              )
+
+              // Dropping a parent back onto its own branch is a no-op. Do not
+              // fall through to the single-endpoint move, which cascades its
+              // children when the original parent is deleted.
+              if (
+                sourceCircuitId === targetCircuit.id &&
+                ((targetEndpoint?.id && groupEndpointIdSet.has(targetEndpoint.id)) ||
+                  (sourceGroupBranch && targetBranch?.id === sourceGroupBranch.id))
+              ) {
+                setSelection({ type: 'endpoint', ids: [elementId] })
+                return false
+              }
+
+              if (groupEndpointIds.length > 0) {
+                if (sourceCircuitId === targetCircuit.id) {
+                  const movedGroup = moveEndpointSelectionOnCircuit(
+                    sourceCircuit,
+                    elementId,
+                    groupEndpointIds,
+                    dropTarget,
+                    { allowSingle: true }
+                  )
+                  if (movedGroup) {
+                    updateCircuit(sourceCircuit.id, {
+                      endpoints: movedGroup.endpoints,
+                      branches: movedGroup.branches,
+                    })
+                    setSelection({ type: 'endpoint', ids: [elementId] })
+                    return true
+                  }
+
+                  // A circuit-area drop can resolve to the same branch without
+                  // carrying branchEndpoints/endpointId. The group mover quite
+                  // correctly reports that as unchanged; never fall through to
+                  // the legacy single-endpoint move, which deletes the children.
+                  setSelection({ type: 'endpoint', ids: groupEndpointIds })
+                  return false
+                }
+
+                const movedGroup = moveEndpointSelectionBetweenCircuits(
+                  sourceCircuit,
+                  targetCircuit,
+                  elementId,
+                  groupEndpointIds,
+                  dropTarget,
+                  { allowSingle: true }
+                )
+                if (movedGroup) {
+                  updateCircuit(sourceCircuit.id, {
+                    endpoints: movedGroup.source.endpoints,
+                    branches: movedGroup.source.branches,
+                  })
+                  updateCircuit(targetCircuit.id, {
+                    endpoints: movedGroup.target.endpoints,
+                    branches: movedGroup.target.branches,
+                  })
+                  setSelection({ type: 'endpoint', ids: [elementId] })
+                  return true
+                }
+
+                // This was a complete domotica group, so a failed grouped
+                // move must not be retried as a destructive single-endpoint
+                // move.
+                return false
+              }
             }
 
             if (!sourceEndpoint.domoticaChildProps && !!sourceCircuitId && dropTarget.circuitId) {
@@ -2868,6 +3271,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
               addProtection,
               addCircuit,
               addCircuitToProtection,
+              updateEndpoint,
               // Preserve existing placements on move, but if the moved endpoint has no
               // plan placement at all, allow a single auto-placement to avoid orphans.
               addPlacement: (endpointId: string, placement: Placement) => {
@@ -2995,12 +3399,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
               resolveProtectionDropTargetForPosition(
                 layoutTree,
                 position,
-                (tree, pos) =>
-                  findDropTargetWithDebug(tree, pos, {
-                    preferMainBusOverGroundWire: true,
-                    preferMainBusOverSupplyWire: true,
-                    preferSecondaryBusForNestedProtection: true,
-                  }),
+                findProtectionDragTarget,
                 (panelId) => getPanelById(panelId),
                 elementId,
                 (id) => getProtectionById(id),
@@ -3086,12 +3485,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
               const target = resolveProtectionDropTargetForPosition(
                 layoutTree,
                 position,
-                (tree, pos) =>
-                  findDropTargetWithDebug(tree, pos, {
-                    preferMainBusOverGroundWire: true,
-                    preferMainBusOverSupplyWire: true,
-                    preferSecondaryBusForNestedProtection: true,
-                  }),
+                findProtectionDragTarget,
                 (panelId) => getPanelById(panelId),
                 undefined,
                 undefined,
@@ -3102,6 +3496,23 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                 protectionDropTargetHitsSource(elementId, target, (id) => getProtectionById(id))
               ) {
                 return false
+              }
+              if (target.type === 'circuit' && target.circuitId) {
+                const targetCircuit = getCircuitById(target.circuitId)
+                const orderedDevices = [...(targetCircuit?.trunkDevices ?? [])].sort(
+                  (left, right) => (left.trunkPosition ?? 0) - (right.trunkPosition ?? 0)
+                )
+                const junctionPanelIndex = orderedDevices.findIndex(
+                  (device) => device.type === 'junction_panel' || device.symbol === 'junction_panel'
+                )
+                const isRotatingSwitchBranch =
+                  protection.type === 'ROTATING_SWITCH' && (target.branchEndpoints?.length ?? 0) > 0
+                const insertsBeforeBoundary =
+                  typeof target.circuitTrunkSegmentIndex === 'number' &&
+                  target.circuitTrunkSegmentIndex <= junctionPanelIndex
+                if (junctionPanelIndex >= 0 && !isRotatingSwitchBranch && !insertsBeforeBoundary) {
+                  return false
+                }
               }
               let moved = false
 
@@ -3173,9 +3584,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                       return undefined
                     }
 
-                    const panel = findPanelForCircuitInDraft(
-                      getElectricalPanelsFromProject(project)
-                    )
+                    const panel = findPanelForCircuitInDraft(getProjectElectricalPanels(project))
                     if (!panel) {
                       logger.warn(
                         '[EendraadCanvas] protection mainBus: panel not found for circuit',
@@ -3322,7 +3731,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
 
                     state.isDirty = true
                     moved = steps > 0
-                    const installation = getElectricalInstallationFromProject(project)
+                    const installation = getProjectElectricalInstallation(project)
                     if (steps > 0 && installation?.eendraadAutomaticNaming) {
                       applyAutomaticMainBusNamingToPanel(
                         panel,
@@ -3389,7 +3798,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                   if (!project) return
 
                   const panels: Panel[] = []
-                  const stack: Panel[] = [...getElectricalPanelsFromProject(project)]
+                  const stack: Panel[] = [...getProjectElectricalPanels(project)]
                   while (stack.length) {
                     const p = stack.pop()!
                     panels.push(p)
@@ -3444,7 +3853,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                         })
                         state.isDirty = true
                         moved = true
-                        const installation = getElectricalInstallationFromProject(project)
+                        const installation = getProjectElectricalInstallation(project)
                         if (installation?.eendraadAutomaticNaming) {
                           applyAutomaticMainBusNamingToPanel(
                             p,
@@ -3487,7 +3896,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
         if (!info || info.isGroundDevice || !layoutTree || !currentProject) return false
 
         if (info.isSupplyDevice) {
-          const { target } = findDropTargetWithDebug(layoutTree, position)
+          const { target, debug: hitDebug } = findDropTargetWithDebug(layoutTree, position)
           const targetFeedScope = target.supplyFeedScope ?? 'shared'
           const targetPanelId = target.panelId
           let moved = false
@@ -3504,7 +3913,60 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                 position,
                 wireSegments
               )
-            : undefined
+              : undefined
+
+          if (isDuplicateDrag) {
+            if (target.type === null) return false
+            return withSingleUndoEntry(
+              () => {
+                const sourcePosition = info.device.trunkPosition ?? 0
+                const clone: TrunkDevice = {
+                  ...JSON.parse(JSON.stringify(info.device)),
+                  id: generateId(),
+                  trunkPosition: sourcePosition + 1,
+                  placements: info.device.placements?.length
+                    ? clonePlacementsForDuplicate(info.device.placements, {
+                        symbolType: info.device.symbol,
+                      })
+                    : [],
+                }
+                // Alt-drag is a single-device operation. Detach the clone from
+                // the source DC branch before the normal supply mover places it
+                // at the requested target, otherwise a branch-head conversion
+                // would bring its serial descendants along as well.
+                delete clone.supplyDcBusId
+                delete clone.supplyDcBusBranchId
+                addSupplyTrunkDevice(clone, sourcePosition + 1, {
+                  panelId: info.supplyPanelId,
+                  feedScope: info.supplyFeedScope,
+                })
+
+                const project = useProjectStore.getState().currentProject
+                if (!project) return false
+                const result = moveSupplyTrunkDeviceAtDropTarget(
+                  project,
+                  clone.id,
+                  target,
+                  targetMounting,
+                )
+                if (!result) {
+                  useProjectStore.getState().deleteSupplyTrunkDevice(clone.id)
+                  return false
+                }
+                for (const panelId of new Set([result.sourcePanelId, result.targetPanelId])) {
+                  if (!panelId) continue
+                  reconcileDirectConverterDcDevices(project, panelId)
+                  reconcileSupplyAssemblyBranchProtections(project, panelId)
+                }
+                useProjectStore.setState((state) => {
+                  state.isDirty = true
+                })
+                setSelection({ type: 'trunkDevice', ids: [clone.id] })
+                return true
+              },
+              { sessionLabel: 'duplicate supply device via alt-drag' },
+            )
+          }
 
           useProjectStore.setState((state: ProjectState) => {
             const project = state.currentProject
@@ -3517,7 +3979,9 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
             )
             if (!result) return
             for (const panelId of new Set([result.sourcePanelId, result.targetPanelId])) {
-              if (panelId) reconcileSupplyAssemblyBranchProtections(project, panelId)
+              if (!panelId) continue
+              reconcileDirectConverterDcDevices(project, panelId)
+              reconcileSupplyAssemblyBranchProtections(project, panelId)
             }
             state.isDirty = true
             moved = true
@@ -3529,7 +3993,14 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
               deviceId: elementId,
               targetPanelId,
               targetFeedScope,
+              targetType: target.type,
+              targetSupplyDcBusId: target.supplyDcBusId,
+              targetSupplyDcBusBranchId: target.supplyDcBusBranchId,
+              targetSupplyConverterDcBranch: target.supplyConverterDcBranch,
+              targetSupplyConverterDcConnectionIndex:
+                target.supplyConverterDcConnectionIndex,
               supplyDeviceInsertIndex: target.supplyDeviceInsertIndex,
+              hitPathMatchedTail: summarizeHitDebugPath(hitDebug.path),
             })
           }
           if (moved) {
@@ -3576,6 +4047,28 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
             pointerCanvas: position,
           })
           return false
+        }
+
+        if (isDuplicateDrag) {
+          return withSingleUndoEntry(
+            () => {
+              const sourceCircuit = useProjectStore.getState().getCircuitById(sourceCircuitId)
+              const sourceDevice = sourceCircuit?.branches
+                ?.flatMap((branch) => branch.branchDevices ?? [])
+                .find((device) => device.id === elementId)
+              if (!sourceCircuit || !sourceDevice) return false
+              const newDeviceId = duplicateCircuitDcBranchDeviceAtDropTarget(
+                sourceDevice,
+                sourceCircuit,
+                dropTarget,
+                updateCircuit,
+              )
+              if (!newDeviceId) return false
+              setSelection({ type: 'trunkDevice', ids: [newDeviceId] })
+              return true
+            },
+            { sessionLabel: 'duplicate DC-rail device via alt-drag' },
+          )
         }
 
         const moved = relocateCircuitTrunkDevice(elementId, dropTarget)
@@ -3637,6 +4130,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
       setSelection,
       t,
       updateCircuit,
+      updateEndpoint,
       updateFloor,
       updateInstallation,
       updateProtection,
@@ -3708,7 +4202,11 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
     (elementId: string, elementType: string, altKey: boolean, nativeEvt?: MouseEvent): boolean => {
       internalDragElementIdRef.current = elementId
       setInternalDragPlacement(null)
-      if (elementType === 'trunkDevice') {
+      if (elementType === 'panelAttachment') {
+        movingPanelAttachmentIdRef.current = elementId
+        const symbol = getSymbolById('panel_distribution')
+        if (symbol) setInternalDragPlacement({ elementId, symbol })
+      } else if (elementType === 'trunkDevice') {
         const info = getTrunkDeviceById(elementId)
         const symbol = info ? getSymbolById(info.device.symbol) : undefined
         if (info && symbol) {
@@ -3729,6 +4227,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                 supplyPath: info.device.supplyPath,
                 supplyConverterDcConnectionIndex: info.device.supplyConverterDcConnectionIndex,
                 converterGridPlacement: info.device.converterGridPlacement,
+                changeoverGridPlacement: info.device.changeoverGridPlacement,
                 dcBusRoot: info.device.type === 'dc_bus',
               },
             })
@@ -3805,15 +4304,28 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
       if (elementDragModeRef.current === 'duplicate') {
         return true
       }
-      if (!altKey || (elementType !== 'endpoint' && elementType !== 'protection')) {
+      if (
+        !altKey ||
+        (elementType !== 'endpoint' &&
+          elementType !== 'protection' &&
+          elementType !== 'trunkDevice')
+      ) {
         elementDragModeRef.current = 'move'
         return false
       }
       if (!nativeEvt) return false
+      // Alt-drag is a targeted duplicate. Keep tracking the pointer and defer
+      // all mutation until the drop target is known; Ctrl-D remains the
+      // immediate duplicate action.
       beginAltDuplicatePointerDrag(elementId, elementType, nativeEvt)
       return true
     },
-    [beginAltDuplicatePointerDrag, getEndpointById, getTrunkDeviceById, layout?.panels]
+    [
+      beginAltDuplicatePointerDrag,
+      getEndpointById,
+      getTrunkDeviceById,
+      layout?.panels,
+    ]
   )
   handleElementDragStartRef.current = handleElementDragStart
 
@@ -3915,7 +4427,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
     const project = useProjectStore.getState().currentProject
     if (!project) return
 
-    getElectricalPanelsFromProject(project).forEach((panel: Panel) => {
+    getProjectElectricalPanels(project).forEach((panel: Panel) => {
       const panelPlacement = ensurePanelPlacement(project, panel)
       if (!panelPlacement) return
 
@@ -4021,7 +4533,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
       const panel = getPanelById(panelId)
       if (!panel || !panel.isMain) return false
 
-      return isLastMainPanel(getElectricalPanelsFromProject(currentProject), panelId)
+      return isLastMainPanel(getProjectElectricalPanels(currentProject), panelId)
     },
     [currentProject]
   )
@@ -4211,7 +4723,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
           (metadata ? resolveSupplyWireSegmentByMetadata(wireSegments, metadata) : undefined)
         const assembly =
           currentProject && selectedWire?.supplyAssemblyId
-            ? getSupplyAssembliesFromProject(currentProject).find(
+            ? selectProjectSupplyAssemblies(currentProject).find(
                 ({ id }) => id === selectedWire.supplyAssemblyId
               )
             : undefined
@@ -4377,10 +4889,22 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
             }
             const multiDuplicateActions = {
               addEndpoint,
+              syncEndpointMultiplierCount: (endpointId: string, count: number) =>
+                syncEndpointMultiplierCount(
+                  createSyncEndpointMultiplierDeps(),
+                  endpointId,
+                  count
+                ),
               addCircuit,
               addTrunkDevice,
               updateTrunkDevice,
               addSupplyTrunkDevice,
+              syncSupplyDeviceMultiplierCount: (deviceId: string, count: number) =>
+                syncSupplyDeviceMultiplierCount(
+                  createSyncSupplyInverterMultiplierDeps(),
+                  deviceId,
+                  count
+                ),
               addGroundTrunkDevice,
               insertProtectionAfter,
               updateCircuit,
@@ -4578,7 +5102,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
 
         // Also check if resolvedElementId is a protection ID by checking panel protections directly
         if (!protection && currentProject) {
-          for (const panel of getElectricalPanelsFromProject(currentProject)) {
+          for (const panel of getProjectElectricalPanels(currentProject)) {
             const foundProtection = panel.protections.find(
               (p: ProtectionDevice) => p.id === resolvedElementId
             )
@@ -4768,10 +5292,22 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
           }
           const actions = {
             addEndpoint,
+            syncEndpointMultiplierCount: (endpointId: string, count: number) =>
+              syncEndpointMultiplierCount(
+                createSyncEndpointMultiplierDeps(),
+                endpointId,
+                count
+              ),
             addCircuit,
             addTrunkDevice,
             updateTrunkDevice,
             addSupplyTrunkDevice,
+            syncSupplyDeviceMultiplierCount: (deviceId: string, count: number) =>
+              syncSupplyDeviceMultiplierCount(
+                createSyncSupplyInverterMultiplierDeps(),
+                deviceId,
+                count
+              ),
             addGroundTrunkDevice,
             insertProtectionAfter,
             updateCircuit,
@@ -5085,10 +5621,22 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                         },
                         {
                           addEndpoint,
+                          syncEndpointMultiplierCount: (endpointId: string, count: number) =>
+                            syncEndpointMultiplierCount(
+                              createSyncEndpointMultiplierDeps(),
+                              endpointId,
+                              count
+                            ),
                           addCircuit,
                           addTrunkDevice,
                           updateTrunkDevice,
                           addSupplyTrunkDevice,
+                          syncSupplyDeviceMultiplierCount: (deviceId: string, count: number) =>
+                            syncSupplyDeviceMultiplierCount(
+                              createSyncSupplyInverterMultiplierDeps(),
+                              deviceId,
+                              count
+                            ),
                           addGroundTrunkDevice,
                           insertProtectionAfter,
                           updateCircuit,
@@ -5218,7 +5766,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
         return
       }
       const opts = resolveAutomaticNamingOptsFromInstallation(
-        getElectricalInstallationFromProject(currentProject)
+        getProjectElectricalInstallation(currentProject)
       )
       if (!automaticMainBusNamingWouldChangeProject(currentProject, opts)) {
         enableAutomaticNamingAndApply()
@@ -5236,6 +5784,37 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
     },
     [currentProject, enableAutomaticNamingAndApply, openDialog, t, updateInstallation]
   )
+
+  const handleResetAllEendraadLabels = useCallback(() => {
+    if (!currentProject || !eendraadAutoNaming || !hasCustomEendraadLabels) return
+    openDialog({
+      type: 'confirm',
+      title: t('canvas.eendraadNaming.resetAllConfirmTitle', 'Reset all custom labels?'),
+      message: t(
+        'canvas.eendraadNaming.resetAllConfirmMessage',
+        'All custom circuit labels will be cleared and replaced by automatic labels. You can undo this change.'
+      ),
+      variant: 'warning',
+      confirmLabel: t('canvas.eendraadNaming.resetAllConfirm', 'Reset labels'),
+      cancelLabel: t('common.cancel'),
+      onConfirm: () => {
+        const latestProject = useProjectStore.getState().currentProject
+        if (!latestProject || !projectHasManualEendraadLabelOverrides(latestProject)) return
+        withSingleUndoEntry(() => {
+          resetAllEendraadLabelOverrides()
+          return true
+        })
+      },
+    })
+  }, [
+    currentProject,
+    eendraadAutoNaming,
+    hasCustomEendraadLabels,
+    openDialog,
+    resetAllEendraadLabelOverrides,
+    t,
+    withSingleUndoEntry,
+  ])
 
   const applyHideFeederPreferenceAndRenumber = useCallback(
     (hideFeederLetters: boolean) => {
@@ -5324,8 +5903,9 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
               {/* Tree-based element rendering */}
               <RenderNode
                 node={panelNode}
+                translate={t}
+                advancedPanelLabels={advancedPanelLabels}
                 panelLayout={panelLayout}
-                allEndpoints={allEndpoints}
                 getProtectionById={getProtectionById}
                 getPanelById={getPanelById}
                 getCanvasPositionFromEvent={getCanvasPositionFromEvent}
@@ -5346,7 +5926,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
       </>
     )
   }, [
-    allEndpoints,
+    advancedPanelLabels,
     canDragItems,
     eendraadNotes,
     getCanvasPositionFromEvent,
@@ -5362,8 +5942,84 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
     stableGroundDragEnd,
     stableNoteDragEnd,
     supplySeparators,
+    t,
     wireSegments,
   ])
+
+  const selectedEndpointOverlay = useMemo(() => {
+    if (
+      selection.type !== 'endpoint' ||
+      selection.ids.length !== 1 ||
+      !layoutTree ||
+      !layout
+    ) {
+      return null
+    }
+    const target = findEndpointRenderTarget(layoutTree.panels, selection.ids[0]!)
+    if (!target) return null
+    const panelLayout = layout.panels.find(
+      (candidate) => getPanelDiagramId(candidate) === target.panelNode.diagramId
+    )
+    if (!panelLayout) return null
+    return (
+      <CanvasPanOrClickProvider onBeginPan={beginInteractiveOverlayPan}>
+        <RenderNode
+          node={target.node}
+          translate={t}
+          advancedPanelLabels={advancedPanelLabels}
+          panelLayout={panelLayout}
+          getProtectionById={getProtectionById}
+          getPanelById={getPanelById}
+          getCanvasPositionFromEvent={getCanvasPositionFromEvent}
+          onElementDragStart={canDragItems ? stableElementDragStart : undefined}
+          shouldSuppressKonvaDragEnd={canDragItems ? shouldSuppressKonvaDragEnd : undefined}
+          onElementDragMove={canDragItems ? stableElementDragMove : undefined}
+          onElementDragEnd={canDragItems ? stableElementDragEnd : undefined}
+          onGroundDragEnd={canDragItems ? stableGroundDragEnd : undefined}
+          renderSelectedEndpoint
+        />
+      </CanvasPanOrClickProvider>
+    )
+  }, [
+    advancedPanelLabels,
+    beginInteractiveOverlayPan,
+    canDragItems,
+    getCanvasPositionFromEvent,
+    getPanelById,
+    getProtectionById,
+    layout,
+    layoutTree,
+    selection,
+    shouldSuppressKonvaDragEnd,
+    stableElementDragEnd,
+    stableElementDragMove,
+    stableElementDragStart,
+    stableGroundDragEnd,
+    t,
+  ])
+
+  const canvasInteractionOverlay = useMemo(
+    () => (
+      <>
+        {selectedEndpointOverlay}
+        {dragPreview?.movingProtection && (
+          <Circle
+            ref={protectionMainBusCursorRef}
+            name="protection-drag-cursor-preview"
+            x={dragPreview.position.x}
+            y={dragPreview.position.y}
+            radius={15}
+            fill="#0284c7"
+            opacity={0.25}
+            stroke="#0284c7"
+            strokeWidth={2}
+            listening={false}
+          />
+        )}
+      </>
+    ),
+    [dragPreview, selectedEndpointOverlay]
+  )
 
   return (
     <CanvasOverlayScaleProvider containerRef={containerRef}>
@@ -5411,6 +6067,8 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
           onMultiFingerSwipe={onMultiFingerSwipe}
           
           gridOpacity={0.1}
+          overlayChildren={canvasInteractionOverlay}
+          enableIsolatedDragLayer
         >
           <Group name="canvas-content">
             <CanvasPanOrClickProvider onBeginPan={beginInteractiveOverlayPan}>
@@ -5434,7 +6092,15 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                   const currentPanelNode = layoutTree?.panels.find(
                     (p: LayoutNode) => p.diagramId === diagramId
                   )
+                  const currentPanelLayout = layout?.panels.find(
+                    (candidate) => getPanelDiagramId(candidate) === diagramId
+                  )
                   if (!previewPanelLayout || !previewPanelNode) return null
+
+                  const previewPanelTranslation = getPreviewPanelTranslation(
+                    currentPanelLayout,
+                    previewPanelLayout
+                  )
 
                   // Generated wire IDs are unstable between layouts, so compare topology and
                   // geometry. This avoids tinting unchanged panel/supply buses for endpoint drops.
@@ -6064,7 +6730,8 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                         <Group
                           key={`preview-panel-${panelId}`}
                           name={`preview-panel-${panelId}`}
-                          x={nestedPreviewOffsetX}
+                          x={nestedPreviewOffsetX + previewPanelTranslation.x}
+                          y={previewPanelTranslation.y}
                           opacity={0.85}
                           listening={false}
                         >
@@ -6150,7 +6817,8 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                     <Group
                       key={`preview-panel-${panelId}`}
                       name={`preview-panel-${panelId}`}
-                      x={nestedPreviewOffsetX}
+                      x={nestedPreviewOffsetX + previewPanelTranslation.x}
+                      y={previewPanelTranslation.y}
                       opacity={0.8}
                       listening={false}
                     >
@@ -6235,6 +6903,9 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                 activeDropTargetNodeId={activeDropTargetNodeId}
                 activePosition={dragPreview?.position ?? null}
                 relocation={internalDragPlacement}
+                movingPanelAttachmentId={
+                  internalDragPlacement?.elementId ?? dragPreview?.movingPanelAttachment?.panelId
+                }
               />
             )}
 
@@ -6246,6 +6917,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                 layout={layout}
                 wireSegments={wireSegments}
                 symbolData={dragPreview.symbolData}
+                showMainBusPositionMarker={!dragPreview.movingProtection}
               />
             )}
 
@@ -6548,29 +7220,48 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
               onOpenChange={(next) => setOpenEendraadMenu(next ? 'naming' : null)}
             >
               <div className="rounded-md bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-lg p-3 min-w-[260px] space-y-3 text-xs">
-                <label
+                <div
                   data-testid="eendraad-auto-label-setting"
-                  className={`flex items-start gap-2 rounded-md p-1 text-gray-700 transition-all duration-1000 dark:text-gray-200 ${
+                  className={`rounded-md p-1 text-gray-700 transition-all duration-1000 dark:text-gray-200 ${
                     namingGuidanceHighlighted
                       ? 'bg-sky-100 ring-2 ring-sky-500 dark:bg-sky-950/60'
                       : 'ring-2 ring-transparent'
                   }`}
                 >
-                  <input
-                    type="checkbox"
-                    checked={eendraadAutoNaming}
-                    onChange={(e) => handleEendraadAutomaticNamingChange(e.target.checked)}
-                    className="rounded border-gray-400 mt-0.5"
-                  />
-                  <span>
-                    <span className="font-medium block">
-                      {t('canvas.eendraadNaming.automaticNaming')}
+                  <label className="flex items-start gap-2">
+                    <input
+                      type="checkbox"
+                      checked={eendraadAutoNaming}
+                      onChange={(e) => handleEendraadAutomaticNamingChange(e.target.checked)}
+                      className="rounded border-gray-400 mt-0.5"
+                    />
+                    <span>
+                      <span className="font-medium block">
+                        {t('canvas.eendraadNaming.automaticNaming')}
+                      </span>
+                      <span className="block text-[11px] leading-snug text-gray-500 dark:text-gray-400 mt-0.5">
+                        {t('canvas.eendraadNaming.automaticNamingDescription')}
+                      </span>
                     </span>
-                    <span className="block text-[11px] leading-snug text-gray-500 dark:text-gray-400 mt-0.5">
-                      {t('canvas.eendraadNaming.automaticNamingDescription')}
-                    </span>
+                  </label>
+                  <span
+                    className="mt-2 block"
+                    title={t(
+                      'canvas.eendraadNaming.resetAllTooltip',
+                      'Remove every custom label and return all circuits to automatic naming.'
+                    )}
+                  >
+                    <button
+                      type="button"
+                      disabled={!eendraadAutoNaming || !hasCustomEendraadLabels}
+                      onClick={handleResetAllEendraadLabels}
+                      className="flex w-full items-center justify-center gap-1.5 rounded-md border border-gray-300 bg-white px-2 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-45 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" aria-hidden />
+                      {t('canvas.eendraadNaming.resetAllLabels', 'Reset all labels')}
+                    </button>
                   </span>
-                </label>
+                </div>
                 <label
                   className={`flex items-start gap-2 ${
                     eendraadAutoNaming

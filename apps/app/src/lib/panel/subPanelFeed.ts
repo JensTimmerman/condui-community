@@ -9,6 +9,8 @@ function orderCircuitTrunkDevices(circuit: Circuit | null | undefined): TrunkDev
 export interface SubPanelFeedDevice {
   circuit: Circuit
   device: TrunkDevice
+  /** First terminal-strip device before the bus-feed anchor, when present. */
+  incomingDevice: TrunkDevice
   orderedDevices: TrunkDevice[]
 }
 
@@ -24,9 +26,15 @@ export function getPanelIncomingMainBusFeedDevice(panel: Panel): SubPanelFeedDev
   if (!circuit) return null
   const orderedDevices = orderCircuitTrunkDevices(circuit)
   if (orderedDevices.length === 0) return null
-  const device =
-    orderedDevices.find((candidate) => candidate.type === 'protection') ?? orderedDevices[0]!
-  return { circuit, device, orderedDevices }
+  const protectionIndex = orderedDevices.findIndex((candidate) => candidate.type === 'protection')
+  const device = protectionIndex >= 0 ? orderedDevices[protectionIndex]! : orderedDevices[0]!
+  const incomingDevice =
+    orderedDevices.find(
+      (candidate, index) =>
+        index < (protectionIndex >= 0 ? protectionIndex : orderedDevices.length) &&
+        (candidate.type === 'terminal_strip' || candidate.symbol === 'terminal_strip')
+    ) ?? device
+  return { circuit, device, incomingDevice, orderedDevices }
 }
 
 /**

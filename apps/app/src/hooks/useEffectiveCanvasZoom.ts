@@ -9,10 +9,7 @@ import type { CanvasType } from '@/types/ui'
  * every symbol to live gesture zoom forced the whole canvas tree to re-render on each zoom frame in
  * Chrome, which showed up as long requestAnimationFrame handlers.
  */
-export function useEffectiveCanvasZoom(
-  fallbackZoom: number,
-  canvas: CanvasType
-): number {
+export function useEffectiveCanvasZoom(fallbackZoom: number, canvas: CanvasType): number {
   const viewZoom = useUIStore((s) => {
     switch (canvas) {
       case 'eendraad':
@@ -21,6 +18,8 @@ export function useEffectiveCanvasZoom(
         return s.planView.zoom
       case 'panel':
         return s.panelView.zoom
+      case 'structure':
+        return s.structureView.zoom
       default:
         return fallbackZoom
     }

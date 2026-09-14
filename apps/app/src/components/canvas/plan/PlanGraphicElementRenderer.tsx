@@ -34,10 +34,8 @@ import {
   setFloorPlanDrawDimensionEditor,
 } from './floorPlanDrawDimensionEditorStore'
 import { normalizeDimensionRotationDeg } from '@/lib/plan/dimensionDragGesture'
-import {
-  scalePlanGraphicPath,
-  scalePlanGraphicPathUniformly,
-} from '@/lib/plan/planGraphicPath'
+import { scalePlanGraphicPath, scalePlanGraphicPathUniformly } from '@/lib/plan/planGraphicPath'
+import { INTERACTIVE_OVERLAY_EXPORT_NAME } from '@/lib/export/interactiveOverlayExport'
 
 const PLAN_GRAPHIC_HOVER_COLOR = '#eab308'
 
@@ -166,40 +164,39 @@ export function PlanGraphicElementShape({
           <Line points={[x + w, y, x, y + h]} {...lineCommon} />
         </>
       )
-    case 'shower':
-      {
-        const showerHeadSize = Math.min(w, h)
-        return (
-          <>
-            <Rect
-              x={x}
-              y={y}
-              width={w}
-              height={h}
-              cornerRadius={Math.min(w, h) * 0.0514}
-              {...common}
-            />
-            <Circle
-              x={fitX(16.39, 100, w)}
-              y={fitY(85.01, 100, h)}
-              radius={Math.min(w, h) * 0.0789}
-              {...common}
-            />
-            <Path
-              data={fitPathDataUniformly(
-                'M57.89,32.49c0,4.35-3.53,7.89-7.89,7.89s-7.89-3.54-7.89-7.89c0-3.34,2.07-6.19,5-7.34V4.98c0-.98.8-1.78,1.78-1.78h2.44c.99,0,1.78.8,1.78,1.78v20.26c2.81,1.2,4.78,4,4.78,7.25Z',
-                100,
-                100,
-                w,
-                h
-              )}
-              x={-showerHeadSize / 2}
-              y={y}
-              {...pathCommon}
-            />
-          </>
-        )
-      }
+    case 'shower': {
+      const showerHeadSize = Math.min(w, h)
+      return (
+        <>
+          <Rect
+            x={x}
+            y={y}
+            width={w}
+            height={h}
+            cornerRadius={Math.min(w, h) * 0.0514}
+            {...common}
+          />
+          <Circle
+            x={fitX(16.39, 100, w)}
+            y={fitY(85.01, 100, h)}
+            radius={Math.min(w, h) * 0.0789}
+            {...common}
+          />
+          <Path
+            data={fitPathDataUniformly(
+              'M57.89,32.49c0,4.35-3.53,7.89-7.89,7.89s-7.89-3.54-7.89-7.89c0-3.34,2.07-6.19,5-7.34V4.98c0-.98.8-1.78,1.78-1.78h2.44c.99,0,1.78.8,1.78,1.78v20.26c2.81,1.2,4.78,4,4.78,7.25Z',
+              100,
+              100,
+              w,
+              h
+            )}
+            x={-showerHeadSize / 2}
+            y={y}
+            {...pathCommon}
+          />
+        </>
+      )
+    }
     case 'bathtub':
       return (
         <>
@@ -919,6 +916,7 @@ function GraphicElementNode({
       <PlanGraphicElementShape element={renderElement} themeMode={themeMode} />
       {active && !selected && isHovered && (
         <Rect
+          name={INTERACTIVE_OVERLAY_EXPORT_NAME}
           x={-renderElement.width / 2}
           y={-renderElement.height / 2}
           width={renderElement.width}
@@ -930,7 +928,7 @@ function GraphicElementNode({
         />
       )}
       {selected && (
-        <>
+        <Group name={INTERACTIVE_OVERLAY_EXPORT_NAME}>
           <Rect
             x={-renderElement.width / 2}
             y={-renderElement.height / 2}
@@ -1049,7 +1047,7 @@ function GraphicElementNode({
               setFastDraft(null)
             }}
           />
-        </>
+        </Group>
       )}
     </Group>
   )

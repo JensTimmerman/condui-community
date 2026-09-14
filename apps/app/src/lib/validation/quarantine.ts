@@ -6,17 +6,17 @@
 
 import type { Panel, Circuit, Endpoint, OrphanReason } from '@/types/schema'
 import {
-  getMutableElectricalPanelsForProject,
+  getEditableProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import {
-  getMutableQuarantinedItemsForProject,
-  getQuarantinedItemsFromProject,
-  type ProjectWithOptionalV2Validation,
+  editQuarantinedItems,
+  queryQuarantinedItems,
+  type ValidationProject,
 } from '@/lib/projectV2/validation'
 import { findPanelById } from '@/lib/panel/panelTree'
 
-type QuarantineProject = ProjectWithOptionalV2Electrical & ProjectWithOptionalV2Validation
+type QuarantineProject = ProjectWithOptionalV2Electrical & ValidationProject
 
 /** Remove circuit from panel tree (panel.circuits or protection.circuits) by id */
 function removeCircuitFromPanel(panel: Panel, circuitId: string): Circuit | null {
@@ -92,13 +92,13 @@ export function quarantineCircuit(
   originalParentId?: string,
   originalRefId?: string
 ): boolean {
-  const panels = getMutableElectricalPanelsForProject(project)
+  const panels = getEditableProjectElectricalPanels(project)
   const panel = findPanelById(panels, panelId)
   if (!panel) return false
   const circuit = removeCircuitFromPanel(panel, circuitId)
   if (!circuit) return false
   removeFromSubCircuitIds(panels, circuitId)
-  getMutableQuarantinedItemsForProject(project).push({
+  editQuarantinedItems(project).push({
     id: `quarantine-${circuitId}-${Date.now()}`,
     kind: 'circuit',
     data: JSON.parse(JSON.stringify(circuit)),
@@ -123,13 +123,13 @@ export function quarantineEndpoint(
   reason: OrphanReason,
   originalRefId?: string
 ): boolean {
-  const panel = findPanelById(getMutableElectricalPanelsForProject(project), panelId)
+  const panel = findPanelById(getEditableProjectElectricalPanels(project), panelId)
   if (!panel) return false
   const circuit = findCircuitInPanel(panel, circuitId)
   if (!circuit) return false
   const endpoint = removeEndpointFromCircuit(circuit, endpointId)
   if (!endpoint) return false
-  getMutableQuarantinedItemsForProject(project).push({
+  editQuarantinedItems(project).push({
     id: `quarantine-${endpointId}-${Date.now()}`,
     kind: 'endpoint',
     data: JSON.parse(JSON.stringify(endpoint)),
@@ -147,7 +147,7 @@ export function quarantineEndpoint(
  * Call inside an immer set().
  */
 export function removeFromQuarantine(project: QuarantineProject, quarantinedItemId: string): boolean {
-  const list = getMutableQuarantinedItemsForProject(project)
+  const list = editQuarantinedItems(project)
   const idx = list.findIndex((q) => q.id === quarantinedItemId)
   if (idx === -1) return false
   list.splice(idx, 1)
@@ -163,12 +163,12 @@ export function restoreCircuitFromQuarantine(
   project: QuarantineProject,
   quarantinedItemId: string
 ): boolean {
-  const list = getMutableQuarantinedItemsForProject(project)
+  const list = editQuarantinedItems(project)
   const idx = list.findIndex((q) => q.id === quarantinedItemId && q.kind === 'circuit')
   if (idx === -1) return false
   const item = list[idx]!
   const circuit = item.data as Circuit
-  const panel = findPanelById(getMutableElectricalPanelsForProject(project), item.panelId)
+  const panel = findPanelById(getEditableProjectElectricalPanels(project), item.panelId)
   if (!panel) return false
   if (item.originalParentId) {
     const protection = panel.protections.find((p) => p.id === item.originalParentId)
@@ -194,12 +194,12 @@ export function restoreEndpointFromQuarantine(
   project: QuarantineProject,
   quarantinedItemId: string
 ): boolean {
-  const list = getMutableQuarantinedItemsForProject(project)
+  const list = editQuarantinedItems(project)
   const idx = list.findIndex((q) => q.id === quarantinedItemId && q.kind === 'endpoint')
   if (idx === -1) return false
   const item = list[idx]!
   const endpoint = item.data as Endpoint
-  const panel = findPanelById(getMutableElectricalPanelsForProject(project), item.panelId)
+  const panel = findPanelById(getEditableProjectElectricalPanels(project), item.panelId)
   if (!panel) return false
   const circuitId = item.originalParentId
   if (!circuitId) return false
@@ -215,7 +215,7 @@ export function restoreEndpointFromQuarantine(
 }
 
 export function restoreFromQuarantine(project: QuarantineProject, quarantinedItemId: string): boolean {
-  const list = getQuarantinedItemsFromProject(project)
+  const list = queryQuarantinedItems(project)
   const q = list.find((x) => x.id === quarantinedItemId)
   if (!q) return false
   return q.kind === 'circuit'

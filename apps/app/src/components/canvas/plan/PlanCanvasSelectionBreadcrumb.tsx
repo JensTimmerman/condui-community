@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import type { Endpoint } from '@/types/schema'
@@ -6,7 +6,7 @@ import { useUIStore } from '@/stores/uiStore'
 import { useProjectStore } from '@/stores/projectStore'
 import type { Panel, Placement } from '@/types/schema'
 import type { Selection } from '@/types/ui'
-import CanvasScaledOverlay from '../CanvasScaledOverlay'
+import { CanvasSelectionPath, type CanvasSelectionPathItem } from '../CanvasSelectionPath'
 
 type BreadcrumbItem = {
   label: string
@@ -17,7 +17,7 @@ type BreadcrumbItem = {
 }
 
 function panelPathToBreadcrumbItems(
-  panelPath: Panel[],
+  panelPath: Panel[]
 ): Array<{ label: string; type: string; id: string; selectionType: 'panel' | 'protection' }> {
   const items: Array<{
     label: string
@@ -60,14 +60,18 @@ function buildPlanSelectionBreadcrumb(
     currentProject: object | null
     visiblePlacements: Array<Placement & { endpointId?: string }>
     placements: Array<Placement & { endpointId?: string }>
-    getEndpointById: (id: string) => ReturnType<ReturnType<typeof useProjectStore.getState>['getEndpointById']>
-    getCircuitById: (id: string) => ReturnType<ReturnType<typeof useProjectStore.getState>['getCircuitById']>
+    getEndpointById: (
+      id: string
+    ) => ReturnType<ReturnType<typeof useProjectStore.getState>['getEndpointById']>
+    getCircuitById: (
+      id: string
+    ) => ReturnType<ReturnType<typeof useProjectStore.getState>['getCircuitById']>
     getCircuitIdentifier: (id: string) => string
     findCircuitForEndpoint: ReturnType<typeof useProjectStore.getState>['findCircuitForEndpoint']
     findPanelForCircuit: ReturnType<typeof useProjectStore.getState>['findPanelForCircuit']
     getAllEndpoints: ReturnType<typeof useProjectStore.getState>['getAllEndpoints']
     getPanelPathFromRoot: (id: string) => Panel[] | null
-  },
+  }
 ): BreadcrumbItem[] | null {
   if (!selection.type || selection.ids.length !== 1) return null
   const selectedId = selection.ids[0]
@@ -138,7 +142,7 @@ function buildPlanSelectionBreadcrumb(
 
     if (endpoint.domoticaChildProps?.parentEndpointId) {
       const domoticaParent = circuit.endpoints.find(
-        (ep: Endpoint) => ep.id === endpoint.domoticaChildProps?.parentEndpointId,
+        (ep: Endpoint) => ep.id === endpoint.domoticaChildProps?.parentEndpointId
       )
       if (domoticaParent) {
         breadcrumbItems.push({
@@ -157,11 +161,11 @@ function buildPlanSelectionBreadcrumb(
           (ep: Endpoint) =>
             ep.type === 'switch' &&
             circuit.endpoints.some((e: Endpoint) => e.id === ep.id) &&
-            ep.controlledEndpointIds?.includes(endpointId || ''),
+            ep.controlledEndpointIds?.includes(endpointId || '')
         ) ||
         allEndpoints.find(
           (ep: Endpoint) =>
-            ep.type === 'switch' && ep.controlledEndpointIds?.includes(endpointId || ''),
+            ep.type === 'switch' && ep.controlledEndpointIds?.includes(endpointId || '')
         )
 
       if (controllingSwitch) {
@@ -177,7 +181,7 @@ function buildPlanSelectionBreadcrumb(
             type: 'light',
             id: endpoint.id,
             selectionType: 'endpoint',
-          },
+          }
         )
       } else {
         breadcrumbItems.push({
@@ -222,8 +226,12 @@ export function PlanCanvasSelectionBreadcrumb({
   visiblePlacements: Array<Placement & { endpointId?: string }>
   placements: Array<Placement & { endpointId?: string }>
   currentProject: object | null
-  getEndpointById: (id: string) => ReturnType<ReturnType<typeof useProjectStore.getState>['getEndpointById']>
-  getCircuitById: (id: string) => ReturnType<ReturnType<typeof useProjectStore.getState>['getCircuitById']>
+  getEndpointById: (
+    id: string
+  ) => ReturnType<ReturnType<typeof useProjectStore.getState>['getEndpointById']>
+  getCircuitById: (
+    id: string
+  ) => ReturnType<ReturnType<typeof useProjectStore.getState>['getCircuitById']>
   getCircuitIdentifier: (id: string) => string
   findCircuitForEndpoint: ReturnType<typeof useProjectStore.getState>['findCircuitForEndpoint']
   findPanelForCircuit: ReturnType<typeof useProjectStore.getState>['findPanelForCircuit']
@@ -264,7 +272,7 @@ export function PlanCanvasSelectionBreadcrumb({
       findPanelForCircuit,
       getAllEndpoints,
       getPanelPathFromRoot,
-    ],
+    ]
   )
 
   const handleBreadcrumbHover = useCallback(
@@ -279,7 +287,7 @@ export function PlanCanvasSelectionBreadcrumb({
         clearHover()
       }
     },
-    [setHover, clearHover],
+    [setHover, clearHover]
   )
 
   const handleBreadcrumbClick = useCallback(
@@ -291,47 +299,37 @@ export function PlanCanvasSelectionBreadcrumb({
         setSelection({ type: item.selectionType, ids: [item.id] })
       }
     },
-    [setSelection, clearHover],
+    [setSelection, clearHover]
   )
 
   if (!breadcrumb) return null
 
   return (
-    <CanvasScaledOverlay
-      data-canvas-overlay-anchor="top-center"
-      className="absolute top-3 left-1/2 -translate-x-1/2 z-10"
-      transformOrigin="top center"
-      resolveTransform={(scale) => `translateX(-50%) scale(${scale})`}
-    >
-      <div className="px-4 py-2">
-        <div
-          className="flex items-center gap-2 text-sm font-bold rounded px-3 py-1.5"
-          style={{
-            color: '#fbbf24',
-            backgroundColor:
-              themeMode === 'light' ? 'rgba(0, 0, 0, 0.4)' : 'rgba(55, 65, 81, 0.5)',
-          }}
-        >
-          {breadcrumb.map((item, index) => (
-            <React.Fragment key={index}>
-              <span
-                className="flex items-center font-bold cursor-pointer hover:opacity-80 transition-opacity"
-                onMouseEnter={() => handleBreadcrumbHover(item)}
-                onMouseLeave={() => handleBreadcrumbHover(null)}
-                onClick={() => handleBreadcrumbClick(item)}
-                title={`Click to select ${item.type}`}
-              >
-                <span>{item.label}</span>
-              </span>
-              {index < breadcrumb.length - 1 && (
-                <span className="mx-2 font-bold" style={{ color: '#fbbf24' }}>
-                  →
-                </span>
-              )}
-            </React.Fragment>
-          ))}
-        </div>
-      </div>
-    </CanvasScaledOverlay>
+    <CanvasSelectionPath
+      items={breadcrumb.map(
+        (item): CanvasSelectionPathItem => ({
+          id: `${item.selectionType}:${item.id}`,
+          label: item.label,
+          title: t('canvas.selectPathItem', {
+            defaultValue: 'Select {{type}}',
+            type: item.type,
+          }),
+        })
+      )}
+      themeMode={themeMode}
+      ariaLabel={t('canvas.selectionPath', { defaultValue: 'Selection path' })}
+      onHover={(pathItem) => {
+        const index = pathItem
+          ? breadcrumb.findIndex((item) => `${item.selectionType}:${item.id}` === pathItem.id)
+          : -1
+        handleBreadcrumbHover(index >= 0 ? breadcrumb[index]! : null)
+      }}
+      onSelect={(pathItem) => {
+        const item = breadcrumb.find(
+          (candidate) => `${candidate.selectionType}:${candidate.id}` === pathItem.id
+        )
+        if (item) handleBreadcrumbClick(item)
+      }}
+    />
   )
 }

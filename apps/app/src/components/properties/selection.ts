@@ -17,8 +17,8 @@ import type {
 } from '@/types/schema'
 import type { Selection } from '@/types/ui'
 import { getPlanGraphicElementAsset } from '@/lib/plan/graphicElements'
-import { getCompatibilityFloorsFromProject } from '@/lib/projectV2/buildingFloors'
-import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
+import { readLegacyCompatibilityFloors } from '@/lib/projectV2/buildingFloors'
+import { getProjectElectricalPanels } from '@/lib/projectV2/electrical'
 import { findPanelById } from '@/lib/panel/panelTree'
 import { getSymbolById } from '@/lib/symbols'
 import { panelT } from './shared/propertiesSharedUtils'
@@ -67,7 +67,7 @@ export function getSameJunctionPanelTrunkDeviceId(
 }
 
 function getItemById(type: Selection['type'], id: string, project: Project): ProjectPropertyItem {
-  const panels = getElectricalPanelsFromProject(project)
+  const panels = getProjectElectricalPanels(project)
   switch (type) {
     case 'panel':
       return findPanelById(panels, id)
@@ -239,7 +239,7 @@ export function getSelectedWall(
   masterWallThickness: number
 } | null {
   if (!project) return null
-  for (const floor of getCompatibilityFloorsFromProject(project)) {
+  for (const floor of readLegacyCompatibilityFloors(project)) {
     if (!floor.floorPlan) continue
     const wall = floor.floorPlan.walls.find((entry: Wall) => entry.id === wallId)
     if (wall) {
@@ -255,7 +255,7 @@ export function getSelectedOpening(
   kind: 'door' | 'window'
 ): { opening: Door | Window; floor: Floor } | null {
   if (!project) return null
-  for (const floor of getCompatibilityFloorsFromProject(project)) {
+  for (const floor of readLegacyCompatibilityFloors(project)) {
     const opening =
       kind === 'door'
         ? floor.floorPlan?.doors.find((entry: Door) => entry.id === openingId)
@@ -277,7 +277,7 @@ export function getSelectedStair({
   stairOnlyPointSelection: { stairId: string; pointIndices: number[] } | null
 }): { stair: Stair; floor: Floor; selectedPointIndices: number[] } | null {
   if (!project) return null
-  for (const floor of getCompatibilityFloorsFromProject(project)) {
+  for (const floor of readLegacyCompatibilityFloors(project)) {
     const stair = floor.floorPlan?.stairs?.find((entry: Stair) => entry.id === stairId)
     if (!stair) continue
     const selectedPointIndices =
@@ -299,7 +299,7 @@ export function getSelectedGraphicElement(
   elementId: string
 ): { element: PlanGraphicElement; floor: Floor } | null {
   if (!project) return null
-  for (const floor of getCompatibilityFloorsFromProject(project)) {
+  for (const floor of readLegacyCompatibilityFloors(project)) {
     const element = floor.floorPlan?.graphicElements?.find(
       (entry: PlanGraphicElement) => entry.id === elementId
     )
@@ -317,6 +317,7 @@ function panelTitleForEndpoint(endpoint: Endpoint | undefined, t: TFunction): st
   if (sym === 'domotica') return panelT(t, 'symbols.domotica', 'Domotica / Smart home device')
   if (sym === 'junction_box') return panelT(t, 'symbols.junction_box', 'Junction box')
   if (sym === 'junction_panel') return panelT(t, 'symbols.junction_panel', 'Junction panel')
+  if (sym === 'terminal_strip') return panelT(t, 'symbols.terminal_strip', 'Terminal strip')
   if (sym === 'solar_panel') return panelT(t, 'symbols.solar_panel', 'Solar panel')
   if (sym === 'battery') return panelT(t, 'symbols.battery', 'Battery')
   if (isSwitch) return panelT(t, 'endpoints.switch', 'Switch')
@@ -334,6 +335,7 @@ function panelTitleForTrunkDevice(device: TrunkDevice | undefined, t: TFunction)
     return pt('symbols.earthing_separator', 'Earthing Separator')
   if (device.symbol === 'junction_panel')
     return pt('junctionPanel.propertiesTitle', 'Junction panel')
+  if (device.symbol === 'terminal_strip') return pt('symbols.terminal_strip', 'Terminal strip')
   if (device.symbol === 'source_changeover')
     return pt('symbols.source_changeover', 'Source transfer switch')
   if (getSymbolById(device.symbol)?.category === 'switches') return pt('endpoints.switch', 'Switch')
@@ -448,6 +450,9 @@ export function getPropertiesPanelTitle({
     }
     case 'wire':
       return pt('wires.title', 'Wire Properties')
+    case 'structuralNode':
+    case 'structuralConnection':
+      return selection.structuralMetadata?.label ?? pt('views.structure', 'Structure')
     case 'door':
       return pt('plan.doorProperties', 'Door')
     case 'window':

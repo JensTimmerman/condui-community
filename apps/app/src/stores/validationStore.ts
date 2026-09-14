@@ -1,15 +1,16 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
-import type { Issue } from '@/lib/validation/core/types'
-import { validateProject } from '@/lib/validation/core/engine'
-import { beAreiBook1_2025 } from '@/lib/validation/rules/be/be.areibook1.2025'
-import { loadRulePack } from '@/lib/validation/core/rulepack-loader'
+import type { Issue, ValidationProject } from '@/lib/validation/core/types'
 import { getValidationSignature } from '@/lib/validation/validationTrigger'
 import { trackGoogleAnalyticsEvent } from '@/lib/analytics/googleAnalytics'
 import { logger } from '@/lib/logger'
 import { useProjectStore } from '@/stores/projectStore'
+import {
+  validateProjectInWorker,
+  validationWorkerSupported,
+} from '@/lib/validation/validationWorkerClient'
 
-type ValidatableProject = Parameters<typeof validateProject>[0] & {
+type ValidatableProject = ValidationProject & {
   project: {
     id: string
   }
@@ -21,7 +22,6 @@ type ValidationRunReason =
   | 'idle_signature_change'
   | 'manual_revalidate'
   | 'language_change'
-  | 'project_opened'
   | 'unknown'
 
 export interface ValidationState {
@@ -33,10 +33,8 @@ export interface ValidationState {
   /** Signature of the most recently completed validation run. */
   lastValidatedSignature: string | null
   /**
-   * Signature that is currently scheduled or in flight. Set by
-   * `markProjectOpened` (and `validate`) so that signature watchers
-   * (e.g. ValidationStatusIcon) know a validation is already coming
-   * for this signature and do not schedule a duplicate.
+   * Signature that is currently in flight. Set by `validate` so signature
+   * watchers know a validation is already running for this revision.
    */
   pendingSignature: string | null
   /** Latest observed signature (used to compute dirty state). */
@@ -46,39 +44,21 @@ export interface ValidationState {
 
   // Actions
   setCurrentSignature: (signature: string) => void
-  validate: (project: ValidatableProject, signature?: string, reason?: ValidationRunReason) => void
+  validate: (
+    project: ValidatableProject,
+    signature?: string,
+    reason?: ValidationRunReason
+  ) => Promise<void>
   /**
-   * Single entry point used when a project has just been opened (and built
-   * by the editor). Schedules exactly one validation on idle so the first
-   * paint and canvas mount complete first. Other validation triggers
-   * (signature watcher, language change) are expected to no-op while this
-   * pending run is in flight, because they see `pendingSignature` matching
-   * the current signature.
+   * Records the canonical hydrated snapshot when a project is opened. The
+   * mounted validation watcher performs the expensive run only after the
+   * editor is idle and the user has stopped interacting.
    */
   markProjectOpened: () => void
   revalidate: () => void
   getStatus: () => ValidationStatus
   getErrorCount: () => number
   getWarningCount: () => number
-}
-
-type IdleDeadlineLike = { didTimeout: boolean; timeRemaining: () => number }
-
-function scheduleIdle(cb: () => void, timeoutMs = 500): () => void {
-  if (typeof window === 'undefined') {
-    const handle = setTimeout(cb, 0) as unknown as number
-    return () => clearTimeout(handle)
-  }
-  const w = window as unknown as {
-    requestIdleCallback?: (cb: (d: IdleDeadlineLike) => void, opts?: { timeout: number }) => number
-    cancelIdleCallback?: (h: number) => void
-  }
-  if (typeof w.requestIdleCallback === 'function') {
-    const handle = w.requestIdleCallback(() => cb(), { timeout: timeoutMs })
-    return () => w.cancelIdleCallback?.(handle)
-  }
-  const handle = window.setTimeout(cb, 0)
-  return () => window.clearTimeout(handle)
 }
 
 /**
@@ -115,7 +95,7 @@ export const useValidationStore = create<ValidationState>()(
       })
     },
 
-    validate: (
+    validate: async (
       project: ValidatableProject,
       signature?: string,
       reason: ValidationRunReason = 'unknown'
@@ -153,17 +133,29 @@ export const useValidationStore = create<ValidationState>()(
       set((state) => {
         state.isLoading = true
         state.pendingSignature = sig
+        state.currentSignature = sig
+        state.lastProjectSnapshot = project
+        state.isDirty = state.lastValidatedSignature !== sig
       })
 
-      try {
-        // Load rule packs (for now, just the sample pack)
-        const pack = loadRulePack(beAreiBook1_2025)
-
-        // Run validation
-        const issues = validateProject(project, { packs: [pack] })
+      const validationStartedAt = import.meta.env.VITE_E2E ? performance.now() : 0
+      const finishValidation = (issues: Issue[]) => {
+        if (import.meta.env.VITE_E2E) {
+          performance.measure('eendra:validation', {
+            start: validationStartedAt,
+            end: performance.now(),
+          })
+        }
         const status = computeStatus(issues)
 
         set((state) => {
+          if (state.currentSignature !== sig) {
+            if (state.pendingSignature === sig) {
+              state.pendingSignature = null
+              state.isLoading = false
+            }
+            return
+          }
           state.issues = issues
           state.status = status
           state.isLoading = false
@@ -181,16 +173,54 @@ export const useValidationStore = create<ValidationState>()(
           errors: issues.filter((i) => i.severity === 'error').length,
           warnings: issues.filter((i) => i.severity === 'warning').length,
         })
-      } catch (error) {
+      }
+      const failValidation = (error: unknown) => {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          set((state) => {
+            if (state.pendingSignature === sig) {
+              state.pendingSignature = null
+              state.isLoading = false
+            }
+          })
+          return
+        }
         logger.error('[Validation Store] Validation error:', error)
         trackGoogleAnalyticsEvent('validation_run_error', { reason })
         set((state) => {
           state.issues = []
           state.status = 'ok'
-          state.isLoading = false
-          if (state.pendingSignature === sig) state.pendingSignature = null
+          if (state.pendingSignature === sig) {
+            state.pendingSignature = null
+            state.isLoading = false
+          }
           // Keep dirty state as-is (project is still unvalidated).
         })
+      }
+
+      try {
+        if (validationWorkerSupported()) {
+          finishValidation(await validateProjectInWorker(project))
+          return
+        }
+
+        // Non-browser environments load the fallback only when invoked. Keeping
+        // these imports out of the startup graph prevents the full validator and
+        // rule pack from inflating the interactive editor bundle.
+        const [{ validateProject }, { beAreiBook1_2025 }, { loadRulePack }] = await Promise.all([
+          import('@/lib/validation/core/engine'),
+          import('@/lib/validation/rules/be/be.areibook1.2025'),
+          import('@/lib/validation/core/rulepack-loader'),
+        ])
+        const { setValidationLanguage } = await import('@/lib/validation/validationI18n')
+        setValidationLanguage(
+          typeof document === 'undefined'
+            ? 'nl-BE'
+            : document.documentElement?.lang || 'nl-BE'
+        )
+        const pack = loadRulePack(beAreiBook1_2025)
+        finishValidation(validateProject(project, { packs: [pack] }))
+      } catch (error) {
+        failValidation(error)
       }
     },
 
@@ -220,41 +250,22 @@ export const useValidationStore = create<ValidationState>()(
         return
       }
 
-      // Claim this signature as pending so the signature watcher in
-      // ValidationStatusIcon does not schedule a duplicate run.
       set((state) => {
         state.lastProjectSnapshot = project
         state.currentSignature = sig
-        state.pendingSignature = sig
+        state.pendingSignature = null
         state.isDirty = state.lastValidatedSignature !== sig
       })
 
-      logger.info('[Validation] project opened — scheduling one validation', {
+      logger.info('[Validation] project opened — waiting for editor inactivity', {
         projectId: project.project.id,
       })
-      // Defer validation off the critical paint path. We want the project
-      // to render and the canvases to mount first; the validation runs on
-      // the next idle slot.
-      scheduleIdle(() => {
-        const snap = get().lastProjectSnapshot
-        // If another project has been opened in the meantime, drop this run.
-        if (!snap || snap.project.id !== project.project.id) return
-        // If something else already validated this signature, skip (validate
-        // itself is idempotent, but this avoids the log noise).
-        if (get().lastValidatedSignature === sig) {
-          set((state) => {
-            if (state.pendingSignature === sig) state.pendingSignature = null
-          })
-          return
-        }
-        get().validate(snap, sig, 'project_opened')
-      }, 750)
     },
 
     revalidate: () => {
       const snap = get().lastProjectSnapshot
       if (!snap) return
-      get().validate(snap, undefined, 'manual_revalidate')
+      void get().validate(snap, undefined, 'manual_revalidate')
     },
 
     getStatus: () => {

@@ -5,8 +5,11 @@ import { CANVAS_ICONS } from './CanvasIcons'
 import type { CanvasType } from '@/types/ui'
 import { FloatingControl } from '@/components/canvas/FloatingControls'
 import { LayoutSelector } from './LayoutSelector'
+import { isStructuralCanvasEnabled } from '@/lib/structuralCanvas/availability'
 
-const CANVAS_TYPES: CanvasType[] = ['eendraad', 'plan', 'panel']
+const CANVAS_TYPES: CanvasType[] = isStructuralCanvasEnabled()
+  ? ['eendraad', 'plan', 'panel', 'structure']
+  : ['eendraad', 'plan', 'panel']
 
 interface CanvasSwitcherProps {
   panelIndex: number

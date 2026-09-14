@@ -1,7 +1,6 @@
 /**
- * Shared supply-scope trunk modules must live in `gridView.supplyPanelSlots`, not main
- * `gridView.slots` (main panel only). Root-local supply devices are bus-side devices and
- * belong in the main panel body.
+ * Repair legacy shared-supply slots using the historical default grid placement.
+ * An explicit physical panel mounting takes precedence over that old convention.
  */
 import type { Panel, PanelGridModuleRef } from '@/types/schema'
 import {
@@ -10,16 +9,21 @@ import {
   panelGridModuleRefKey,
   resolveModuleWidthCols,
 } from '@/components/canvas/panel/panelGridLayout'
-import { getPanelFeedProjection } from '@/lib/feedTopology'
+import { getAllSupplyTrunkDevices, getPanelFeedProjection } from '@/lib/feedTopology'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import {
   DEFAULT_PANEL_GRID_COLUMNS,
   DEFAULT_PANEL_GRID_ROWS,
 } from '@/lib/panel/panelGridDefaults'
+import {
+  MIN_PANEL_GRID_MODULE_WIDTH,
+  panelGridUnitsToModules,
+  panelModulesToGridUnits,
+} from '@/lib/panel/panelGridUnits'
 
 function visitPanels(panels: Panel[], fn: (p: Panel) => void): void {
   for (const p of panels) {
@@ -36,9 +40,9 @@ function isSharedSupplyRef(
   if (!panel.isMain || moduleRef.kind !== 'trunkDevice' || moduleRef.scope !== 'supply') {
     return false
   }
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   if (!installation) return false
-  const projection = getPanelFeedProjection(installation, getElectricalPanelsFromProject(project), panel)
+  const projection = getPanelFeedProjection(installation, getProjectElectricalPanels(project), panel)
   const key = panelGridModuleRefKey(moduleRef)
   return (projection?.sharedFeed.trunkDevices ?? []).some(
     (device) => panelGridModuleRefKey({ kind: 'trunkDevice', id: device.id, scope: 'supply' }) === key,
@@ -80,21 +84,25 @@ export function ejectSupplyTrunkFromMainGridSlot(
   const rows = getSupplyPanelRows(panel)
   const cols = getSupplyPanelColumns(panel)
   const width = Math.max(
-    1,
+    MIN_PANEL_GRID_MODULE_WIDTH,
     Math.min(cols, resolveModuleWidthCols(moduleRef, project, removedSlot)),
   )
+  const colUnits = panelModulesToGridUnits(cols)
+  const widthUnits = panelModulesToGridUnits(width)
   let nextSpot: { row: number; col: number } | null = null
   for (let r = 0; r < rows && !nextSpot; r++) {
-    for (let c = 0; c <= cols - width && !nextSpot; c++) {
+    for (let c = 0; c <= colUnits - widthUnits && !nextSpot; c++) {
       const collides = supplySlots.some((slot) => {
         if (slot.row !== r) return false
         const slotWidth = Math.max(
-          1,
+          MIN_PANEL_GRID_MODULE_WIDTH,
           Math.min(cols, resolveModuleWidthCols(slot.module, project, slot)),
         )
-        return c < slot.col + slotWidth && slot.col < c + width
+        const slotColUnits = panelModulesToGridUnits(slot.col)
+        const slotWidthUnits = panelModulesToGridUnits(slotWidth)
+        return c < slotColUnits + slotWidthUnits && slotColUnits < c + widthUnits
       })
-      if (!collides) nextSpot = { row: r, col: c }
+      if (!collides) nextSpot = { row: r, col: panelGridUnitsToModules(c) }
     }
   }
   if (!nextSpot) {
@@ -117,17 +125,23 @@ export function ejectSupplyTrunkFromMainGridSlot(
   return true
 }
 
-/** Remove every shared supply-scope trunk slot from the main grid and place it on the supply strip (main panel). */
+/** Repair legacy shared-supply slots without relocating explicitly panel-mounted devices. */
 export function healSupplyTrunkMisplacedOnMainGridForPanel(
   panel: Panel,
   project: ProjectWithOptionalV2Electrical,
 ): boolean {
   if (!panel.isMain || !panel.gridView?.slots?.length) return false
   let changed = false
+  const explicitlyMountedDevices = new Set(
+    getAllSupplyTrunkDevices(project)
+      .filter((device) => device.panelMounting?.kind === 'panel' && device.panelMounting.panelId === panel.id)
+      .map((device) => device.id)
+  )
   const misplaced = panel.gridView.slots.filter(
     (s) =>
       s.module.kind === 'trunkDevice' &&
       s.module.scope === 'supply' &&
+      !explicitlyMountedDevices.has(s.module.id) &&
       isSharedSupplyRef(panel, project, s.module),
   )
   for (const slot of misplaced) {
@@ -141,7 +155,7 @@ export function healSupplyTrunkMisplacedOnMainGridForPanel(
 /** Run {@link healSupplyTrunkMisplacedOnMainGridForPanel} on every panel tree node. */
 export function healSupplyTrunkMisplacedOnMainGrid(project: ProjectWithOptionalV2Electrical): boolean {
   let changed = false
-  visitPanels(getElectricalPanelsFromProject(project), (panel) => {
+  visitPanels(getProjectElectricalPanels(project), (panel) => {
     if (healSupplyTrunkMisplacedOnMainGridForPanel(panel, project)) changed = true
   })
   return changed

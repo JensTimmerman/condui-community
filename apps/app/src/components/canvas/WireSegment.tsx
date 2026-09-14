@@ -19,9 +19,16 @@ import {
   useIsWireSelected,
   useSetSelection,
 } from '@/editions/community/communityHooks'
-import type { WireSegment } from '@/types/schema'
+import type {
+  Endpoint,
+  Installation,
+  ProtectionDevice,
+  TrunkDevice,
+  WireSegment,
+} from '@/types/schema'
 import { WireTextLabel } from '@/components/canvas/eendraad/WireTextLabel'
 import { SELECTION_COLOR } from '@/components/canvas/eendraad/canvasSymbols'
+import { INTERACTIVE_OVERLAY_EXPORT_NAME } from '@/lib/export/interactiveOverlayExport'
 import {
   ZOOM_100,
   screenPxToCanvasUnits,
@@ -57,10 +64,16 @@ import {
   getWireLabelOffsetAlongWire,
   getWireLabelOrientationForSegment,
   getSupplyWireLabelAnchor,
+  getPhaseLabelTextLayout,
 } from '@/lib/wireTextLabel'
 import type { WireTranslateFn } from '@/lib/wires/wireFingerprint'
 import { shouldShowDomainChangeMarker } from '@/lib/wires/domainChangeMarker'
-import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
+import {
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
+} from '@/lib/projectV2/electrical'
+import { getAllCircuits, getAllProtections } from '@/lib/eendraad/projectElectricalDomain'
+import type { ProjectV2 } from '@/types/projectV2'
 import {
   getPhaseAssignmentLabel,
   getVisiblePhaseAssignmentLabel,
@@ -82,8 +95,59 @@ import {
   hasStableSupplyWireDecorationIdentity,
 } from '@/lib/wires/supplyWireDecoration'
 import { getCircuitWireJunctions } from './wireJunctions'
+import { localizeWireSegment } from './wireSegmentLocalCoordinates'
 
 type WireSegmentPointerEvent = KonvaEventObject<MouseEvent | TouchEvent>
+
+type WireRenderLookup = {
+  endpoints: Map<string, Endpoint>
+  protections: Map<string, ProtectionDevice>
+  trunkDevices: Map<string, TrunkDevice>
+  modularChangeoverPanels: Set<string>
+  phaseSystem: Installation['nominalVoltage']['system'] | undefined
+}
+
+const wireRenderLookupCache = new WeakMap<ProjectV2, WireRenderLookup>()
+
+function getWireRenderLookup(project: ProjectV2): WireRenderLookup {
+  const cached = wireRenderLookupCache.get(project)
+  if (cached) return cached
+
+  const endpoints = new Map<string, Endpoint>()
+  const protections = new Map<string, ProtectionDevice>()
+  const trunkDevices = new Map<string, TrunkDevice>()
+  const modularChangeoverPanels = new Set<string>()
+  const panels = getProjectElectricalPanels(project)
+  for (const rootPanel of panels) {
+    for (const circuit of getAllCircuits(rootPanel)) {
+      for (const endpoint of circuit.endpoints) endpoints.set(endpoint.id, endpoint)
+      for (const device of circuit.trunkDevices ?? []) trunkDevices.set(device.id, device)
+    }
+    for (const protection of getAllProtections(rootPanel)) {
+      protections.set(protection.id, protection)
+    }
+  }
+  const installation = getProjectElectricalInstallation(project)
+  for (const device of installation?.mainSupply?.supplyTrunkDevices ?? []) {
+    trunkDevices.set(device.id, device)
+  }
+  for (const device of installation?.groundTrunkDevices ?? []) {
+    trunkDevices.set(device.id, device)
+  }
+  for (const panel of panels) {
+    if (panelHasModularChangeover(project, panel.id)) modularChangeoverPanels.add(panel.id)
+  }
+
+  const lookup = {
+    endpoints,
+    protections,
+    trunkDevices,
+    modularChangeoverPanels,
+    phaseSystem: installation?.nominalVoltage.system,
+  }
+  wireRenderLookupCache.set(project, lookup)
+  return lookup
+}
 
 /** E-shape line geometry for wall route (in-wall): vertical left, 3 horizontals right. Drawn once, reused above/below; on-wall = 180° rotation. */
 const WALL_ROUTE_LINES: Array<[number, number, number, number]> = [
@@ -97,6 +161,11 @@ interface WireSegmentProps {
   wireSegment: WireSegment
   onSelect?: (wireSegmentId: string) => void
   isSupplyDecorationOwner?: boolean
+  hasModularChangeover?: boolean
+  phaseSystem?: Installation['nominalVoltage']['system']
+  fromTrunkDevice?: TrunkDevice
+  fromEndpoint?: Endpoint
+  targetProtectionType?: ProtectionDevice['type']
 }
 
 type EffectiveRoute = 'inWall' | 'onWall' | 'ground' | 'air' | undefined
@@ -240,6 +309,7 @@ const LocalizedWireTextLabel = memo(function LocalizedWireTextLabel({
     <WireTextLabel
       text={formatWireLabel(wireSegment, {
         otherLabel: t('wires.other', 'Other'),
+        batteryCableLabel: t('wires.batteryCable', 'Battery cable'),
       })}
       fireClassText={
         isFireClassLabelVisibleForSegment(wireSegment)
@@ -274,6 +344,11 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
   wireSegment,
   onSelect,
   isSupplyDecorationOwner = true,
+  hasModularChangeover = false,
+  phaseSystem,
+  fromTrunkDevice,
+  fromEndpoint,
+  targetProtectionType,
 }: WireSegmentProps) {
   const { t } = useTranslation()
   const setSelection = useSetSelection()
@@ -284,8 +359,6 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
   const colors = useThemeColors()
   const fontFamily = useCanvasFontFamily()
   const isPreviewSelected = useIsPreviewSelected('wire', wireSegment.id)
-  const { currentProject, getEndpointById, getTrunkDeviceById, getProtectionById } =
-    useProjectStore()
   const [isHovered, setIsHovered] = useState(false)
 
   // Determine line properties based on wire type
@@ -309,7 +382,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
   const busFeedMarkerLabelLayout = getBusFeedMarkerLabelLayout(wireSegment)
   const busFeedMarkerLabel =
     wireSegment.busFeedKind === 'backup'
-      ? currentProject && panelHasModularChangeover(currentProject, wireSegment.panelId)
+      ? hasModularChangeover
         ? t('feedOrganization.switchableBackupMarker', 'Backup/Grid')
         : t('feedOrganization.backupMarker', 'Backup')
       : t('feedOrganization.gridMarker', 'Grid')
@@ -424,11 +497,23 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
       // to investigate layout issues (e.g. short stubs above trunk devices).
       // This only runs on user click, so it won't spam the console.
 
+      const renderOrigin = event.currentTarget.findAncestor('.wire-segment-origin')?.position() ?? {
+        x: 0,
+        y: 0,
+      }
+      const absoluteStartPoint = {
+        x: wireSegment.startPoint.x + renderOrigin.x,
+        y: wireSegment.startPoint.y + renderOrigin.y,
+      }
+      const absoluteEndPoint = {
+        x: wireSegment.endPoint.x + renderOrigin.x,
+        y: wireSegment.endPoint.y + renderOrigin.y,
+      }
       logger.info('[Eendraad Wire Debug]', {
         id: wireSegment.id,
         type: wireSegment.type,
-        startPoint: wireSegment.startPoint,
-        endPoint: wireSegment.endPoint,
+        startPoint: absoluteStartPoint,
+        endPoint: absoluteEndPoint,
         circuitId: wireSegment.circuitId,
         panelId: wireSegment.panelId,
         fromElementType: wireSegment.fromElementType,
@@ -449,8 +534,8 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
         fromElementId: wireSegment.fromElementId,
         toElementType: wireSegment.toElementType,
         toElementId: wireSegment.toElementId,
-        startPoint: wireSegment.startPoint,
-        endPoint: wireSegment.endPoint,
+        startPoint: absoluteStartPoint,
+        endPoint: absoluteEndPoint,
         selectionMetadata: wireMeta(),
       })
 
@@ -551,20 +636,13 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
   const routeIndicatorEndY = getVerticalRouteIndicatorEndY(wireSegment)
   const routeIndicatorDeltaY = routeIndicatorEndY - wireSegment.startPoint.y
   const centeredIndicatorY = routeIndicatorDeltaY / 2 + 10
-  const fromTrunkDevice = wireSegment.fromElementId
-    ? getTrunkDeviceById(wireSegment.fromElementId)
-    : undefined
-  const fromEndpoint =
-    wireSegment.fromElementType === 'endpoint' && wireSegment.fromElementId
-      ? getEndpointById(wireSegment.fromElementId)
-      : undefined
-  const fromDeviceSymbolId = fromTrunkDevice?.device.symbol ?? fromEndpoint?.symbol
+  const fromDeviceSymbolId = fromTrunkDevice?.symbol ?? fromEndpoint?.symbol
   const fromDeviceSymbol = fromDeviceSymbolId ? getSymbolById(fromDeviceSymbolId) : null
   const fromDeviceDomainInfo = fromDeviceSymbol ? getDomainForSymbol(fromDeviceSymbol.id) : null
   const isFromConversionDevice =
     !!fromDeviceDomainInfo && fromDeviceDomainInfo.inputDomain !== fromDeviceDomainInfo.outputDomain
   const showDomainChangeLabel = fromTrunkDevice
-    ? fromTrunkDevice.device.showDomainChangeLabel !== false
+    ? fromTrunkDevice.showDomainChangeLabel !== false
     : true
   const domainLabelText: 'AC' | 'DC' = wireSegment.domain === 'DC' ? 'DC' : 'AC'
   const isTrunkConversionOutput = !!fromTrunkDevice
@@ -575,9 +653,6 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
     isFromConversionDevice,
     showDomainChangeLabel
   )
-  const phaseSystem = currentProject
-    ? getElectricalInstallationFromProject(currentProject)?.nominalVoltage.system
-    : undefined
   const isSubPanelIncomingPhaseSegment =
     wireSegment.isSubPanelSupply === true &&
     wireSegment.fromElementId === wireSegment.feederProtectionId
@@ -601,6 +676,10 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
       ? getPhaseAssignmentLabel(wireSegment.phaseAssignment, phaseSystem)
       : undefined
   const incomingPanelPhaseLabelWidth = 48
+  const incomingPanelPhaseLabelTextLayout = getPhaseLabelTextLayout(
+    wireSegment,
+    incomingPanelPhaseLabelWidth
+  )
   const incomingPanelPhaseLabelY =
     wireSegment.phaseLabelAnchor?.y ??
     (isVertical
@@ -631,8 +710,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
         )
       : undefined
   const protectionPhaseLabelWidth = 48
-  const protectionPhaseLabelOffsetY =
-    getProtectionById(wireSegment.toElementId ?? '')?.type === 'SPD' ? 14 : 4
+  const protectionPhaseLabelOffsetY = targetProtectionType === 'SPD' ? 14 : 4
 
   const domainLabelOffsetX = isTrunkConversionOutput && isWireLabelVisible ? 10 : 0
   const domainLabelX =
@@ -773,6 +851,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
       {/* Hover highlight — dashed yellow line, matches selectable symbol hover */}
       {showHoverHighlight && (
         <Line
+          name={INTERACTIVE_OVERLAY_EXPORT_NAME}
           points={wireLinePoints}
           stroke={SELECTION_COLOR}
           strokeWidth={wireHoverStroke}
@@ -809,7 +888,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
           <KonvaText
             x={
               wireSegment.phaseLabelAnchor
-                ? 0
+                ? incomingPanelPhaseLabelTextLayout.x
                 : isVertical
                   ? isRootSupplyPhaseSegment || isBusFeedStubPhaseSegment
                     ? 5
@@ -824,7 +903,7 @@ export const WireSegmentComponent = memo(function WireSegmentComponent({
             fill={colors.wireColor}
             align={
               wireSegment.phaseLabelAnchor
-                ? 'left'
+                ? incomingPanelPhaseLabelTextLayout.align
                 : isVertical
                   ? isRootSupplyPhaseSegment || isBusFeedStubPhaseSegment
                     ? 'left'
@@ -1034,6 +1113,9 @@ export const WireSegments = memo(function WireSegments({
   )
   const circuitWireJunctions = useMemo(() => getCircuitWireJunctions(panelWires), [panelWires])
   const colors = useThemeColors()
+  const renderState = useProjectStore.getState()
+  const currentProject = renderState.currentProject
+  const lookup = currentProject ? getWireRenderLookup(currentProject) : null
 
   return (
     <>
@@ -1047,13 +1129,44 @@ export const WireSegments = memo(function WireSegments({
           listening={false}
         />
       ))}
-      {panelWires.map((wireSegment) => (
-        <WireSegmentComponent
-          key={wireSegment.id}
-          wireSegment={wireSegment}
-          isSupplyDecorationOwner={supplyDecorationOwnerIds.has(wireSegment.id)}
-        />
-      ))}
+      {panelWires.map((wireSegment) => {
+        const localRender = localizeWireSegment(wireSegment)
+        const fromTrunkDevice = wireSegment.fromElementId
+          ? (lookup?.trunkDevices.get(wireSegment.fromElementId) ??
+            renderState.getTrunkDeviceById(wireSegment.fromElementId)?.device)
+          : undefined
+        const fromEndpoint =
+          !fromTrunkDevice &&
+          wireSegment.fromElementType === 'endpoint' &&
+          wireSegment.fromElementId
+            ? lookup?.endpoints.get(wireSegment.fromElementId)
+            : undefined
+        const targetProtectionType =
+          wireSegment.toElementType === 'protection' && wireSegment.toElementId
+            ? lookup?.protections.get(wireSegment.toElementId)?.type
+            : undefined
+        return (
+          <Group
+            key={wireSegment.id}
+            name="wire-segment-origin eendraad-hit-cullable"
+            x={localRender.origin.x}
+            y={localRender.origin.y}
+          >
+            <WireSegmentComponent
+              wireSegment={localRender.wire}
+              isSupplyDecorationOwner={supplyDecorationOwnerIds.has(wireSegment.id)}
+              hasModularChangeover={
+                wireSegment.busFeedKind === 'backup' &&
+                lookup?.modularChangeoverPanels.has(wireSegment.panelId)
+              }
+              phaseSystem={lookup?.phaseSystem}
+              fromTrunkDevice={fromTrunkDevice}
+              fromEndpoint={fromEndpoint}
+              targetProtectionType={targetProtectionType}
+            />
+          </Group>
+        )
+      })}
     </>
   )
 })

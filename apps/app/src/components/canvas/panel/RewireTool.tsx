@@ -9,13 +9,14 @@ interface RewireToolProps {
   onToggle: () => void
   /** Whether origin module is selected */
   hasOrigin?: boolean
+  disabled?: boolean
 }
 
 /**
  * Rewire tool component - an overlay bubble button on the left side of the panel view
  * When active, allows dragging from one module to another to rewire parent-child relationships
  */
-export function RewireTool({ isActive, onToggle, hasOrigin = false }: RewireToolProps) {
+export function RewireTool({ isActive, onToggle, hasOrigin = false, disabled = false }: RewireToolProps) {
   const { t } = useTranslation()
   const label = isActive
     ? hasOrigin
@@ -30,6 +31,7 @@ export function RewireTool({ isActive, onToggle, hasOrigin = false }: RewireTool
       variant="tool"
       side="left"
       active={isActive}
+      disabled={disabled}
       onClick={onToggle}
     />
   )

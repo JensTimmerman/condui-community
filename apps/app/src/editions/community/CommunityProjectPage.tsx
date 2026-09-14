@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { loadProject } from '@/lib/db'
 import { preloadProjectRasterImages } from '@/lib/preloadProjectRasterImages'
-import { getBuildingFloorsFromProject } from '@/lib/projectV2/buildingFloors'
+import { selectProjectBuildingFloors } from '@/lib/projectV2/buildingFloors'
 import { loadLocalProjectEditorState, saveLocalProjectEditorState } from '@/lib/projectStorage/localProjectEditorState'
 import { sanitizeViewportLayoutSnapshot, viewportLayoutForPersistence } from '@/lib/viewport/viewportLayoutPersistence'
 import { useProjectStore } from '@/stores/projectStore'
@@ -46,14 +46,14 @@ export default function CommunityProjectPage() {
       const projectStore = useProjectStore.getState()
       const ui = useUIStore.getState()
       projectStore.setCurrentProjectStorageMode('local')
-      projectStore.setProject(project as unknown as import('@/types/schema').Project)
+      projectStore.setProject(project)
       useValidationStore.getState().markProjectOpened()
       const saved = loadLocalProjectEditorState(id)
       if (saved?.canvasViews?.eendraad) ui.setEendraadView(saved.canvasViews.eendraad)
       if (saved?.canvasViews?.plan) ui.setPlanView(saved.canvasViews.plan)
       if (saved?.canvasViews?.panel) ui.setPanelView(saved.canvasViews.panel)
       const floorId = saved?.activeFloorId ?? project.project.lastActiveFloorId ?? null
-      ui.setActiveFloor(getBuildingFloorsFromProject(project).some((floor) => floor.id === floorId) ? floorId : null)
+      ui.setActiveFloor(selectProjectBuildingFloors(project).some((floor) => floor.id === floorId) ? floorId : null)
       ui.setActivePanelId(saved?.activePanelId ?? project.project.lastActivePanelId ?? null)
       ui.setPanelCanvasMode(saved?.panelCanvasMode ?? { kind: 'all' })
       projectStore.setPlanFloorOverlayVisibleByBaseFloorId(saved?.planFloorOverlayVisibleByBaseFloorId ?? {})

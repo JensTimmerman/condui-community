@@ -9,7 +9,7 @@ import { generateId } from '@/utils'
 import { ensureElectricalLayerOnFloor } from '@/lib/plan/floorLayers'
 import { getPlacementWorldBounds } from '@/utils/plan/placementBounds'
 import {
-  getBuildingFloorsFromProject,
+  selectProjectBuildingFloors,
   type ProjectWithOptionalV2Building,
 } from '@/lib/projectV2/buildingFloors'
 import type { ProjectWithOptionalV2Electrical } from '@/lib/projectV2/electrical'
@@ -120,7 +120,7 @@ export function sitplanPlacementsForDuplicateClone(source: Endpoint): Placement[
 }
 
 function isValidFloorId(project: DuplicateSitplanProject, floorId: string): boolean {
-  return getBuildingFloorsFromProject(project).some((f) => f.id === floorId)
+  return selectProjectBuildingFloors(project).some((f) => f.id === floorId)
 }
 
 /** UI / persisted floor, else a floor where a circuit mate already has a placement. */
@@ -177,7 +177,7 @@ export function ensureSitplanPlacementsForEndpoints(
     getEndpointById,
   )
   if (!floorId) return
-  const floorEntity = getBuildingFloorsFromProject(project).find((f) => f.id === floorId)
+  const floorEntity = selectProjectBuildingFloors(project).find((f) => f.id === floorId)
   if (!floorEntity) return
   if ('layers' in floorEntity) {
     ensureElectricalLayerOnFloor(floorEntity)

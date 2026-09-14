@@ -1,21 +1,17 @@
 import type { CableSpec, WireSegment } from '@/types/schema'
 import { formatCableTypeLabel } from '@/lib/wireTextLabel'
-import i18n from '@/i18n'
 
-export type WireTranslateFn = (
-  key: string,
-  options?: string | Record<string, unknown>,
-) => string
+export type WireTranslateFn = (key: string, options?: string | Record<string, unknown>) => string
 
 function resolveTranslate(t?: WireTranslateFn): WireTranslateFn {
   return (
     t ??
-    ((key, options) =>
-      typeof options === 'string'
-        ? i18n.t(key, options)
-        : options
-          ? i18n.t(key, options)
-          : i18n.t(key))
+    ((key, options) => {
+      if (key === 'wires.lengthWithUnit' && options && typeof options !== 'string') {
+        return `${String(options.value)} m`
+      }
+      return typeof options === 'string' ? options : key
+    })
   )
 }
 
@@ -69,17 +65,15 @@ export function wireSegmentFingerprint(segment: WireSegment): string {
   })
 }
 
-export function formatWireTallySummaryLabel(
-  segment: WireSegment,
-  t: WireTranslateFn,
-): string {
-  const type = formatCableTypeLabel(segment.cable, { otherLabel: t('wires.other', 'Other') })
+export function formatWireTallySummaryLabel(segment: WireSegment, t: WireTranslateFn): string {
+  const type = formatCableTypeLabel(segment.cable, {
+    otherLabel: t('wires.other', 'Other'),
+    batteryCableLabel: t('wires.batteryCable', 'Battery cable'),
+  })
   const conductors = segment.cable.conductors
   const hasPE = segment.cable.hasPE ?? false
   const thickness = segment.cable.sectionMm2
-  const spec = hasPE
-    ? `${type} ${conductors}G${thickness}`
-    : `${type} ${conductors}x${thickness}`
+  const spec = hasPE ? `${type} ${conductors}G${thickness}` : `${type} ${conductors}x${thickness}`
 
   const extras: string[] = []
   if (segment.cable.fireClass) extras.push(segment.cable.fireClass)

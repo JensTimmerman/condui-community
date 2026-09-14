@@ -1,11 +1,11 @@
-import { useMemo } from 'react'
-import { useProjectStore } from '@/stores/projectStore'
+import { useMemo, useRef } from 'react'
+import { useProjectStore, type ProjectState } from '@/stores/projectStore'
 import { getSymbolCategory } from '@/components/plan/SitplanVisibilityPanel'
 import type { SymbolKey, Placement } from '@/types/schema'
 import type { PlanVisibility } from '@/stores/uiStore'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  selectProjectElectricalInstallation,
+  selectProjectElectricalPanels,
 } from '@/lib/projectV2/electrical'
 import { findPanelById } from '@/lib/panel/panelTree'
 import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
@@ -17,6 +17,46 @@ type SitplanPlacementRow = Placement & {
   junctionPanelLabel?: string
 }
 
+function shallowEqualPlacementRow(a: SitplanPlacementRow, b: SitplanPlacementRow): boolean {
+  return (
+    a.id === b.id &&
+    a.floorId === b.floorId &&
+    a.layer === b.layer &&
+    a.pos.x === b.pos.x &&
+    a.pos.y === b.pos.y &&
+    a.rotationDeg === b.rotationDeg &&
+    a.rotationMode === b.rotationMode &&
+    a.scale === b.scale &&
+    a.locked === b.locked &&
+    a.endpointId === b.endpointId &&
+    a.trunkDeviceId === b.trunkDeviceId &&
+    a.junctionPanelLabel === b.junctionPanelLabel &&
+    a.isEarthing === b.isEarthing &&
+    (a.style === b.style || JSON.stringify(a.style) === JSON.stringify(b.style))
+  )
+}
+
+function reusePlacementRows(
+  previous: SitplanPlacementRow[],
+  next: SitplanPlacementRow[]
+): SitplanPlacementRow[] {
+  if (previous.length === 0) return next
+  const previousById = new Map(previous.map((placement) => [placement.id, placement]))
+  const reused = next.map((placement) => {
+    const prior = previousById.get(placement.id)
+    return prior && shallowEqualPlacementRow(prior, placement) ? prior : placement
+  })
+  return reused.length === previous.length && reused.every((item, index) => item === previous[index])
+    ? previous
+    : reused
+}
+
+function reuseMembers<T>(previous: T[], next: T[]): T[] {
+  return next.length === previous.length && next.every((item, index) => item === previous[index])
+    ? previous
+    : next
+}
+
 /**
  * Hook to get and filter placements for the plan canvas
  */
@@ -25,21 +65,36 @@ export function usePlanPlacements(
   sitplanPanelFilterId: string | null,
   planVisibility: PlanVisibility
 ) {
-  const {
-    currentProject,
-    getPlacementsByFloor,
-    getEndpointById,
-    getTrunkDeviceById,
-    findCircuitForEndpoint,
-    getFloorById,
-  } = useProjectStore()
+  const previousPlacementsRef = useRef<SitplanPlacementRow[]>([])
+  const previousVisiblePlacementsRef = useRef<SitplanPlacementRow[]>([])
+  const currentProject = useProjectStore((state: ProjectState) => state.currentProject)
+  const getPlacementsByFloor = useProjectStore(
+    (state: ProjectState) => state.getPlacementsByFloor
+  )
+  const getEndpointById = useProjectStore((state: ProjectState) => state.getEndpointById)
+  const getTrunkDeviceById = useProjectStore(
+    (state: ProjectState) => state.getTrunkDeviceById
+  )
+  const findCircuitForEndpoint = useProjectStore(
+    (state: ProjectState) => state.findCircuitForEndpoint
+  )
+  const getFloorById = useProjectStore((state: ProjectState) => state.getFloorById)
 
-  // Get placements for the active floor, filtered by scope and optional panel filter
-  // Include panel_distribution symbols (panels) which have scope 'both'
+  // Keep visibility filtering reactive even when placement rows are structurally unchanged.
+  // The row-reuse optimization intentionally preserves the placements array identity, so a
+  // hidden-placement-only edit needs its own dependency to invalidate visiblePlacements.
+  const hiddenPlacementIds = useMemo(() => {
+    if (!currentProject) return new Set<string>()
+    const floor = activeFloorId ? getFloorById(activeFloorId) : null
+    return new Set<string>(floor?.hiddenSitplanPlacementIds ?? [])
+  }, [activeFloorId, currentProject, getFloorById])
+
+  // Get placements for the active floor, filtered by scope and optional panel filter.
+  // Defer this graph walk so a one-wire-only edit cannot extend its input event.
   const placements = useMemo(() => {
     if (!activeFloorId || !currentProject) return []
     const floorPlacements = getPlacementsByFloor(activeFloorId)
-    const hasGround = getElectricalInstallationFromProject(currentProject)?.hasGround !== false
+    const hasGround = selectProjectElectricalInstallation(currentProject)?.hasGround !== false
     let filtered = floorPlacements.filter((placement: SitplanPlacementRow) => {
       if (placement.isEarthing) return hasGround
       if (placement.junctionPanelLabel != null) return true
@@ -52,7 +107,7 @@ export function usePlanPlacements(
     })
     if (sitplanPanelFilterId) {
       const selectedPanel = findPanelById(
-        getElectricalPanelsFromProject(currentProject),
+        selectProjectElectricalPanels(currentProject),
         sitplanPanelFilterId
       )
       filtered = filtered.filter((placement: SitplanPlacementRow) => {
@@ -70,7 +125,9 @@ export function usePlanPlacements(
         return false
       })
     }
-    return filtered
+    const stablePlacements = reusePlacementRows(previousPlacementsRef.current, filtered)
+    previousPlacementsRef.current = stablePlacements
+    return stablePlacements
   }, [
     activeFloorId,
     currentProject,
@@ -84,10 +141,8 @@ export function usePlanPlacements(
   // Filter placements by visibility (symbols master + per-category)
   const visiblePlacements = useMemo(() => {
     if (!planVisibility.symbolsVisible) return []
-    const floor = activeFloorId ? getFloorById(activeFloorId) : null
-    const hiddenIds = new Set<string>(floor?.hiddenSitplanPlacementIds ?? [])
-    return placements.filter((placement: SitplanPlacementRow) => {
-      if (hiddenIds.has(placement.id)) return false
+    const filtered = placements.filter((placement: SitplanPlacementRow) => {
+      if (hiddenPlacementIds.has(placement.id)) return false
       if (placement.isEarthing) return planVisibility.panelsVisible
       if (placement.junctionPanelLabel != null) return planVisibility.panelsVisible
       const endpoint = placement.endpointId ? getEndpointById(placement.endpointId) : undefined
@@ -110,7 +165,16 @@ export function usePlanPlacements(
                 : planVisibility.fixedAppliancesVisible
       return flag
     })
-  }, [placements, planVisibility, getEndpointById, getTrunkDeviceById, activeFloorId, getFloorById])
+    const stableVisiblePlacements = reuseMembers(previousVisiblePlacementsRef.current, filtered)
+    previousVisiblePlacementsRef.current = stableVisiblePlacements
+    return stableVisiblePlacements
+  }, [
+    placements,
+    planVisibility,
+    getEndpointById,
+    getTrunkDeviceById,
+    hiddenPlacementIds,
+  ])
 
   return {
     placements,

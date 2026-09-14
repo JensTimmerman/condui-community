@@ -1,4 +1,15 @@
 {
+  "junctionIdentity": {
+    "label": "Verbindingsidentificatie",
+    "pickExisting": "Bestaande identificatie hergebruiken",
+    "toggleVisibility": "Identificatie tonen of verbergen op het schema",
+    "noExisting": "Geen bestaande identificaties"
+  },
+  "terminalStrip": {
+    "pin": "Klemnummer",
+    "incomingPin": "In",
+    "outgoingPin": "Uit"
+  },
   "appUpdate": {
     "banner": "Er is een nieuwe versie van de app beschikbaar.",
     "refresh": "Vernieuwen"
@@ -78,6 +89,7 @@
     "backToMain": "Terug naar start",
     "versions": "Versies",
     "exportPdf": "PDF exporteren",
+    "exportLabels": "Labels exporteren",
     "reExportPdf": "Her-exporteer PDF",
     "validation": "Validatie",
     "exportProject": "Project downloaden",
@@ -347,6 +359,8 @@
       "hint": "Naam, adres en handtekening vereist op AREI-conforme plannen. Wordt voor alle projecten bewaard.",
       "name": "Naam installateur",
       "companyNumber": "Ondernemingsnr.",
+      "vatNumber": "Btw-nummer",
+      "vatNumberAccountHint": "Bewerk dit btw-nummer in de accountapp.",
       "email": "E-mail",
       "mobile": "Gsm",
       "phone": "Telefoon",
@@ -366,6 +380,92 @@
       "saved": "Opgeslagen"
     }
   },
+  "visionScan": {
+    "title": "Document scannen",
+    "action": "Scannen",
+    "choosePdf": "Bestanden kiezen",
+    "chooseFiles": "PDF’s of afbeeldingen kiezen",
+    "invalidFile": "Kies een PDF of afbeelding.",
+    "addPages": "Pagina’s toevoegen",
+    "dragPage": "Sleep pagina {{page}} om te verplaatsen",
+    "classifying": "Pagina’s indelen…",
+    "recognizing": "Document verwerken…",
+    "serviceUnavailable": "De lokale vision-service draait niet. Voer npm run vision:api uit en probeer opnieuw.",
+    "failed": "Het document kon niet worden ingedeeld.",
+    "registrationRequired": "Registreer om een document te scannen.",
+    "hosted": {
+      "cancelScan": "Scan annuleren",
+      "cancelFailed": "De scan kon niet worden geannuleerd.",
+      "processing": "Document verwerken…",
+      "reviewReady": "Klaar voor paginacontrole"
+    },
+    "mode": {
+      "title": "Herkenning kiezen",
+      "description": "Ontwikkeloptie om de herkenningsroutes te vergelijken.",
+      "hybrid": {
+        "title": "Hybride",
+        "description": "Combineert OpenCV-voorbereiding met het getrainde vision-model. Aanbevolen."
+      },
+      "opencv": {
+        "title": "OpenCV",
+        "description": "Gebruikt vaste beeldverwerking zonder het vision-model."
+      }
+    },
+    "confident": "Indeling ziet er goed uit",
+    "review": "Kijk deze pagina na",
+    "page": "Pagina {{page}}",
+    "pagePreview": "Voorbeeld van pagina {{page}}",
+    "crop": "Uitsnede",
+    "cropCorner": "Hoek {{corner}} van uitsnede",
+    "applyCrop": "Toepassen",
+    "levels": "Helderheid",
+    "highPass": "Equalizatie",
+    "planReview": {
+      "analyzing": "Plannen voorbereiden…",
+      "cleaned": "Opgeschoond",
+      "editable": "Bewerkbaar",
+      "previous": "Vorig plan",
+      "next": "Volgend plan",
+      "zoomOut": "Uitzoomen",
+      "zoomIn": "Inzoomen",
+      "fit": "Passend maken"
+    },
+    "summary": {
+      "title": "Scansamenvatting",
+      "circuits": "Kringen",
+      "endpoints": "Punten",
+      "placed": "Op plan",
+      "detected": "Herkend",
+      "unplaced_one": "{{count}} punt is niet aan een plan gekoppeld.",
+      "unplaced_other": "{{count}} punten zijn niet aan een plan gekoppeld.",
+      "create": "Project maken",
+      "creating": "Project maken…",
+      "types": {
+        "socket": "stopcontacten",
+        "switch": "schakelaars",
+        "light_point": "lichtpunten",
+        "fixed_appliance": "toestellen",
+        "domotica": "domotica"
+      }
+    },
+    "pending": {
+      "title": "Documentscan",
+      "processing": "Wordt op de achtergrond verwerkt",
+      "reviewPages": "Kijk de herkende pagina’s na",
+      "ready": "Klaar om na te kijken",
+      "failed": "Heeft aandacht nodig",
+      "unavailable": "Vision-service niet bereikbaar",
+      "open": "Openen",
+      "discard": "Verwijderen"
+    },
+    "moveEarlier": "Pagina eerder plaatsen",
+    "moveLater": "Pagina later plaatsen",
+    "types": {
+      "one_wire": "Eendraad",
+      "plan": "Plan",
+      "other": "Overig"
+    }
+  },
   "project": {
     "rename": "Project hernoemen",
     "new": "Nieuw project",
@@ -379,7 +479,7 @@
     "customerMobile": "Mobiel",
     "customerPhone": "Telefoon",
     "yearOfConstruction": "Bouwjaar",
-    "yearOfConstructionInvalid": "Voer een geldig jaar in tussen 1800 en 2100.",
+    "yearOfConstructionInvalid": "Voer een geldig jaar in tussen 1500 en 2100.",
     "meterEanCode": "Meter EAN-code",
     "meterEanCodePlaceholder": "bijv. 5412345678901234",
     "inspectionAgency": "Keuringsorganisme",
@@ -427,8 +527,22 @@
     "importFailedMessage": "Het project kon niet worden geïmporteerd.",
     "importProjectLoadingTitle": "Project importeren…",
     "importProjectLoadingBody": "Plattegrondafbeeldingen en projectgegevens worden verwerkt. Grote bestanden kunnen even duren.",
+    "importRepairedSupplyHandoffs": "{{count}} verouderde voedingskoppeling(en) verwijderd zodat het project kon worden geïmporteerd. De overige projectgegevens zijn behouden.",
     "importSchematicalsArchive": "Schematicals-archief importeren (dev)…",
     "importSchematicalsFolder": "Schematicals-map importeren (dev)…",
+    "devElectricalImportButton": "JSON importeren (dev)…",
+    "devElectricalImportTitle": "Elektrische JSON importeren",
+    "devElectricalImportJson": "Elektrische import-JSON",
+    "devElectricalImportValid": "JSON is geldig",
+    "devElectricalImportInvalid": "Los validatiefouten op",
+    "devElectricalImportCreate": "Project maken",
+    "devElectricalImportCopyPrompt": "Systeemprompt kopiëren",
+    "devElectricalImportPromptCopied": "Systeemprompt gekopieerd",
+    "devElectricalImportRepaired": "JSON hersteld",
+    "devElectricalImportRepair": {
+      "removedWrapping": "Omringende tekst of Markdown verwijderd.",
+      "closedDelimiters": "Ontbrekende sluithaken aan het einde toegevoegd."
+    },
     "openExampleProject": "Voorbeeldproject openen",
     "exampleTitle": "Probeer een voorbeeldproject",
     "exampleDescription": "Zie hoe een afgewerkt project eruitziet.",
@@ -482,6 +596,8 @@
     "city": "Gemeente",
     "country": "Land",
     "countryBelgium": "België",
+    "countryFrance": "Frankrijk",
+    "countryNetherlands": "Nederland",
     "voltage": "Spanning",
     "mainSupply": "Hoofdvoeding",
     "voltage_2x230": "2×230V",
@@ -754,7 +870,7 @@
     },
     "solarPanel": {
       "groupTitle": "Merk en model",
-      "wattage": "Vermogen (W)",
+      "wattage": "Vermogen (Wp)",
       "voltage": "Spanning (V)"
     },
     "battery": {
@@ -763,7 +879,8 @@
       "powerKw": "Vermogen (kW)"
     },
     "evCharger": {
-      "groupTitle": "Gegevens laadpaal"
+      "groupTitle": "Gegevens laadpaal",
+      "integratedDcResidualProtection": "Ingebouwde DC-lekdetectie (6 mA)"
     },
     "certification": {
       "groupTitle": "Identificatie toestel (certificatie)",
@@ -814,8 +931,54 @@
     "eendraad": "Eendraadschema",
     "plan": "Situatieplan",
     "panel": "Bord",
+    "structure": "Structuur",
     "both": "Beide",
     "panelAndPlan": "Bord + Plan"
+  },
+  "structure": {
+    "noStructure": "Geen elektrische structuur",
+    "noFilterResults": "Geen resultaten voor de huidige filters",
+    "buildFailed": "Structuur kon niet worden opgebouwd",
+    "traceScope": "Traceerrichting",
+    "upstream": "Stroomopwaarts",
+    "downstream": "Stroomafwaarts",
+    "both": "Beide",
+    "none": "Geen",
+    "layoutDirection": "Lay-outrichting",
+    "horizontal": "Horizontaal",
+    "vertical": "Verticaal",
+    "relationships": "Relaties",
+    "secondaryLinks": "Secundaire relaties",
+    "inferred": "Afgeleide relaties",
+    "items": "items",
+    "links": "relaties",
+    "diagnostics": "diagnoses",
+    "viewOptions": "Weergaveopties",
+    "supply": "Voeding",
+    "panelGraph": "Bordtrajecten",
+    "circuitGraph": "Stroombanen",
+    "panelOrphans": "Niet-gekoppelde bordgegevens",
+    "circuitOrphans": "Niet-gekoppelde stroombaangegevens",
+    "graphScope": "Grafiekbereik",
+    "selectedPanel": "Geselecteerd bord",
+    "entireInstallation": "Volledige installatie",
+    "occurrences": "Fysieke voorkomens",
+    "selectedConnection": "geselecteerde verbinding",
+    "connectionBetween": "Verbinding van {{source}} naar {{target}}",
+    "item": "Structuuritem",
+    "knowledge": "Kennisniveau",
+    "knowledge_explicit": "Expliciet",
+    "knowledge_inferred": "Afgeleid",
+    "knowledge_ambiguous": "Dubbelzinnig",
+    "knowledge_missing": "Ontbrekend",
+    "source": "Bron",
+    "sourceType": "Brontype",
+    "sourceId": "Bron-ID",
+    "projectedReadOnly": "Geprojecteerd weergave-item · alleen-lezen",
+    "resetView": "Structuurweergave herstellen",
+    "filtersActive": "filters actief",
+    "alternativePaths_one": "{{count}} alternatief pad",
+    "alternativePaths_other": "{{count}} alternatieve paden"
   },
   "panelCanvas": {
     "selectPanel": "Selecteer bord",
@@ -828,6 +991,8 @@
     "feedFromBottom": "Voeding van onder",
     "rows": "Rijen",
     "columns": "Kolommen",
+    "topTerminalStripRail": "Klemmenrail bovenaan",
+    "bottomTerminalStripRail": "Klemmenrail onderaan",
     "showDomotica": "Toon domotica",
     "moveToSupplyPanel": "Verplaats naar netbord",
     "moveToMainPanel": "Verplaats naar hoofdbord",
@@ -841,6 +1006,27 @@
     "rewireModeOff": "Herschakelmodus",
     "autoArrange": "Modules automatisch ordenen",
     "autoArrangeConfirm": "Dit zal de huidige bordindeling volledig vervangen. Doorgaan?",
+    "labelMode": "Labelmodus",
+    "swapLabelRows": "Rijen wisselen",
+    "swapPanelLabels": "Alle labelrijen van het bord wisselen",
+    "editRowTopLabels": "Bovenste labels van de rij bewerken",
+    "editRowBottomLabels": "Onderste labels van de rij bewerken",
+    "editPanelTopLabels": "Alle bovenste labels bewerken",
+    "editPanelBottomLabels": "Alle onderste labels bewerken",
+    "overflowWarningTitle": "Sommige modules staan in de overloopzone",
+    "overflowWarningMessage": "Sommige modules staan in de overloopzone. Plaats ze in het bordraster of vergroot het bord; label-exports laten ze weg.",
+    "labelSourceLabel": "Label",
+    "labelSourceNotes": "Notities",
+    "labelSourceExtra": "Extra",
+    "labelSourceTechnical": "Technisch",
+    "labelCellPlaceholder": "Label",
+    "notesCellPlaceholder": "Notities",
+    "extraCellPlaceholder": "Labelnotities toevoegen",
+    "technicalCellPlaceholder": "Technische eigenschappen",
+    "labelAlignLeft": "Links uitlijnen",
+    "labelAlignCenter": "Centreren",
+    "labelAlignRight": "Rechts uitlijnen",
+    "labelAlignJustify": "Tekst spreiden",
     "panelLayout": "Bordindeling"
   },
   "panelFilter": {
@@ -884,6 +1070,18 @@
       "lockedTooltip": "Automatisch label is ingeschakeld",
       "lockedDescription": "Schakel het uit om dit label te wijzigen.",
       "openAutomaticNaming": "Automatisch label openen",
+      "automaticStatus": "Automatisch",
+      "customStatus": "Aangepast",
+      "setCustomLabel": "Aangepast label instellen",
+      "useAutomaticLabel": "Automatisch label gebruiken",
+      "customLabelNonStandardWarning": "Dit aangepaste label valt buiten de reeks A, B, C…",
+      "customLabelDuplicateWarning": "Dit label wordt ook door een andere kring op dit bord gebruikt.",
+      "customLabelBothWarnings": "Dit aangepaste label valt buiten de reeks A, B, C… en wordt ook door een andere kring op dit bord gebruikt.",
+      "resetAllLabels": "Alle labels resetten",
+      "resetAllTooltip": "Verwijder alle aangepaste labels en gebruik opnieuw automatische labels voor alle kringen.",
+      "resetAllConfirmTitle": "Alle aangepaste labels resetten?",
+      "resetAllConfirmMessage": "Alle aangepaste kringlabels worden gewist en vervangen door automatische labels. Je kunt deze wijziging ongedaan maken.",
+      "resetAllConfirm": "Labels resetten",
       "confirmOverwriteTitle": "Letters vervangen?",
       "confirmOverwriteMessage": "Automatische benaming vervangt de huidige letters door A, B, C… volgens de rijen op elk bord. Doorgaan?",
       "confirmOverwriteConfirm": "Doorgaan"
@@ -1109,6 +1307,13 @@
     "wireStyleSpline": "Bochtig",
     "wireStyleOrthogonal": "90 graden"
   },
+  "situationPlan": {
+    "bulkDeleteWarning": {
+      "title": "Symbolen verwijderen?",
+      "message": "Deze symbolen staan ook in het eendraadschema. Met Verwijderen verdwijnen ze daar ook; met Verbergen blijven ze daar.",
+      "hide": "Verbergen"
+    }
+  },
   "symbols": {
     "library": "Symbolenbibliotheek",
     "recent": "Recent",
@@ -1237,6 +1442,7 @@
       "panelMissingOneWireSymbol": "Paneel mist eendraadsymbool",
       "panelGridDuplicateModule": "Dubbele module op paneelcanvas",
       "supplyTrunkMisplacedInMainGrid": "Voedingscomponent op verkeerd paneelgebied",
+      "supplyTrunkVisualPlacementMissing": "Voedingscomponent ontbreekt op het paneelcanvas",
       "splitBusWithoutBackupSupply": "Gesplitste rail zonder backupvoeding",
       "branchMultiplierEndpointsSplit": "Vermenigvuldigingssymbolen gesplitst op één aftakking",
       "danglingReference": "Dangling referentie",
@@ -1247,6 +1453,8 @@
   },
   "validation": {
     "title": "AREI Validatie",
+    "disabledOutsideBelgium": "Validatie uitgeschakeld buiten België.",
+    "belgianRulesOnly": "De app controleert momenteel alleen AREI-regels voor België.",
     "errors": "Fouten",
     "warnings": "Waarschuwingen",
     "info": "Info",
@@ -1475,11 +1683,13 @@
       "endpointOnPanelCircuit": "Eindpunt \"{{endpointLabel}}\" is verbonden met de PANEL pseudo-stroombaan en verschijnt niet correct op het éénlijnschema.",
       "endpointMultipleFloorPlacements": "Eindpunt \"{{endpointLabel}}\" staat op {{floorCount}} verdiepingen, maar dit symbool mag maar één plaatsing hebben.",
       "endpointPlacementIntegrity": "Eindpunt \"{{endpointLabel}}\" heeft ongeldige plaatsingsdata ({{violation}}).",
+      "planPlacementIdentityConflict": "Situatieplanplaatsing \"{{placementId}}\" wordt gedeeld door {{ownerLabels}}. Symbolen kunnen overlappen, verdwijnen of samen geselecteerd worden; maak de betrokken duplicaten opnieuw aan met unieke plaatsingen.",
       "endpointMissingPlanPlacement": "{{endpointLabel}} ({{circuitCode}}) — niet op plan.",
       "panelDistributionLabelDrift": "Paneelsymbool \"{{endpointLabel}}\" komt niet overeen met bord \"{{panelName}}\" (stroombaan {{circuitCode}}).",
       "panelMissingOneWireSymbol": "Paneel \"{{panelName}}\" bestaat maar heeft geen eendraad-voedingssymbool/koppeling.",
       "panelGridDuplicateModule": "Paneelcanvas toont \"{{moduleLabel}}\" meer dan één keer; behoud de volledige module en verberg de zwakkere dubbelganger.",
       "supplyTrunkMisplacedInMainGrid": "Voedingscomponent \"{{label}}\" staat op het hoofdraster (rij {{row}}, kolom {{col}}) maar hoort alleen in de voedingsstrook — paneelcanvas en eendraad voeding wijken af.",
+      "supplyTrunkVisualPlacementMissing": "Voedingscomponent \"{{label}}\" bestaat in de voedingstopologie maar heeft geen bereikbare plaatsing op het paneelcanvas.",
       "splitBusWithoutBackupSupply": "Bord \"{{panelName}}\" heeft {{busSectionCount}} railsecties maar geen aangesloten backupvoeding. Voeg ze opnieuw samen op één netvoeding.",
       "branchMultiplierEndpointsSplit": "Stroombaan {{circuitCode}}: aftakking \"{{branchLabel}}\" heeft {{absorbCount}} extra vermenigvuldigingssymbool(len) als aparte eindpunten; horen één eindpunt met meerdere plaatsingen te zijn. Gebruik Repareren in de weesinspectie."
     },
@@ -1678,6 +1888,10 @@
         "sensitivity": {
           "message": "Stroombaan {{circuitCode}} is beveiligd door differentieel(s), maar geen enkel toestel heeft 30 mA gevoeligheid",
           "details": "Verlichting, algemene contactdozen, wasmachines, droogkasten, afwasmachines en EV-laadstroombanen vereisen differentieelbeveiliging van 30 mA. Pas de gevoeligheid stroomopwaarts aan of leid de stroombaan via een 30 mA-toestel."
+        },
+        "dcCompatibility": {
+          "message": "EV-stroombaan {{circuitCode}} heeft 30 mA-differentieelbeveiliging, maar er werd geen DC-foutbeveiliging vastgesteld",
+          "details": "AREI 7.22.4.1 en 5.3.5.3(f) vereisen dat het laadpunt beschermd blijft tegen verstorende gelijkstroomcomponenten. Gebruik een type B-differentieel of vink aan dat de laadpaal ingebouwde, gecoördineerde DC-lekbeveiliging/-detectie heeft, bijvoorbeeld 6 mA DC-detectie."
         }
       },
       "stoveCircuitSizingHint": {
@@ -1750,8 +1964,64 @@
     "error": {
       "title": "Export mislukt",
       "message": "PDF exporteren mislukt. Probeer het opnieuw.",
-      "details": "Export voltooid maar sommige pagina's zijn mislukt:\n{{errors}}"
+      "details": "Export voltooid maar sommige pagina's zijn mislukt:\n{{errors}}",
+      "validationFailureTitle": "Export kon niet worden voltooid",
+      "validationFailureMessage": "Er ging iets mis bij het voorbereiden van je export. Je project is veilig en het probleem is gemeld aan ons team. Probeer het later opnieuw."
     }
+  },
+  "labelStripExport": {
+    "title": "Labels exporteren",
+    "canvasWarningTitle": "Rangschik eerst het paneelcanvas",
+    "canvasWarningMessage": "Een onaangeroerde indeling geeft onbetrouwbare labels.",
+    "overflowWarningTitle": "Sommige modules passen niet",
+    "overflowWarningMessage": "{{count}} geselecteerde module(s) staan in de overloopzone en worden weggelaten. Controleer de bordindeling vóór het exporteren.",
+    "sourcesTitle": "Panelen opnemen",
+    "noSources": "Geen panelen beschikbaar",
+    "virtualSource": "Voedingskast",
+    "paperSettings": "Papier",
+    "exportFormat": "Exportformaat",
+    "brotherLbx": "Brother LBX",
+    "brotherPrinter": "Brother-printer",
+    "brotherP900Family": "PT-P900 / PT-P950",
+    "brotherE920": "PT-E920BT",
+    "brotherP910": "PT-P910BT",
+    "brotherE800": "PT-E800W",
+    "brotherD800": "PT-D800W",
+    "brotherQl810w": "QL-810W",
+    "brotherQl820": "QL-820NWB",
+    "brotherTapeWidth": "Brother-tapebreedte",
+    "brotherSheets": "Vellen",
+    "brotherSingleStrip": "Eén strook",
+    "panelContents": "Paneelinhoud",
+    "paperSize": "Papierformaat",
+    "preset": "Voorinstelling labelstrook",
+    "generic25": "Generiek 25 mm",
+    "generic35": "Generiek 35 mm",
+    "custom": "Aangepast",
+    "customHeight": "Aangepaste strookhoogte",
+    "customHeightFirst": "Hoogte eerste strook",
+    "customHeightSecond": "Hoogte tweede strook",
+    "height": "{{value}} mm hoog",
+    "mode": "Stroken",
+    "modeSingle": "Enkel",
+    "modeDouble": "Dubbel",
+    "include": "Opnemen",
+    "domotics": "Domotica",
+    "nonProtection": "Omvormers",
+    "terminalStrips": "Klemmenstroken",
+    "skipEmptyRows": "Lege rijen overslaan",
+    "skipEmptyRowsDescription": "Schakel dit uit om lege stroken af te drukken die je later met de hand kan invullen.",
+    "madeWith": "Kastlabels gemaakt met",
+    "rowFromTop": "Rij {{row}} vanaf boven",
+    "preview": "Voorbeeld",
+    "hidePreview": "Voorbeeld verbergen",
+    "previewPages": "{{count}} pagina's",
+    "previewLoading": "Voorbeeld wordt gemaakt...",
+    "previewError": "Het voorbeeld kon niet worden gemaakt. Probeer opnieuw.",
+    "export": "Exporteren",
+    "errorTitle": "Export van labels mislukt",
+    "errorMessage": "De label-export kon niet worden aangemaakt. Probeer opnieuw.",
+    "generatedDescription": "{{type}} voor {{items}}"
   },
   "panelRelationOverview": "Overzicht van paneelrelaties",
   "properties": {
@@ -1936,6 +2206,7 @@
     "circuitNotFound": "Stroombaan niet gevonden",
     "trySelectingAgain": "Probeer de draad opnieuw te selecteren. Draadsegmenten worden opnieuw gegenereerd, dus de selectie kan verloren zijn gegaan.",
     "other": "Anders",
+    "batteryCable": "Accukabel",
     "customTypePlaceholder": "Eigen type naam",
     "supplyTitle": "Voedingsdraad eigenschappen",
     "supplySegmentUpstream": "Voedingszijde (tot scheiding)",

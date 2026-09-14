@@ -11,6 +11,7 @@ export const symbolTooltipsEn = {
   panel_distribution: 'Distribution board or panel.',
   junction_box: 'Junction or connection box.',
   junction_panel: 'Junction panel; contains no protection modules.',
+  terminal_strip: 'Terminal strip or connector clamp.',
 
   // Protection
   mcb: 'MCB for overload and short-circuit.',

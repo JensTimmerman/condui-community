@@ -1,4 +1,15 @@
 {
+  "junctionIdentity": {
+    "label": "Junction identity",
+    "pickExisting": "Reuse an existing identity",
+    "toggleVisibility": "Show or hide identity on diagram",
+    "noExisting": "No existing identities"
+  },
+  "terminalStrip": {
+    "pin": "Pin",
+    "incomingPin": "In",
+    "outgoingPin": "Out"
+  },
   "appUpdate": {
     "banner": "A new version of the app is available.",
     "refresh": "Refresh"
@@ -78,6 +89,7 @@
     "backToMain": "Back to main",
     "versions": "Versions",
     "exportPdf": "Export to PDF",
+    "exportLabels": "Export labels",
     "reExportPdf": "Re-export PDF",
     "validation": "Validation",
     "exportProject": "Download project",
@@ -347,6 +359,8 @@
       "hint": "Name, address and signature required on Belgian AREI-conform plans. Stored for all projects.",
       "name": "Installer name",
       "companyNumber": "Company number",
+      "vatNumber": "VAT number",
+      "vatNumberAccountHint": "Edit this VAT number in the account app.",
       "email": "Email",
       "mobile": "Mobile",
       "phone": "Phone",
@@ -366,6 +380,92 @@
       "saved": "Saved"
     }
   },
+  "visionScan": {
+    "title": "Scan document",
+    "action": "Scan",
+    "choosePdf": "Choose files",
+    "chooseFiles": "Choose PDFs or images",
+    "invalidFile": "Choose a PDF or image.",
+    "addPages": "Add pages",
+    "dragPage": "Drag page {{page}} to reorder",
+    "classifying": "Classifying pages…",
+    "recognizing": "Processing document…",
+    "serviceUnavailable": "The local vision service is not running. Run npm run vision:api and try again.",
+    "failed": "The document could not be classified.",
+    "registrationRequired": "Register to scan a document.",
+    "hosted": {
+      "cancelScan": "Cancel scan",
+      "cancelFailed": "Could not cancel the scan.",
+      "processing": "Processing document…",
+      "reviewReady": "Ready for page review"
+    },
+    "mode": {
+      "title": "Choose recognition",
+      "description": "Development option for comparing the recognition pipelines.",
+      "hybrid": {
+        "title": "Hybrid",
+        "description": "Use OpenCV preparation with the trained vision model. Recommended."
+      },
+      "opencv": {
+        "title": "OpenCV",
+        "description": "Use deterministic image processing without the vision model."
+      }
+    },
+    "confident": "Classification looks good",
+    "review": "Review this page",
+    "page": "Page {{page}}",
+    "pagePreview": "Preview of page {{page}}",
+    "crop": "Crop",
+    "cropCorner": "Crop corner {{corner}}",
+    "applyCrop": "Apply",
+    "levels": "Brightness",
+    "highPass": "Equalization",
+    "planReview": {
+      "analyzing": "Preparing plans…",
+      "cleaned": "Cleaned",
+      "editable": "Editable",
+      "previous": "Previous plan",
+      "next": "Next plan",
+      "zoomOut": "Zoom out",
+      "zoomIn": "Zoom in",
+      "fit": "Fit to view"
+    },
+    "summary": {
+      "title": "Scan summary",
+      "circuits": "Circuits",
+      "endpoints": "Endpoints",
+      "placed": "On plan",
+      "detected": "Detected",
+      "unplaced_one": "{{count}} endpoint was not matched to a plan.",
+      "unplaced_other": "{{count}} endpoints were not matched to a plan.",
+      "create": "Create project",
+      "creating": "Creating project…",
+      "types": {
+        "socket": "sockets",
+        "switch": "switches",
+        "light_point": "lights",
+        "fixed_appliance": "appliances",
+        "domotica": "domotics"
+      }
+    },
+    "pending": {
+      "title": "Document scan",
+      "processing": "Processing in the background",
+      "reviewPages": "Review the detected pages",
+      "ready": "Ready to review",
+      "failed": "Needs attention",
+      "unavailable": "Vision service unavailable",
+      "open": "Open",
+      "discard": "Discard"
+    },
+    "moveEarlier": "Move page earlier",
+    "moveLater": "Move page later",
+    "types": {
+      "one_wire": "One-wire",
+      "plan": "Plan",
+      "other": "Other"
+    }
+  },
   "project": {
     "rename": "Rename project",
     "new": "New project",
@@ -379,7 +479,7 @@
     "customerMobile": "Mobile",
     "customerPhone": "Phone",
     "yearOfConstruction": "Year of construction",
-    "yearOfConstructionInvalid": "Please enter a valid year between 1800 and 2100.",
+    "yearOfConstructionInvalid": "Please enter a valid year between 1500 and 2100.",
     "meterEanCode": "Meter EAN code",
     "meterEanCodePlaceholder": "e.g. 5412345678901234",
     "inspectionAgency": "Inspection agency",
@@ -427,8 +527,22 @@
     "importFailedMessage": "Could not import project.",
     "importProjectLoadingTitle": "Importing project…",
     "importProjectLoadingBody": "Processing floor plan images and project data. Large files may take a moment.",
+    "importRepairedSupplyHandoffs": "Removed {{count}} obsolete supply link(s) so the project could be imported. Other project data was kept.",
     "importSchematicalsArchive": "Import Schematicals archive (dev)…",
     "importSchematicalsFolder": "Import Schematicals folder (dev)…",
+    "devElectricalImportButton": "Import JSON (dev)…",
+    "devElectricalImportTitle": "Import electrical JSON",
+    "devElectricalImportJson": "Electrical import JSON",
+    "devElectricalImportValid": "JSON is valid",
+    "devElectricalImportInvalid": "Fix validation errors",
+    "devElectricalImportCreate": "Create project",
+    "devElectricalImportCopyPrompt": "Copy system prompt",
+    "devElectricalImportPromptCopied": "System prompt copied",
+    "devElectricalImportRepaired": "JSON repaired",
+    "devElectricalImportRepair": {
+      "removedWrapping": "Removed surrounding text or Markdown.",
+      "closedDelimiters": "Added missing closing brackets at the end."
+    },
     "openExampleProject": "Open Example project",
     "exampleTitle": "Try an example project",
     "exampleDescription": "See how a finished setup looks.",
@@ -482,6 +596,8 @@
     "city": "City",
     "country": "Country",
     "countryBelgium": "Belgium",
+    "countryFrance": "France",
+    "countryNetherlands": "Netherlands",
     "voltage": "Voltage",
     "mainSupply": "Main supply",
     "voltage_2x230": "2×230V",
@@ -748,7 +864,7 @@
     },
     "solarPanel": {
       "groupTitle": "Brand and model",
-      "wattage": "Wattage (W)",
+      "wattage": "Wattage (Wp)",
       "voltage": "Voltage (V)"
     },
     "battery": {
@@ -757,7 +873,8 @@
       "powerKw": "Power (kW)"
     },
     "evCharger": {
-      "groupTitle": "EV charger details"
+      "groupTitle": "EV charger details",
+      "integratedDcResidualProtection": "Built-in DC residual-current detection (6 mA)"
     },
     "certification": {
       "groupTitle": "Device identification (certification)",
@@ -808,8 +925,54 @@
     "eendraad": "Single-line diagram",
     "plan": "Site plan",
     "panel": "Distribution board",
+    "structure": "Structure",
     "both": "Both",
     "panelAndPlan": "Distribution board + Plan"
+  },
+  "structure": {
+    "noStructure": "No electrical structure",
+    "noFilterResults": "No results for current filters",
+    "buildFailed": "Structure could not be built",
+    "traceScope": "Trace direction",
+    "upstream": "Upstream",
+    "downstream": "Downstream",
+    "both": "Both",
+    "none": "None",
+    "layoutDirection": "Layout direction",
+    "horizontal": "Horizontal",
+    "vertical": "Vertical",
+    "relationships": "Relationships",
+    "secondaryLinks": "Secondary links",
+    "inferred": "Inferred relationships",
+    "items": "items",
+    "links": "links",
+    "diagnostics": "diagnostics",
+    "viewOptions": "View options",
+    "supply": "Supply",
+    "panelGraph": "Panel paths",
+    "circuitGraph": "Circuits",
+    "panelOrphans": "Unlinked panel data",
+    "circuitOrphans": "Unlinked circuit data",
+    "graphScope": "Graph scope",
+    "selectedPanel": "Selected panel",
+    "entireInstallation": "Entire installation",
+    "occurrences": "Physical occurrences",
+    "selectedConnection": "selected connection",
+    "connectionBetween": "Connection from {{source}} to {{target}}",
+    "item": "Structural item",
+    "knowledge": "Knowledge",
+    "knowledge_explicit": "Explicit",
+    "knowledge_inferred": "Inferred",
+    "knowledge_ambiguous": "Ambiguous",
+    "knowledge_missing": "Missing",
+    "source": "Source",
+    "sourceType": "Source type",
+    "sourceId": "Source ID",
+    "projectedReadOnly": "Projected view item · read-only",
+    "resetView": "Reset Structural view",
+    "filtersActive": "filters active",
+    "alternativePaths_one": "{{count}} alternative path",
+    "alternativePaths_other": "{{count}} alternative paths"
   },
   "panelCanvas": {
     "selectPanel": "Select panel",
@@ -822,6 +985,8 @@
     "feedFromBottom": "Feed from bottom",
     "rows": "Rows",
     "columns": "Columns",
+    "topTerminalStripRail": "Top clamp rail",
+    "bottomTerminalStripRail": "Bottom clamp rail",
     "showDomotica": "Show domotica",
     "modules": "modules",
     "assignToCircuit": "Assign to circuit",
@@ -838,6 +1003,27 @@
     "rewireModeOff": "Rewire Tool",
     "autoArrange": "Auto Arrange Modules",
     "autoArrangeConfirm": "This will fully replace the current panel layout. Continue?",
+    "labelMode": "Label mode",
+    "swapLabelRows": "Swap rows",
+    "swapPanelLabels": "Swap all panel label rows",
+    "editRowTopLabels": "Edit top row labels",
+    "editRowBottomLabels": "Edit bottom row labels",
+    "editPanelTopLabels": "Edit all top labels",
+    "editPanelBottomLabels": "Edit all bottom labels",
+    "overflowWarningTitle": "Some modules are overflowing",
+    "overflowWarningMessage": "Some modules are in the overflow area. Move them into the panel grid or increase the panel size; label exports will omit them.",
+    "labelSourceLabel": "Label",
+    "labelSourceNotes": "Notes",
+    "labelSourceExtra": "Extra",
+    "labelSourceTechnical": "Technical",
+    "labelCellPlaceholder": "Label",
+    "notesCellPlaceholder": "Notes",
+    "extraCellPlaceholder": "Add label notes",
+    "technicalCellPlaceholder": "Technical properties",
+    "labelAlignLeft": "Align left",
+    "labelAlignCenter": "Align center",
+    "labelAlignRight": "Align right",
+    "labelAlignJustify": "Spread text",
     "panelLayout": "Panel Layout"
   },
   "panelFilter": {
@@ -881,6 +1067,18 @@
       "lockedTooltip": "Auto-label is on",
       "lockedDescription": "Turn it off to change this label.",
       "openAutomaticNaming": "Open auto-label",
+      "automaticStatus": "Automatic",
+      "customStatus": "Custom",
+      "setCustomLabel": "Set custom label",
+      "useAutomaticLabel": "Use automatic label",
+      "customLabelNonStandardWarning": "This custom label is outside the A, B, C… sequence.",
+      "customLabelDuplicateWarning": "This label is also used by another circuit on this panel.",
+      "customLabelBothWarnings": "This custom label is outside the A, B, C… sequence and is also used by another circuit on this panel.",
+      "resetAllLabels": "Reset all labels",
+      "resetAllTooltip": "Remove every custom label and return all circuits to automatic naming.",
+      "resetAllConfirmTitle": "Reset all custom labels?",
+      "resetAllConfirmMessage": "All custom circuit labels will be cleared and replaced by automatic labels. You can undo this change.",
+      "resetAllConfirm": "Reset labels",
       "confirmOverwriteTitle": "Replace circuit letters?",
       "confirmOverwriteMessage": "Automatic naming will replace current letters with A, B, C… by row order on each panel. Continue?",
       "confirmOverwriteConfirm": "Continue"
@@ -1106,6 +1304,13 @@
     "wireStyleSpline": "Curved",
     "wireStyleOrthogonal": "90°"
   },
+  "situationPlan": {
+    "bulkDeleteWarning": {
+      "title": "Delete symbols?",
+      "message": "These symbols are also in the one-wire diagram. Delete removes them there too; Hide keeps them there.",
+      "hide": "Hide"
+    }
+  },
   "symbols": {
     "library": "Symbol library",
     "recent": "Recent",
@@ -1234,6 +1439,7 @@
       "panelMissingOneWireSymbol": "Panel missing one-wire symbol",
       "panelGridDuplicateModule": "Duplicate module on panel canvas",
       "supplyTrunkMisplacedInMainGrid": "Supply device on wrong panel area",
+      "supplyTrunkVisualPlacementMissing": "Supply device missing from panel canvas",
       "splitBusWithoutBackupSupply": "Split bus without backup supply",
       "branchMultiplierEndpointsSplit": "Multiplier symbols split on one branch",
       "danglingReference": "Dangling reference",
@@ -1244,6 +1450,8 @@
   },
   "validation": {
     "title": "AREI Validation",
+    "disabledOutsideBelgium": "Validation disabled outside Belgium.",
+    "belgianRulesOnly": "The app currently only checks AREI rules for Belgium.",
     "errors": "Errors",
     "warnings": "Warnings",
     "info": "Info",
@@ -1472,11 +1680,13 @@
       "endpointOnPanelCircuit": "Endpoint \"{{endpointLabel}}\" is attached to the PANEL pseudo-circuit and will not appear correctly on the one-line diagram.",
       "endpointMultipleFloorPlacements": "Endpoint \"{{endpointLabel}}\" is placed on {{floorCount}} floors, but this symbol should have only one placement.",
       "endpointPlacementIntegrity": "Endpoint \"{{endpointLabel}}\" has invalid placement data ({{violation}}).",
+      "planPlacementIdentityConflict": "Situation-plan placement \"{{placementId}}\" is shared by {{ownerLabels}}. Symbols may overlap, disappear, or select together; recreate the affected duplicates with unique placements.",
       "endpointMissingPlanPlacement": "{{endpointLabel}} ({{circuitCode}}) — not on plan.",
       "panelDistributionLabelDrift": "Panel symbol \"{{endpointLabel}}\" does not match board \"{{panelName}}\" (circuit {{circuitCode}}).",
       "panelMissingOneWireSymbol": "Panel \"{{panelName}}\" exists but has no one-wire feeder symbol/link.",
       "panelGridDuplicateModule": "Panel canvas shows \"{{moduleLabel}}\" more than once; keep the fuller module and hide the weaker duplicate.",
       "supplyTrunkMisplacedInMainGrid": "Supply device \"{{label}}\" is placed on the main panel grid (row {{row}}, column {{col}}) but must live in the supply strip only — panel canvas and one-line supply chain disagree.",
+      "supplyTrunkVisualPlacementMissing": "Supply device \"{{label}}\" exists in the supply topology but has no reachable panel-canvas placement.",
       "splitBusWithoutBackupSupply": "Panel \"{{panelName}}\" has {{busSectionCount}} bus sections but no connected backup supply. Merge it back onto one grid feed.",
       "branchMultiplierEndpointsSplit": "Circuit {{circuitCode}}: branch \"{{branchLabel}}\" lists {{absorbCount}} extra multiplier symbol(s) (e.g. lights) as separate endpoints; they should be one endpoint with multiple plan placements. Use Repair in the Orphan Inspector."
     },
@@ -1675,6 +1885,10 @@
         "sensitivity": {
           "message": "Circuit {{circuitCode}} is protected by RCD(s), but none have 30 mA sensitivity",
           "details": "Lighting, general-purpose socket, washer, dryer, dishwasher and EV charging circuits require 30 mA residual-current protection. Adjust the upstream RCD/RCBO sensitivity or route this circuit through a 30 mA device."
+        },
+        "dcCompatibility": {
+          "message": "EV circuit {{circuitCode}} has 30 mA RCD protection, but no DC-fault protection was identified",
+          "details": "AREI 7.22.4.1 and 5.3.5.3(f) require the charging point to remain protected against disruptive DC components. Use a Type B RCD, or mark the charger as having coordinated built-in DC residual-current protection/detection (such as 6 mA DC detection)."
         }
       },
       "stoveCircuitSizingHint": {
@@ -1747,8 +1961,64 @@
     "error": {
       "title": "Export Failed",
       "message": "Failed to export PDF. Please try again.",
-      "details": "Export completed but some pages failed:\n{{errors}}"
+      "details": "Export completed but some pages failed:\n{{errors}}",
+      "validationFailureTitle": "Export couldn't be completed",
+      "validationFailureMessage": "Something went wrong while preparing your export. Your project is safe, and the issue has been reported to our team. Please try again later."
     }
+  },
+  "labelStripExport": {
+    "title": "Export labels",
+    "canvasWarningTitle": "Arrange the panel canvas first",
+    "canvasWarningMessage": "An untouched layout will produce unreliable labels.",
+    "overflowWarningTitle": "Some modules do not fit",
+    "overflowWarningMessage": "{{count}} selected module(s) are in the panel overflow area and will be omitted. Review the panel layout before exporting.",
+    "sourcesTitle": "Panels to include",
+    "noSources": "No panels available",
+    "virtualSource": "Supply enclosure",
+    "paperSettings": "Paper",
+    "exportFormat": "Export format",
+    "brotherLbx": "Brother LBX",
+    "brotherPrinter": "Brother printer",
+    "brotherP900Family": "PT-P900 / PT-P950",
+    "brotherE920": "PT-E920BT",
+    "brotherP910": "PT-P910BT",
+    "brotherE800": "PT-E800W",
+    "brotherD800": "PT-D800W",
+    "brotherQl810w": "QL-810W",
+    "brotherQl820": "QL-820NWB",
+    "brotherTapeWidth": "Brother tape width",
+    "brotherSheets": "Sheets",
+    "brotherSingleStrip": "Single strip",
+    "panelContents": "Panel contents",
+    "paperSize": "Paper size",
+    "preset": "Label-strip preset",
+    "generic25": "Generic 25 mm",
+    "generic35": "Generic 35 mm",
+    "custom": "Custom",
+    "customHeight": "Custom strip height",
+    "customHeightFirst": "First strip height",
+    "customHeightSecond": "Second strip height",
+    "height": "{{value}} mm high",
+    "mode": "Strips",
+    "modeSingle": "Single",
+    "modeDouble": "Double",
+    "include": "Include",
+    "domotics": "Domotica",
+    "nonProtection": "Inverters",
+    "terminalStrips": "Terminal strips",
+    "skipEmptyRows": "Skip empty rows",
+    "skipEmptyRowsDescription": "Turn this off to print blank strips that you can fill in by hand later.",
+    "madeWith": "Cabinet labels made with",
+    "rowFromTop": "Row {{row}} from top",
+    "preview": "Preview",
+    "hidePreview": "Hide preview",
+    "previewPages": "{{count}} pages",
+    "previewLoading": "Generating preview...",
+    "previewError": "The preview could not be generated. Please try again.",
+    "export": "Export",
+    "errorTitle": "Label export failed",
+    "errorMessage": "The label export could not be created. Please try again.",
+    "generatedDescription": "{{type}} feeding {{items}}"
   },
   "panelRelationOverview": "Panel relation overview",
   "properties": {
@@ -1933,6 +2203,7 @@
     "circuitNotFound": "Circuit not found",
     "trySelectingAgain": "Try selecting the wire again. Wire segments are regenerated, so the selection may have been lost.",
     "other": "Other",
+    "batteryCable": "Battery cable",
     "customTypePlaceholder": "Custom type name",
     "supplyTitle": "Supply Wire Properties",
     "supplySegmentUpstream": "Supply side (to separator)",

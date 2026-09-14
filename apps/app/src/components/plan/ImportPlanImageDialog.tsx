@@ -41,9 +41,9 @@ import {
   shouldShowPdfDestinationOptions,
 } from './planImportFloor'
 import CustomDropdown from '@/components/common/CustomDropdown'
-import { getSitplanNotesFromProject } from '@/lib/projectV2/annotations'
-import { getCompatibilityFloorsFromProject } from '@/lib/projectV2/buildingFloors'
-import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
+import { querySitplanNotes } from '@/lib/projectV2/annotations'
+import { readLegacyCompatibilityFloors } from '@/lib/projectV2/buildingFloors'
+import { selectProjectElectricalPanels } from '@/lib/projectV2/electrical'
 import {
   isRasterPlanImportFile,
   isSupportedPlanImportFile,
@@ -200,7 +200,7 @@ function ImportPlanImageDialog({
   const handledInitialFileRef = useRef<File | null>(null)
 
   const floors = useMemo(
-    () => (currentProject ? getCompatibilityFloorsFromProject(currentProject) : []),
+    () => (currentProject ? readLegacyCompatibilityFloors(currentProject) : []),
     [currentProject]
   )
   const currentFileName = file?.name.toLowerCase() ?? ''
@@ -816,7 +816,7 @@ function ImportPlanImageDialog({
   const isFloorEmptyForAutoReplace = useCallback(
     (floor: Floor | null | undefined) => {
       if (!floor || !currentProject) return false
-      const mainPanel = getElectricalPanelsFromProject(currentProject).find(
+      const mainPanel = selectProjectElectricalPanels(currentProject).find(
         (panel: Panel) => panel.isMain
       )
       const mainPanelId = mainPanel?.id
@@ -828,10 +828,10 @@ function ImportPlanImageDialog({
           floor.floorPlan.windows.length > 0)
       )
       const hasAsset = !!(floor.planAsset || floor.planImportAsset)
-      const hasNotes = getSitplanNotesFromProject(currentProject).some(
+      const hasNotes = querySitplanNotes(currentProject).some(
         (note: Note) => note.floorId === floor.id
       )
-      const hasPlacements = getElectricalPanelsFromProject(currentProject).some((panel: Panel) => {
+      const hasPlacements = selectProjectElectricalPanels(currentProject).some((panel: Panel) => {
         const checkPanel = (p: Panel): boolean => {
           for (const endpoint of p.circuits.flatMap((circuit: Circuit) => circuit.endpoints)) {
             const hasMeaningfulPlacement = endpoint.placements.some((placement: Placement) => {
@@ -1020,7 +1020,7 @@ function ImportPlanImageDialog({
 
         const floorNamePrefix = t('canvas.floor')
         const usedFloorNames = new Set(
-          getCompatibilityFloorsFromProject(currentProject).map((f: Floor) => f.name)
+          readLegacyCompatibilityFloors(currentProject).map((f: Floor) => f.name)
         )
         let nextFloorNumber = usedFloorNames.size + 1
         const getImportedFloorName = (_pageIndex: number) => {
@@ -1139,7 +1139,7 @@ function ImportPlanImageDialog({
         } else {
           const activeFloor = activeFloorId ? getFloorById(activeFloorId) : null
           const fallbackEmptyFloor =
-            getCompatibilityFloorsFromProject(currentProject).find((floor: Floor) =>
+            readLegacyCompatibilityFloors(currentProject).find((floor: Floor) =>
               isFloorEmptyForAutoReplace(floor)
             ) ?? null
           const floorToReuse = isFloorEmptyForAutoReplace(activeFloor)

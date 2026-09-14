@@ -5,7 +5,7 @@ import type { SymbolMetadata } from '@/lib/symbols'
 import { getEndpointTypeFromSymbol } from '@/utils'
 import { collectCircuits, flattenPanels } from '@/utils/eendraad/panelHelpers'
 import {
-  getElectricalPanelsFromProject,
+  selectProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { getMainBusOrder } from '@/lib/eendraad/mainBusOrder'
@@ -278,7 +278,7 @@ export function resolveInitialPlanDropAssignment(
   if (!endpointType) return null
 
   const dropKind = endpointTypeToPlanDropKind(endpointType)
-  const panelsFlat = flattenPanels(getElectricalPanelsFromProject(project))
+  const panelsFlat = flattenPanels(selectProjectElectricalPanels(project))
   if (panelsFlat.length === 0) return null
 
   const panelId =

@@ -37,8 +37,11 @@ import {
   findPanelOwningProtection,
   findProtectionById,
   getAllCircuits,
+  getAllEndpoints,
   maybeApplyAutomaticEendraadNamingForPanel,
   migrateSubCircuitContentToParent,
+  promoteCircuitSubcircuitsToParent,
+  pruneStaleElectricalEndpointRecords,
   prunePanelGridSlotsForUnresolvedModules,
   pruneStalePanelGridProtectionReferencesInProject,
   rewirePromotedIncomingProtectionGridRef,
@@ -52,9 +55,10 @@ import { resolveSecondaryBusEjectSelection } from '@/lib/eendraad/secondaryBusEj
 import { ensureInstallationFeedTopology } from '@/lib/feedTopology'
 import { findPanelById } from '@/lib/panel/panelTree'
 import { getViewportCenterPlanSpaceIfApplicable } from '@/lib/plan/autoSitplanPlacement'
+import { healPlanWiring } from '@/lib/plan/planWiring'
 import {
-  getMutableElectricalInstallationForProject,
-  getMutableElectricalPanelsForProject,
+  getEditableProjectElectricalInstallation,
+  getEditableProjectElectricalPanels,
 } from '@/lib/projectV2/electrical'
 import {
   getDefaultProtectionProps,
@@ -130,12 +134,23 @@ function preserveDeletedProtectionPanelLinks(
   for (const panel of panels) preserveInPanel(panel)
 }
 
+function collectPanelEndpointIds(panels: Panel[]): Set<string> {
+  return new Set(panels.flatMap((panel) => getAllEndpoints(panel).map((endpoint) => endpoint.id)))
+}
+
+function promoteDeletedProtectionSubcircuits(protection: ProtectionDevice, panels: Panel[]): void {
+  for (const circuit of protection.circuits ?? []) {
+    const parentInfo = findParentCircuitInfo(circuit.id, panels)
+    if (parentInfo) promoteCircuitSubcircuitsToParent(circuit, parentInfo.parentCircuit)
+  }
+}
+
 export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
   // Protection actions
   addProtection: (panelId, protection) =>
     set((state) => {
       if (state.currentProject) {
-        const panels = getMutableElectricalPanelsForProject(state.currentProject)
+        const panels = getEditableProjectElectricalPanels(state.currentProject)
         const panel = findPanelById(panels, panelId)
         if (panel) {
           if (!protection.circuits) {
@@ -152,7 +167,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
   insertProtectionAfter: (panelId, protection, afterProtectionId) =>
     set((state) => {
       if (state.currentProject) {
-        const panels = getMutableElectricalPanelsForProject(state.currentProject)
+        const panels = getEditableProjectElectricalPanels(state.currentProject)
         const panel = findPanelById(panels, panelId)
         if (panel) {
           const idx = panel.protections.findIndex((p) => p.id === afterProtectionId)
@@ -170,7 +185,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
   insertProtectionBefore: (panelId, protection, beforeProtectionId) =>
     set((state) => {
       if (state.currentProject) {
-        const panels = getMutableElectricalPanelsForProject(state.currentProject)
+        const panels = getEditableProjectElectricalPanels(state.currentProject)
         const panel = findPanelById(panels, panelId)
         if (panel) {
           const idx = panel.protections.findIndex((p) => p.id === beforeProtectionId)
@@ -185,7 +200,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
       }
     }),
 
-  duplicateProtectionLeft: (protectionId, mainBusPlacement) =>
+  duplicateProtectionLeft: (protectionId, mainBusPlacement, options) =>
     runDuplicateProtectionLeft(
       protectionId,
       {
@@ -212,14 +227,15 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
           )
         },
       },
-      mainBusPlacement
+      mainBusPlacement,
+      options
     ),
 
   updateProtection: (id, updates) =>
     set((state) => {
       if (state.currentProject) {
         const owningPanel = findPanelOwningProtection(
-          getMutableElectricalPanelsForProject(state.currentProject),
+          getEditableProjectElectricalPanels(state.currentProject),
           id
         )
         if (owningPanel) {
@@ -228,7 +244,9 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
             const oldLabel = protection.label
             const newLabelRaw = updates.label
             const nextUpdates =
-              typeof newLabelRaw === 'string'
+              typeof newLabelRaw === 'string' &&
+              getEditableProjectElectricalInstallation(state.currentProject)?.eendraadAutomaticNaming &&
+              !protection.circuits?.some((circuit) => circuit.eendraadManualCodeLock === true)
                 ? {
                     ...updates,
                     label: resolveUniqueProtectionLabelOnPanel(
@@ -279,7 +297,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
             const newPoleWidth = getModuleWidthInCols(protectionRef, state.currentProject)
             if (oldPoleWidth !== newPoleWidth) {
               clearStaleAutoModuleWidthForModuleRef(
-                getMutableElectricalPanelsForProject(state.currentProject),
+                getEditableProjectElectricalPanels(state.currentProject),
                 protectionRef,
                 oldPoleWidth
               )
@@ -306,8 +324,8 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
   deleteProtection: (id, options) =>
     set((state) => {
       if (state.currentProject) {
-        const panels = getMutableElectricalPanelsForProject(state.currentProject)
-        // Before removing, migrate any subcircuit content back to the parent circuit
+        const panels = getEditableProjectElectricalPanels(state.currentProject)
+        const endpointIdsBeforeDeletion = collectPanelEndpointIds(panels)
         let protectionToDelete: ProtectionDevice | undefined
         for (const panel of panels) {
           protectionToDelete = findProtectionById(panel, id)
@@ -321,7 +339,16 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
           `delete protection "${protectionToDelete.label?.trim() || protectionToDelete.id}"`
         )
 
-        migrateSubCircuitContentToParent(protectionToDelete, panels)
+        if (protectionToDelete.subPanelId && options?.preserveLinkedPanels) {
+          // A preserved secondary-panel feeder is intentionally reattached to the
+          // surviving parent protection, including its panel link.
+          migrateSubCircuitContentToParent(protectionToDelete, panels)
+        } else {
+          // Ordinary chained protections are removed surgically: only the chain
+          // reference is replaced; endpoints and other content leave with the
+          // deleted protection.
+          promoteDeletedProtectionSubcircuits(protectionToDelete, panels)
+        }
         const linkedSubPanelId = protectionToDelete.subPanelId
         const deletedProtectionIds = new Set([id])
         if (options?.preserveLinkedPanels && linkedSubPanelId) {
@@ -356,7 +383,14 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
             // blank module position behind.
             cleanupPanelGridSlotsForDevice(panels, { kind: 'protection', id })
             pruneStalePanelGridProtectionReferencesInProject(state.currentProject)
-            pruneEendraadFrames(state.currentProject, { removedMemberIds: [id] })
+            const removedEndpointIds = [...endpointIdsBeforeDeletion].filter(
+              (endpointId) => !collectPanelEndpointIds(panels).has(endpointId)
+            )
+            pruneEendraadFrames(state.currentProject, {
+              removedMemberIds: [id, ...removedEndpointIds],
+            })
+            healPlanWiring(state.currentProject)
+            pruneStaleElectricalEndpointRecords(state.currentProject)
             return
           }
         }
@@ -366,7 +400,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
   deleteProtections: (ids, options) =>
     set((state) => {
       if (state.currentProject) {
-        const panels = getMutableElectricalPanelsForProject(state.currentProject)
+        const panels = getEditableProjectElectricalPanels(state.currentProject)
         if (ids.length === 1) {
           const onlyId = ids[0]!
           let protLabel: string | undefined
@@ -385,18 +419,25 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
         }
 
         const idsSet = new Set(ids)
+        const endpointIdsBeforeDeletion = collectPanelEndpointIds(panels)
 
-        // Before removing, migrate subcircuit content for each protection being deleted
+        // Promote each deleted protection's children into its parent's chain slot. A
+        // linked feeder that is explicitly being preserved keeps the existing
+        // content-migration behavior so its secondary panel remains attached.
         for (const panel of panels) {
-          const migrateInPanel = (p: Panel) => {
+          const promoteInPanel = (p: Panel) => {
             for (const prot of p.protections) {
               if (idsSet.has(prot.id)) {
-                migrateSubCircuitContentToParent(prot, panels)
+                if (prot.subPanelId && options?.preserveLinkedPanels) {
+                  migrateSubCircuitContentToParent(prot, panels)
+                } else {
+                  promoteDeletedProtectionSubcircuits(prot, panels)
+                }
               }
             }
-            for (const subPanel of p.subPanels) migrateInPanel(subPanel)
+            for (const subPanel of p.subPanels) promoteInPanel(subPanel)
           }
-          migrateInPanel(panel)
+          promoteInPanel(panel)
         }
 
         const linkedSubPanelIds = new Set<string>()
@@ -431,7 +472,14 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
           cleanupPanelGridSlotsForDevice(panels, { kind: 'protection', id })
         }
         pruneStalePanelGridProtectionReferencesInProject(state.currentProject)
-        pruneEendraadFrames(state.currentProject, { removedMemberIds: ids })
+        const removedEndpointIds = [...endpointIdsBeforeDeletion].filter(
+          (endpointId) => !collectPanelEndpointIds(panels).has(endpointId)
+        )
+        pruneEendraadFrames(state.currentProject, {
+          removedMemberIds: [...ids, ...removedEndpointIds],
+        })
+        healPlanWiring(state.currentProject)
+        pruneStaleElectricalEndpointRecords(state.currentProject)
         state.isDirty = true
         applyAutomaticEendraadNamingAllPanelsInProject(state.currentProject)
       }
@@ -445,7 +493,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
         return
       }
       const panel = findPanelById(
-        getMutableElectricalPanelsForProject(state.currentProject),
+        getEditableProjectElectricalPanels(state.currentProject),
         panelId
       )
       if (!panel) {
@@ -592,7 +640,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
       }
 
       // Find the parent circuit that contains this circuit in subCircuitIds
-      for (const panel of getMutableElectricalPanelsForProject(state.currentProject)) {
+      for (const panel of getEditableProjectElectricalPanels(state.currentProject)) {
         const allCircuits = getAllCircuits(panel)
         for (const parentCircuit of allCircuits) {
           if (parentCircuit.subCircuitIds && parentCircuit.subCircuitIds.includes(circuitId)) {
@@ -657,7 +705,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
     set((state) => {
       if (!state.currentProject) return
       const targetPanel = findPanelById(
-        getMutableElectricalPanelsForProject(state.currentProject),
+        getEditableProjectElectricalPanels(state.currentProject),
         panelId
       )
       if (!targetPanel) return
@@ -665,7 +713,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
       let protection: ProtectionDevice | undefined
       let sourcePanel: Panel | undefined
 
-      const walkStack: Panel[] = [...getMutableElectricalPanelsForProject(state.currentProject)]
+      const walkStack: Panel[] = [...getEditableProjectElectricalPanels(state.currentProject)]
       while (walkStack.length) {
         const p = walkStack.pop()!
         for (const prot of p.protections ?? []) {
@@ -699,7 +747,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
     set((state) => {
       if (!state.currentProject) return
 
-      const panels = getMutableElectricalPanelsForProject(state.currentProject)
+      const panels = getEditableProjectElectricalPanels(state.currentProject)
       const sourcePanel = findPanelOwningProtection(panels, protectionId)
       const targetPanel = findPanelById(panels, panelId)
       const protection = sourcePanel && findProtectionById(sourcePanel, protectionId)
@@ -708,18 +756,13 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
       // A secondary panel has one incoming protection slot. Main-panel supply
       // devices use the separate feed-topology actions.
       if (!sourcePanel || !targetPanel || targetPanel.isMain || !protection || !panelCircuit) return
-      if ((panelCircuit.trunkDevices ?? []).some((device) => device.type === 'protection')) return
-      const hasChildCircuitRefs = (protection.circuits ?? []).some(
-        (circuit) => (circuit.subCircuitIds?.length ?? 0) > 0
+      const existingIncomingProtection = (panelCircuit.trunkDevices ?? []).find(
+        (device) => device.type === 'protection'
       )
-      const hasOwnLoadPayload = (protection.circuits ?? []).some(
-        (circuit) =>
-          circuit.endpoints.length > 0 ||
-          (circuit.branches?.length ?? 0) > 0 ||
-          (circuit.trunkDevices?.length ?? 0) > 0
-      )
-      if (hasOwnLoadPayload && !hasChildCircuitRefs) return
-
+      // The panel feeder can contain only one incoming protection. A matching
+      // device is an incomplete earlier move and is safe to normalize below;
+      // a different device is a real occupied feeder and must remain blocked.
+      if (existingIncomingProtection && existingIncomingProtection.id !== protection.id) return
       relocateProtectionToPanelMainBus(sourcePanel, targetPanel, protection, 0)
       const incomingDevice = protectionDeviceToSubPanelIncomingTrunkDevice(
         protection,
@@ -727,6 +770,13 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
         getVoltagePolesConfig(state.currentProject)
       )
       promoteMovedSubPanelRootToIncomingTrunk(targetPanel, protection.id, incomingDevice)
+
+      // The moved protection is represented by the incoming trunk device now.
+      // Keep it out of the panel's main-bus protection list even when the move
+      // is repairing a partially completed prior operation.
+      targetPanel.protections = targetPanel.protections.filter(
+        (candidate) => candidate.id !== protection.id
+      )
       rewirePromotedIncomingProtectionGridRef(targetPanel, protection.id, panelCircuit.id)
 
       moved = (panelCircuit.trunkDevices ?? []).some(
@@ -751,7 +801,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
     set((state) => {
       if (!state.currentProject) return
       const sourcePanel = findPanelOwningProtection(
-        getMutableElectricalPanelsForProject(state.currentProject),
+        getEditableProjectElectricalPanels(state.currentProject),
         protectionId
       )
       const protection = sourcePanel && findProtectionById(sourcePanel, protectionId)
@@ -760,7 +810,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
       const insertIdx = computeMainBusInsertIndexForEjectedProtection(
         sourcePanel,
         protectionId,
-        getMutableElectricalPanelsForProject(state.currentProject)
+        getEditableProjectElectricalPanels(state.currentProject)
       )
       const movedCircuitIds = collectCircuitClosureDownstreamFromProtection(sourcePanel, protection)
       const representativeCircuitId = pickRepresentativeCircuitIdForMainBusMove(
@@ -770,7 +820,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
       const originalParentInfo = representativeCircuitId
         ? findParentCircuitInfo(
             representativeCircuitId,
-            getMutableElectricalPanelsForProject(state.currentProject)
+            getEditableProjectElectricalPanels(state.currentProject)
           )
         : null
       const originalParentCircuit = originalParentInfo?.parentCircuit
@@ -784,7 +834,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
         !movedCircuitIds.has(originalParentCircuit.id)
 
       const totalPanelCount = countPanels(
-        getMutableElectricalPanelsForProject(state.currentProject)
+        getEditableProjectElectricalPanels(state.currentProject)
       )
       const panelNumber = totalPanelCount + 1
       const newPanelId = generateId()
@@ -824,7 +874,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
       })
       if (panelPlacement) {
         const targetPanelForPlacement = findPanelById(
-          getMutableElectricalPanelsForProject(state.currentProject),
+          getEditableProjectElectricalPanels(state.currentProject),
           newPanelId
         )!
         const panelCircuit = findCircuitById(targetPanelForPlacement, 'PANEL')
@@ -863,7 +913,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
 
       const voltagePoles = getVoltagePolesConfig(state.currentProject)
       const targetPanel = findPanelById(
-        getMutableElectricalPanelsForProject(state.currentProject),
+        getEditableProjectElectricalPanels(state.currentProject),
         newPanelId
       )!
       if (!targetPanel.circuits.some((circuit) => circuit.code === 'PANEL')) {
@@ -886,12 +936,20 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
         protection.id,
         voltagePoles
       )
-      promoteMovedSubPanelRootToIncomingTrunk(targetPanel, protection.id, incomingDevice)
+      const protectionHasOwnEndpoints = (protection.circuits ?? []).some(
+        (circuit) => (circuit.endpoints?.length ?? 0) > 0
+      )
+      if (!protectionHasOwnEndpoints) {
+        promoteMovedSubPanelRootToIncomingTrunk(targetPanel, protection.id, incomingDevice)
+      }
 
       const parentProtForMergedFeeder = originalParentInfo?.parentProtection
       if (shouldReattachFeederToOriginalParent && parentProtForMergedFeeder) {
         parentProtForMergedFeeder.subPanelId = newPanelId
         rewirePanelGridProtectionModuleId(sourcePanel, protectionId, parentProtForMergedFeeder.id)
+        originalParentCircuit.subCircuitIds = originalParentCircuit.subCircuitIds?.filter(
+          (circuitId) => circuitId !== representativeCircuitId
+        )
         if (originalParentCircuit.subCircuitIds?.length === 0) {
           originalParentCircuit.subCircuitIds = undefined
         }
@@ -930,11 +988,11 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
       dedupePanelProtectionsInPanelTree(targetPanel)
       ensureLinkedSubPanelsHaveOwnPanelEndpoint(state.currentProject)
       syncLinkedSubPanelHierarchy(state.currentProject)
-      const installation = getMutableElectricalInstallationForProject(state.currentProject)
+      const installation = getEditableProjectElectricalInstallation(state.currentProject)
       if (!installation) return
       ensureInstallationFeedTopology(
         installation,
-        getMutableElectricalPanelsForProject(state.currentProject)
+        getEditableProjectElectricalPanels(state.currentProject)
       )
 
       state.isDirty = true
@@ -959,7 +1017,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
       if (!selection || selection.protectionIds.length <= 1) return
 
       const sourcePanel = findPanelById(
-        getMutableElectricalPanelsForProject(state.currentProject),
+        getEditableProjectElectricalPanels(state.currentProject),
         selection.sourcePanel.id
       )
       if (!sourcePanel) return
@@ -975,7 +1033,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
       if (protectionsToMove.length !== selection.protectionIds.length) return
 
       const totalPanelCount = countPanels(
-        getMutableElectricalPanelsForProject(state.currentProject)
+        getEditableProjectElectricalPanels(state.currentProject)
       )
       const panelNumber = totalPanelCount + 1
       const newPanelId = generateId()
@@ -1016,7 +1074,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
         ...(preferredPlanPos ? { preferredPlanPos } : {}),
       })
       const targetPanel = findPanelById(
-        getMutableElectricalPanelsForProject(state.currentProject),
+        getEditableProjectElectricalPanels(state.currentProject),
         newPanelId
       )!
       let panelCircuit = targetPanel.circuits.find((circuit) => circuit.code === 'PANEL')
@@ -1060,11 +1118,11 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
       dedupePanelProtectionsInPanelTree(targetPanel)
       ensureLinkedSubPanelsHaveOwnPanelEndpoint(state.currentProject)
       syncLinkedSubPanelHierarchy(state.currentProject)
-      const installation = getMutableElectricalInstallationForProject(state.currentProject)
+      const installation = getEditableProjectElectricalInstallation(state.currentProject)
       if (!installation) return
       ensureInstallationFeedTopology(
         installation,
-        getMutableElectricalPanelsForProject(state.currentProject)
+        getEditableProjectElectricalPanels(state.currentProject)
       )
 
       state.isDirty = true
@@ -1078,7 +1136,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
     set((state) => {
       if (!state.currentProject) return
       const panel = findPanelById(
-        getMutableElectricalPanelsForProject(state.currentProject),
+        getEditableProjectElectricalPanels(state.currentProject),
         panelId
       )
       if (!panel) return
@@ -1100,7 +1158,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
     set((state) => {
       if (!state.currentProject) return
       const result = moveCircuitsToRcdBus(
-        getMutableElectricalPanelsForProject(state.currentProject),
+        getEditableProjectElectricalPanels(state.currentProject),
         panelId,
         rcdProtectionId,
         circuitIds,
@@ -1119,7 +1177,7 @@ export const createProtectionSlice: ProjectSliceCreator = (set, get) => ({
     set((state) => {
       if (!state.currentProject) return
       const panel = findPanelById(
-        getMutableElectricalPanelsForProject(state.currentProject),
+        getEditableProjectElectricalPanels(state.currentProject),
         panelId
       )
       if (!panel) return

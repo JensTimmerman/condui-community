@@ -9,13 +9,159 @@ import type {
 } from '@/types/schema'
 import { nanoid } from 'nanoid'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { getPrimaryPanelBusSectionId } from '@/lib/panel/panelBusSections'
 
 export type SupplyFeedScope = 'shared' | 'root'
+
+type FeedTopologyCacheEntry = {
+  panels: Panel[]
+  topologySource: FeedTopology | undefined
+  mainSupply: Installation['mainSupply']
+  mainSupplyCable: CableSpec
+  mainSupplyOrigin: Installation['mainSupply']['origin']
+  mainSupplyHideWireLabel: boolean | undefined
+  mainSupplyDevices: TrunkDevice[] | undefined
+  mainSupplyDeviceLength: number
+  mainSupplyDevicePositions: number[]
+  mainSupplySegmentCables: Installation['mainSupply']['supplyTrunkSegmentCables']
+  rootFeeds: FeedTopology['rootFeeds'] | undefined
+  rootFeedLength: number
+  rootFeedCableRefs: Array<CableSpec | undefined>
+  rootFeedDeviceRefs: Array<TrunkDevice[] | undefined>
+  rootFeedDeviceLengths: number[]
+  rootFeedDevicePositions: number[][]
+  sharedFeed: FeedTopology['sharedFeed'] | undefined
+  sharedFeedDevices: TrunkDevice[] | undefined
+  panelLength: number
+  panelRefs: Panel[]
+  panelIds: string[]
+  panelMainFlags: Array<boolean | undefined>
+  panelPrimaryBusSectionIds: Array<string | undefined>
+  panelBusSectionRefs: Array<Panel['busSections']>
+  result: FeedTopology
+}
+
+/**
+ * Topology projection is read extremely often by layout, wire, phase and canvas code.
+ * Keep one result per immutable installation revision. The lightweight guards below
+ * also notice the in-place edits used by import/migration code before reusing it.
+ */
+const feedTopologyCache = new WeakMap<Installation, FeedTopologyCacheEntry>()
+
+function trunkPositionsMatch(
+  devices: TrunkDevice[] | undefined,
+  length: number,
+  positions: number[]
+): boolean {
+  if ((devices?.length ?? 0) !== length) return false
+  for (let index = 0; index < length; index += 1) {
+    if (devices?.[index]?.trunkPosition !== positions[index]) return false
+  }
+  return true
+}
+
+function cachedTopologyMatches(
+  entry: FeedTopologyCacheEntry,
+  installation: Installation,
+  panels: Panel[]
+): boolean {
+  const mainSupply = installation.mainSupply
+  const topology = installation.feedTopology
+  if (
+    entry.panels !== panels ||
+    entry.topologySource !== topology ||
+    entry.mainSupply !== mainSupply ||
+    entry.mainSupplyCable !== mainSupply.cable ||
+    entry.mainSupplyOrigin !== mainSupply.origin ||
+    entry.mainSupplyHideWireLabel !== mainSupply.hideWireLabel ||
+    entry.mainSupplyDevices !== mainSupply.supplyTrunkDevices ||
+    entry.mainSupplySegmentCables !== mainSupply.supplyTrunkSegmentCables ||
+    entry.rootFeeds !== topology?.rootFeeds ||
+    entry.sharedFeed !== topology?.sharedFeed ||
+    entry.sharedFeedDevices !== topology?.sharedFeed.trunkDevices ||
+    entry.panelLength !== panels.length ||
+    entry.rootFeedLength !== (topology?.rootFeeds.length ?? 0) ||
+    !trunkPositionsMatch(
+      mainSupply.supplyTrunkDevices,
+      entry.mainSupplyDeviceLength,
+      entry.mainSupplyDevicePositions
+    )
+  ) {
+    return false
+  }
+
+  for (let index = 0; index < panels.length; index += 1) {
+    const panel = panels[index]
+    if (
+      entry.panelRefs[index] !== panel ||
+      entry.panelIds[index] !== panel?.id ||
+      entry.panelMainFlags[index] !== panel?.isMain ||
+      entry.panelPrimaryBusSectionIds[index] !== panel?.primaryBusSectionId ||
+      entry.panelBusSectionRefs[index] !== panel?.busSections
+    ) {
+      return false
+    }
+  }
+
+  for (let index = 0; index < entry.rootFeedLength; index += 1) {
+    const feed = topology?.rootFeeds[index]
+    if (
+      entry.rootFeedCableRefs[index] !== feed?.cable ||
+      entry.rootFeedDeviceRefs[index] !== feed?.trunkDevices ||
+      !trunkPositionsMatch(
+        feed?.trunkDevices,
+        entry.rootFeedDeviceLengths[index] ?? 0,
+        entry.rootFeedDevicePositions[index] ?? []
+      )
+    ) {
+      return false
+    }
+  }
+  return true
+}
+
+function rememberFeedTopology(
+  installation: Installation,
+  panels: Panel[],
+  result: FeedTopology
+): FeedTopology {
+  const topologySource = installation.feedTopology
+  const rootFeeds = topologySource?.rootFeeds
+  const mainSupplyDevices = installation.mainSupply.supplyTrunkDevices
+  feedTopologyCache.set(installation, {
+    panels,
+    topologySource,
+    mainSupply: installation.mainSupply,
+    mainSupplyCable: installation.mainSupply.cable,
+    mainSupplyOrigin: installation.mainSupply.origin,
+    mainSupplyHideWireLabel: installation.mainSupply.hideWireLabel,
+    mainSupplyDevices,
+    mainSupplyDeviceLength: mainSupplyDevices?.length ?? 0,
+    mainSupplyDevicePositions: mainSupplyDevices?.map((device) => device.trunkPosition) ?? [],
+    mainSupplySegmentCables: installation.mainSupply.supplyTrunkSegmentCables,
+    rootFeeds,
+    rootFeedLength: rootFeeds?.length ?? 0,
+    rootFeedCableRefs: rootFeeds?.map((feed) => feed.cable) ?? [],
+    rootFeedDeviceRefs: rootFeeds?.map((feed) => feed.trunkDevices) ?? [],
+    rootFeedDeviceLengths: rootFeeds?.map((feed) => feed.trunkDevices?.length ?? 0) ?? [],
+    rootFeedDevicePositions:
+      rootFeeds?.map((feed) => feed.trunkDevices?.map((device) => device.trunkPosition) ?? []) ?? [],
+    sharedFeed: topologySource?.sharedFeed,
+    sharedFeedDevices: topologySource?.sharedFeed.trunkDevices,
+    panelLength: panels.length,
+    panelRefs: [...panels],
+    panelIds: panels.map((panel) => panel.id),
+    panelMainFlags: panels.map((panel) => panel.isMain),
+    panelPrimaryBusSectionIds: panels.map((panel) => panel.primaryBusSectionId),
+    panelBusSectionRefs: panels.map((panel) => panel.busSections),
+    result,
+  })
+  return result
+}
 
 export function collectRootPanels(panels: Panel[]): Panel[] {
   return panels.filter((panel) => panel.isMain !== false)
@@ -107,6 +253,9 @@ function resolvePanelIncomingSupplyCable(
 }
 
 export function ensureInstallationFeedTopology(installation: Installation, panels: Panel[]): FeedTopology {
+  const cached = feedTopologyCache.get(installation)
+  if (cached && cachedTopologyMatches(cached, installation, panels)) return cached.result
+
   const rootPanels = collectRootPanels(panels)
   /** One main panel: mainSupply is the UI/schema source for the incoming supply cable. */
   const soleRootPanelId = rootPanels.length === 1 ? rootPanels[0]!.id : null
@@ -188,7 +337,7 @@ export function ensureInstallationFeedTopology(installation: Installation, panel
     } catch {
       // Read-only snapshots can call this during render; derived topology still returned.
     }
-    return topology
+    return rememberFeedTopology(installation, panels, topology)
   }
 
   const connectorId = nanoid(16)
@@ -213,7 +362,7 @@ export function ensureInstallationFeedTopology(installation: Installation, panel
   } catch {
     // Read-only snapshots can call this during render; derived topology still returned.
   }
-  return topology
+  return rememberFeedTopology(installation, panels, topology)
 }
 
 export interface PanelFeedProjection {
@@ -649,9 +798,9 @@ export function buildSupplyWireLengthVisibilityUpdate(
 }
 
 export function getAllSupplyTrunkDevices(project: ProjectWithOptionalV2Electrical): TrunkDevice[] {
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   if (!installation) return []
-  const topology = ensureInstallationFeedTopology(installation, getElectricalPanelsFromProject(project))
+  const topology = ensureInstallationFeedTopology(installation, getProjectElectricalPanels(project))
   const all: TrunkDevice[] = []
   const seen = new Set<string>()
   const push = (device: TrunkDevice) => {

@@ -1,5 +1,5 @@
 import { getSymbolById } from '@/lib/symbols'
-import { symbolCanAppearInPanelGrid } from '@/lib/eendraad/projectElectricalDomain'
+import { symbolCanAppearInPanelGrid } from '@/lib/panel/panelGridSymbolEligibility'
 
 const SITUATION_PLAN_EXCLUDED_SYMBOLS = new Set(['domotica', 'energy_meter'])
 const OPTIONAL_SITUATION_PLAN_SYMBOLS = new Set([
@@ -21,8 +21,10 @@ export function canSymbolAppearOnSituationPlan(symbolId: string | undefined): bo
 
 /** Whether absence from the situation plan is a data-integrity problem. */
 export function symbolRequiresSituationPlanPlacement(symbolId: string | undefined): boolean {
-  return !!symbolId &&
+  return (
+    !!symbolId &&
     canSymbolAppearOnSituationPlan(symbolId) &&
     !symbolCanAppearInPanelGrid(symbolId) &&
     !OPTIONAL_SITUATION_PLAN_SYMBOLS.has(symbolId)
+  )
 }

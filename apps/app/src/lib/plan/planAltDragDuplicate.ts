@@ -8,15 +8,75 @@ import {
   endpointSymbolCanBeDuplicated,
 } from '@/lib/eendraad/duplicateEndpoint'
 import { ensureSitplanPlacementsForEndpoints } from '@/lib/eendraad/duplicateSitplanHelpers'
-import type { Endpoint, Placement } from '@/types/schema'
+import { endpointSupportsMultiplier } from '@/utils/endpointMultipliers'
+import {
+  createSyncSupplyInverterMultiplierDeps,
+  syncSupplyDeviceMultiplierCount,
+} from '@/lib/eendraad/syncSupplyInverterMultiplier'
+import {
+  getSupplyDeviceMultiplier,
+  supportsSupplyDeviceMultiplier,
+} from '@/lib/supplyAssembly/inverterMultipliers'
+import type { Endpoint, Placement, TrunkDevice } from '@/types/schema'
 import type { Point } from '@/types/ui'
 import { generateId } from '@/utils'
 import { useProjectStore } from '@/stores/projectStore'
 import { useUIStore } from '@/stores/uiStore'
-import { getBuildingFloorsFromProject } from '@/lib/projectV2/buildingFloors'
+import { selectProjectBuildingFloors } from '@/lib/projectV2/buildingFloors'
 
 /** Initial nudge so the copy is visible while dragging; pointer updates position live. */
 export const PLAN_ALT_DRAG_COPY_OFFSET = { x: 24, y: 24 } as const
+
+export type PlanAltDuplicateSource = {
+  endpoint?: Endpoint | null
+  trunkDevice?: TrunkDevice | null
+}
+
+/** Whether this plan symbol has a duplication strategy. */
+export function canPlanAltDuplicate(source: PlanAltDuplicateSource): boolean {
+  if (source.trunkDevice) return supportsSupplyDeviceMultiplier(source.trunkDevice)
+  if (!source.endpoint) return false
+  return endpointSupportsMultiplier(source.endpoint) || endpointSymbolCanBeDuplicated(source.endpoint)
+}
+
+/**
+ * Create the placement that the shared Alt-drag handoff will move.  Every
+ * eligible symbol uses this one entry point; only its domain creation rule
+ * differs (another occurrence versus another physical endpoint).
+ */
+export function createPlanAltDuplicatePlacement(
+  source: PlanAltDuplicateSource,
+  refPlacement: Placement,
+): string | null {
+  const trunkDevice = source.trunkDevice
+  if (trunkDevice && supportsSupplyDeviceMultiplier(trunkDevice)) {
+    const store = useProjectStore.getState()
+    const incremented = store.withSingleUndoEntry(
+      () =>
+        syncSupplyDeviceMultiplierCount(
+          createSyncSupplyInverterMultiplierDeps(),
+          trunkDevice.id,
+          getSupplyDeviceMultiplier(trunkDevice) + 1,
+          { placement: refPlacement }
+        ),
+      { sessionLabel: 'add supply device multiplier via alt-drag' }
+    )
+    if (!incremented) return null
+    const placementId = store.getTrunkDeviceById(trunkDevice.id)?.device.placements?.at(-1)?.id
+    if (!placementId) return null
+    useUIStore.getState().setSelection({ type: 'placement', ids: [placementId] })
+    return placementId
+  }
+
+  const endpoint = source.endpoint
+  if (!endpoint) return null
+  if (endpointSupportsMultiplier(endpoint)) {
+    return createPlanMultiplierAltDuplicatePlacement(endpoint, refPlacement)
+  }
+  return endpointSymbolCanBeDuplicated(endpoint)
+    ? createPlanPropertyAltDuplicatePlacement(endpoint.id, refPlacement)
+    : null
+}
 
 /** Add another placement on the same endpoint (lights / multiplier symbols). */
 export function createPlanMultiplierAltDuplicatePlacement(
@@ -59,7 +119,6 @@ export function createPlanPropertyAltDuplicatePlacement(
       circuitId: circuitInfo.circuit.id,
       sourceEndpointId,
       context: 'plan',
-      placement: { mode: 'new_branch', order: 'before_source_branch' },
     },
     {
       getCircuitById: store.getCircuitById,
@@ -134,7 +193,6 @@ export function runPlanEndpointAltDragDuplicate(
       circuitId: circuitInfo.circuit.id,
       sourceEndpointId,
       context: 'plan',
-      placement: { mode: 'new_branch', order: 'before_source_branch' },
     },
     {
       getCircuitById: store.getCircuitById,
@@ -159,7 +217,7 @@ export function runPlanEndpointAltDragDuplicate(
   const floorId =
     refPlacement?.floorId ??
     ui.activeFloorId ??
-    getBuildingFloorsFromProject(project)[0]?.id
+    selectProjectBuildingFloors(project)[0]?.id
   if (!floorId) return false
 
   const newPlacementId = generateId()

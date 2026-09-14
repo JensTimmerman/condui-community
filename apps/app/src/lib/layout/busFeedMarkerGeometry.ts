@@ -1,5 +1,6 @@
 import type { WireSegment } from '@/types/schema'
 import { getLeftBiasedBusFeedStubX } from '@/lib/panel/panelBusFeedPreview'
+import { getPhaseLabelTextLayout } from '@/lib/wireTextLabel'
 
 export interface BusFeedMarkerPoint {
   x: number
@@ -106,8 +107,9 @@ export function getBusFeedMarkerPaintBounds(wireSegment: WireSegment): BusFeedMa
     bottom = Math.max(bottom, marker.y + BUS_FEED_MARKER_LABEL_BOTTOM)
   }
   if (wireSegment.phaseLabelAnchor) {
-    left = Math.min(left, wireSegment.phaseLabelAnchor.x)
-    right = Math.max(right, wireSegment.phaseLabelAnchor.x + 48)
+    const phaseLabel = getPhaseLabelTextLayout(wireSegment)
+    left = Math.min(left, wireSegment.phaseLabelAnchor.x + phaseLabel.x)
+    right = Math.max(right, wireSegment.phaseLabelAnchor.x + phaseLabel.x + phaseLabel.width)
     top = Math.min(top, wireSegment.phaseLabelAnchor.y)
     bottom = Math.max(bottom, wireSegment.phaseLabelAnchor.y + 10)
   }

@@ -46,6 +46,27 @@ export function getSupplyWireLabelAnchor(wireSegment: WireSegment): Point2 | und
   return { x: (left + right) / 2, y }
 }
 
+export interface PhaseLabelTextLayout {
+  x: number
+  width: number
+  align: 'left' | 'right'
+}
+
+/** Keep an explicitly anchored phase caption outside the horizontal wire it describes. */
+export function getPhaseLabelTextLayout(
+  wireSegment: WireSegment,
+  width = 48,
+  gap = 5
+): PhaseLabelTextLayout {
+  const anchor = wireSegment.phaseLabelAnchor
+  const isHorizontal = wireSegment.startPoint.y === wireSegment.endPoint.y
+  const wireLeft = Math.min(wireSegment.startPoint.x, wireSegment.endPoint.x)
+  if (anchor && isHorizontal && anchor.x < wireLeft) {
+    return { x: -width - gap, width, align: 'right' }
+  }
+  return { x: 0, width, align: 'left' }
+}
+
 export type WireLabelAlignment = 'origin' | 'center' | 'bottom'
 
 export interface VerticalWireLabelLayoutInput {
@@ -168,10 +189,14 @@ export function computeHorizontalWireLabelStackLayout({
 export interface FormatWireLabelOptions {
   /** Localized fallback when `cable.kind` is `other` and no `customKind` is set. */
   otherLabel?: string
+  /** Localized label for the built-in battery cable kind. */
+  batteryCableLabel?: string
 }
 
 export function formatCableTypeLabel(cable: CableSpec, options?: FormatWireLabelOptions): string {
   if ((cable.kind as string) === 'VOB_in_conduit') return 'VOB'
+  if (cable.kind === 'battery-cable') return options?.batteryCableLabel ?? 'Battery cable'
+  if (cable.kind === 'twinflex') return 'Twinflex'
   if (cable.kind === 'other') {
     const custom = cable.customKind?.trim()
     if (custom) return custom

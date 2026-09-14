@@ -1,5 +1,3 @@
-import type { ProjectV2 } from '@/types/projectV2'
-import type { Installation, Panel } from '@/types/schema'
 import { normalizeInstallationNominalVoltage } from '@/constants/nominalVoltage'
 import {
   ensureLinkedSubPanelsHaveOwnPanelEndpoint,
@@ -20,24 +18,22 @@ import { healJunctionBoxSitplanPlacements } from '@/lib/plan/junctionBoxSitplanP
 import { healProjectFloorsElectricalLayers } from '@/lib/plan/floorLayers'
 import { healPlanWiring } from '@/lib/plan/planWiring'
 import { syncPanelAndSituationPlanDeviceVisibility } from '@/lib/plan/panelPlanPlacementVisibility'
+import { healSharedPlanScale } from '@/lib/projectV2/buildingFloors'
 import {
-  getMutableCompatibilityFloorsForProject,
-  healSharedPlanScale,
-} from '@/lib/projectV2/buildingFloors'
-import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  selectProjectElectricalInstallation,
+  selectProjectElectricalPanels,
+  editProjectSupplyAssemblies,
 } from '@/lib/projectV2/electrical'
-import {
-  projectToStoredProjectV2,
-  stripLazyElementGraphForRuntime,
-} from '@/lib/projectV2/migration'
+import { projectToStoredProjectV2 } from '@/lib/projectV2/migration'
 import { hasLegacyV2ProjectBloat } from '@/lib/projectV2/sanitizeLegacyV2Project'
-import { syncValidationFromCompatibility } from '@/lib/projectV2/validation'
 import { logOrphanReport } from '@/lib/validation/orphanDetection'
 import { healSupplyTrunkProtectionBreakingCapacity } from '@/lib/protectionDefaults'
 import { recordSessionAction } from '@/lib/diagnostics/sessionActionLog'
-import { healSourceChangeoverFeedScope } from '@/lib/supplyAssembly/editorIntegration'
+import {
+  healSourceChangeoverFeedScope,
+  initializeDirectConverterPanelBranches,
+  reconcileDirectConverterCommonLoadPath,
+} from '@/lib/supplyAssembly/editorIntegration'
 import { shortProjectIdLabel } from '@/utils/project'
 import { logger } from '@/lib/logger'
 import { summarizeConverterDcPersistence } from '@/lib/supplyAssembly/persistenceDiagnostics'
@@ -50,58 +46,40 @@ import { findPanelById, findPanelByName } from '@/lib/panel/panelTree'
 
 export { findPanelById, findPanelByName }
 
-export function normalizeRuntimeProjectCompatibilityFields(project: ProjectV2): Project {
-  const compatibilityProject = project as ProjectV2 & {
-    installation?: Installation
-    panels?: Panel[]
-    floors?: unknown
-  }
-  const electrical = project.disciplines.electrical
-
-  if (electrical) {
-    if (Object.prototype.hasOwnProperty.call(compatibilityProject, 'installation') && compatibilityProject.installation) {
-      electrical.installation = compatibilityProject.installation
-    }
-    if (Object.prototype.hasOwnProperty.call(compatibilityProject, 'panels') && compatibilityProject.panels) {
-      electrical.panels = compatibilityProject.panels
-    }
-  }
-
-  delete compatibilityProject.installation
-  delete compatibilityProject.panels
-
-  return project as Project
-}
-
 export function hydrateProjectForEditor(project: ProjectInput): {
   project: Project
   isDirty: boolean
 } {
   const sanitizedLegacyV2Bloat = hasLegacyV2ProjectBloat(project)
-  const runtimeProject = normalizeRuntimeProjectCompatibilityFields(projectToStoredProjectV2(project))
-  getMutableCompatibilityFloorsForProject(runtimeProject)
+  const runtimeProject = projectToStoredProjectV2(project) as Project
   const healedSharedPlanScale = healSharedPlanScale(runtimeProject)
-  const installation = getElectricalInstallationFromProject(runtimeProject)
-  const panels = getElectricalPanelsFromProject(runtimeProject)
+  const installation = selectProjectElectricalInstallation(runtimeProject)
+  const panels = selectProjectElectricalPanels(runtimeProject)
   if (installation) {
     ensureInstallationFeedTopology(installation, panels)
   }
   const healedSourceChangeoverFeedScope = healSourceChangeoverFeedScope(runtimeProject)
   const linkedSupplyAssemblyDeviceReferences = linkSupplyAssemblyDeviceReferences(runtimeProject)
-  const reconciledPanelFeedOrganizations = reconcileInvalidPanelFeedOrganizationsInProject(
-    runtimeProject
+  const initializedDirectBranches = editProjectSupplyAssemblies(runtimeProject).reduce(
+    (changed, assembly) => initializeDirectConverterPanelBranches(runtimeProject, assembly) || changed,
+    false
   )
+  const reconciledPanelFeedOrganizations =
+    reconcileInvalidPanelFeedOrganizationsInProject(runtimeProject)
   const normalizedNominalVoltage = installation
     ? normalizeInstallationNominalVoltage(installation)
     : false
   const healedSupplyProtectionBreakingCapacity =
     healSupplyTrunkProtectionBreakingCapacity(runtimeProject)
+  const reconciledDirectSupplyOutputs = panels.reduce(
+    (changed, panel) => reconcileDirectConverterCommonLoadPath(runtimeProject, panel.id) || changed,
+    initializedDirectBranches
+  )
   const healedSupplyGrid = healSupplyTrunkMisplacedOnMainGrid(runtimeProject)
   const dedupedProtections = dedupeAllPanelsProtectionsInProject(runtimeProject)
   const removedPromotedIncomingProtections =
     removePromotedIncomingProtectionsFromSubPanels(runtimeProject)
-  const healedPromotedIncomingGridRefs =
-    healPromotedIncomingProtectionGridRefs(runtimeProject)
+  const healedPromotedIncomingGridRefs = healPromotedIncomingProtectionGridRefs(runtimeProject)
   const healedLinkedSubPanelSymbols = ensureLinkedSubPanelsHaveOwnPanelEndpoint(runtimeProject)
   const removedDuplicatePanelGridRefs = removePanelGridDuplicateRefsInProject(runtimeProject)
   const prunedStalePanelGridProtectionRefs =
@@ -116,11 +94,8 @@ export function hydrateProjectForEditor(project: ProjectInput): {
     syncPanelAndSituationPlanDeviceVisibility(runtimeProject)
   const healedEnergyConversionSitplan = healEnergyConversionSitplanPlacements(runtimeProject)
   const healedJunctionBoxSitplan = healJunctionBoxSitplanPlacements(runtimeProject)
-  const synchronizedPanelPlanVisibility =
-    syncPanelAndSituationPlanDeviceVisibility(runtimeProject)
+  const synchronizedPanelPlanVisibility = syncPanelAndSituationPlanDeviceVisibility(runtimeProject)
   const healedPlanWiring = healPlanWiring(runtimeProject)
-  syncValidationFromCompatibility(runtimeProject)
-  stripLazyElementGraphForRuntime(runtimeProject)
   recordSessionAction(
     `Opened project in editor (${shortProjectIdLabel(runtimeProject.project.id)})`
   )
@@ -140,6 +115,7 @@ export function hydrateProjectForEditor(project: ProjectInput): {
       sanitizedLegacyV2Bloat ||
       healedSourceChangeoverFeedScope ||
       linkedSupplyAssemblyDeviceReferences ||
+      reconciledDirectSupplyOutputs ||
       reconciledPanelFeedOrganizations ||
       normalizedNominalVoltage ||
       healedSupplyProtectionBreakingCapacity ||
@@ -172,13 +148,12 @@ export function applyProjectMetadataUpdate(
 }
 
 export function prepareProjectForPersistence(project: Project): void {
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = selectProjectElectricalInstallation(project)
   if (installation) {
-    ensureInstallationFeedTopology(installation, getElectricalPanelsFromProject(project))
+    ensureInstallationFeedTopology(installation, selectProjectElectricalPanels(project))
   }
   linkSupplyAssemblyDeviceReferences(project)
   healPlanWiring(project)
 }
-
 
 export * from '@/lib/eendraad/projectElectricalDomain'

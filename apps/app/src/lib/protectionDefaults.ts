@@ -14,7 +14,7 @@ import { polesFromConfig } from '@/constants/poleConfig'
 import { getAllSupplyTrunkDevices } from '@/lib/feedTopology'
 import { ROTATING_SWITCH_LABEL_VISIBILITY } from '@/lib/protectionKind'
 import {
-  getElectricalInstallationFromProject,
+  getProjectElectricalInstallation,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 
@@ -117,7 +117,7 @@ export function getVoltagePolesConfig(
   project: ProjectWithOptionalV2Electrical | null
 ): PolesConfig {
   const system = project
-    ? getElectricalInstallationFromProject(project)?.nominalVoltage?.system
+    ? getProjectElectricalInstallation(project)?.nominalVoltage?.system
     : '2~'
   return polesConfigFromVoltageSystem(system ?? '2~')
 }

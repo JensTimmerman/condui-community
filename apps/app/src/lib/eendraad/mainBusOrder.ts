@@ -10,12 +10,12 @@ import type {
 } from '@/types/schema'
 import { getMainBusOrder, isCircuitNestedUnderPanelBus } from '@/lib/panel/mainBusOrder'
 export { getMainBusOrder, isCircuitNestedUnderPanelBus } from '@/lib/panel/mainBusOrder'
-import { getModuleWidthInCols } from '@/components/canvas/panel/panelGridLayout'
+import { getModuleWidthInCols } from '@/lib/panel/panelGridModuleWidth'
 import { getDefaultTrunkDeviceProtectionProps } from '@/lib/protectionDefaults'
 import { findParentCircuitInfo } from '@/lib/eendraad/findParentCircuitInfo'
 import { clamp } from '@/lib/geometry'
 import {
-  getElectricalPanelsFromProject,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { collectCircuits, walkPanels } from '@/lib/panel/panelTree'
@@ -23,10 +23,10 @@ import { collectCircuits, walkPanels } from '@/lib/panel/panelTree'
 /** First non-nested circuit that attaches a protection row to the main bus. */
 function getProtectionMainBusAttachmentCircuit(
   panel: Panel,
-  protection: ProtectionDevice,
+  protection: ProtectionDevice
 ): Circuit | undefined {
   return (protection.circuits ?? []).find(
-    (circuit) => !isCircuitNestedUnderPanelBus(panel, circuit.id),
+    (circuit) => !isCircuitNestedUnderPanelBus(panel, circuit.id)
   )
 }
 
@@ -92,7 +92,7 @@ export function dedupeAllPanelsProtectionsInProject(
       if (dedupePanelProtectionsInPanelTree(p)) any = true
     }
   }
-  walk(getElectricalPanelsFromProject(project))
+  walk(getProjectElectricalPanels(project))
   return any
 }
 
@@ -184,9 +184,7 @@ export function collectProtectionsOrderedForSubtreeMove(
 }
 
 function collectDirectPanelCircuitsInClosure(panel: Panel, circuitClosure: Set<string>): Circuit[] {
-  return (panel.circuits ?? []).filter(
-    (c) => circuitClosure.has(c.id) && c.code !== 'PANEL'
-  )
+  return (panel.circuits ?? []).filter((c) => circuitClosure.has(c.id) && c.code !== 'PANEL')
 }
 
 /**
@@ -228,7 +226,7 @@ export function pickRepresentativeCircuitIdForMainBusMove(
  * Human-facing name for a new sub-panel when ejecting `protection` (label may be an auto bus letter).
  */
 export function deriveDescriptiveNameFromProtectionForNewSubPanel(
-  protection: ProtectionDevice,
+  protection: ProtectionDevice
 ): string | undefined {
   const lbl = (protection.label ?? '').trim()
   const busLetter = /^[A-Z]{1,3}[0-9]?$/i
@@ -250,10 +248,12 @@ export function deriveDescriptiveNameFromProtectionForNewSubPanel(
 export function computeMainBusInsertIndexForEjectedProtection(
   panel: Panel,
   ejectedProtectionId: string,
-  projectPanels: Panel[],
+  projectPanels: Panel[]
 ): number {
   const orderBefore = getMainBusOrder(panel)
-  const direct = orderBefore.findIndex((o) => o.type === 'protection' && o.id === ejectedProtectionId)
+  const direct = orderBefore.findIndex(
+    (o) => o.type === 'protection' && o.id === ejectedProtectionId
+  )
   if (direct >= 0) return direct
 
   const protection = panel.protections.find((p) => p.id === ejectedProtectionId)
@@ -315,7 +315,7 @@ function circuitHasMigratableMainBusPayload(c: Circuit): boolean {
 export function protectionDeviceToSubPanelIncomingTrunkDevice(
   protection: ProtectionDevice,
   deviceId: string,
-  polesConfig: PolesConfig,
+  polesConfig: PolesConfig
 ): TrunkDevice {
   const defaults = getDefaultTrunkDeviceProtectionProps(protection.type, polesConfig)
   return {
@@ -331,8 +331,7 @@ export function protectionDeviceToSubPanelIncomingTrunkDevice(
     sensitivityMa: protection.sensitivityMa ?? defaults.sensitivityMa,
     residualCurrentType: protection.residualCurrentType ?? defaults.residualCurrentType,
     breakingCapacityKa: protection.breakingCapacityKa ?? defaults.breakingCapacityKa,
-    breakingCapacityOption:
-      protection.breakingCapacityOption ?? defaults.breakingCapacityOption,
+    breakingCapacityOption: protection.breakingCapacityOption ?? defaults.breakingCapacityOption,
     polesConfig: protection.polesConfig ?? defaults.polesConfig,
     poles: protection.poles ?? defaults.poles,
     notes: protection.notes,
@@ -343,13 +342,14 @@ export function protectionDeviceToSubPanelIncomingTrunkDevice(
 /**
  * After {@link relocateProtectionToPanelMainBus} moved a subtree onto a **secondary** panel,
  * hoists the **root** device onto the PANEL incoming trunk (between mirrored parent feeder and
- * main bus) and promotes nested `subCircuitIds` so downstream rows sit on the main bus.
+ * main bus) and promotes its direct downstream rows onto the main bus while preserving any
+ * nested hierarchy below those rows.
  * Mutates `panel` in place.
  */
 export function promoteMovedSubPanelRootToIncomingTrunk(
   panel: Panel,
   rootProtectionId: string,
-  incomingDevice: TrunkDevice,
+  incomingDevice: TrunkDevice
 ): void {
   if (panel.isMain) return
 
@@ -360,18 +360,46 @@ export function promoteMovedSubPanelRootToIncomingTrunk(
   if (!panelCircuit) return
 
   const rootCircuits = [...root.circuits]
-  const rootHasChildCircuitRefs = rootCircuits.some((c) => (c.subCircuitIds?.length ?? 0) > 0)
-  const rootHasOwnLoadPayload = rootCircuits.some(circuitHasMigratableMainBusPayload)
-
-  if (rootHasOwnLoadPayload && !rootHasChildCircuitRefs) {
-    rebuildPanelMainBusFromOrder(panel, getMainBusOrder(panel))
-    return
+  const directChildCircuitIds: string[] = []
+  const seenDirectChildCircuitIds = new Set<string>()
+  for (const circuit of rootCircuits) {
+    for (const childId of circuit.subCircuitIds ?? []) {
+      if (seenDirectChildCircuitIds.has(childId)) continue
+      seenDirectChildCircuitIds.add(childId)
+      directChildCircuitIds.push(childId)
+    }
   }
 
-  for (const c of rootCircuits) {
-    if (c.subCircuitIds?.length) {
-      c.subCircuitIds = undefined
-    }
+  // Capture the order from the parent bus before removing the parent link. The
+  // protection array can contain nested rows interleaved with their parent rows,
+  // so its index order is not a reliable replacement for subCircuitIds order.
+  const directChildItems: Array<{ type: 'circuit' | 'protection'; id: string }> = []
+  const seenDirectChildItemKeys = new Set<string>()
+  for (const childCircuitId of directChildCircuitIds) {
+    const childProtection = (panel.protections ?? []).find(
+      (candidate) =>
+        candidate.id !== rootProtectionId &&
+        candidate.circuits?.some((circuit) => circuit.id === childCircuitId)
+    )
+    const item = childProtection
+      ? { type: 'protection' as const, id: childProtection.id }
+      : panel.circuits.some(
+            (circuit) => circuit.id === childCircuitId && circuit.code !== 'PANEL'
+          )
+        ? { type: 'circuit' as const, id: childCircuitId }
+        : null
+    if (!item) continue
+    const key = `${item.type}:${item.id}`
+    if (seenDirectChildItemKeys.has(key)) continue
+    seenDirectChildItemKeys.add(key)
+    directChildItems.push(item)
+  }
+
+  // The incoming protection is no longer a bus parent after this operation.
+  // Promote only its direct children. Any links below those children describe
+  // deeper secondary-bus hierarchy and must remain intact.
+  for (const circuit of rootCircuits) {
+    if (circuit.subCircuitIds?.length) circuit.subCircuitIds = undefined
   }
 
   for (const c of rootCircuits) {
@@ -382,12 +410,66 @@ export function promoteMovedSubPanelRootToIncomingTrunk(
 
   panel.protections = (panel.protections ?? []).filter((p) => p.id !== rootProtectionId)
 
+  if (directChildItems.length > 0) {
+    const protectionByCircuitId = new Map<string, ProtectionDevice>()
+    for (const candidate of panel.protections) {
+      for (const circuit of candidate.circuits ?? []) {
+        protectionByCircuitId.set(circuit.id, candidate)
+      }
+    }
+    const orderedProtections: ProtectionDevice[] = []
+    const orderedProtectionIds = new Set<string>()
+    const appendProtectionTree = (protectionId: string): void => {
+      if (orderedProtectionIds.has(protectionId)) return
+      const candidate = panel.protections.find((protection) => protection.id === protectionId)
+      if (!candidate) return
+      orderedProtectionIds.add(candidate.id)
+      orderedProtections.push(candidate)
+      for (const circuit of candidate.circuits ?? []) {
+        for (const childCircuitId of circuit.subCircuitIds ?? []) {
+          const childProtection = protectionByCircuitId.get(childCircuitId)
+          if (childProtection) appendProtectionTree(childProtection.id)
+        }
+      }
+    }
+
+    for (const item of directChildItems) {
+      if (item.type === 'protection') appendProtectionTree(item.id)
+    }
+    for (const candidate of panel.protections) appendProtectionTree(candidate.id)
+    panel.protections = orderedProtections
+  }
+
   const previous = orderTrunkDevicesByPosition(panelCircuit.trunkDevices ?? [])
   const kept = previous.filter((d) => d.type !== 'protection')
   const merged = [...kept, { ...incomingDevice, trunkPosition: kept.length }]
   panelCircuit.trunkDevices = merged.map((d, i) => ({ ...d, trunkPosition: i }))
 
-  rebuildPanelMainBusFromOrder(panel, getMainBusOrder(panel))
+  const currentMainBusOrder = getMainBusOrder(panel)
+  if (directChildItems.length > 0) {
+    const directChildKeys = new Set(
+      directChildItems.map((item) => `${item.type}:${item.id}`)
+    )
+    const firstDirectIndex = currentMainBusOrder.findIndex((item) =>
+      directChildKeys.has(`${item.type}:${item.id}`)
+    )
+    const insertIndex =
+      firstDirectIndex < 0
+        ? currentMainBusOrder.length
+        : currentMainBusOrder
+            .slice(0, firstDirectIndex)
+            .filter((item) => !directChildKeys.has(`${item.type}:${item.id}`)).length
+    const remainingMainBusItems = currentMainBusOrder.filter(
+      (item) => !directChildKeys.has(`${item.type}:${item.id}`)
+    )
+    rebuildPanelMainBusFromOrder(panel, [
+      ...remainingMainBusItems.slice(0, insertIndex),
+      ...directChildItems,
+      ...remainingMainBusItems.slice(insertIndex),
+    ])
+  } else {
+    rebuildPanelMainBusFromOrder(panel, currentMainBusOrder)
+  }
 }
 
 function rebuildPanelMainBusFromOrder(
@@ -407,7 +489,10 @@ function rebuildPanelMainBusFromOrder(
    * `panel.protections` array (so inserting/reordering main rows does not flush nested modules to
    * the end of the array, which breaks nesting on the panel canvas).
    */
-  const nestedBetweenMains = (leftMainId: string | null, rightMainId: string | null): ProtectionDevice[] => {
+  const nestedBetweenMains = (
+    leftMainId: string | null,
+    rightMainId: string | null
+  ): ProtectionDevice[] => {
     const leftIdx =
       leftMainId == null ? -1 : oldProtectionsSnapshot.findIndex((p) => p.id === leftMainId)
     if (leftMainId != null && leftIdx < 0) return []
@@ -629,16 +714,15 @@ function slotSpanCols(slot: PanelGridSlot, project: ProjectWithOptionalV2Electri
 
 /**
  * Place a main-bus protection module on the panel grid at `mainBusInsertIndex`, shifting modules
- * at or after that column on the same row. Keeps `gridView.slots` aligned with
- * {@link getMainBusOrder} so {@link reorderPanelMainBusProtectionsFromMainGridSlots} does not undo
- * ééndraad insert placement when automatic naming runs.
+ * at or after that column on the same row. This is used when creating a new physical module;
+ * existing Panel Canvas placement remains independent from later one-wire reordering.
  */
 export function placeMainBusProtectionGridSlotAtIndex(
   panel: Panel,
   newProtectionId: string,
   mainBusInsertIndex: number,
   project: ProjectWithOptionalV2Electrical,
-  copyLayoutFromProtectionId?: string,
+  copyLayoutFromProtectionId?: string
 ): void {
   const gv = panel.gridView
   if (!gv?.slots) return
@@ -655,12 +739,10 @@ export function placeMainBusProtectionGridSlotAtIndex(
     gv.slots!.find((s) => s.module.kind === 'protection' && s.module.id === protId)
 
   gv.slots = gv.slots.filter(
-    (s) => !(s.module.kind === 'protection' && s.module.id === newProtectionId),
+    (s) => !(s.module.kind === 'protection' && s.module.id === newProtectionId)
   )
 
-  const sourceSlot = copyLayoutFromProtectionId
-    ? findSlot(copyLayoutFromProtectionId)
-    : undefined
+  const sourceSlot = copyLayoutFromProtectionId ? findSlot(copyLayoutFromProtectionId) : undefined
   const newWidth = sourceSlot?.moduleWidth ?? getModuleWidthInCols(newRef, project)
 
   const shiftRowFromCol = (row: number, fromCol: number) => {
@@ -711,42 +793,4 @@ export function placeMainBusProtectionGridSlotAtIndex(
     moduleWidth: sourceSlot?.moduleWidth,
     moduleWidthManual: sourceSlot?.moduleWidthManual,
   })
-}
-
-/**
- * Reorders `panel.protections` so **main-bus** protections (not nested under another row's
- * `subCircuitIds`) appear first in left-to-right / top-to-read reading order of `gridView.slots`,
- * then any nested-only protections in their previous relative order.
- *
- * Panel canvas drag-and-drop only updates slots; `getMainBusOrder` uses array indices — without this,
- * automatic naming order stays stale after a drag.
- */
-export function reorderPanelMainBusProtectionsFromMainGridSlots(panel: Panel): void {
-  const slots = panel.gridView?.slots
-  if (!slots?.length || !panel.protections?.length) return
-
-  const sorted: PanelGridSlot[] = [...slots].sort((a, b) =>
-    a.row !== b.row ? a.row - b.row : a.col - b.col,
-  )
-
-  const mainOrdered: typeof panel.protections = []
-  const seen = new Set<string>()
-
-  for (const slot of sorted) {
-    const ref: PanelGridModuleRef = slot.module
-    if (ref.kind !== 'protection') continue
-    const prot = panel.protections.find((p) => p.id === ref.id)
-    const attach = prot ? getProtectionMainBusAttachmentCircuit(panel, prot) : undefined
-    if (!attach || !prot) continue
-    if (seen.has(prot.id)) continue
-    seen.add(prot.id)
-    mainOrdered.push(prot)
-  }
-
-  if (mainOrdered.length === 0) return
-
-  const mainIds = new Set(mainOrdered.map((p) => p.id))
-  const rest = panel.protections.filter((p) => !mainIds.has(p.id))
-
-  panel.protections = [...mainOrdered, ...rest]
 }

@@ -1,8 +1,11 @@
-import { useMemo } from 'react'
+import { useDeferredValue, useMemo } from 'react'
 import { useProjectStore, type ProjectState } from '@/stores/projectStore'
 import { useUIStore, type UIState } from '@/stores/uiStore'
-import { calculateBottomUpLayout, type BottomUpLayoutResult } from '@/lib/layout/bottomUpLayout'
-import type { Point } from '@/types/ui'
+import type { BottomUpLayoutResult } from '@/lib/layout/bottomUpLayout'
+import {
+  getCachedEendraadLayout,
+  getEendraadRenderProjectRevision,
+} from '@/lib/layout/eendraadDerivedLayout'
 
 /**
  * Calculate the eendraad layout from the current project and layout overrides.
@@ -18,13 +21,15 @@ import type { Point } from '@/types/ui'
  * memoize / incrementalize the layout or debounce overrides rather than moving
  * this computation off-thread.
  */
-export function useEendraadLayout(): BottomUpLayoutResult | null {
-  const currentProject = useProjectStore((state: ProjectState) => state.currentProject)
+export function useEendraadLayout(enabled = true): BottomUpLayoutResult | null {
+  const currentProject = useProjectStore((state: ProjectState) =>
+    enabled && state.currentProject ? getEendraadRenderProjectRevision(state.currentProject) : null
+  )
+  const renderProject = useDeferredValue(currentProject)
   const eendraadLayoutOverrides = useUIStore((state: UIState) => state.eendraadLayoutOverrides)
 
   return useMemo(() => {
-    if (!currentProject) return null
-    const overrides = new Map<string, Point>(eendraadLayoutOverrides)
-    return calculateBottomUpLayout(currentProject, overrides)
-  }, [currentProject, eendraadLayoutOverrides])
+    if (!enabled || !renderProject) return null
+    return getCachedEendraadLayout(renderProject, eendraadLayoutOverrides)
+  }, [enabled, renderProject, eendraadLayoutOverrides])
 }

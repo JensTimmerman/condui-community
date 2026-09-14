@@ -6,7 +6,7 @@ import type { Scope } from './types'
 import { getExplicitInstallYear, type ProjectWithOptionalInstallYear } from '@/lib/installDates'
 import { buildCircuitGraphIndex, resolveCircuitReference } from '@/lib/eendraad/circuitGraph'
 import {
-  getElectricalPanelsFromProject,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 
@@ -110,7 +110,7 @@ export function getScopeEntityPath(project: DateResolverProject, scope: Scope): 
     return false
   }
 
-  findPath(getElectricalPanelsFromProject(project))
+  findPath(getProjectElectricalPanels(project))
   return path
 }
 

@@ -6,7 +6,7 @@
 import type { InstallerProfile } from '@/lib/installerProfile'
 import type { ProjectPartyContact } from '@/types/schema'
 import {
-  getElectricalInstallationFromProject,
+  getProjectElectricalInstallation,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import {
@@ -120,7 +120,7 @@ export function buildInfoBlockSvg(options: InfoBlockSvgOptions): string {
   const signatureY = logoY + halfImageHeight
 
   const projectName = project?.project?.name ?? ''
-  const installation = project ? getElectricalInstallationFromProject(project) : undefined
+  const installation = project ? getProjectElectricalInstallation(project) : undefined
   const addressText = installation ? formatInstallationAddress(installation, countryLabel) : ''
   const voltageText = installation ? getVoltageLabel(installation) : ''
   const eanText = project?.project?.meterEanCode ?? ''

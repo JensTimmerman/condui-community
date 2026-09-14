@@ -2,7 +2,7 @@ import type { TFunction } from 'i18next'
 import type { Panel, PanelGridModuleRef, ProtectionDevice } from '@/types/schema'
 import type { Selection } from '@/types/ui'
 import {
-  getElectricalPanelsFromProject,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { findCircuitInProject } from '@/lib/eendraad/frameContent'
@@ -68,7 +68,7 @@ export function getPanelHiddenModulePresentation(
   const key = panelGridModuleRefKey(ref)
 
   if (ref.kind === 'protection') {
-    const protection = findProtection(getElectricalPanelsFromProject(project), ref.id)
+    const protection = findProtection(getProjectElectricalPanels(project), ref.id)
     const symbolId = protection ? protectionSymbolIds[protection.type] : undefined
     const device =
       localizedSymbolName(symbolId, t) ||

@@ -3,7 +3,7 @@ import type { Selection } from '@/types/ui'
 import type { LayoutNode, LayoutTree } from '@/lib/layout/layoutTree'
 import { getMainBusOrder } from '@/lib/eendraad/mainBusOrder'
 import {
-  getElectricalPanelsFromProject,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 
@@ -46,7 +46,7 @@ export function listCircuitsWithSingleLetterCode(
   letter: string,
 ): Circuit[] {
   const out: Circuit[] = []
-  for (const root of getElectricalPanelsFromProject(project)) {
+  for (const root of getProjectElectricalPanels(project)) {
     walkPanelsDepthFirst(root, (panel) => {
       for (const c of panel.circuits) {
         if (c.code === 'PANEL') continue

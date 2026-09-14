@@ -1,3 +1,4 @@
+import { hasSupplyInlineLabels, getSupplyInlineLabelLines } from '@/lib/layout/supplyInlineDeviceLabels'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -17,8 +18,11 @@ import { Group, Image, Line, Rect, Text } from 'react-konva'
 import {
   getDomainForSymbol,
   getSwitchSymbolPaths,
+  getSwitchDisplaySvgPath,
   getSymbolById,
+  DOMOTICA_CONTROL_OVERLAY_PATHS,
   TRANSFORMER_OVERLAY_PATHS,
+  RELAY_OVERLAY_PATHS,
 } from '@/lib/symbols'
 import { SYMBOL_EXPORT_ATTR_SVG_PATH, loadProcessedSymbol } from '@/lib/symbolImage'
 import {
@@ -41,6 +45,14 @@ import { useIsPreviewSelected } from '@/contexts/SelectionPreviewContext'
 import { useCanvasFontFamily, useEffectiveCanvasZoom, useTouchPrimaryDevice } from '@/editions/community/communityHooks'
 import { SymbolTextLabels } from './SymbolTextLabels'
 import {
+  getJunctionIdentity,
+  getJunctionIdentityDisplay,
+  getJunctionIdentityLabelPosition,
+  isJunctionIdentityVisibleByDefault,
+  isSharedJunctionSymbol,
+} from '@/lib/junctionIdentity'
+import { getEffectiveTerminalStripOutgoingPin } from '@/lib/terminalStrip/labels'
+import {
   SYMBOL_SIZE,
   ENDPOINT_OUTLINE_SIZE,
   getTouchAwareHitAreaProps,
@@ -54,6 +66,12 @@ import {
   getSymbolColor,
   getTextColor,
   SELECTION_COLOR,
+  DOMOTICA_BASE_HEIGHT,
+  DOMOTICA_BOX_WIDTH,
+  DOMOTICA_OUTPUT_SPACING,
+  DOMOTICA_MAX_ENDPOINT_OUTPUTS,
+  DOMOTICA_MIN_ENDPOINT_OUTPUTS,
+  DOMOTICA_CONTROL_BAR_HEIGHT,
 } from './canvasSymbols'
 import { ProtectionOneWireLabels } from './ProtectionOneWireLabels'
 import { useEendraadWireSegments } from '@/hooks/eendraad'
@@ -61,20 +79,21 @@ import { getCertificationSideLabelExtraOffsetPx } from '@/lib/conversionSideLabe
 import { getVisibleCertificationLabelParts } from '@/lib/certificationLabels'
 import { getVisibleConversionLabelParts } from '@/lib/conversionLabels'
 import { isSymbolLabelVisible } from '@/lib/symbolLabels'
-import type { SymbolLabelPosition, TrunkDevice } from '@/types/schema'
+import type { DomoticaControlKey, SymbolLabelPosition, TrunkDevice } from '@/types/schema'
 import type { Point } from '@/types/ui'
 import { getSupplyDeviceMultiplier } from '@/lib/supplyAssembly/inverterMultipliers'
 import { openSupplyDeviceAddMoreDialog } from '@/components/endpoints/AddMoreCountDialog'
 import { MultiplierBadge } from './MultiplierBadge'
 import { useCanvasPanOrClickGesture } from './CanvasPanOrClickGesture'
 import { DomainMarker } from './DomainMarker'
-import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
+import { getProjectElectricalInstallation } from '@/lib/projectV2/electrical'
 import { getEarthingSeparatorPairIds } from '@/lib/eendraad/earthingSeparatorPairs'
 import {
   getPhaseAssignmentLabel,
   phaseAssignmentDiffersFromInstallation,
 } from '@/lib/wires/phaseAssignment'
 import { getSupplyConverterAcPhaseAssignment } from '@/lib/supplyAssembly/supplyConverterPhases'
+import { INTERACTIVE_OVERLAY_EXPORT_NAME } from '@/lib/export/interactiveOverlayExport'
 import {
   CONVERTER_ARTWORK_PATHS,
   CONVERTER_DOMAIN_ICON_SIZE_RATIO,
@@ -93,8 +112,11 @@ import {
   getSupplyMetadataCalloutPlacement,
   getSupplyMetadataCalloutPlacementKind,
   getSupplyMetadataSharedLeaderPointSets,
+  canRenderSupplyMetadataCallout,
+  isSupplyMetadataCalloutDevice,
   shouldUseSupplyDeviceMetadataCallout,
 } from '@/lib/supplyMetadataCallout'
+import { getCircuitLabelVisualRect } from '@/lib/layout/bottomUpLayout'
 import { resolveTrunkDeviceMetadataCalloutSelection } from '@/lib/ui/metadataCalloutSelection'
 import {
   applyMetadataCalloutMultiplier,
@@ -110,6 +132,7 @@ import {
   resizeConverterDcConnections,
 } from '@/lib/eendraad/resizeConverterDcConnections'
 import { isVerticalSupplyDevice } from '@/lib/layout/supplyDeviceOrientation'
+import type { SupplyTopLabelPlacement } from '@/lib/layout/supplyTopLabelLayout'
 
 type EendraadPointerEvent = {
   cancelBubble: boolean
@@ -132,6 +155,7 @@ interface TrunkDeviceSymbolProps {
   position: Point
   /** Original circuit-trunk anchor when a widened converter's painted center shifts right. */
   circuitConverterAnchor?: Point
+  converterGrowthDirection?: 'left' | 'right'
   /** Painted width of a selectable DC busbar. */
   dcBusWidth?: number
   /** Circuit-level collision-solved metadata frame for a widened converter. */
@@ -144,10 +168,19 @@ interface TrunkDeviceSymbolProps {
     targetIds?: string[]
   }
   /** Other devices on this supply lane, used to keep metadata cards apart. */
-  supplyDevicePositions?: Array<{ device: TrunkDevice; x: number; y: number }>
+  supplyDevicePositions?: Array<{
+    device: TrunkDevice
+    x: number
+    y: number
+    topLabelPlacements?: SupplyTopLabelPlacement[]
+  }>
   /** Left-to-right supply layouts are solved in canonical space, then mirrored back. */
   supplyMirrorAxisX?: number
+  supplyPanelMainBusY?: number
   supplyPanelId?: string
+  supplyPanelLabel?: string
+  /** Attached supply wires may use the device-specific vertical notes preference. */
+  allowVerticalSupplyNotes?: boolean
   /** If true, symbol is on a horizontal wire (supply trunk). Default: vertical trunk. */
   isHorizontal?: boolean
   /** Artwork rotation resolved by the shared layout tree. */
@@ -173,18 +206,6 @@ const CONVERTER_ARTWORK_VIEWBOX_SIZE = 48
 const CONVERTER_ARTWORK_EDGE = 5.3
 const CONVERTER_ARTWORK_STROKE = 2
 
-function isSupplyMetadataDevice(device: TrunkDevice): boolean {
-  // DC-DC devices can carry long model/charger notes even when they do not have
-  // certification fields. Treat them like the other supply equipment so those
-  // notes use the same collision-aware callout instead of floating over the inverter.
-  return (
-    device.symbol === 'inverter' ||
-    device.symbol === 'dc_dc_converter' ||
-    device.symbol === 'solar_panel' ||
-    device.symbol === 'battery'
-  )
-}
-
 function getSupplyMetadataLinesForDevice(device: TrunkDevice, multiplier = 1): string[] {
   const certificationParts = getVisibleCertificationLabelParts(device)
   const conversionParts =
@@ -193,7 +214,7 @@ function getSupplyMetadataLinesForDevice(device: TrunkDevice, multiplier = 1): s
       : []
   const notesText = (device.notes ?? '').trim()
   const showNotes =
-    device.type !== 'protection' &&
+    !hasSupplyInlineLabels(device) &&
     notesText.length > 0 &&
     isSymbolLabelVisible(device.symbolLabelDisplay, 'trunkDeviceNotes', true)
 
@@ -231,11 +252,15 @@ export function TrunkDeviceSymbol({
   device,
   position,
   circuitConverterAnchor,
+  converterGrowthDirection,
   dcBusWidth,
   metadataCallout,
   supplyDevicePositions,
   supplyMirrorAxisX,
+  supplyPanelMainBusY,
   supplyPanelId,
+  supplyPanelLabel,
+  allowVerticalSupplyNotes = false,
   isHorizontal,
   symbolRotationDeg,
   showDeviceLabelLeft = false,
@@ -280,13 +305,22 @@ export function TrunkDeviceSymbol({
     useState<HTMLImageElement | null>(null)
   const [transformerProtectionImage, setTransformerProtectionImage] =
     useState<HTMLImageElement | null>(null)
+  const [domoticaMainImage, setDomoticaMainImage] = useState<HTMLImageElement | null>(null)
+  const [domoticaControlImages, setDomoticaControlImages] = useState<
+    Partial<Record<DomoticaControlKey, HTMLImageElement | null>>
+  >({})
 
   const symbol = getSymbolById(device.symbol)
   const isInlineSwitch = symbol?.category === 'switches'
   const isDark = theme?.mode === 'dark'
   const phaseSystem = useProjectStore((state) =>
     state.currentProject
-      ? getElectricalInstallationFromProject(state.currentProject)?.nominalVoltage.system
+      ? getProjectElectricalInstallation(state.currentProject)?.nominalVoltage.system
+      : undefined
+  )
+  const supplyTrunkNotesOrientation = useProjectStore((state) =>
+    state.currentProject
+      ? getProjectElectricalInstallation(state.currentProject)?.supplyTrunkNotesOrientation
       : undefined
   )
   const isTransformer = device.symbol === 'transformer'
@@ -301,34 +335,52 @@ export function TrunkDeviceSymbol({
     isDirectionalConverterSymbol(device.symbol) ||
     (!!circuitConverterAnchor && device.symbol === 'dc_dc_converter')
   const converterAcPhaseAssignment =
-    isConversionSymbol && phaseSystem
+    isConversionSymbol && device.symbol !== 'dc_dc_converter' && phaseSystem
       ? getSupplyConverterAcPhaseAssignment(device, phaseSystem)
       : undefined
   const converterAcPhaseLabel =
     phaseSystem && phaseAssignmentDiffersFromInstallation(converterAcPhaseAssignment, phaseSystem)
       ? getPhaseAssignmentLabel(converterAcPhaseAssignment, phaseSystem)
       : undefined
-  const isProtection = device.type === 'protection'
-  const isSurgeProtection = device.protectionType === 'SPD' || device.symbol === 'spd'
+  const isRelay = device.symbol === 'relay'
+  const isProtection = device.type === 'protection' && !isRelay
+  const hasInlineLabels = hasSupplyInlineLabels(device)
+  const relayOverlayPath = isRelay ? RELAY_OVERLAY_PATHS[device.relayProps?.control ?? 'standard'] : undefined
+  const [relayOverlayImage, setRelayOverlayImage] = useState<HTMLImageElement | null>(null)
+  const isSurgeProtection = !isRelay && (device.protectionType === 'SPD' || device.symbol === 'spd')
   const switchSymbolPaths = isInlineSwitch
     ? getSwitchSymbolPaths(device.symbol, {
         poles: Math.min(4, Math.max(1, device.poles ?? 1)) as 1 | 2 | 3 | 4,
         twoPole: device.symbol === 'switch_2p_twoway',
       })
     : undefined
-  const renderedSymbolPath = isSurgeProtection
+  const renderedSymbolPath = isRelay
+    ? getSwitchSymbolPaths('relay').basePath
+    : isSurgeProtection
     ? getSurgeProtectionSymbolPath(device.surgeProtectionKind)
     : isDirectionalConverter
       ? CONVERTER_ARTWORK_PATHS.base
       : (switchSymbolPaths?.basePath ?? symbol?.svgPath)
   const nameLabelText = (device.label ?? '').trim()
-  const isVerticalSupplyProtection = isProtection && isVerticalSupplyDevice(device)
+  const junctionIdentityText = getJunctionIdentity(device)
+  const isVerticalSupplyProtection = hasInlineLabels && isVerticalSupplyDevice(device)
   const showSupplyProtectionNameLabel =
     (isHorizontal === true || isVerticalSupplyProtection) &&
-    (isProtection || device.symbol === 'source_changeover') &&
+    (hasInlineLabels || device.symbol === 'source_changeover') &&
     nameLabelText.length > 0 &&
-    isSymbolLabelVisible(device.symbolLabelDisplay, 'supplyProtectionNameLabel', true)
-  const wireSegments = useEendraadWireSegments()
+    !showDeviceLabelLeft &&
+    ((isProtection && isVerticalSupplyProtection && !!device.supplyDcBusId) ||
+      isSymbolLabelVisible(device.symbolLabelDisplay, 'supplyProtectionNameLabel', true))
+  const needsSupplyMetadataGeometry =
+    isSupplyMetadataCalloutDevice(device) && (supplyDevicePositions?.length ?? 0) > 0
+  const wireSegments = useEendraadWireSegments(
+    isDirectionalConverter || isConversionSymbol || needsSupplyMetadataGeometry
+  )
+  const terminalStripOutgoingPin = useProjectStore((state) =>
+    (device.symbol === 'terminal_strip' || device.type === 'terminal_strip') && state.currentProject
+      ? getEffectiveTerminalStripOutgoingPin(state.currentProject, device)
+      : undefined
+  )
   const converterConnectionDomains = isDirectionalConverter
     ? getConverterConnectionDomains(
         wireSegments,
@@ -363,12 +415,79 @@ export function TrunkDeviceSymbol({
   const certificationLabelParts = getVisibleCertificationLabelParts(device)
   const notesText = (device.notes ?? '').trim()
   const showNotesLabel =
-    !isProtection &&
     notesText.length > 0 &&
     isSymbolLabelVisible(device.symbolLabelDisplay, 'trunkDeviceNotes', true)
+  const renderSupplyNotesVertically =
+    allowVerticalSupplyNotes &&
+    isHorizontal === true &&
+    showNotesLabel &&
+    supplyTrunkNotesOrientation === 'vertical'
   const isDomoticaDevice = device.symbol === 'domotica'
-  const forceProtectionLabelStack = isProtection && isHorizontal !== true
+  const isSupplyDcBusDomotica = isDomoticaDevice && device.supplyDcBusId != null
+  const domoticaProps = device.domoticaProps
+  const domoticaMainType = domoticaProps?.mainDeviceType
+  const domoticaMainSwitchSymbol = domoticaProps?.mainSwitchSymbol
+  const domoticaMainSocketSymbol = domoticaProps?.mainSocketSymbol
+  const domoticaMainSwitchProps = domoticaProps?.mainSwitchProps
+  const domoticaEndpointCount = isSupplyDcBusDomotica
+    ? DOMOTICA_MIN_ENDPOINT_OUTPUTS
+    : Math.max(
+        DOMOTICA_MIN_ENDPOINT_OUTPUTS,
+        Math.min(
+          DOMOTICA_MAX_ENDPOINT_OUTPUTS,
+          Math.trunc(domoticaProps?.endpointCount ?? DOMOTICA_MIN_ENDPOINT_OUTPUTS)
+        )
+      )
+  const domoticaHeight =
+    DOMOTICA_BASE_HEIGHT + Math.max(0, domoticaEndpointCount - 1) * DOMOTICA_OUTPUT_SPACING
+  const forceProtectionLabelStack = hasInlineLabels && isHorizontal !== true
   const placeNotesOnTop = isDomoticaDevice || isHorizontal === true || forceProtectionLabelStack
+
+  useEffect(() => {
+    if (!isDomoticaDevice) {
+      setDomoticaControlImages({})
+      return
+    }
+    const isDarkMode = theme?.mode === 'dark'
+    const keys: Array<keyof typeof DOMOTICA_CONTROL_OVERLAY_PATHS> = [
+      'programmed_control',
+      'wireless_control',
+      'detection_control',
+      'button_control',
+    ]
+    keys.forEach((key) => {
+      loadProcessedSymbol(DOMOTICA_CONTROL_OVERLAY_PATHS[key], isDarkMode)
+        .then((image) => setDomoticaControlImages((previous) => ({ ...previous, [key]: image })))
+        .catch(() => setDomoticaControlImages((previous) => ({ ...previous, [key]: null })))
+    })
+  }, [isDomoticaDevice, theme?.mode])
+
+  useEffect(() => {
+    if (!isDomoticaDevice) {
+      setDomoticaMainImage(null)
+      return
+    }
+    let path: string | null = null
+    if (domoticaMainType === 'switch' && domoticaMainSwitchSymbol) {
+      path = getSwitchDisplaySvgPath(domoticaMainSwitchSymbol, domoticaMainSwitchProps)
+    } else if (domoticaMainType === 'socket' && domoticaMainSocketSymbol) {
+      path = getSymbolById(domoticaMainSocketSymbol)?.svgPath ?? null
+    }
+    if (!path) {
+      setDomoticaMainImage(null)
+      return
+    }
+    loadProcessedSymbol(path, theme?.mode === 'dark')
+      .then(setDomoticaMainImage)
+      .catch(() => setDomoticaMainImage(null))
+  }, [
+    domoticaMainSocketSymbol,
+    domoticaMainSwitchProps,
+    domoticaMainSwitchSymbol,
+    domoticaMainType,
+    isDomoticaDevice,
+    theme?.mode,
+  ])
   const stackedRightLabelItems = useMemo(
     () => [
       ...(isConversionSymbol || device.symbol === 'solar_panel' || device.symbol === 'battery'
@@ -377,7 +496,9 @@ export function TrunkDeviceSymbol({
       ...(!placeNotesOnTop
         ? certificationLabelParts.map((part) => ({ key: part.key, text: part.text }))
         : []),
-      ...(!placeNotesOnTop && showNotesLabel ? [{ key: 'trunkDeviceNotes', text: notesText }] : []),
+      ...(!placeNotesOnTop && !showDeviceLabelLeft && showNotesLabel
+        ? [{ key: 'trunkDeviceNotes', text: notesText }]
+        : []),
     ],
     [
       certificationLabelParts,
@@ -386,20 +507,45 @@ export function TrunkDeviceSymbol({
       isConversionSymbol,
       notesText,
       placeNotesOnTop,
+      showDeviceLabelLeft,
       showNotesLabel,
     ]
+  )
+  const leftStackLabelItems = useMemo(
+    () => [
+      ...(nameLabelText.length > 0 ? [{ key: 'trunkDeviceNameLabel', text: nameLabelText }] : []),
+      ...(showNotesLabel ? [{ key: 'trunkDeviceNotes', text: notesText }] : []),
+    ],
+    [nameLabelText, notesText, showNotesLabel]
   )
   const topStackLabelItems = useMemo(
     () => [
       ...certificationLabelParts.map((part) => ({ key: part.key, text: part.text })),
-      ...(showNotesLabel ? [{ key: 'trunkDeviceNotes' as const, text: notesText }] : []),
+      ...(showNotesLabel && !showDeviceLabelLeft && !renderSupplyNotesVertically
+        ? [{ key: 'trunkDeviceNotes' as const, text: notesText }]
+        : []),
     ],
-    [certificationLabelParts, notesText, showNotesLabel]
+    [
+      certificationLabelParts,
+      notesText,
+      renderSupplyNotesVertically,
+      showDeviceLabelLeft,
+      showNotesLabel,
+    ]
   )
-  const topStackVisualLineCount = useMemo(
-    () =>
-      topStackLabelItems.reduce((total, item) => total + countSymbolLabelVisualLines(item.text), 0),
-    [topStackLabelItems]
+  const ownSupplyPosition = supplyDevicePositions?.find(({ device: peer }) => peer.id === device.id)
+  const metadataTopPlacement = ownSupplyPosition?.topLabelPlacements?.find(
+    (placement) => placement.kind === 'metadata'
+  )
+  const nameTopPlacement = ownSupplyPosition?.topLabelPlacements?.find(
+    (placement) => placement.kind === 'name'
+  )
+  const renderedTopStackLabelItems = metadataTopPlacement
+    ? [{ key: 'supplyTopMetadata', text: metadataTopPlacement.text }]
+    : topStackLabelItems
+  const topStackVisualLineCount = renderedTopStackLabelItems.reduce(
+    (total, item) => total + countSymbolLabelVisualLines(item.text),
+    0
   )
   const metadataCalloutItems = useMemo(
     () => [
@@ -415,12 +561,13 @@ export function TrunkDeviceSymbol({
       : [{ device, x: position.x, y: position.y }]
   ).filter(
     ({ device: peer }) =>
-      isSupplyMetadataDevice(peer) &&
+      isSupplyMetadataCalloutDevice(peer) &&
       !(peer.supplyPath === 'converter-grid' && peer.converterGridPlacement === 'input-leg')
   ).length
   const metadataCalloutPlacementKind = getSupplyMetadataCalloutPlacementKind({
     symbol: device.symbol,
     peerCount: metadataCalloutPeerCount,
+    stackVertically: metadataCalloutPeerCount > 1,
   })
   const metadataCalloutLayout = useMemo(() => {
     const renderedPeerPositions = supplyDevicePositions?.length
@@ -440,7 +587,7 @@ export function TrunkDeviceSymbol({
     })
     const peers = peerPositions.filter(
       ({ device: peer }) =>
-        isSupplyMetadataDevice(peer) &&
+        isSupplyMetadataCalloutDevice(peer) &&
         !(peer.supplyPath === 'converter-grid' && peer.converterGridPlacement === 'input-leg')
     )
     const hasLongPeer = peers.some(({ device: peer }) => {
@@ -468,10 +615,32 @@ export function TrunkDeviceSymbol({
       }
     }
 
-    const symbolRects = peers.map(({ device: peer, x, y }) => {
+    const mainBusLabelRects = supplyPanelLabel
+      ? wireSegments
+          .filter((segment) => supplyPanelId == null || segment.panelId === supplyPanelId)
+          .filter((segment) => segment.type === 'mainBus')
+          .map((segment) => {
+            const renderedRect = getCircuitLabelVisualRect({
+              x: (segment.startPoint.x + segment.endPoint.x) / 2,
+              y: segment.startPoint.y - 10,
+              label: supplyPanelLabel,
+            })
+            return supplyMirrorAxisX == null
+              ? renderedRect
+              : {
+                  left: supplyMirrorAxisX * 2 - renderedRect.right,
+                  top: renderedRect.top,
+                  right: supplyMirrorAxisX * 2 - renderedRect.left,
+                  bottom: renderedRect.bottom,
+                }
+          })
+      : []
+    const symbolRects = peerPositions.map(({ device: peer, x, y }) => {
       const width = supportsCircuitConverterDcConnections(peer)
         ? SYMBOL_SIZE * getCircuitConverterDcConnectionCount(peer)
-        : SYMBOL_SIZE
+        : peer.type === 'dc_bus'
+          ? SYMBOL_SIZE + 18
+          : SYMBOL_SIZE
       return {
         left: x - width / 2 - 4,
         top: y - SYMBOL_SIZE / 2 - 4,
@@ -500,6 +669,7 @@ export function TrunkDeviceSymbol({
           placement: getSupplyMetadataCalloutPlacementKind({
             symbol: peer.symbol,
             peerCount: peers.length,
+            stackVertically: peers.length > 1,
           }),
         },
       ]
@@ -523,11 +693,19 @@ export function TrunkDeviceSymbol({
                 },
               }
         ),
-      symbolRects,
+      symbolRects: [...symbolRects, ...mainBusLabelRects],
       // Supply assemblies are mirrored for rendering. A canonical right-side
       // nudge becomes the visually preferable left-side placement.
       packRows: supplyMirrorAxisX == null,
       preferRightNudges: supplyMirrorAxisX != null,
+      stackVertically: peers.length > 1,
+      stackBelowY:
+        supplyPanelMainBusY ??
+        wireSegments.find(
+          (segment) =>
+            (supplyPanelId == null || segment.panelId === supplyPanelId) &&
+            segment.type === 'mainBus'
+        )?.startPoint.y,
     })
     const representativePositionById = new Map(
       peers.map((peer) => [peer.device.id, { x: peer.x, y: peer.y }])
@@ -584,7 +762,9 @@ export function TrunkDeviceSymbol({
     position.y,
     supplyDevicePositions,
     supplyMirrorAxisX,
+    supplyPanelMainBusY,
     supplyPanelId,
+    supplyPanelLabel,
     wireSegments,
   ])
   const metadataCalloutGroup = metadataCalloutLayout.placements
@@ -608,8 +788,7 @@ export function TrunkDeviceSymbol({
   )
   const useMetadataCallout =
     metadataCallout != null ||
-    (isSupplyMetadataDevice(device) &&
-      isHorizontal === true &&
+    (canRenderSupplyMetadataCallout(device, isHorizontal) &&
       metadataCalloutGroup.has(device.id) &&
       (!isSharedMetadataMember || isSharedMetadataRepresentative))
   const metadataCalloutVisualLineCount = useMemo(
@@ -662,11 +841,9 @@ export function TrunkDeviceSymbol({
     supportsCircuitConverterDcConnections(device) &&
     circuitConverterAnchor != null &&
     !isSupplyConverterResize
-  const converterResizeDirection = isSupplyConverterResize
-    ? 'left'
-    : isOrdinaryConverterResize
-      ? 'right'
-      : undefined
+  const converterResizeDirection =
+    converterGrowthDirection ??
+    (isSupplyConverterResize ? 'left' : isOrdinaryConverterResize ? 'right' : undefined)
   const renderedSymbolSize = useMemo(() => {
     if (circuitConverterConnectionCount > 1) {
       return { width: SYMBOL_SIZE * circuitConverterConnectionCount, height: SYMBOL_SIZE }
@@ -779,6 +956,17 @@ export function TrunkDeviceSymbol({
     }
   }, [isDirectionalConverter, isDark])
 
+  useEffect(() => {
+    let active = true
+    setRelayOverlayImage(null)
+    if (relayOverlayPath) {
+      loadProcessedSymbol(relayOverlayPath, isDark)
+        .then((image) => { if (active) setRelayOverlayImage(image) })
+        .catch(() => { if (active) setRelayOverlayImage(null) })
+    }
+    return () => { active = false }
+  }, [relayOverlayPath, isDark])
+
   // Load transformer overlays for trunk devices
   useEffect(() => {
     if (!isTransformer) {
@@ -841,7 +1029,7 @@ export function TrunkDeviceSymbol({
       const currentProject = useProjectStore.getState().currentProject
       const pairedIds = currentProject
         ? getEarthingSeparatorPairIds(
-            getElectricalInstallationFromProject(currentProject)?.groundTrunkDevices,
+            getProjectElectricalInstallation(currentProject)?.groundTrunkDevices,
             device.id
           )
         : [device.id]
@@ -928,7 +1116,7 @@ export function TrunkDeviceSymbol({
   const rotateMirroredChangeover =
     isHorizontal === true && device.symbol === 'source_changeover' && supplyMirrorAxisX != null
   const renderedSymbolRotationDeg =
-    symbolRotationDeg ?? (rotateMirroredChangeover ? 180 : rotateForHorizontal ? 90 : 0)
+    symbolRotationDeg ?? (isRelay ? (isHorizontal ? 0 : 90) : rotateMirroredChangeover ? 180 : rotateForHorizontal ? 90 : 0)
   const protectionLabelSource = isInlineSwitch
     ? {
         ...device,
@@ -1096,6 +1284,7 @@ export function TrunkDeviceSymbol({
         />
         {isHoveredAny && !isSelected && !isPreviewSelected && (
           <Line
+            name={INTERACTIVE_OVERLAY_EXPORT_NAME}
             points={[busStartX, 0, busEndX, 0]}
             stroke={SELECTION_COLOR}
             strokeWidth={busHoverStroke}
@@ -1112,12 +1301,176 @@ export function TrunkDeviceSymbol({
         />
         {!!device.label?.trim() && (
           <Text
-            x={busStartX}
-            y={8}
+            x={busStartX + 7}
+            y={4}
             text={device.label}
             fontFamily={fontFamily}
             fontSize={10}
             fill={getTextColor(theme?.mode === 'dark')}
+          />
+        )}
+      </Group>
+    )
+  }
+
+  if (isDomoticaDevice) {
+    const strokeColor = getSymbolColor(theme?.mode === 'dark')
+    const outlineY = -domoticaHeight / 2
+    const controlBandHeight = Math.min(DOMOTICA_CONTROL_BAR_HEIGHT, domoticaHeight / 2)
+    const dividerY = outlineY + controlBandHeight
+    const controlKeys = (domoticaProps?.control ?? []).filter((key) =>
+      ['programmed_control', 'wireless_control', 'detection_control', 'button_control'].includes(
+        key
+      )
+    ) as Array<keyof typeof DOMOTICA_CONTROL_OVERLAY_PATHS>
+    const mainDeviceSize = SYMBOL_SIZE * 0.75
+
+    return (
+      <Group
+        name={`trunkDevice-${device.id}`}
+        x={position.x - DOMOTICA_BOX_WIDTH / 2}
+        y={position.y}
+        draggable={canDragTrunk}
+        onClick={handleClick}
+        onTap={handleClick}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        onDragStart={
+          canDragTrunk && onDragStart
+            ? (event) => {
+                const nativeEvent = event.evt as MouseEvent
+                if (onDragStart(!!nativeEvent.altKey, nativeEvent)) event.target.stopDrag()
+              }
+            : undefined
+        }
+        onDragEnd={
+          canDragTrunk && onDragEnd
+            ? (event) => {
+                if (shouldSuppressKonvaDragEnd?.()) return
+                onDragEnd(
+                  getCanvasPositionFromEvent?.(event) ?? {
+                    x: event.target.x(),
+                    y: event.target.y(),
+                  }
+                )
+                event.target.position({ x: position.x - DOMOTICA_BOX_WIDTH / 2, y: position.y })
+              }
+            : undefined
+        }
+      >
+        <Rect
+          x={0}
+          y={outlineY - 2}
+          width={DOMOTICA_BOX_WIDTH}
+          height={domoticaHeight + 4}
+          fill="rgba(0, 0, 0, 0.01)"
+        />
+        <Rect
+          x={0}
+          y={outlineY}
+          width={DOMOTICA_BOX_WIDTH}
+          height={domoticaHeight}
+          fill="transparent"
+          stroke={strokeColor}
+          strokeWidth={1}
+          listening={false}
+        />
+        {isPreviewSelected && !isSelected && (
+          <Rect
+            {...getPaddedRectPreviewOutlineProps(
+              canvasZoom,
+              0,
+              outlineY,
+              DOMOTICA_BOX_WIDTH,
+              domoticaHeight,
+              2
+            )}
+          />
+        )}
+        {isHoveredAny && !isSelected && !isPreviewSelected && (
+          <Rect
+            {...getPaddedRectHoverOutlineProps(
+              canvasZoom,
+              0,
+              outlineY,
+              DOMOTICA_BOX_WIDTH,
+              domoticaHeight,
+              2
+            )}
+          />
+        )}
+        {isSelected && (
+          <Rect
+            {...getPaddedRectSelectionOutlineProps(
+              canvasZoom,
+              0,
+              outlineY,
+              DOMOTICA_BOX_WIDTH,
+              domoticaHeight,
+              2
+            )}
+          />
+        )}
+        <Line
+          points={[0, dividerY, DOMOTICA_BOX_WIDTH, dividerY]}
+          stroke={strokeColor}
+          strokeWidth={0.6}
+          listening={false}
+        />
+        {controlKeys.map((key, index) => {
+          const image = domoticaControlImages[key]
+          if (!image) return null
+          const size = SYMBOL_SIZE * 0.3
+          const count = controlKeys.length
+          return (
+            <Image
+              key={key}
+              image={image}
+              width={size}
+              height={size}
+              offsetX={size / 2}
+              offsetY={size / 2}
+              x={(DOMOTICA_BOX_WIDTH * (index + 1)) / (count + 1)}
+              y={outlineY + controlBandHeight / 2}
+              listening={false}
+            />
+          )
+        })}
+        {domoticaMainImage && domoticaMainType && (
+          <Image
+            image={domoticaMainImage}
+            width={mainDeviceSize}
+            height={mainDeviceSize}
+            offsetX={mainDeviceSize / 2}
+            offsetY={mainDeviceSize / 2}
+            x={DOMOTICA_BOX_WIDTH / 2}
+            y={dividerY + (domoticaHeight - controlBandHeight) / 2}
+            listening={false}
+          />
+        )}
+        {showDeviceLabelLeft && leftStackLabelItems.length > 0 && (
+          <SymbolTextLabels
+            items={leftStackLabelItems}
+            config={{ position: 'left', layout: 'stack' }}
+            sideLabelBlockAlign="center"
+            textColor={getSecondaryTextColor(isDark ?? false)}
+            fontFamily={fontFamily}
+            fontSize={8}
+            symbolWidth={DOMOTICA_BOX_WIDTH}
+            symbolHeight={domoticaHeight}
+          />
+        )}
+        {showNotesLabel && !showDeviceLabelLeft && (
+          <SymbolTextLabels
+            items={[{ key: 'trunkDeviceNotes', text: notesText }]}
+            config={{ position: 'right', layout: 'stack' }}
+            sideLabelBlockAlign="center"
+            offsetFromSymbol={5}
+            textColor={getSecondaryTextColor(isDark ?? false)}
+            fontFamily={fontFamily}
+            fontSize={8}
+            symbolWidth={DOMOTICA_BOX_WIDTH}
+            symbolHeight={domoticaHeight}
           />
         )}
       </Group>
@@ -1222,6 +1575,18 @@ export function TrunkDeviceSymbol({
           listening={false}
         />
       )}
+      {isRelay && relayOverlayImage && (
+        <Image
+          image={relayOverlayImage}
+          {...{ [SYMBOL_EXPORT_ATTR_SVG_PATH]: relayOverlayPath }}
+          width={renderedSymbolSize.width}
+          height={renderedSymbolSize.height}
+          offsetX={renderedSymbolSize.width / 2}
+          offsetY={renderedSymbolSize.height / 2}
+          rotation={renderedSymbolRotationDeg}
+          listening={false}
+        />
+      )}
       {isWideCircuitConverter && converterArtworkLayout ? (
         <Line
           points={
@@ -1306,6 +1671,7 @@ export function TrunkDeviceSymbol({
           {converterResizePreviewCount != null &&
             converterResizePreviewCount !== circuitConverterConnectionCount && (
               <Rect
+                name={INTERACTIVE_OVERLAY_EXPORT_NAME}
                 x={
                   converterResizeDirection === 'left'
                     ? converterFixedEdge - previewConverterWidth
@@ -1321,6 +1687,7 @@ export function TrunkDeviceSymbol({
               />
             )}
           <Rect
+            name={INTERACTIVE_OVERLAY_EXPORT_NAME}
             x={converterResizeHandleEdge - CONVERTER_RESIZE_HANDLE_HIT_WIDTH / 2}
             y={-renderedSymbolSize.height / 2}
             width={CONVERTER_RESIZE_HANDLE_HIT_WIDTH}
@@ -1494,8 +1861,8 @@ export function TrunkDeviceSymbol({
       {supplyDeviceMultiplier > 1 && (
         <MultiplierBadge
           count={supplyDeviceMultiplier}
-          x={renderedSymbolSize.width / 2 + 7}
-          y={-renderedSymbolSize.height / 2 - 11}
+          anchorX={renderedSymbolSize.width / 2}
+          anchorY={-renderedSymbolSize.height / 2}
           fontFamily={fontFamily}
           fill={getSymbolColor(theme?.mode === 'dark')}
           onActivate={() => openSupplyDeviceAddMoreDialog(device, t)}
@@ -1607,8 +1974,13 @@ export function TrunkDeviceSymbol({
         topStackLabelItems.length > 0 &&
         !hasConnectedTopWire && (
           <SymbolTextLabels
-            items={topStackLabelItems}
+            items={renderedTopStackLabelItems}
             config={{ position: 'top', layout: 'stack' }}
+            positionOffset={
+              metadataTopPlacement
+                ? { x: metadataTopPlacement.offsetX, y: metadataTopPlacement.offsetY }
+                : undefined
+            }
             textColor={getSecondaryTextColor(isDark ?? false)}
             fontFamily={fontFamily}
             fontSize={8}
@@ -1616,6 +1988,20 @@ export function TrunkDeviceSymbol({
             symbolHeight={renderedSymbolSize.height}
           />
         )}
+      {renderSupplyNotesVertically && (
+        <Text
+          name="supply-trunk-vertical-note"
+          x={-(countSymbolLabelVisualLines(notesText) * SUPPLY_METADATA_FONT_SIZE) / 2}
+          y={-renderedSymbolSize.height / 2 - 5}
+          text={notesText}
+          rotation={-90}
+          fontFamily={fontFamily}
+          fontSize={SUPPLY_METADATA_FONT_SIZE}
+          fill={getSecondaryTextColor(isDark ?? false)}
+          wrap="none"
+          listening={false}
+        />
+      )}
       {placeNotesOnTop &&
         !useMetadataCallout &&
         !isSharedMetadataMember &&
@@ -1625,7 +2011,7 @@ export function TrunkDeviceSymbol({
             x={-164}
             y={-renderedSymbolSize.height / 2 - topStackVisualLineCount * 10 - 4}
             width={160}
-            text={topStackLabelItems.map((item) => item.text).join('\n')}
+            text={renderedTopStackLabelItems.map((item) => item.text).join('\n')}
             align="right"
             fontFamily={fontFamily}
             fontSize={8}
@@ -1636,8 +2022,20 @@ export function TrunkDeviceSymbol({
         )}
       {showSupplyProtectionNameLabel && (
         <SymbolTextLabels
-          items={[{ key: 'supplyProtectionNameLabel', text: nameLabelText }]}
+          items={[
+            {
+              key: 'supplyProtectionNameLabel',
+              text: nameTopPlacement?.text ?? nameLabelText,
+            },
+          ]}
           config={{ position: 'top', layout: 'stack' }}
+          positionOffset={
+            nameTopPlacement
+              ? { x: nameTopPlacement.offsetX, y: nameTopPlacement.offsetY }
+              : isVerticalSupplyProtection && topStackVisualLineCount > 0 && !showDeviceLabelLeft
+                ? { x: 0, y: -(topStackVisualLineCount * 10 + 4) }
+                : undefined
+          }
           textColor={getTextColor(isDark ?? false)}
           fontFamily={fontFamily}
           fontSize={11}
@@ -1645,15 +2043,66 @@ export function TrunkDeviceSymbol({
           symbolHeight={renderedSymbolSize.height}
         />
       )}
-      {showDeviceLabelLeft && nameLabelText.length > 0 && (
+      {showDeviceLabelLeft && leftStackLabelItems.length > 0 && (
         <SymbolTextLabels
-          items={[{ key: 'trunkDeviceNameLabel', text: nameLabelText }]}
+          items={leftStackLabelItems}
           config={{ position: 'left', layout: 'stack' }}
-          textColor={getTextColor(isDark ?? false)}
+          sideLabelBlockAlign="center"
+          textColor={getSecondaryTextColor(isDark ?? false)}
           fontFamily={fontFamily}
-          fontSize={11}
+          fontSize={8}
           symbolWidth={renderedSymbolSize.width}
           symbolHeight={renderedSymbolSize.height}
+        />
+      )}
+      {isSharedJunctionSymbol(device.symbol) &&
+        junctionIdentityText.length > 0 &&
+        isSymbolLabelVisible(
+          device.symbolLabelDisplay,
+          'junctionIdentityLabel',
+          isJunctionIdentityVisibleByDefault(device.symbol)
+        ) && (
+          <SymbolTextLabels
+            items={[
+              {
+                key: 'junctionIdentityLabel',
+                text: getJunctionIdentityDisplay(
+                  device.symbol,
+                  junctionIdentityText,
+                  device.terminalStripPin,
+                  device.symbol === 'terminal_strip'
+                    ? terminalStripOutgoingPin
+                    : device.terminalStripOutgoingPin
+                ),
+              },
+            ]}
+            config={{
+              position: getJunctionIdentityLabelPosition(device.symbol, isHorizontal === true),
+              layout: 'stack',
+            }}
+            textColor={getTextColor(isDark ?? false)}
+            fontFamily={fontFamily}
+            fontSize={10}
+            symbolWidth={renderedSymbolSize.width}
+            symbolHeight={renderedSymbolSize.height}
+          />
+        )}
+      {isRelay && (
+        <SymbolTextLabels
+          items={[]}
+          lines={getSupplyInlineLabelLines(device).map((line) => line.text)}
+          anchorLineIndex={0}
+          config={{
+            ...device.symbolLabelDisplay,
+            position: protectionLabelPosition ?? device.symbolLabelDisplay?.position ?? (isHorizontal ? 'bottom' : 'right'),
+            layout: 'stack',
+          }}
+          textColor={getSecondaryTextColor(isDark ?? false)}
+          fontFamily={fontFamily}
+          fontSize={10}
+          symbolWidth={renderedSymbolSize.width}
+          symbolHeight={renderedSymbolSize.height}
+          onLabelClick={handleClick}
         />
       )}
       {isProtection && (

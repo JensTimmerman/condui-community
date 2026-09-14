@@ -20,7 +20,7 @@ import { generateId } from '@/utils'
 import { useProjectStore } from '@/stores/projectStore'
 import { useUIStore } from '@/stores/uiStore'
 import {
-  getBuildingFloorsFromProject,
+  selectProjectBuildingFloors,
   type ProjectWithOptionalV2Building,
 } from '@/lib/projectV2/buildingFloors'
 import type { ProjectWithOptionalV2Electrical } from '@/lib/projectV2/electrical'
@@ -54,7 +54,7 @@ export function resolvePlanDuplicateFloorId(
   activeFloorId: string | null,
   refPlacement?: Pick<Placement, 'floorId'>,
 ): string | undefined {
-  return activeFloorId ?? refPlacement?.floorId ?? getBuildingFloorsFromProject(project)[0]?.id
+  return activeFloorId ?? refPlacement?.floorId ?? selectProjectBuildingFloors(project)[0]?.id
 }
 
 function resolvePanelToEndpointId(getters: PlanDuplicateGetters, panelId: string): string | undefined {

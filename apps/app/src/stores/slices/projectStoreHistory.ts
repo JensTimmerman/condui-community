@@ -1,21 +1,173 @@
 import type { StoreApi } from 'zustand'
 import type { Floor } from '@/types/schema'
 import { useUIStore } from '@/stores/uiStore'
-import { stripLazyElementGraphForRuntime } from '@/lib/projectV2/migration'
 import { type Project, type ProjectState } from './projectStoreTypes'
 
 export const MAX_HISTORY_ENTRIES = 100
+export const MIN_HISTORY_ENTRIES = 10
+export const MAX_HISTORY_ESTIMATED_BYTES = 96 * 1024 * 1024
 
-export const cloneProjectForHistory = (project: Project): Project => {
-  // structuredClone is generally faster than JSON roundtrips and preserves
-  // more JS types (though our project is plain JSON-compatible data).
-  // Fall back to JSON clone for older browsers.
+const historySnapshotBytes = new WeakMap<Project, number>()
+const lastEstimatedBytesByProjectId = new Map<string, number>()
+const CONSERVATIVE_UNKNOWN_SNAPSHOT_BYTES = 8 * 1024 * 1024
+
+type HistoryAssetPayload = {
+  dataUrl?: string
+  svgContent?: string
+  legacyDataUrl?: string
+  legacyProcessedDataUrl?: string
+  legacySvgContent?: string
+}
+
+/**
+ * Asset payload strings are immutable and can be very large. Keep them out of the
+ * deep-clone input, then attach the original string values to the snapshot. The
+ * asset records themselves are still cloned, so undo snapshots cannot mutate the
+ * current project's asset metadata.
+ */
+function cloneProjectWithoutCopyingAssetPayloads(project: Project): Project {
+  const payloads = new Map<string, HistoryAssetPayload>()
+  const cloneInput: Project = {
+    ...project,
+    assets: project.assets.map((asset) => {
+      payloads.set(asset.id, {
+        dataUrl: asset.dataUrl,
+        svgContent: asset.svgContent,
+        legacyDataUrl: asset.legacy?.dataUrl,
+        legacyProcessedDataUrl: asset.legacy?.processedDataUrl,
+        legacySvgContent: asset.legacy?.svgContent,
+      })
+      return {
+        ...asset,
+        dataUrl: undefined,
+        svgContent: undefined,
+        legacy: asset.legacy
+          ? {
+              ...asset.legacy,
+              dataUrl: undefined,
+              processedDataUrl: undefined,
+              svgContent: undefined,
+            }
+          : undefined,
+      }
+    }),
+  }
+
   const snapshot =
     typeof structuredClone === 'function'
-      ? structuredClone(project)
-      : JSON.parse(JSON.stringify(project)) as Project
-  stripLazyElementGraphForRuntime(snapshot)
+      ? structuredClone(cloneInput)
+      : (JSON.parse(JSON.stringify(cloneInput)) as Project)
+
+  historySnapshotBytes.set(snapshot, estimateRetainedBytes(cloneInput))
+  lastEstimatedBytesByProjectId.set(
+    project.project.id,
+    historySnapshotBytes.get(snapshot) ?? CONSERVATIVE_UNKNOWN_SNAPSHOT_BYTES
+  )
+
+  for (const asset of snapshot.assets) {
+    const payload = payloads.get(asset.id)
+    if (!payload) continue
+    asset.dataUrl = payload.dataUrl
+    asset.svgContent = payload.svgContent
+    if (asset.legacy) {
+      asset.legacy.dataUrl = payload.legacyDataUrl
+      asset.legacy.processedDataUrl = payload.legacyProcessedDataUrl
+      asset.legacy.svgContent = payload.legacySvgContent
+    }
+  }
   return snapshot
+}
+
+function estimateRetainedBytes(value: unknown, seen = new WeakSet<object>()): number {
+  if (value == null) return 4
+  if (typeof value === 'string') return 8 + value.length * 2
+  if (typeof value === 'number') return 8
+  if (typeof value === 'boolean') return 4
+  if (typeof value !== 'object') return 0
+  if (seen.has(value)) return 0
+  seen.add(value)
+
+  if (Array.isArray(value)) {
+    return 24 + value.reduce((total, item) => total + estimateRetainedBytes(item, seen), 0)
+  }
+
+  let bytes = 32
+  for (const [key, item] of Object.entries(value)) {
+    bytes += 8 + key.length * 2 + estimateRetainedBytes(item, seen)
+  }
+  return bytes
+}
+
+function estimateProjectRetainedBytes(project: Project): number {
+  const projectWithoutAssets = { ...project, assets: undefined }
+  let bytes = estimateRetainedBytes(projectWithoutAssets)
+  for (const asset of project.assets) {
+    const assetWithoutPayloads = {
+      ...asset,
+      dataUrl: undefined,
+      svgContent: undefined,
+      legacy: asset.legacy
+        ? {
+            ...asset.legacy,
+            dataUrl: undefined,
+            processedDataUrl: undefined,
+            svgContent: undefined,
+          }
+        : undefined,
+    }
+    bytes += estimateRetainedBytes(assetWithoutPayloads)
+  }
+  return bytes
+}
+
+export function getEstimatedHistoryBytes(snapshots: readonly Project[]): number {
+  return snapshots.reduce(
+    (total, snapshot) =>
+      total + (historySnapshotBytes.get(snapshot) ?? estimateProjectRetainedBytes(snapshot)),
+    0
+  )
+}
+
+export function trimProjectHistory(
+  snapshots: readonly Project[],
+  limits: { maxEntries?: number; minEntries?: number; maxEstimatedBytes?: number } = {}
+): Project[] {
+  const maxEntries = limits.maxEntries ?? MAX_HISTORY_ENTRIES
+  const minEntries = Math.min(limits.minEntries ?? MIN_HISTORY_ENTRIES, maxEntries)
+  const maxEstimatedBytes = limits.maxEstimatedBytes ?? MAX_HISTORY_ESTIMATED_BYTES
+  const retained = snapshots.slice(-maxEntries)
+  let retainedBytes = getEstimatedHistoryBytes(retained)
+  while (retained.length > minEntries && retainedBytes > maxEstimatedBytes) {
+    const removed = retained.shift()
+    if (removed) {
+      retainedBytes -= historySnapshotBytes.get(removed) ?? estimateProjectRetainedBytes(removed)
+    }
+  }
+  return retained
+}
+
+export const cloneProjectForHistory = (project: Project): Project => {
+  return cloneProjectWithoutCopyingAssetPayloads(project)
+}
+
+/**
+ * Capture an Immer-produced project revision for undo without cloning it.
+ *
+ * Zustand's Immer middleware freezes completed revisions, so subsequent edits create new
+ * objects and cannot mutate this revision. Keeping that immutable root is both undo-safe and
+ * lets adjacent history entries share their unchanged V2 subtrees. Non-Immer callers retain
+ * the defensive deep-clone behavior.
+ */
+export const captureProjectForHistory = (project: Project): Project => {
+  if (!Object.isFrozen(project)) return cloneProjectForHistory(project)
+
+  if (!historySnapshotBytes.has(project)) {
+    historySnapshotBytes.set(
+      project,
+      lastEstimatedBytesByProjectId.get(project.project.id) ?? CONSERVATIVE_UNKNOWN_SNAPSHOT_BYTES
+    )
+  }
+  return project
 }
 
 // Coalesce rapid-fire edits (typing, sliders) into a single undo entry.
@@ -115,23 +267,23 @@ export function getProjectStoreApi(): StoreApi<ProjectState> {
 }
 
 export function appendUndoSnapshotInStore(
-  set: (fn: (state: ProjectState) => void) => void,
+  _set: (fn: (state: ProjectState) => void) => void,
   snapshotBefore: Project
 ): void {
-  set((state) => {
-    const nextUndoStack = [...state.undoStack, snapshotBefore]
-    if (nextUndoStack.length > MAX_HISTORY_ENTRIES) nextUndoStack.shift()
-    state.undoStack = nextUndoStack
-    state.redoStack = []
+  const api = getProjectStoreApi()
+  const state = api.getState()
+  // History entries are already immutable snapshots. Apply this shallow store-only update
+  // directly so Immer does not draft/finalize an ever-growing history array on every edit.
+  api.setState({
+    undoStack: trimProjectHistory([...state.undoStack, snapshotBefore]),
+    redoStack: [],
   })
 }
 
 export function pushUndoSnapshot(snapshotProject: Project): void {
-  const snapshot = cloneProjectForHistory(snapshotProject)
+  const snapshot = captureProjectForHistory(snapshotProject)
   getProjectStoreApi().setState((s: ProjectState) => {
-    const nextUndoStack = [...s.undoStack, snapshot]
-    if (nextUndoStack.length > MAX_HISTORY_ENTRIES) nextUndoStack.shift()
-    return { undoStack: nextUndoStack, redoStack: [] }
+    return { undoStack: trimProjectHistory([...s.undoStack, snapshot]), redoStack: [] }
   })
 }
 
@@ -199,7 +351,10 @@ export function findClosestNonEmptyAbove(floors: Floor[], startIndex: number): F
   return null
 }
 
-export function pickDefaultPlanReferenceOverlayFloor(floors: Floor[], baseFloorId: string): string | null {
+export function pickDefaultPlanReferenceOverlayFloor(
+  floors: Floor[],
+  baseFloorId: string
+): string | null {
   const idx = floors.findIndex((f) => f.id === baseFloorId)
   if (idx < 0) return null
 

@@ -20,6 +20,21 @@ export type PlanLabelWireCollisionInput = {
   placementPositionOverrides?: Map<string, Point2>
 }
 
+function reuseLabelPositions(
+  previous: Map<string, { x: number; y: number }>,
+  next: Map<string, { x: number; y: number }>
+): Map<string, { x: number; y: number }> {
+  let allSame = previous.size === next.size
+  const stable = new Map<string, { x: number; y: number }>()
+  for (const [id, position] of next) {
+    const prior = previous.get(id)
+    const value = prior && prior.x === position.x && prior.y === position.y ? prior : position
+    stable.set(id, value)
+    if (value !== prior) allSame = false
+  }
+  return allSame ? previous : stable
+}
+
 /**
  * Hook to calculate label positions with collision detection
  */
@@ -47,6 +62,7 @@ export function usePlanLabelPositions(
     lastPlacementGeomById: new Map(),
     wallScoresByPlacementId: new Map(),
   })
+  const previousLabelPositionsRef = useRef(new Map<string, { x: number; y: number }>())
 
   const wallObstacleRects = useMemo(() => {
     if (!wallCollision || wallCollision.walls.length === 0) return null
@@ -144,7 +160,7 @@ export function usePlanLabelPositions(
         else wallScoresByPlacementId.delete(placement.id)
       }
     }
-    return calculateLabelPositions(
+    const nextLabelPositions = calculateLabelPositions(
       placements,
       getEndpointById,
       wallScoresByPlacementId,
@@ -153,6 +169,12 @@ export function usePlanLabelPositions(
       wallObstacleRects,
       wireObstacleIndex
     )
+    const stableLabelPositions = reuseLabelPositions(
+      previousLabelPositionsRef.current,
+      nextLabelPositions
+    )
+    previousLabelPositionsRef.current = stableLabelPositions
+    return stableLabelPositions
   }, [
     placements,
     getEndpointById,

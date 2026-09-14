@@ -58,7 +58,7 @@ function registerSymbolImageElement(image: HTMLImageElement, svgPath: string): v
 }
 
 /** Bump when themed SVG processing changes so in-memory blob caches refresh. */
-const SYMBOL_THEME_PROCESSING_VERSION = '3'
+const SYMBOL_THEME_PROCESSING_VERSION = '5'
 
 function themedSymbolCacheKey(svgPath: string, isDark: boolean): string {
   return `${SYMBOL_THEME_PROCESSING_VERSION}::${svgPath}::${isDark ? 'dark' : 'light'}`

@@ -92,7 +92,7 @@ function MultiplierSymbolPreview({ previewSrc, count }: { previewSrc: string; co
         />
         {clamped > 1 && (
           <span
-            className="absolute -top-2 right-0 text-xs font-bold leading-none text-gray-900 dark:text-gray-100"
+            className="absolute bottom-full left-full -translate-x-1/2 text-xs font-bold leading-none text-gray-900 dark:text-gray-100"
             aria-hidden="true"
           >
             {clamped}x

@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback, useEffect, type ReactNode } from 'react'
+import { memo, useRef, useState, useCallback, useEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Star } from 'lucide-react'
 import type { SymbolMetadata } from '@/lib/symbols'
@@ -73,12 +73,12 @@ interface SymbolItemProps {
   /** Short description shown on hover; omit to hide the tooltip. */
   tooltip?: string
   isFavorite: boolean
-  onToggleFavorite: () => void
+  onToggleFavorite: (symbolId: string) => void
   onDragStart?: (symbol: SymbolMetadata) => void
   compact?: boolean
 }
 
-export default function SymbolItem({
+function SymbolItem({
   symbol,
   localizedName,
   tooltip,
@@ -199,7 +199,7 @@ export default function SymbolItem({
 
   const handleFavoriteClick = (e: React.MouseEvent) => {
     e.stopPropagation()
-    onToggleFavorite()
+    onToggleFavorite(symbol.id)
   }
 
   // Touch handlers for drag and drop (iPad) using global native listeners
@@ -409,6 +409,8 @@ export default function SymbolItem({
     </>
   )
 }
+
+export default memo(SymbolItem)
 
 interface SymbolPreviewProps {
   svgPath: string

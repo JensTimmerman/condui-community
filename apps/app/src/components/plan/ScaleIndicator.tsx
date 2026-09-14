@@ -3,7 +3,7 @@ import { useUIStore } from '@/stores/uiStore'
 import { useCanvasOverlayScale } from '@/contexts/CanvasOverlayScaleContext'
 import { calculatePxPerMeter } from '@/hooks/plan/usePlanScale'
 import type { Floor } from '@/types/schema'
-import { getCompatibilityFloorsFromProject } from '@/lib/projectV2/buildingFloors'
+import { readLegacyCompatibilityFloors } from '@/lib/projectV2/buildingFloors'
 
 function ScaleIndicator() {
   const { currentProject } = useProjectStore()
@@ -11,7 +11,7 @@ function ScaleIndicator() {
   const { scale } = useCanvasOverlayScale()
 
   const activeFloor = activeFloorId
-    ? (currentProject ? getCompatibilityFloorsFromProject(currentProject) : []).find(
+    ? (currentProject ? readLegacyCompatibilityFloors(currentProject) : []).find(
         (f: Floor) => f.id === activeFloorId
       )
     : null

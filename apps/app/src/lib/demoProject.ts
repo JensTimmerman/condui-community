@@ -1,7 +1,35 @@
-/** Bundled /demo editor projects use ids `demo` or `demo-<uuid>`. */
+export const DEMO_PROJECT_TARGETS = {
+  demo: {
+    route: 'demo',
+    exampleProjectZipPath: '/examples/starter-project.zip',
+  },
+  demo_backup: {
+    route: 'demo_backup',
+    exampleProjectZipPath: '/examples/demo_backup.zip',
+  },
+  demo_offgrid: {
+    route: 'demo_offgrid',
+    exampleProjectZipPath: '/examples/demo_offgrid.zip',
+  },
+} as const
+
+export type DemoProjectTarget = keyof typeof DEMO_PROJECT_TARGETS
+
+/** Bundled demo editor projects use ids `demo` or `demo-<uuid>`. */
 export function isDemoProjectId(projectId: string | null | undefined): boolean {
   if (!projectId) return false
   return projectId === 'demo' || projectId.startsWith('demo-')
+}
+
+/** Returns the editable bundled demo represented by a localized app pathname. */
+export function getDemoProjectTargetForPathname(pathname: string): DemoProjectTarget | null {
+  const normalizedPathname = pathname.replace(/\/+$/, '') || '/'
+  const match = normalizedPathname.match(
+    /^\/(?:[a-z]{2}(?:-[A-Z]{2})?\/)?(demo|demo_backup|demo_offgrid)$/
+  )
+  if (!match) return null
+
+  return match[1] as DemoProjectTarget
 }
 
 export const DEMO_PROJECT_LIFETIME_MS = 60 * 60 * 1000

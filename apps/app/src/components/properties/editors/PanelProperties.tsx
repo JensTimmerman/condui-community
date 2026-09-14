@@ -22,13 +22,10 @@ import { InstallDateField } from '../shared/propertiesShared'
 import { ensureInstallDateTargetColors, selectClass } from '../shared/propertiesSharedUtils'
 import { installationDateUpdateFromYear } from '@/lib/installDates'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
 } from '@/lib/projectV2/electrical'
-import {
-  DEFAULT_PANEL_GRID_COLUMNS,
-  DEFAULT_PANEL_GRID_ROWS,
-} from '@/lib/panel/panelGridDefaults'
+import { DEFAULT_PANEL_GRID_COLUMNS, DEFAULT_PANEL_GRID_ROWS } from '@/lib/panel/panelGridDefaults'
 // Panel Properties Component
 export function PanelProperties({
   panelId,
@@ -52,20 +49,17 @@ export function PanelProperties({
 
   const projectLocale = currentProject?.project.locale ?? i18n.language
   const displayName = panel?.nameByLocale?.[projectLocale] ?? panel?.name ?? ''
-  const installation = currentProject
-    ? getElectricalInstallationFromProject(currentProject)
-    : undefined
+  const installation = currentProject ? getProjectElectricalInstallation(currentProject) : undefined
   const panelNumberingEnabled = !!installation?.panelNumberingEnabled
   const panelNetTypeLabelsEnabled = !!installation?.panelNetTypeLabelsEnabled
   const hasBackupFeed =
     currentProject != null && panel != null && panelHasBackupOutput(currentProject, panel.id)
   const mainPanel = currentProject
-    ? findMainPanel(getElectricalPanelsFromProject(currentProject))
+    ? findMainPanel(getProjectElectricalPanels(currentProject))
     : null
   const earthingValue =
     panel && currentProject
-      ? (resolveEffectiveEarthingSystem(panel, getElectricalPanelsFromProject(currentProject)) ??
-        '')
+      ? (resolveEffectiveEarthingSystem(panel, getProjectElectricalPanels(currentProject)) ?? '')
       : ''
   const earthingSyncedWithMain =
     !!panel &&
@@ -316,6 +310,28 @@ export function PanelProperties({
         <h4 className="text-sm font-semibold text-gray-900 dark:text-white">
           {t('panelCanvas.panelLayout', 'Panel layout')}
         </h4>
+        <button
+          type="button"
+          aria-pressed={panel.gridView?.terminalStripTopRail ?? false}
+          onClick={() =>
+            updatePanelGrid(panelId, {
+              terminalStripTopRail: !(panel.gridView?.terminalStripTopRail ?? false),
+            })
+          }
+          className={`flex w-full items-center justify-center gap-3 rounded-md border-2 px-3 py-2 text-xs font-medium transition-colors ${
+            panel.gridView?.terminalStripTopRail
+              ? 'border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-300'
+              : 'border-gray-300 bg-white text-gray-700 hover:border-sky-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300'
+          }`}
+        >
+          <img
+            src="/symbols/junction/terminal_strip.svg"
+            alt=""
+            aria-hidden="true"
+            className="h-8 w-8 opacity-90 dark:invert"
+          />
+          <span>{t('panelCanvas.topTerminalStripRail', 'Top clamp rail')}</span>
+        </button>
         <div className="flex items-center gap-2">
           <span className="w-16 text-sm text-gray-700 dark:text-gray-300">
             {t('panelCanvas.rows')}
@@ -350,6 +366,28 @@ export function PanelProperties({
             className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
           />
         </div>
+        <button
+          type="button"
+          aria-pressed={panel.gridView?.terminalStripBottomRail ?? false}
+          onClick={() =>
+            updatePanelGrid(panelId, {
+              terminalStripBottomRail: !(panel.gridView?.terminalStripBottomRail ?? false),
+            })
+          }
+          className={`flex w-full items-center justify-center gap-3 rounded-md border-2 px-3 py-2 text-xs font-medium transition-colors ${
+            panel.gridView?.terminalStripBottomRail
+              ? 'border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-300'
+              : 'border-gray-300 bg-white text-gray-700 hover:border-sky-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300'
+          }`}
+        >
+          <img
+            src="/symbols/junction/terminal_strip.svg"
+            alt=""
+            aria-hidden="true"
+            className="h-8 w-8 opacity-90 dark:invert"
+          />
+          <span>{t('panelCanvas.bottomTerminalStripRail', 'Bottom clamp rail')}</span>
+        </button>
       </div>
     </div>
   )

@@ -9,11 +9,11 @@ import { generateId } from './project'
 import type { Panel, Endpoint, Placement } from '@/types/schema'
 import type { Point } from '@/types/ui'
 import {
-  getBuildingFloorsFromProject,
+  selectProjectBuildingFloors,
   type ProjectWithOptionalV2Building,
 } from '@/lib/projectV2/buildingFloors'
 import {
-  getElectricalPanelsFromProject,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 
@@ -45,7 +45,7 @@ function findPanel(panels: Panel[], panelId: string): Panel | undefined {
 export function getPanelEndpoint(project: PanelPlacementProject, panelId: string): Endpoint | null {
   // Find endpoint with symbol 'panel_distribution' that represents this panel
   // We'll use a naming convention: endpoint label matches panel name
-  const rootPanels = getElectricalPanelsFromProject(project)
+  const rootPanels = getProjectElectricalPanels(project)
   const panel = findPanel(rootPanels, panelId)
   if (!panel) return null
   
@@ -169,7 +169,7 @@ function collectPlacementsOnFloor(project: PanelPlacementProject, floorId: strin
     }
   }
 
-  for (const panel of getElectricalPanelsFromProject(project)) {
+  for (const panel of getProjectElectricalPanels(project)) {
     visitPanel(panel)
   }
   return placements
@@ -210,7 +210,7 @@ export function ensurePanelPlacement(
   options?: EnsurePanelPlacementOptions
 ): { endpoint: Endpoint; placement: Placement } | null {
   // Get ground floor (first floor)
-  const floors = getBuildingFloorsFromProject(project)
+  const floors = selectProjectBuildingFloors(project)
   const groundFloor = floors.find(f =>
     f.name.toLowerCase().includes('ground') || 
     f.name.toLowerCase().includes('grond')

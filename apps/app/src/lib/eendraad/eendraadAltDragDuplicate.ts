@@ -16,13 +16,28 @@ import type { LayoutTree } from '@/lib/layout/layoutTree'
 import { executeDropBehavior } from '@/handlers/eendraad/dropBehaviors'
 import type { DropBehaviorProject } from '@/handlers/eendraad/dropBehaviors'
 import { getSymbolById } from '@/lib/symbols'
-import type { Circuit, Endpoint, Panel, Placement, ProtectionDevice } from '@/types/schema'
+import type {
+  Circuit,
+  Endpoint,
+  Panel,
+  Placement,
+  ProtectionDevice,
+  TrunkDevice,
+} from '@/types/schema'
 import type { Point, Selection } from '@/types/ui'
 import type { TFunction } from 'i18next'
 import { useProjectStore } from '@/stores/projectStore'
 import { useUIStore } from '@/stores/uiStore'
 import { useDialogStore } from '@/stores/dialogStore'
 import { clamp } from '@/lib/geometry'
+import { clonePlacementsForDuplicate } from '@/lib/eendraad/duplicateSitplanHelpers'
+import { cloneDomoticaEndpointGroup } from '@/lib/eendraad/duplicateDomoticaEndpointGroup'
+import { generateId } from '@/utils'
+import {
+  incrementSameSymbolAddMoreTarget,
+  canIncrementSameSymbolAddMoreTarget,
+  findSameSymbolAddMoreLayoutTargets,
+} from '@/lib/eendraad/sameSymbolAddMore'
 
 export type WireSegmentForDrop = {
   panelId?: string
@@ -50,6 +65,89 @@ export interface EendraadAltDragDuplicateDeps {
   setSelection: (sel: Selection) => void
   getFloorById: (floorId: string) => { id: string; layers?: string[] } | null
   getProtectionById: (protectionId: string) => ProtectionDevice | null
+  updateEndpointSocketCount: (endpointId: string, count: number) => void
+  syncEndpointMultiplierCount: (endpointId: string, count: number) => boolean
+}
+
+/**
+ * Duplicate one ordinary DC-rail branch device at the exact branch insertion slot
+ * under the pointer. Alt-drag intentionally copies only the selected device; Ctrl-D
+ * is the operation that copies the downstream branch suffix.
+ */
+export function duplicateCircuitDcBranchDeviceAtDropTarget(
+  sourceDevice: TrunkDevice,
+  circuit: Circuit,
+  target: DropTarget,
+  updateCircuit: (circuitId: string, updates: Partial<Circuit>) => void,
+): string | null {
+  if (!target.circuitId || target.circuitId !== circuit.id || !target.dcBusId) return null
+
+  const branch = (circuit.branches ?? []).find(
+    (candidate) =>
+      candidate.dcBusId === target.dcBusId &&
+      (candidate.id === target.branchId ||
+        candidate.endpointIds.some((id) => target.branchEndpoints?.includes(id))),
+  )
+  if (!branch) return null
+
+  const clone: TrunkDevice = {
+    ...JSON.parse(JSON.stringify(sourceDevice)),
+    id: generateId(),
+    trunkPosition: target.branchDeviceInsertIndex ?? branch.branchDevices?.length ?? 0,
+    placements: sourceDevice.placements?.length
+      ? clonePlacementsForDuplicate(sourceDevice.placements, {
+          symbolType: sourceDevice.symbol,
+        })
+      : [],
+  }
+  const branchDevices = [...(branch.branchDevices ?? [])]
+  const insertIndex = clamp(
+    target.branchDeviceInsertIndex ?? branchDevices.length,
+    0,
+    branchDevices.length,
+  )
+  clone.trunkPosition = insertIndex
+  branchDevices.splice(insertIndex, 0, clone)
+
+  updateCircuit(circuit.id, {
+    branches: (circuit.branches ?? []).map((candidate) =>
+      candidate.id === branch.id ? { ...candidate, branchDevices } : candidate,
+    ),
+  })
+  return clone.id
+}
+
+/**
+ * Apply the same-symbol multiplier behavior for an Alt-drag released on its source.
+ * Returns null when the drop is not an eligible self-target, so the caller can continue
+ * with ordinary endpoint duplication.
+ */
+export function incrementAltDragSameSymbolEndpoint(
+  sourceEndpoint: Endpoint,
+  targetEndpoint: Endpoint | null,
+  deps: Pick<
+    EendraadAltDragDuplicateDeps,
+    'updateEndpointSocketCount' | 'syncEndpointMultiplierCount'
+  >,
+): boolean | null {
+  if (
+    targetEndpoint?.id !== sourceEndpoint.id ||
+    !sourceEndpoint.symbol ||
+    !canIncrementSameSymbolAddMoreTarget(sourceEndpoint.symbol, { endpoint: targetEndpoint })
+  ) {
+    return null
+  }
+
+  const result = incrementSameSymbolAddMoreTarget(
+    sourceEndpoint.symbol,
+    { endpoint: targetEndpoint },
+    {
+      updateSocketCount: deps.updateEndpointSocketCount,
+      syncEndpointCount: deps.syncEndpointMultiplierCount,
+      syncSupplyDeviceCount: () => false,
+    },
+  )
+  return result === 'incremented'
 }
 
 function augmentDropTargetWithWireDomain(
@@ -95,17 +193,82 @@ export function runEendraadEndpointAltDragDuplicate(
 ): boolean {
   const store = useProjectStore.getState()
   const sourceEndpoint = store.getEndpointById(sourceEndpointId)
-  if (!sourceEndpoint?.symbol || !endpointSymbolCanBeDuplicated(sourceEndpoint)) return false
+  // Domotica output children are still ordinary endpoint symbols for Alt-drag.
+  // The drop target supplies the new row/slot relationship; the callback below
+  // supplies the source endpoint's user-facing properties. Keep the stricter
+  // default for Ctrl-D and context-menu duplication, where a child is not a
+  // standalone branch to duplicate.
+  if (
+    !sourceEndpoint?.symbol ||
+    !endpointSymbolCanBeDuplicated(sourceEndpoint, { allowDomoticaChild: true })
+  ) {
+    return false
+  }
 
   const symbolMeta = getSymbolById(sourceEndpoint.symbol)
   if (!symbolMeta) return false
+
+  // Resolve the symbol under the pointer before asking the generic drop-target
+  // hit tester. The latter may report the surrounding wire (or no target at
+  // all), while the library drop path deliberately gives the symbol body
+  // priority for same-symbol multiplier drops.
+  const sameSymbolLayoutTarget = findSameSymbolAddMoreLayoutTargets(
+    sourceEndpoint.symbol,
+    deps.layoutTree,
+    position,
+  )[0]
+  const directSameSymbolTargetId = sameSymbolLayoutTarget?.target.endpoint?.id
+  const directSameSymbolTarget = directSameSymbolTargetId
+    ? store.getEndpointById(directSameSymbolTargetId) ?? null
+    : null
+  const directSameSymbolMultiplierResult = incrementAltDragSameSymbolEndpoint(
+    sourceEndpoint,
+    directSameSymbolTarget,
+    deps,
+  )
+  if (directSameSymbolMultiplierResult !== null) {
+    return directSameSymbolMultiplierResult
+  }
 
   const { target: rawTarget } = deps.findDropTarget(deps.layoutTree, position)
   if (!rawTarget || rawTarget.type === null) return false
 
   let dropTarget = augmentDropTargetWithWireDomain(rawTarget, position, deps.wireSegments)
 
-  const targetEndpoint = dropTarget.endpointId ? store.getEndpointById(dropTarget.endpointId) : null
+  const targetEndpoint = dropTarget.endpointId
+    ? store.getEndpointById(dropTarget.endpointId) ?? null
+    : null
+
+  const sourceDomoticaCircuit =
+    sourceEndpoint.symbol === 'domotica' && !sourceEndpoint.domoticaChildProps
+      ? store.findCircuitForEndpoint(sourceEndpointId)?.circuit
+      : undefined
+  const domoticaGroupClone = sourceDomoticaCircuit
+    ? cloneDomoticaEndpointGroup(sourceEndpoint, sourceDomoticaCircuit)
+    : undefined
+
+  // A domotica parent is a complete diagram module. Dropping its duplicate on
+  // another domotica row must insert a sibling module, never turn the copied
+  // parent itself into another output child.
+  if (domoticaGroupClone && (targetEndpoint?.domoticaChildProps || dropTarget.domoticaOutput)) {
+    dropTarget = {
+      ...dropTarget,
+      domoticaOutput: undefined,
+      domoticaChildDropIntent: undefined,
+      insertAfterEndpointId: targetEndpoint?.id ?? dropTarget.insertAfterEndpointId,
+    }
+  }
+
+  // Match the library drop behavior when Alt-dragging a multiplier-capable
+  // endpoint back onto its own symbol. A drop elsewhere remains a real copy;
+  // a self-drop grows the existing endpoint instead of creating a duplicate.
+  const sameSymbolMultiplierResult = incrementAltDragSameSymbolEndpoint(
+    sourceEndpoint,
+    targetEndpoint,
+    deps,
+  )
+  if (sameSymbolMultiplierResult !== null) return sameSymbolMultiplierResult
+
   if (
     sourceEndpoint.domoticaChildProps &&
     !dropTarget.domoticaOutput &&
@@ -119,6 +282,8 @@ export function runEendraadEndpointAltDragDuplicate(
 
   const createdEndpointIds: string[] = []
   let dropRejected = false
+  let createdDomoticaParentId: string | undefined
+  let createdDomoticaCircuitId: string | undefined
 
   executeDropBehavior(
     symbolMeta as Parameters<typeof executeDropBehavior>[0],
@@ -130,6 +295,7 @@ export function runEendraadEndpointAltDragDuplicate(
       addProtection: store.addProtection,
       addCircuit: deps.addCircuit,
       addCircuitToProtection: store.addCircuitToProtection,
+      updateEndpoint: store.updateEndpoint,
       addPlacement: deps.addPlacement,
       setSelection: deps.setSelection,
       getFloorById: deps.getFloorById,
@@ -153,13 +319,36 @@ export function runEendraadEndpointAltDragDuplicate(
         const latestSource = store.getEndpointById(sourceEndpointId) ?? sourceEndpoint
         const clonedSource = JSON.parse(JSON.stringify(latestSource)) as Endpoint
         const isDomoticaChildDrop = !!endpoint.domoticaChildProps
-        const merged: Endpoint = {
-          ...clonedSource,
-          ...endpoint,
-          placements: [],
-          domoticaChildProps: endpoint.domoticaChildProps,
-          converterDcConnection: endpoint.converterDcConnection,
-          id: endpoint.id,
+        const merged: Endpoint = domoticaGroupClone
+          ? {
+              ...domoticaGroupClone.parent,
+              ...endpoint,
+              id: endpoint.id,
+              placements: domoticaGroupClone.parent.placements,
+              // The parent is normalized immediately by addEndpoint. Keep its
+              // slots empty until the copied children have been inserted, or
+              // normalization would discard references to children not added yet.
+              domoticaProps: domoticaGroupClone.parent.domoticaProps
+                ? {
+                    ...domoticaGroupClone.parent.domoticaProps,
+                    endpointChildEndpointIds: [],
+                    controlChildEndpointIds: [],
+                  }
+                : undefined,
+              controlledEndpointIds: domoticaGroupClone.parent.controlledEndpointIds,
+            }
+          : {
+              ...clonedSource,
+              ...endpoint,
+              placements: [],
+              domoticaChildProps: endpoint.domoticaChildProps,
+              converterDcConnection: endpoint.converterDcConnection,
+              id: endpoint.id,
+            }
+        if (domoticaGroupClone) {
+          delete merged.domoticaChildProps
+          createdDomoticaParentId = merged.id
+          createdDomoticaCircuitId = circuitId
         }
         if (!isDomoticaChildDrop) {
           delete (merged as { label?: string }).label
@@ -186,6 +375,38 @@ export function runEendraadEndpointAltDragDuplicate(
   )
 
   if (dropRejected || createdEndpointIds.length === 0) return false
+
+  if (domoticaGroupClone && createdDomoticaParentId && createdDomoticaCircuitId) {
+    let insertAfterEndpointId: string = createdDomoticaParentId
+    for (const sourceChild of domoticaGroupClone.children) {
+      const childClone: Endpoint = JSON.parse(JSON.stringify(sourceChild))
+      if (childClone.domoticaChildProps) {
+        childClone.domoticaChildProps = {
+          ...childClone.domoticaChildProps,
+          parentEndpointId: createdDomoticaParentId,
+        }
+      }
+      store.addEndpoint(createdDomoticaCircuitId, childClone, insertAfterEndpointId)
+      createdEndpointIds.push(childClone.id)
+      insertAfterEndpointId = childClone.id
+    }
+
+    if (store.getCircuitById(createdDomoticaCircuitId)) {
+      // updateEndpoint normalizes inside Immer, after every copied child exists.
+      // Calling normalizeDomoticaCircuit on the frozen store snapshot here would
+      // throw and leave the new parent with its temporary empty slot list.
+      store.updateEndpoint(createdDomoticaParentId, {
+        domoticaProps: domoticaGroupClone.parent.domoticaProps,
+      })
+      const circuitWithSlots = store.getCircuitById(createdDomoticaCircuitId)
+      if (!circuitWithSlots) return false
+      deps.updateCircuit(createdDomoticaCircuitId, {
+        endpoints: circuitWithSlots.endpoints,
+        branches: circuitWithSlots.branches,
+      })
+    }
+    deps.setSelection({ type: 'endpoint', ids: [createdDomoticaParentId] })
+  }
 
   const project = store.currentProject
   if (project) {

@@ -24,6 +24,8 @@ export interface CableSpec {
     | 'VTLB'
     | 'JYSTY'
     | 'Solar'
+    | 'battery-cable'
+    | 'twinflex'
     | 'other'
   conductors: number
   sectionMm2: number
@@ -60,11 +62,7 @@ export interface PanelBusSection {
 }
 
 export type CircuitPhaseAssignmentKind =
-  | 'inherit'
-  | 'single_phase'
-  | 'phase_to_phase'
-  | 'three_phase'
-  | 'dc'
+  'inherit' | 'single_phase' | 'phase_to_phase' | 'three_phase' | 'dc'
 
 /** Typed conductor/phase assignment for an AC or DC circuit wire. */
 export interface CircuitPhaseAssignment {
@@ -81,10 +79,16 @@ export type PanelGridModuleRef =
   /** Legacy ref name used for every eligible endpoint-style panel module. */
   | { kind: 'domotica'; endpointId: string; circuitId: string }
 
-/** Slot position and optional width override for one module in panel grid view */
+/**
+ * Slot position and optional width override in physical DIN-module measurements.
+ * Panel layout normalizes values to an integer 1/12-module fixed-point grid;
+ * whole numbers remain the normal representation for existing devices.
+ */
 export interface PanelGridSlot {
   row: number
   col: number
+  /** Optional compact terminal-strip rail; only terminal-strip modules may use it. */
+  terminalStripRail?: 'top' | 'bottom'
   moduleWidth?: number
   /** When true, `moduleWidth` is a deliberate user resize; otherwise width follows device poles. */
   moduleWidthManual?: boolean
@@ -99,6 +103,8 @@ export interface PanelGridConfig {
   columns: number
   feedFromTop: boolean
   slots: PanelGridSlot[]
+  terminalStripTopRail?: boolean
+  terminalStripBottomRail?: boolean
   /** Independent supply-panel row count. */
   supplyPanelRows?: number
   /** Independent supply-panel column count. */
@@ -111,6 +117,23 @@ export interface PanelGridConfig {
   hiddenModuleKeys?: string[]
   /** Non-protection module ref keys explicitly shown in the panel view. */
   shownModuleKeys?: string[]
+}
+
+/** Source used to populate one of the two editable panel label cells. */
+export type PanelLabelCellSource = 'label' | 'notes' | 'labelNotes' | 'technical'
+
+export interface PanelLabelCellConfig {
+  /** First source retained for backward compatibility with older editors. */
+  source: PanelLabelCellSource
+  /** Ordered sources rendered as separate lines. Missing uses the singular source. */
+  sources?: PanelLabelCellSource[]
+  alignment?: 'left' | 'center' | 'right' | 'justify'
+}
+
+/** Per-module label editor preferences. Missing sides use label/notes defaults. */
+export interface PanelLabelConfig {
+  top?: PanelLabelCellConfig
+  bottom?: PanelLabelCellConfig
 }
 
 export interface Panel {
@@ -156,14 +179,7 @@ export interface Panel {
 }
 
 export type ProtectionType =
-  | 'RCD'
-  | 'MCB'
-  | 'RCBO'
-  | 'FUSE'
-  | 'MAIN_SWITCH'
-  | 'SPD'
-  | 'ROTATING_SWITCH'
-  | 'OTHER'
+  'RCD' | 'MCB' | 'RCBO' | 'FUSE' | 'MAIN_SWITCH' | 'SPD' | 'ROTATING_SWITCH' | 'OTHER'
 export type CurveType = 'B' | 'C' | 'D' | 'F' | 'K' | 'MA' | 'Z' | 'unknown'
 export type ResidualCurrentType = 'AC' | 'A' | 'F' | 'B'
 export type SurgeProtectionKind = 'standard' | 'sparkGap'
@@ -198,6 +214,10 @@ export interface ProtectionDevice {
   polesConfig?: PolesConfig // Human-readable poles config (e.g. '2P', '1P+N', '4P')
   poles?: number // Numeric pole count (derived from polesConfig for backward compat)
   notes?: string
+  /** Optional second comment used by the panel label editor. */
+  labelNotes?: string
+  /** Panel label cell source preferences. */
+  panelLabel?: PanelLabelConfig
   circuits?: Circuit[] // Circuits protected by this device (e.g., RCD with multiple circuits)
   subPanelId?: string // For MCBs that connect to sub-panels
   /** Structural carrier for a secondary panel connected directly to a busbar; no protection symbol is rendered. */
@@ -259,6 +279,14 @@ export interface Branch {
   id: string
   label: string // Shared branch label (e.g. "A1") — source of truth for all endpoints on this branch
   endpointIds: string[] // Endpoint IDs in order (switches first, then endpoint)
+  /** Ordinary-panel DC rail that renders this endpoint branch as a vertical rail tap. */
+  dcBusId?: string
+  /**
+   * Optional serial devices on an ordinary DC-rail tap, ordered from the bus toward the
+   * endpoint chain. These remain owned by the parent circuit; they are not child circuits
+   * and must not make the DC bus a serial structure node.
+   */
+  branchDevices?: TrunkDevice[]
 }
 
 export interface Circuit {
@@ -425,6 +453,7 @@ export type SymbolKey =
   | 'earthing_separator'
   | 'junction_box'
   | 'junction_panel'
+  | 'terminal_strip'
   | 'note'
   // Energy conversion (AC/DC)
   | 'transformer'
@@ -491,21 +520,30 @@ export interface EnergyMeterDeviceProps {
  */
 export type TrunkDeviceType =
   | 'energy_meter'
+  | 'relay'
   | 'protection'
   | 'earthing_separator'
   | 'junction_box'
   | 'junction_panel'
+  | 'terminal_strip'
   | 'changeover'
   | 'conversion'
   | 'storage'
   | 'generation'
+  | 'domotica'
   | 'dc_bus'
 
 export interface DcBusDeviceProps {
-  /** Ordered outgoing circuits. The referenced circuit owns its endpoint/trunk content. */
+  /** @deprecated Legacy unreleased model. Ordinary-panel rails now own Circuit.branches directly. */
   branchCircuitIds?: string[]
   ratedCurrentA?: number
   ratedVoltageV?: number
+}
+
+export interface JunctionPanelTerminalComponent {
+  id: string
+  label: string
+  pinCount: number
 }
 
 export interface TrunkDevice {
@@ -513,18 +551,32 @@ export interface TrunkDevice {
   type: TrunkDeviceType
   symbol: SymbolKey
   label: string
+  /** Shared physical identity for junction boxes, junction panels, and terminal strips. */
+  junctionIdentity?: string
+  /** Shared panel-canvas layout for a physical junction panel. */
+  junctionPanelGridView?: PanelGridConfig
+  /** Physical terminal component created for this junction-panel connection occurrence. */
+  junctionPanelTerminal?: JunctionPanelTerminalComponent
+  /** Unique connection pin within the terminal strip identified by `junctionIdentity`. */
+  terminalStripPin?: number
+  /** Distinct outgoing connection pin for an in-line terminal strip. */
+  terminalStripOutgoingPin?: number
   /** Shared identity for the two physical symbols of one earthing separator. */
   earthingSeparatorPairId?: string
-  /** Physical panel-canvas mounting for supply devices; independent from electrical feed ownership. */
+  /** Physical panel-canvas mounting for supply devices and auxiliary-mounted terminal strips; independent from electrical ownership. */
   panelMounting?:
     | { kind: 'grid' }
     | { kind: 'panel'; panelId: string }
     | { kind: 'auxiliary'; enclosureId: string }
+  /** Physical panel-canvas owner for terminal strips; independent from circuit ownership. */
+  terminalStripPanelId?: string
   /** Situation-plan instances for trunk devices that also have a physical plan symbol. */
   placements?: Placement[]
   /** Show domain-change label (AC/DC symbol) after this device on 1draad trunk. Defaults to true. */
   showDomainChangeLabel?: boolean
   energyMeterProps?: EnergyMeterDeviceProps
+  /** When symbol === 'relay'; shared with ordinary relay endpoints. */
+  relayProps?: RelayDeviceProps
   /** When type === 'conversion' — energy conversion specific properties */
   conversionProps?: EnergyConversionDeviceProps
   /** When type === 'storage' and symbol === 'battery'. */
@@ -533,7 +585,9 @@ export interface TrunkDevice {
   solarPanelProps?: SolarPanelDeviceProps
   /** When type === 'dc_bus' and symbol === 'dc_bus'. */
   dcBusProps?: DcBusDeviceProps
-  /** Ordinary-circuit converter connection on which this passive device is placed. */
+  /** When type === 'domotica' and symbol === 'domotica'. */
+  domoticaProps?: DomoticaDeviceProps
+  /** Widened DC converter output on which this circuit or supply-branch device is placed. */
   converterDcConnection?: {
     converterId: string
     connectionIndex: number
@@ -557,6 +611,10 @@ export interface TrunkDevice {
   polesConfig?: PolesConfig
   poles?: number
   notes?: string
+  /** Optional second comment used by the panel label editor. */
+  labelNotes?: string
+  /** Panel label cell source preferences. */
+  panelLabel?: PanelLabelConfig
   /** Position on trunk relative to branches (circuit) or sequential index (supply). */
   trunkPosition: number
   /** Supply-only branch ownership. Omitted/serial devices stay on the ordinary grid-to-panel path. */
@@ -577,6 +635,8 @@ export interface TrunkDevice {
   supplyDcBusBranchId?: string
   /** Geometry on the converter grid-input path. Missing means inline on the horizontal run. */
   converterGridPlacement?: 'inline' | 'input-leg'
+  /** Geometry on the modular changeover grid-input path. Missing means inline on the lower rail. */
+  changeoverGridPlacement?: 'inline' | 'input-leg'
   /**
    * Supply inverter only. False intentionally disconnects the inverter's grid AC input.
    * Missing remains backward-compatible and means connected.
@@ -762,12 +822,7 @@ export interface BatteryDeviceProps extends EquipmentCertificationProps {
 }
 
 export type HvacEnergySource =
-  | 'electricity'
-  | 'gas_fan'
-  | 'gas_atmospheric'
-  | 'liquid'
-  | 'solid'
-  | 'none'
+  'electricity' | 'gas_fan' | 'gas_atmospheric' | 'liquid' | 'solid' | 'none'
 
 export type HvacType = 'heat_exchange' | 'cogeneration' | 'tap_spiral' | 'boiler' | 'none'
 
@@ -839,8 +894,11 @@ export interface EnergyConversionDeviceProps {
   synergrid?: SynergridCertification
 }
 
-/** EV charger (symbol === 'ev') certification listing props */
-export interface EvChargerDeviceProps extends EquipmentCertificationProps {}
+/** EV charger (symbol === 'ev') certification listing and AREI properties */
+export interface EvChargerDeviceProps extends EquipmentCertificationProps {
+  /** The charger includes coordinated residual-DC protection/detection (e.g. 6 mA DC detection). */
+  integratedDcResidualProtection?: boolean
+}
 
 /** Socket-specific props: overlays drawn on top of the base socket symbol */
 export interface SocketDeviceProps {
@@ -858,11 +916,21 @@ export interface Endpoint {
   id: string
   type: EndpointType
   label: string
+  /** Shared physical identity, independent from the branch's automatic endpoint label. */
+  junctionIdentity?: string
+  /** Unique connection pin within the terminal strip identified by `junctionIdentity`. */
+  terminalStripPin?: number
+  /** Optional outgoing pin when an endpoint representation gains a second connection. */
+  terminalStripOutgoingPin?: number
   symbol?: SymbolKey
   /** When symbol === 'panel_distribution', optional back-reference to the owning panel */
   panelId?: string
   controlledEndpointIds?: string[] // For switches: what they control (on same circuit)
   notes?: string
+  /** Optional second comment used by the panel label editor. */
+  labelNotes?: string
+  /** Panel label cell source preferences. */
+  panelLabel?: PanelLabelConfig
   /** If false, endpoint notes are not shown on the eendraad canvas. Default true. */
   notesVisible?: boolean
   placements: Placement[]
@@ -900,7 +968,7 @@ export interface Endpoint {
   hvacProps?: HvacDeviceProps
   /** When symbol is an energy conversion device (transformer/rectifier/inverter/DC-DC) */
   energyConversionProps?: EnergyConversionDeviceProps
-  /** Endpoint chain attached to one widened ordinary circuit-trunk converter DC connection. */
+  /** Endpoint chain attached to one widened circuit-trunk or DC-bus-branch converter output. */
   converterDcConnection?: {
     converterId: string
     connectionIndex: number
@@ -1017,14 +1085,7 @@ export interface Stair {
 }
 
 export type PlanGraphicElementKind =
-  | 'bathtub'
-  | 'shower'
-  | 'washbasin'
-  | 'toilet'
-  | 'kitchen_cabinet'
-  | 'car'
-  | 'rectangle'
-  | 'custom'
+  'bathtub' | 'shower' | 'washbasin' | 'toilet' | 'kitchen_cabinet' | 'car' | 'rectangle' | 'custom'
 
 export interface PlanGraphicElement {
   id: string
@@ -1052,9 +1113,7 @@ export interface FloorPlan {
 
 export type ImportedPlanAssetKind = 'raster' | 'pdf-vector' | 'pdf-raster' | 'cad-vector'
 
-export function importedPlanAssetUsesSvgContent(
-  kind: ImportedPlanAssetKind | undefined,
-): boolean {
+export function importedPlanAssetUsesSvgContent(kind: ImportedPlanAssetKind | undefined): boolean {
   return kind === 'pdf-vector' || kind === 'cad-vector'
 }
 
@@ -1343,6 +1402,8 @@ export interface Installation {
   notes?: string
   /** Global orientation for circuit notes on eendraad: vertical on new projects; horizontal when unset (legacy). */
   circuitNotesOrientation?: 'horizontal' | 'vertical'
+  /** Shared note orientation for devices on attached supply wires; detached assemblies stay horizontal. */
+  supplyTrunkNotesOrientation?: 'horizontal' | 'vertical'
   /**
    * When true, main-bus circuit/protection letters follow placement order per panel (A, B, C, …)
    * and are rewritten whenever bus order changes.
@@ -1580,11 +1641,7 @@ export interface Frame {
 
 /** Explicit data state for items that can be orphaned or recovered */
 export type OrphanStatus =
-  | 'valid'
-  | 'orphaned'
-  | 'danglingReference'
-  | 'invalidGeometry'
-  | 'quarantined'
+  'valid' | 'orphaned' | 'danglingReference' | 'invalidGeometry' | 'quarantined'
 
 /** Reason an item was moved to quarantine (for recovery/debugging) */
 export type OrphanReason =
@@ -1601,6 +1658,8 @@ export type OrphanReason =
   | 'endpointOnPanelCircuit'
   | 'endpointMultipleFloorPlacements'
   | 'endpointPlacementIntegrity'
+  /** Two or more plan symbols share one placement identity and cannot be selected independently. */
+  | 'planPlacementIdentityConflict'
   | 'endpointMissingPlanPlacement'
   | 'domoticaChildLinkMismatch'
   | 'panelDistributionLabelDrift'
@@ -1609,6 +1668,8 @@ export type OrphanReason =
   | 'panelGridDuplicateModule'
   /** Supply trunk device slotted on main panel grid instead of supply strip (one-line vs canvas mismatch). */
   | 'supplyTrunkMisplacedInMainGrid'
+  /** Supply trunk device has no reachable panel-canvas placement for its physical mounting. */
+  | 'supplyTrunkVisualPlacementMissing'
   /** Main panel retains multiple source bus sections without a connected backup supply path. */
   | 'splitBusWithoutBackupSupply'
   | 'danglingReference'
@@ -1729,3 +1790,6 @@ export interface Project {
   /** V2-first project chronology; transitional runtime field while editors still mutate compatibility data. */
   chronology?: import('./projectV2').ChronologyModelV2
 }
+
+/** Metadata shared by legacy import documents and the native V2 project envelope. */
+export type ProjectMetadata = Project['project']

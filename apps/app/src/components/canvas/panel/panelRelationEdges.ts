@@ -8,18 +8,19 @@ import type {
   Circuit,
   TrunkDevice,
 } from '@/types/schema'
-import {
-  findConverterBackupProtectionRefs,
-} from '@/lib/panel/converterBackupPanelFeed'
+import { findConverterBackupProtectionRefs } from '@/lib/panel/converterBackupPanelFeed'
 import { ensureInstallationFeedTopology, getPanelFeedProjection } from '@/lib/feedTopology'
 import { getPanelIncomingMainBusFeedDevice } from '@/lib/panel/subPanelFeed'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { findPanelById } from '@/lib/panel/panelTree'
 import { panelGridModuleRefKey } from './panelGridLayout'
+import { assemblyOwnsPanelInput, buildSupplyElectricalTopology } from '@/lib/supplyAssembly/electricalTopology'
+import { selectProjectSupplyAssemblies } from '@/lib/projectV2/electrical'
+import { getProtectionBusSectionId } from '@/lib/panel/panelBusSections'
 
 /** Trunk chain order on a circuit (matches eendraad trunkPosition). */
 function orderedTrunkDevices(circuit: Circuit | null | undefined): TrunkDevice[] {
@@ -64,11 +65,11 @@ function flattenPanelsDepthFirst(panels: Panel[]): Panel[] {
 }
 
 function projectPanels(project: ProjectWithOptionalV2Electrical): Panel[] {
-  return getElectricalPanelsFromProject(project)
+  return getProjectElectricalPanels(project)
 }
 
 function projectInstallation(project: ProjectWithOptionalV2Electrical) {
-  return getElectricalInstallationFromProject(project)
+  return getProjectElectricalInstallation(project)
 }
 
 /** Physical supply device that feeds the panel bus after branch-only devices are excluded. */
@@ -86,64 +87,15 @@ export function getPanelMainBusSupplyDevice(devices: TrunkDevice[]): TrunkDevice
   const directConverter = devices.find((device) => device.supplyPath === 'converter-branch')
   if (directConverter) {
     return (
-      devices.filter(
-        (device) => device.supplyPath == null || device.supplyPath === 'serial'
-      ).at(-1) ?? directConverter
+      devices
+        .filter((device) => device.supplyPath == null || device.supplyPath === 'serial')
+        .at(-1) ?? directConverter
     )
   }
   return devices.at(-1) ?? null
 }
 
-function findSupplyTrunkDeviceByIdInProject(
-  project: ProjectWithOptionalV2Electrical,
-  deviceId: string
-): TrunkDevice | null {
-  const installation = projectInstallation(project)
-  if (!installation) return null
-  const topology = ensureInstallationFeedTopology(installation, projectPanels(project))
-  for (const d of topology.sharedFeed.trunkDevices ?? []) {
-    if (d.id === deviceId) return d
-  }
-  for (const rf of topology.rootFeeds) {
-    for (const d of rf.trunkDevices ?? []) {
-      if (d.id === deviceId) return d
-    }
-  }
-  return installation.mainSupply?.supplyTrunkDevices?.find((d) => d.id === deviceId) ?? null
-}
-
-/**
- * First supply trunk on this panel's grid that is not part of the global shared feed
- * (root-local / board-specific chain).
- */
-function firstSupplyTrunkOnPanelGridNotInShared(
-  project: ProjectWithOptionalV2Electrical,
-  panel: Panel,
-  sharedIds: Set<string>
-): TrunkDevice | null {
-  type Cand = { pri: number; row: number; col: number; id: string }
-  const cands: Cand[] = []
-  for (const s of panel.gridView?.slots ?? []) {
-    const m = s.module
-    if (m?.kind === 'trunkDevice' && m.scope === 'supply' && !sharedIds.has(m.id)) {
-      cands.push({ pri: 0, row: s.row, col: s.col, id: m.id })
-    }
-  }
-  for (const s of panel.gridView?.supplyPanelSlots ?? []) {
-    const m = s.module
-    if (m?.kind === 'trunkDevice' && m.scope === 'supply' && !sharedIds.has(m.id)) {
-      cands.push({ pri: 1, row: s.row, col: s.col, id: m.id })
-    }
-  }
-  cands.sort((a, b) => a.pri - b.pri || a.row - b.row || a.col - b.col)
-  for (const c of cands) {
-    const d = findSupplyTrunkDeviceByIdInProject(project, c.id)
-    if (d) return d
-  }
-  return null
-}
-
-/** First trunk after the shared segment for this main (projection, then grid fallback). */
+/** First electrically owned trunk after the shared segment for this main. */
 function firstPostSharedSupplyTrunkForMain(
   project: ProjectWithOptionalV2Electrical,
   panel: Panel
@@ -163,7 +115,7 @@ function firstPostSharedSupplyTrunkForMain(
   const fromRootFeed = proj.rootFeed?.trunkDevices?.[0]
   if (fromRootFeed && !sharedIds.has(fromRootFeed.id)) return fromRootFeed
 
-  return firstSupplyTrunkOnPanelGridNotInShared(project, panel, sharedIds)
+  return null
 }
 
 function findPanelOwningCircuitInTree(panels: Panel[], circuitId: string): Panel | null {
@@ -272,7 +224,12 @@ export function findPanelContainingModuleRef(
     if (!owner) return null
     const circuit = findCircuitInPanel(owner, ref.circuitId)
     const list = orderedTrunkDevices(circuit)
-    return list.some((d) => d.id === ref.id) ? owner : null
+    const device = list.find((d) => d.id === ref.id)
+    if (!device) return null
+    if (device.type === 'terminal_strip' || device.symbol === 'terminal_strip') {
+      return findPanelById(projectPanels(project), device.terminalStripPanelId ?? '') ?? owner
+    }
+    return owner
   }
 
   if (ref.kind === 'domotica') {
@@ -320,8 +277,43 @@ export function getRelationEdges(
   if (!project) return { parentRefs, childRefs, childPanelIds }
   const panels = projectPanels(project)
   const installation = projectInstallation(project)
+  const supplyGraph = selectProjectSupplyAssemblies(project).length
+    ? buildSupplyElectricalTopology(project) : undefined
+
+  if (ref.kind === 'trunkDevice' && ref.scope === 'supply' && supplyGraph?.handlesDevice(ref.id)) {
+    for (const target of supplyGraph.deviceAdjacent(ref.id, 'parents')) {
+      if (target.kind === 'device') parentRefs.push({ kind: 'trunkDevice', id: target.deviceId, scope: 'supply' })
+    }
+    for (const target of supplyGraph.deviceAdjacent(ref.id, 'children')) {
+      if (target.kind === 'device') childRefs.push({ kind: 'trunkDevice', id: target.deviceId, scope: 'supply' })
+      else if (target.kind === 'circuit') {
+        const owner = findPanelOwningCircuitInTree(panels, target.circuitId)
+        const protection = owner && findProtectionForCircuit(owner, target.circuitId)
+        if (protection) childRefs.push({ kind: 'protection', id: protection.id })
+        else {
+          const first = owner && orderedTrunkDevices(findCircuitInPanel(owner, target.circuitId))[0]
+          if (first) childRefs.push({ kind: 'trunkDevice', id: first.id, scope: 'circuit', circuitId: target.circuitId })
+        }
+      } else {
+        const fedPanel = findPanelById(panels, target.panelId)
+        const protections = fedPanel?.protections.filter((protection) =>
+          isMainBusProtection(protection, fedPanel) &&
+          getProtectionBusSectionId(fedPanel, protection) === target.busSectionId
+        ) ?? []
+        childRefs.push(...protections.map((protection): PanelGridModuleRef => ({ kind: 'protection', id: protection.id })))
+        if (!protections.length) childPanelIds.push(target.panelId)
+      }
+    }
+    return { parentRefs, childRefs, childPanelIds }
+  }
+
+  if (ref.kind === 'trunkDevice' && ref.scope === 'supply') {
+    panel = findPanelContainingModuleRef(ref, project) ?? panel
+  } else if (ref.kind === 'trunkDevice' && ref.scope === 'circuit' && ref.circuitId) {
+    panel = findPanelOwningCircuitInTree(panels, ref.circuitId) ?? panel
+  }
   const mainPanelSupplyDevices =
-    panel.isMain && installation
+    panel.isMain && installation && ref.kind === 'trunkDevice' && ref.scope === 'supply'
       ? (getPanelFeedProjection(installation, panels, panel)?.devices ?? [])
       : []
 
@@ -334,7 +326,11 @@ export function getRelationEdges(
     const pushedChildCircuitTrunks = new Set<string>()
     if (pr?.circuits) {
       for (const circuit of pr.circuits) {
-        if (circuit.supplySource?.kind === 'converter-backup') {
+        if (supplyGraph?.hasCircuit(circuit.id)) {
+          for (const target of supplyGraph.circuitParents(circuit.id)) {
+            if (target.kind === 'device') parentRefs.push({ kind: 'trunkDevice', id: target.deviceId, scope: 'supply' })
+          }
+        } else if (circuit.supplySource?.kind === 'converter-backup') {
           parentRefs.push({
             kind: 'trunkDevice',
             id: circuit.supplySource.converterId,
@@ -382,12 +378,12 @@ export function getRelationEdges(
       if (!fedPanel) continue
       const incoming = getPanelIncomingMainBusFeedDevice(fedPanel)
       if (incoming) {
-        const incomingKey = `${incoming.device.id}:${incoming.circuit.id}`
+        const incomingKey = `${incoming.incomingDevice.id}:${incoming.circuit.id}`
         if (!pushedChildCircuitTrunks.has(incomingKey)) {
           pushedChildCircuitTrunks.add(incomingKey)
           childRefs.push({
             kind: 'trunkDevice',
-            id: incoming.device.id,
+            id: incoming.incomingDevice.id,
             scope: 'circuit',
             circuitId: incoming.circuit.id,
           })
@@ -432,11 +428,15 @@ export function getRelationEdges(
     // Main-bus protections: incoming PANEL feed (another board) wins over utility supply;
     // sub-panels fall back to the upstream feeder MCB when the PANEL line has no trunks yet.
     const hasConverterBackupSource = (pr?.circuits ?? []).some(
-      (circuit) => circuit.supplySource?.kind === 'converter-backup',
+      (circuit) => circuit.supplySource?.kind === 'converter-backup' || supplyGraph?.hasCircuit(circuit.id)
     )
     if (pr && isMainBusProtection(pr, protectionPanel) && !hasConverterBackupSource) {
       const incoming = getPanelIncomingMainBusFeedDevice(protectionPanel)
-      if (incoming) {
+      if (supplyGraph && assemblyOwnsPanelInput(project, protectionPanel, pr.busSectionId)) {
+        for (const target of supplyGraph.busParents(protectionPanel, pr.busSectionId)) {
+          if (target.kind === 'device') parentRefs.push({ kind: 'trunkDevice', id: target.deviceId, scope: 'supply' })
+        }
+      } else if (incoming) {
         parentRefs.push({
           kind: 'trunkDevice',
           id: incoming.device.id,
@@ -549,10 +549,7 @@ export function getRelationEdges(
             }
 
             if (current?.id === sourceChangeover.id) {
-              pushUnique(
-                parentRefs,
-                changeoverGridDevices.at(-1) ?? sourceSerialDevices.at(-1)
-              )
+              pushUnique(parentRefs, changeoverGridDevices.at(-1) ?? sourceSerialDevices.at(-1))
               pushUnique(parentRefs, backupOutputDevices.at(-1) ?? converter)
               if (loadSerialDevices[0]) pushUnique(childRefs, loadSerialDevices[0])
               else pushMainBusChildren()
@@ -560,10 +557,7 @@ export function getRelationEdges(
             }
             if (current?.supplyPath === 'changeover-grid') {
               const index = changeoverGridDevices.findIndex((device) => device.id === ref.id)
-              pushUnique(
-                parentRefs,
-                changeoverGridDevices[index - 1] ?? sourceSerialDevices.at(-1)
-              )
+              pushUnique(parentRefs, changeoverGridDevices[index - 1] ?? sourceSerialDevices.at(-1))
               pushUnique(childRefs, changeoverGridDevices[index + 1] ?? sourceChangeover)
               return { parentRefs, childRefs, childPanelIds }
             }
@@ -575,10 +569,7 @@ export function getRelationEdges(
             }
             if (current?.supplyPath === 'converter-grid') {
               const index = converterGridDevices.findIndex((device) => device.id === ref.id)
-              pushUnique(
-                parentRefs,
-                converterGridDevices[index - 1] ?? sourceSerialDevices.at(-1)
-              )
+              pushUnique(parentRefs, converterGridDevices[index - 1] ?? sourceSerialDevices.at(-1))
               pushUnique(childRefs, converterGridDevices[index + 1] ?? converter)
               return { parentRefs, childRefs, childPanelIds }
             }
@@ -619,8 +610,7 @@ export function getRelationEdges(
                 index > converterIndex &&
                 (device.supplyPath == null || device.supplyPath === 'serial')
             )
-            const gridDevices = list
-              .filter((device) => device.supplyPath === 'converter-grid')
+            const gridDevices = list.filter((device) => device.supplyPath === 'converter-grid')
             const current = list.find((device) => device.id === ref.id)
             const asSupplyRef = (device: TrunkDevice): PanelGridModuleRef => ({
               kind: 'trunkDevice',
@@ -707,7 +697,10 @@ export function getRelationEdges(
       // Circuit trunk devices must have exactly ONE logical parent:
       // - first device: parent is the circuit's protection (or nothing for direct panel.circuits)
       // - later devices: parent is the previous trunk device in the same circuit
-      const circuit = findCircuitInPanel(panel, ref.circuitId)
+      const circuitOwner = findPanelOwningCircuitInTree(panels, ref.circuitId)
+      const circuit =
+        findCircuitInPanel(panel, ref.circuitId) ??
+        (circuitOwner ? findCircuitInPanel(circuitOwner, ref.circuitId) : null)
       const list = orderedTrunkDevices(circuit)
       const idx = list.findIndex((d) => d.id === ref.id)
 
@@ -722,7 +715,7 @@ export function getRelationEdges(
           })
         }
       } else {
-        const protection = findProtectionForCircuit(panel, ref.circuitId)
+        const protection = findProtectionForCircuit(circuitOwner ?? panel, ref.circuitId)
         if (protection) {
           parentRefs.push({ kind: 'protection', id: protection.id })
         } else if (circuit?.code === 'PANEL') {

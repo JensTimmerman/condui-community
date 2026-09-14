@@ -31,6 +31,8 @@ export function InstallerInfoSection() {
   const logoInputRef = useRef<HTMLInputElement>(null)
 
   const setProfileInStore = useInstallerProfileStore((s) => s.setProfile)
+  let cloudProfileActive = false
+  
 
   useEffect(() => {
     let cancelled = false
@@ -146,13 +148,18 @@ export function InstallerInfoSection() {
           htmlFor="installer-company-number"
           className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
         >
-          {t('settings.installerInfo.companyNumber')}
+          {cloudProfileActive
+            ? t('settings.installerInfo.vatNumber')
+            : t('settings.installerInfo.companyNumber')}
         </label>
         <input
           id="installer-company-number"
           type="text"
           value={companyNumber}
           onChange={(e) => setCompanyNumber(e.target.value)}
+          readOnly={cloudProfileActive}
+          aria-readonly={cloudProfileActive || undefined}
+          title={cloudProfileActive ? t('settings.installerInfo.vatNumberAccountHint') : undefined}
           className="w-full px-3 py-2 text-sm rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
         />
       </div>

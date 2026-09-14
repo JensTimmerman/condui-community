@@ -1,6 +1,6 @@
 import { getAllSupplyTrunkDevices } from '@/lib/feedTopology'
 import {
-  getSupplyAssembliesFromProject,
+  selectProjectSupplyAssemblies,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import type { TrunkDevice } from '@/types/schema'
@@ -74,7 +74,7 @@ export function resolveSupplyNodePresentation(
   if (node.kind === 'inverter-unit') {
     const unitIndex = Math.max(
       0,
-      getSupplyAssembliesFromProject(project)
+      selectProjectSupplyAssemblies(project)
         .flatMap((assembly) => assembly.inverterGroups)
         .find((group) => group.unitNodeIds.includes(node.id))
         ?.unitNodeIds.indexOf(node.id) ?? 0
@@ -147,11 +147,29 @@ export function linkSupplyAssemblyDeviceReferences(
 ): boolean {
   const devices = supplyDeviceIndex(project)
   let changed = false
-  for (const assembly of getSupplyAssembliesFromProject(project)) {
+  // Older supply drops used generic fallback types for relay symbols. Preserve
+  // every user field while giving the physical switch its own non-protection type.
+  for (const device of devices.values()) {
+    if (device.symbol !== 'relay' || device.type === 'relay') continue
+    device.type = 'relay'
+    changed = true
+  }
+  for (const assembly of selectProjectSupplyAssemblies(project)) {
     for (const node of assembly.nodes) {
       if (node.deviceId || !devices.has(node.id)) continue
       node.deviceId = node.id
       changed = true
+    }
+    if (assembly.nodes.some((node) => node.kind === 'protection' && devices.get(node.deviceId ?? node.id)?.symbol === 'relay')) {
+      assembly.nodes = assembly.nodes.map<SupplyNode>((node) => {
+      if (node.kind !== 'protection' || devices.get(node.deviceId ?? node.id)?.symbol !== 'relay') return node
+      changed = true
+      return {
+        ...node,
+        kind: node.ports.every((candidate) => candidate.domain === 'DC') ? 'dc-bus' : 'ac-distribution',
+        properties: {},
+      }
+      })
     }
     for (const group of assembly.inverterGroups) {
       const canonicalDeviceId = group.unitNodeIds.find((id) => devices.has(id))
@@ -177,7 +195,7 @@ export function collectSupplyDeviceReferenceIssues(
   project: ProjectWithOptionalV2Electrical
 ): SupplyDeviceReferenceIssue[] {
   const devices = supplyDeviceIndex(project)
-  const assemblies = getSupplyAssembliesFromProject(project)
+  const assemblies = selectProjectSupplyAssemblies(project)
   const issues: SupplyDeviceReferenceIssue[] = []
   const referencedDeviceIds = new Set<string>()
   for (const assembly of assemblies) {

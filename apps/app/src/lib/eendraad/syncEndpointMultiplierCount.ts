@@ -3,7 +3,7 @@ import type { Endpoint, Placement } from '@/types/schema'
 
 import { useProjectStore } from '@/stores/projectStore'
 import { useUIStore } from '@/stores/uiStore'
-import { getCompatibilityFloorsFromProject } from '@/lib/projectV2/buildingFloors'
+import { readLegacyCompatibilityFloors } from '@/lib/projectV2/buildingFloors'
 
 export interface SyncEndpointMultiplierDeps {
   getEndpointById: (id: string) => Endpoint | undefined
@@ -74,6 +74,6 @@ export function createSyncEndpointMultiplierDeps(): SyncEndpointMultiplierDeps {
     deletePlacements: state.deletePlacements,
     getActiveFloorId: () => useUIStore.getState().activeFloorId,
     getFallbackFloorId: () =>
-      state.currentProject ? getCompatibilityFloorsFromProject(state.currentProject)[0]?.id : undefined,
+      state.currentProject ? readLegacyCompatibilityFloors(state.currentProject)[0]?.id : undefined,
   }
 }

@@ -35,8 +35,10 @@ import {
 const INTERACTIVE_HIT_FILL = 'rgba(0,0,0,0.001)'
 import { getWallTotalLength, getWallPathBetweenDistances } from '@/handlers/plan/wallDrawing'
 import {
+  buildSimpleWallFallbackPaths,
   buildOpeningCornerFusions,
   buildWallVolumeComponents,
+  extendSimpleWallPathEnds,
   isOpeningFrameCenterFused,
   resolveWallThicknessPx,
   type WallVolumeComponent,
@@ -204,6 +206,20 @@ function WallRendererInner({
   const [wallVolumeComponents, setWallVolumeComponents] = React.useState<
     WallVolumeComponent[] | null
   >(null)
+  const [wallVolumeFallbackActive, setWallVolumeFallbackActive] = React.useState(false)
+  const wallVolumeFallbackLoggedRef = React.useRef(false)
+
+  const simpleWallFallbackPaths = React.useMemo(
+    () => buildSimpleWallFallbackPaths(walls, doors, windows, masterWallThickness, pxPerMeter),
+    [doors, masterWallThickness, pxPerMeter, walls, windows]
+  )
+  const simpleWallFallbackPathByWallId = React.useMemo(() => {
+    const paths = new Map<string, (typeof simpleWallFallbackPaths)[number]>()
+    for (const path of simpleWallFallbackPaths) {
+      for (const wallId of path.wallIds) paths.set(wallId, path)
+    }
+    return paths
+  }, [simpleWallFallbackPaths])
 
   // Group doors and windows by wall ID for efficient lookup
   const doorsByWall = new Map<string, Door[]>()
@@ -317,6 +333,8 @@ function WallRendererInner({
   const wallOutlineStrokeWidth = getWallOutlineStrokeWidth(pxPerMeter)
 
   React.useEffect(() => {
+    if (wallVolumeFallbackActive) return
+
     if (walls.length === 0) {
       setWallVolumeComponents([])
       return
@@ -329,14 +347,26 @@ function WallRendererInner({
         if (!cancelled) setWallVolumeComponents(components)
       })
       .catch((error) => {
-        logger.error('[WallRenderer] Failed to build merged wall volumes', error)
-        if (!cancelled) setWallVolumeComponents(null)
+        if (!wallVolumeFallbackLoggedRef.current) {
+          wallVolumeFallbackLoggedRef.current = true
+          logger.warn(
+            '[WallRenderer] Merged wall volumes unavailable; using simple wall rendering.',
+            error
+          )
+        }
+        if (!cancelled) {
+          // Clipper2 is an enhancement for merged wall geometry, not a prerequisite for
+          // editing plans. Leave the regular per-wall renderer in charge when WASM is
+          // unavailable or blocked by the browser/security policy.
+          setWallVolumeComponents([])
+          setWallVolumeFallbackActive(true)
+        }
       })
 
     return () => {
       cancelled = true
     }
-  }, [walls, doors, windows, masterWallThickness, pxPerMeter])
+  }, [doors, masterWallThickness, pxPerMeter, wallVolumeFallbackActive, walls, windows])
 
   const wallVolumeStyleByWallId = React.useMemo(() => {
     const styleByWallId = new Map<string, { fillColor: string; borderColor: string }>()
@@ -934,6 +964,41 @@ function WallRendererInner({
 
   return (
     <Group listening={listening}>
+      {wallVolumeFallbackActive &&
+        simpleWallFallbackPaths.map((path) => {
+          const hasSelectedWall = path.wallIds.some((wallId) => selectedWallIds.includes(wallId))
+          const hasHoveredWall = path.wallIds.includes(hoveredWallId ?? '')
+          const pathBorderColor = hasSelectedWall
+            ? selectionColor
+            : hasHoveredWall
+              ? selectionPathDimmedColor
+              : baseBorderColor
+          const outerPoints = path.closed
+            ? path.points
+            : extendSimpleWallPathEnds(path.points, wallOutlineStrokeWidth)
+          return (
+            <Group key={`simple-wall-fallback-${path.id}`} listening={false}>
+              <Line
+                points={pointsToLinePoints(outerPoints)}
+                stroke={pathBorderColor}
+                strokeWidth={path.thickness + wallOutlineStrokeWidth * 2}
+                lineCap="butt"
+                lineJoin="miter"
+                closed={path.closed}
+                perfectDrawEnabled={false}
+              />
+              <Line
+                points={pointsToLinePoints(path.points)}
+                stroke={baseFillColor}
+                strokeWidth={path.thickness}
+                lineCap="butt"
+                lineJoin="miter"
+                closed={path.closed}
+                perfectDrawEnabled={false}
+              />
+            </Group>
+          )
+        })}
       {wallVolumeComponents?.map((component) => {
         const style = wallVolumeStyleByWallId.get(component.wallIds[0] ?? '')
         if (!style) return null
@@ -977,6 +1042,8 @@ function WallRendererInner({
                 : baseBorderColor
         const mergedStyle = wallVolumeStyleByWallId.get(wall.id)
         const hasMergedWallVolume = mergedStyle != null
+        const hasGroupedSimpleFallback =
+          wallVolumeFallbackActive && simpleWallFallbackPathByWallId.has(wall.id)
         const fillColor = mergedStyle?.fillColor ?? baseFillColor
         const fillThickness = thickness
         const borderThickness = wallOutlineStrokeWidth
@@ -1260,12 +1327,51 @@ function WallRendererInner({
 
                 return (
                   <React.Fragment key={`seg-${segIdx}`}>
-                    {!hasMergedWallVolume && (
+                    {hasGroupedSimpleFallback && (
+                      <Line
+                        points={linePts}
+                        stroke={INTERACTIVE_HIT_FILL}
+                        strokeWidth={fillThickness + borderThickness * 2}
+                        lineCap="butt"
+                        lineJoin="miter"
+                        closed={isClosed && isFullWall}
+                        listening={wallsListening}
+                        fillEnabled={false}
+                        hitStrokeWidth={fillThickness + borderThickness * 2}
+                        draggable={draggableSelectedWalls && isSelected}
+                        onDragStart={(e) => {
+                          if (!isSelected) return
+                          e.target.x(0)
+                          e.target.y(0)
+                          onWallDragStart?.(wall.id, e)
+                        }}
+                        onDragMove={(e) => {
+                          if (!isSelected) return
+                          e.target.x(0)
+                          e.target.y(0)
+                          onWallDragMove?.(wall.id, e)
+                        }}
+                        onDragEnd={(e) => {
+                          if (!isSelected) return
+                          e.target.x(0)
+                          e.target.y(0)
+                          onWallDragEnd?.(wall.id, e)
+                        }}
+                        onClick={(e) => onWallClick?.(wall.id, e)}
+                        onTap={(e) => onWallClick?.(wall.id, e)}
+                        onMouseMove={
+                          trackPointerHover ? (e) => onWallMouseMove?.(wall.id, e) : undefined
+                        }
+                        onMouseEnter={(e) => onWallMouseMove?.(wall.id, e)}
+                        onMouseLeave={(e) => onWallMouseLeave?.(e)}
+                      />
+                    )}
+                    {!hasMergedWallVolume && !hasGroupedSimpleFallback && (
                       <>
                         <Line
                           points={linePts}
-                          stroke={fillColor}
-                          strokeWidth={fillThickness}
+                          stroke={segmentBorderColor}
+                          strokeWidth={fillThickness + borderThickness * 2}
                           lineCap={'butt'}
                           lineJoin={'miter'}
                           closed={isClosed && isFullWall}
@@ -1273,13 +1379,13 @@ function WallRendererInner({
                         />
                         <Line
                           points={linePts}
-                          stroke={segmentBorderColor}
-                          strokeWidth={borderThickness}
+                          stroke={fillColor}
+                          strokeWidth={fillThickness}
                           lineCap={'butt'}
                           lineJoin={'miter'}
                           closed={isClosed && isFullWall}
                           fillEnabled={false}
-                          hitStrokeWidth={borderThickness}
+                          hitStrokeWidth={fillThickness + borderThickness * 2}
                           listening={wallsListening}
                           draggable={draggableSelectedWalls && isSelected}
                           onDragStart={(e) => {
@@ -1367,6 +1473,7 @@ function WallRendererInner({
 
             {/* Hybrid butt/square cap: outer-stroke-only bar centered under the user vertex */}
             {!hasMergedWallVolume &&
+              !hasGroupedSimpleFallback &&
               !isClosed &&
               wall.points.length >= 2 &&
               (() => {

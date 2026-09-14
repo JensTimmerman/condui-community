@@ -11,6 +11,7 @@ export const symbolTooltipsNlBE = {
   panel_distribution: 'Verdeelbord of verdeelkast',
   junction_box: 'Lasdoos of verbindingsdoos.',
   junction_panel: 'Verbindingspaneel, bevat geen beveiligingsmodules.',
+  terminal_strip: 'Klemmenstrook of verbindingsklem.',
 
   // Protection
   mcb: 'Automaat voor overbelasting en kortsluiting.',
@@ -81,7 +82,8 @@ export const symbolTooltipsNlBE = {
   transformer: 'Transformator die spanning omzet.',
   rectifier: 'Gelijkrichter van wissel- naar gelijkspanning.',
   inverter: 'Omvormer van gelijk- naar wisselspanning. Geschikt voor zonnepanelen en batterijen.',
-  dc_dc_converter: 'DC-DC-omzetter, geschikt om rechtstreeks tussen zonnepanelen en batterijen te gebruiken.',
+  dc_dc_converter:
+    'DC-DC-omzetter, geschikt om rechtstreeks tussen zonnepanelen en batterijen te gebruiken.',
   dc_bus: 'DC-verdeelrail voor aftakkende gelijkstroomkringen.',
   solar_panel: 'PV-string of zonnepaneel op gelijkspanning',
   battery: 'Batterijopslag op gelijkspanning.',

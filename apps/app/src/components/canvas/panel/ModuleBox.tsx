@@ -13,7 +13,12 @@ import { CELL_W, panelGridModuleRefKey } from './panelGridLayout'
 import { findPanelContainingModuleRef, getRelationEdges } from './panelRelationEdges'
 import Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
-import { DOMOTICA_CONTROL_OVERLAY_PATHS, getSwitchDisplaySvgPath, getSymbolById, getDomainForSymbol } from '@/lib/symbols'
+import {
+  DOMOTICA_CONTROL_OVERLAY_PATHS,
+  getSwitchDisplaySvgPath,
+  getSymbolById,
+  getDomainForSymbol,
+} from '@/lib/symbols'
 import { loadProcessedSymbol } from '@/lib/symbolImage'
 import { getSurgeProtectionSymbolPath } from '@/lib/surgeProtectionSymbol'
 import {
@@ -27,6 +32,7 @@ import {
 import { logger } from '@/lib/logger'
 import { useIsMarqueeSelecting, useIsPreviewSelected } from '@/contexts/SelectionPreviewContext'
 import { getSpdPanelModuleLayout } from './spdPanelModuleLayout'
+import { snapTerminalStripWidth } from '@/lib/panel/panelGridUnits'
 
 const DRAG_THRESHOLD = 8
 const RESIZE_HANDLE_W = 10
@@ -39,13 +45,28 @@ export interface ModuleTooltipData {
 
 interface ModuleBoxProps {
   moduleRef: PanelGridModuleRef
+  terminalStripMemberRefs?: PanelGridModuleRef[]
+  terminalStripRail?: 'top' | 'bottom'
+  selectionOverride?: Selection
   x: number
   y: number
   width: number
   height: number
   info: ModuleDisplayInfo
-  onDragEnd?: (ref: PanelGridModuleRef, x: number, y: number) => void
-  onDragMove?: (ref: PanelGridModuleRef, x: number, y: number) => void
+  onDragEnd?: (
+    ref: PanelGridModuleRef,
+    x: number,
+    y: number,
+    shiftKey: boolean,
+    altKey: boolean
+  ) => void
+  onDragMove?: (
+    ref: PanelGridModuleRef,
+    x: number,
+    y: number,
+    shiftKey: boolean,
+    altKey: boolean
+  ) => void
   onDragStart?: (ref: PanelGridModuleRef, x: number, y: number) => void
   draggable?: boolean
   onAssignTargetClick?: (ref: PanelGridModuleRef) => void
@@ -72,12 +93,17 @@ interface ModuleBoxProps {
   debugMode?: boolean
   /** Dev-only: classify trunk supply devices as shared vs unique. */
   debugSupplyTrunkKind?: 'shared' | 'unique'
+  /** Render the module without accepting pointer selection or drag gestures. */
+  interactive?: boolean
+  /** Keep the source in place while the parent renders an Alt-drag copy preview. */
+  resetPositionOnAltDrag?: boolean
+  /** Visual-only copy used by drag previews. */
+  opacity?: number
+  /** Compress identification and essential ratings into the center band while labels are edited. */
+  compactLabelMode?: boolean
 }
 
-function getSelectionForRef(
-  ref: PanelGridModuleRef,
-  endpoint?: Endpoint
-): Selection {
+function getSelectionForRef(ref: PanelGridModuleRef, endpoint?: Endpoint): Selection {
   if (ref.kind === 'protection') return { type: 'protection', ids: [ref.id] }
   if (ref.kind === 'trunkDevice') return { type: 'trunkDevice', ids: [ref.id] }
   if (ref.kind === 'domotica') {
@@ -120,7 +146,40 @@ type ModuleMouseEvent = KonvaEventObject<MouseEvent>
 type ModuleClickEvent = KonvaEventObject<MouseEvent | TouchEvent>
 type ModuleDragEvent = KonvaEventObject<DragEvent>
 
-function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove, onDragStart, draggable = false, onAssignTargetClick, onHoverChange, onHoverRefChange, onResizeEnd, isResizeWidthValid, maxWidthCols, onRewireDragStart, onRewireDragMove, onRewireDragEnd, isRewireOrigin = false, isRewireTarget = false, isRewireTargetValid = true, onSelectionIntent, debugMode = false, debugSupplyTrunkKind }: ModuleBoxProps) {
+function ModuleBox({
+  moduleRef,
+  terminalStripMemberRefs,
+  terminalStripRail,
+  selectionOverride,
+  x,
+  y,
+  width,
+  height,
+  info,
+  onDragEnd,
+  onDragMove,
+  onDragStart,
+  draggable = false,
+  onAssignTargetClick,
+  onHoverChange,
+  onHoverRefChange,
+  onResizeEnd,
+  isResizeWidthValid,
+  maxWidthCols,
+  onRewireDragStart,
+  onRewireDragMove,
+  onRewireDragEnd,
+  isRewireOrigin = false,
+  isRewireTarget = false,
+  isRewireTargetValid = true,
+  onSelectionIntent,
+  debugMode = false,
+  debugSupplyTrunkKind,
+  interactive = true,
+  resetPositionOnAltDrag = false,
+  opacity = 1,
+  compactLabelMode = false,
+}: ModuleBoxProps) {
   const selection = useUIStore((s) => s.selection)
   const setSelection = useUIStore((s) => s.setSelection)
   const colors = useThemeColors()
@@ -132,6 +191,9 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
   const currentProject = useProjectStore((s: ProjectState) => s.currentProject)
   const groupRef = useRef<Konva.Group>(null)
   const isDragging = useRef(false)
+  // Konva's node is reset to the source during an Alt-drag, so preserve the
+  // pointer-derived position separately for the eventual duplicate-on-drop.
+  const altDuplicateDropPositionRef = useRef<{ x: number; y: number } | null>(null)
   const bgRectRef = useRef<Konva.Rect>(null)
   const labelTextRef = useRef<Konva.Text>(null)
   const specTextRef = useRef<Konva.Text>(null)
@@ -142,7 +204,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
   const isMarqueeSelecting = useIsMarqueeSelecting()
   const isPreviewSelected = useIsPreviewSelected(
     moduleRef.kind === 'domotica' ? 'endpoint' : moduleRef.kind,
-    moduleRef.kind === 'domotica' ? moduleRef.endpointId : moduleRef.id,
+    moduleRef.kind === 'domotica' ? moduleRef.endpointId : moduleRef.id
   )
   const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const tooltipVisibleRef = useRef(false)
@@ -150,7 +212,12 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
 
   const [domoticaMainImage, setDomoticaMainImage] = useState<HTMLImageElement | null>(null)
   const [domoticaControlImages, setDomoticaControlImages] = useState<
-    Partial<Record<'programmed_control' | 'wireless_control' | 'detection_control' | 'button_control', HTMLImageElement | null>>
+    Partial<
+      Record<
+        'programmed_control' | 'wireless_control' | 'detection_control' | 'button_control',
+        HTMLImageElement | null
+      >
+    >
   >({})
   const [liveWidth, setLiveWidth] = useState<number | null>(null)
   const [resizeInvalid, setResizeInvalid] = useState(false)
@@ -191,12 +258,16 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
 
   const domoticaEndpoint: Endpoint | undefined =
     moduleRef.kind === 'domotica' ? getEndpointById(moduleRef.endpointId) : undefined
-  const sel = getSelectionForRef(moduleRef, domoticaEndpoint)
+  const sel = selectionOverride ?? getSelectionForRef(moduleRef, domoticaEndpoint)
+  const selectedModuleIds =
+    terminalStripMemberRefs?.flatMap((ref) =>
+      ref.kind === 'domotica' ? [ref.endpointId] : 'id' in ref ? [ref.id] : []
+    ) ?? sel.ids
   const isSelected =
     sel.type !== null &&
     sel.ids.length > 0 &&
     sel.ids[0] != null &&
-    selection.ids.includes(sel.ids[0]) &&
+    selectedModuleIds.some((id) => selection.ids.includes(id)) &&
     (selection.type === sel.type || selection.ids.length > 1)
 
   // Promote hovered/selected module to top so its outline is never clipped by neighbours.
@@ -234,6 +305,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
 
   const handleDragStart = useCallback(
     (e: ModuleDragEvent) => {
+      altDuplicateDropPositionRef.current = null
       // In rewire mode, handle differently
       if (onRewireDragStart) {
         const pos = e.target.position()
@@ -241,21 +313,27 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
         if (shouldPrevent) {
           // Don't stop drag, but mark it as rewire drag
           // Clear any existing tooltip when starting rewire drag
-          if (tooltipTimerRef.current) { clearTimeout(tooltipTimerRef.current); tooltipTimerRef.current = null }
+          if (tooltipTimerRef.current) {
+            clearTimeout(tooltipTimerRef.current)
+            tooltipTimerRef.current = null
+          }
           tooltipVisibleRef.current = false
           onHoverChange?.(null)
           isDragging.current = true
           return
         }
       }
-      
+
       isDragging.current = true
       setIsHovered(false)
       onHoverRefChange?.(null)
-      if (tooltipTimerRef.current) { clearTimeout(tooltipTimerRef.current); tooltipTimerRef.current = null }
+      if (tooltipTimerRef.current) {
+        clearTimeout(tooltipTimerRef.current)
+        tooltipTimerRef.current = null
+      }
       tooltipVisibleRef.current = false
       onHoverChange?.(null)
-      const sel = getSelectionForRef(moduleRef)
+      const sel = selectionOverride ?? getSelectionForRef(moduleRef)
       if (sel.type === null) return
       const id = sel.ids[0] as string
       const isInMultiSelection = selection.ids.length > 1 && selection.ids.includes(id)
@@ -266,13 +344,22 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
         onDragStart(moduleRef, pos.x, pos.y)
       }
     },
-    [moduleRef, setSelection, onHoverRefChange, onHoverChange, onRewireDragStart, onDragStart, selection]
+    [
+      moduleRef,
+      selectionOverride,
+      setSelection,
+      onHoverRefChange,
+      onHoverChange,
+      onRewireDragStart,
+      onDragStart,
+      selection,
+    ]
   )
 
   const handleDragMove = useCallback(
     (e: ModuleDragEvent) => {
       const pos = e.target.position()
-      
+
       // In rewire mode, track position for preview wire (use stage coordinates)
       if (onRewireDragMove) {
         const stage = e.target.getStage()
@@ -287,18 +374,23 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
         e.target.y(y)
         return
       }
-      
+
       if (onDragMove) {
-        onDragMove(moduleRef, pos.x, pos.y)
+        const altKey = e.evt.altKey === true
+        onDragMove(moduleRef, pos.x, pos.y, e.evt.shiftKey === true, altKey)
+        if (altKey && resetPositionOnAltDrag) {
+          altDuplicateDropPositionRef.current = pos
+          e.target.position({ x, y })
+        }
       }
     },
-    [moduleRef, onDragMove, onRewireDragMove, x, y]
+    [moduleRef, onDragMove, onRewireDragMove, resetPositionOnAltDrag, x, y]
   )
 
   const handleDragEnd = useCallback(
     (e: ModuleDragEvent) => {
       isDragging.current = false
-      
+
       // In rewire mode, handle rewire end
       if (onRewireDragEnd) {
         onRewireDragEnd()
@@ -306,9 +398,10 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
         e.target.y(y)
         return
       }
-      
+
       if (!onDragEnd) return
-      const pos = e.target.position()
+      const pos = altDuplicateDropPositionRef.current ?? e.target.position()
+      altDuplicateDropPositionRef.current = null
       logger.warn('[ModuleBox drag] dragEnd', {
         ref: moduleRef,
         pos,
@@ -317,7 +410,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
       })
       e.target.x(x)
       e.target.y(y)
-      onDragEnd(moduleRef, pos.x, pos.y)
+      onDragEnd(moduleRef, pos.x, pos.y, e.evt.shiftKey === true, e.evt.altKey === true)
     },
     [moduleRef, onDragEnd, onRewireDragEnd, x, y]
   )
@@ -331,7 +424,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
         onAssignTargetClick(moduleRef)
         return
       }
-      const sel = getSelectionForRef(moduleRef)
+      const sel = selectionOverride ?? getSelectionForRef(moduleRef)
       if (sel.type === null) return
       const id = sel.ids[0] as string
       const shift = e.evt.shiftKey === true
@@ -379,7 +472,15 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
         applySelection(sel)
       }
     },
-    [moduleRef, setSelection, onAssignTargetClick, flushStaleDragEntry, selection, onSelectionIntent]
+    [
+      moduleRef,
+      selectionOverride,
+      setSelection,
+      onAssignTargetClick,
+      flushStaleDragEntry,
+      selection,
+      onSelectionIntent,
+    ]
   )
 
   const handleMouseEnter = useCallback(
@@ -394,11 +495,22 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
         tooltipTimerRef.current = setTimeout(() => {
           tooltipVisibleRef.current = true
           tooltipTimerRef.current = null
-          onHoverChange({ text: info.tooltipText!, clientX: mousePositionRef.current.clientX, clientY: mousePositionRef.current.clientY })
+          onHoverChange({
+            text: info.tooltipText!,
+            clientX: mousePositionRef.current.clientX,
+            clientY: mousePositionRef.current.clientY,
+          })
         }, TOOLTIP_DELAY_MS)
       }
     },
-    [info.tooltipText, isMarqueeSelecting, onHoverChange, onHoverRefChange, moduleRef, onRewireDragStart]
+    [
+      info.tooltipText,
+      isMarqueeSelecting,
+      onHoverChange,
+      onHoverRefChange,
+      moduleRef,
+      onRewireDragStart,
+    ]
   )
 
   const handleMouseMove = useCallback(
@@ -478,34 +590,64 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
   const border = resizeInvalid
     ? '#ef4444'
     : isRewireTarget
-    ? (isRewireTargetValid ? '#10b981' : '#ef4444') // Green for valid rewire target, red for invalid
-    : (isRewireOrigin
-      ? '#f59e0b' // Amber for rewire origin
-      : (isSelected || isPreviewSelected || (isHovered && !isMarqueeSelecting)
-        ? colors.moduleBorderSelected
-        : colors.moduleBorder))
+      ? isRewireTargetValid
+        ? '#10b981'
+        : '#ef4444' // Green for valid rewire target, red for invalid
+      : isRewireOrigin
+        ? '#f59e0b' // Amber for rewire origin
+        : isSelected || isPreviewSelected || (isHovered && !isMarqueeSelecting)
+          ? colors.moduleBorderSelected
+          : colors.moduleBorder
   const debugBorder = debugModuleColor ?? border
   const debugBg = resizeInvalid ? '#ef44441a' : debugModuleColor ? `${debugModuleColor}14` : bg
-  const borderWidth = resizeInvalid || isRewireTarget || isRewireOrigin ? 3 : (isSelected || isPreviewSelected ? 2 : 1)
-  const borderDash = isRewireTarget || isRewireOrigin
-    ? [6, 4]
-    : (isHovered && !isMarqueeSelecting && !isSelected && !isPreviewSelected ? [4, 3] : undefined)
+  const borderWidth =
+    resizeInvalid || isRewireTarget || isRewireOrigin ? 3 : isSelected || isPreviewSelected ? 2 : 1
+  const borderDash =
+    isRewireTarget || isRewireOrigin
+      ? [6, 4]
+      : isHovered && !isMarqueeSelecting && !isSelected && !isPreviewSelected
+        ? [4, 3]
+        : undefined
   const textColor = colors.moduleText
   const secondaryColor = colors.moduleSecondary
 
-  const visibleSpecLines = info.specLines.slice(0, MAX_SPEC_LINES)
+  const compactRating = info.specLines.find((line) => /^\d+(?:[.,]\d+)?A$/i.test(line))
+  const compactCurve = info.specLines.find((line) => /^[A-Z]$/i.test(line))
+  const compactResidualType = info.specLines.find((line) => /^Type\s+/i.test(line))
+  const compactSensitivity = info.specLines
+    .find((line) => /^IΔn\s+/i.test(line))
+    ?.replace(/^IΔn\s+/i, '')
+  const compactSpecs = [
+    compactResidualType && compactSensitivity
+      ? `${compactResidualType} ${compactSensitivity}`
+      : compactCurve && compactRating
+        ? `${compactCurve} ${compactRating}`
+        : compactRating,
+  ]
+    .filter((line): line is string => Boolean(line))
+  const visibleSpecLines = (compactLabelMode ? compactSpecs : info.specLines).slice(0, MAX_SPEC_LINES)
+  const isTerminalStripModule = info.terminalStrip != null
 
   const effectiveModuleWidth = liveWidth ?? width
+  const terminalHandleScale = Math.max(0, Math.min(1, effectiveModuleWidth / CELL_W / 0.5))
+  const resizeHandleVisualWidth =
+    isTerminalStripModule && effectiveModuleWidth < CELL_W * 0.5
+      ? 1.5 + terminalHandleScale * 1.5
+      : 4
+  const resizeHandleHitWidth =
+    isTerminalStripModule && effectiveModuleWidth < CELL_W * 0.5 ? 5 : RESIZE_HANDLE_W
+  const resizeHandleOffset =
+    isTerminalStripModule && effectiveModuleWidth < CELL_W * 0.5 ? 0 : resizeHandleHitWidth / 2
   const topBandHeight = height * MODULE_TOP_BAND_RATIO
   const bottomBandTop = height * MODULE_BOTTOM_BAND_RATIO
   const centerBandHeight = bottomBandTop - topBandHeight
   const bottomBandHeight = height - bottomBandTop
   const textSidePadding = Math.min(4, Math.max(2, effectiveModuleWidth * 0.08))
   const textWidth = Math.max(1, effectiveModuleWidth - textSidePadding * 2)
-  const topTextY = MODULE_BAND_PADDING
-  const topTextHeight = Math.max(1, topBandHeight - MODULE_BAND_PADDING * 2)
-  const middleTextY = topBandHeight + MODULE_BAND_PADDING
-  const middleTextHeight = Math.max(1, centerBandHeight - MODULE_BAND_PADDING * 2)
+  const topTextY = compactLabelMode ? topBandHeight + 1 : MODULE_BAND_PADDING
+  const topTextHeight = compactLabelMode ? centerBandHeight * 0.46 : Math.max(1, topBandHeight - MODULE_BAND_PADDING * 2)
+  const middleTextY = compactLabelMode ? topBandHeight + centerBandHeight * 0.46 : topBandHeight + MODULE_BAND_PADDING
+  const middleTextHeight = compactLabelMode ? centerBandHeight * 0.5 : Math.max(1, centerBandHeight - MODULE_BAND_PADDING * 2)
   const bottomTextY = bottomBandTop + MODULE_BAND_PADDING
   const bottomTextHeight = Math.max(1, bottomBandHeight - MODULE_BAND_PADDING * 2)
 
@@ -516,9 +658,8 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
   const domoticaMainType = domoticaProps?.mainDeviceType
 
   const trunkInfo = moduleRef.kind === 'trunkDevice' ? getTrunkDeviceById(moduleRef.id) : undefined
-  const protectionDevice = moduleRef.kind === 'protection'
-    ? getProtectionById(moduleRef.id)
-    : undefined
+  const protectionDevice =
+    moduleRef.kind === 'protection' ? getProtectionById(moduleRef.id) : undefined
   const isEnergyMeterDevice = !!trunkInfo && trunkInfo.device.symbol === 'energy_meter'
   const energyMeterCircuitLabel =
     isEnergyMeterDevice && trunkInfo?.circuit?.code ? trunkInfo.circuit.code : info.label
@@ -526,26 +667,29 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
   // Energy conversion modules (rectifier, inverter, transformer, etc.)
   const energyDeviceSymbol = trunkInfo?.device.symbol ?? domoticaEndpoint?.symbol
   const energySymbolMeta = energyDeviceSymbol ? getSymbolById(energyDeviceSymbol) : null
-  const isEnergyConversionModule = !!energySymbolMeta && energySymbolMeta.category === 'energyConversion'
+  const isEnergyConversionModule =
+    !!energySymbolMeta && energySymbolMeta.category === 'energyConversion'
   const isDirectionalEnergyConversion = isDirectionalConverterSymbol(energyDeviceSymbol)
-  const energyDomains = isEnergyConversionModule && energyDeviceSymbol
-    ? getDomainForSymbol(energyDeviceSymbol)
-    : null
+  const energyDomains =
+    isEnergyConversionModule && energyDeviceSymbol ? getDomainForSymbol(energyDeviceSymbol) : null
   const isRotatingSwitchModule =
-    trunkInfo?.device.symbol === 'rotating_switch' ||
-    protectionDevice?.type === 'ROTATING_SWITCH'
+    trunkInfo?.device.symbol === 'rotating_switch' || protectionDevice?.type === 'ROTATING_SWITCH'
   const isSourceChangeoverModule = trunkInfo?.device.symbol === 'source_changeover'
   const isSelectorSwitchModule = isRotatingSwitchModule || isSourceChangeoverModule
-  const selectorSwitchCustomLabel =
-    (trunkInfo?.device.label ?? protectionDevice?.label ?? '').trim()
+  const selectorSwitchCustomLabel = (
+    trunkInfo?.device.label ??
+    protectionDevice?.label ??
+    ''
+  ).trim()
   const rotatingSwitchSymbolMeta = isSelectorSwitchModule
     ? getSymbolById(isSourceChangeoverModule ? 'source_changeover' : 'rotating_switch')
     : null
-  const spdDevice = protectionDevice?.type === 'SPD'
-    ? protectionDevice
-    : trunkInfo?.device.protectionType === 'SPD'
-      ? trunkInfo.device
-      : null
+  const spdDevice =
+    protectionDevice?.type === 'SPD'
+      ? protectionDevice
+      : trunkInfo?.device.protectionType === 'SPD'
+        ? trunkInfo.device
+        : null
   const isSpdModule = spdDevice != null
   const spdRawLabel = spdDevice?.label.trim() ?? ''
   const hasSpdLabel = spdRawLabel.length > 0 && spdRawLabel.toUpperCase() !== 'SPD'
@@ -561,7 +705,9 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
   const [rotatingSwitchImage, setRotatingSwitchImage] = useState<HTMLImageElement | null>(null)
   const [spdSymbolImage, setSpdSymbolImage] = useState<HTMLImageElement | null>(null)
   const [relaySymbolImage, setRelaySymbolImage] = useState<HTMLImageElement | null>(null)
-  const [relayControlOverlayImage, setRelayControlOverlayImage] = useState<HTMLImageElement | null>(null)
+  const [relayControlOverlayImage, setRelayControlOverlayImage] = useState<HTMLImageElement | null>(
+    null
+  )
 
   // Load AC/DC domain symbols for energy conversion modules (panel view)
   useEffect(() => {
@@ -588,7 +734,12 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
     loadProcessedSymbol(energySymbolMeta.svgPath, themeMode === 'dark')
       .then(setEnergyDeviceImage)
       .catch(() => setEnergyDeviceImage(null))
-  }, [energySymbolMeta?.svgPath, isDirectionalEnergyConversion, isEnergyConversionModule, themeMode])
+  }, [
+    energySymbolMeta?.svgPath,
+    isDirectionalEnergyConversion,
+    isEnergyConversionModule,
+    themeMode,
+  ])
 
   useEffect(() => {
     if (!isDirectionalEnergyConversion) {
@@ -701,7 +852,9 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
       ref={groupRef}
       x={x}
       y={y}
+      opacity={opacity}
       draggable={effectiveDraggable}
+      listening={interactive}
       onMouseDown={handleMouseDown}
       onDragStart={handleDragStart}
       onDragMove={handleDragMove}
@@ -724,25 +877,142 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
         listening={true}
       />
       {/* Subtle guides divide the module into label, symbol/detail, and phase bands. */}
-      <Line
-        points={[1, topBandHeight, effectiveModuleWidth - 1, topBandHeight]}
-        stroke={secondaryColor}
-        strokeWidth={0.75}
-        opacity={0.45}
-        perfectDrawEnabled={false}
-        listening={false}
-      />
-      <Line
-        points={[1, bottomBandTop, effectiveModuleWidth - 1, bottomBandTop]}
-        stroke={secondaryColor}
-        strokeWidth={0.75}
-        opacity={0.45}
-        perfectDrawEnabled={false}
-        listening={false}
-      />
-      {isSpdModule && (() => {
-        const { symbolSize, symbolX, symbolY, specsY, specsHeight } =
-          getSpdPanelModuleLayout({
+      {!isTerminalStripModule && (
+        <Line
+          points={[1, topBandHeight, effectiveModuleWidth - 1, topBandHeight]}
+          stroke={secondaryColor}
+          strokeWidth={0.75}
+          opacity={0.45}
+          perfectDrawEnabled={false}
+          listening={false}
+        />
+      )}
+      {!isTerminalStripModule && (
+        <Line
+          points={[1, bottomBandTop, effectiveModuleWidth - 1, bottomBandTop]}
+          stroke={secondaryColor}
+          strokeWidth={0.75}
+          opacity={0.45}
+          perfectDrawEnabled={false}
+          listening={false}
+        />
+      )}
+      {info.terminalStrip &&
+        (() => {
+          const terminal = info.terminalStrip
+          const dotRadius = Math.min(3.2, Math.max(1.5, effectiveModuleWidth * 0.18))
+          const pinCount = Math.max(2, terminal.maxPin)
+          const labelFontSize = Math.max(4.5, Math.min(9, effectiveModuleWidth * 0.42))
+          const pinFontSize = Math.max(4, Math.min(8, effectiveModuleWidth * 0.38))
+          const slim = effectiveModuleWidth < CELL_W * 0.55
+          const horizontal = terminalStripRail != null && effectiveModuleWidth > CELL_W * 2
+          const dotsX = effectiveModuleWidth / 2
+          const labelHeight = horizontal
+            ? Math.min(10, Math.max(7, labelFontSize + 1))
+            : Math.max(8, labelFontSize + 3)
+          const labelY = height / 2 - labelHeight / 2
+          const reservedTop = slim ? 13 : 4
+          const positions = Array.from({ length: pinCount }, (_, index) =>
+            horizontal
+              ? {
+                  x: (effectiveModuleWidth * (index + 1)) / (pinCount + 1),
+                  y: height - Math.max(4, dotRadius + 2),
+                }
+              : {
+                  x: dotsX,
+                  y: reservedTop + ((height - reservedTop - 4) * (index + 1)) / (pinCount + 1),
+                }
+          )
+          const connectedPins = terminal.connectedPins
+          const connectedPositions = connectedPins.map(
+            (pin) => positions[Math.min(pinCount - 1, Math.max(0, pin - 1))]!
+          )
+          const labelCandidates = horizontal ? [1] : [labelY, 2, height - labelHeight - 2]
+          const resolvedLabelY = labelCandidates.reduce((best, candidate) => {
+            const clearance = Math.min(
+              ...connectedPositions.map((point) =>
+                Math.abs(point.y - (candidate + labelHeight / 2))
+              )
+            )
+            const bestClearance = Math.min(
+              ...connectedPositions.map((point) => Math.abs(point.y - (best + labelHeight / 2)))
+            )
+            return clearance > bestClearance ? candidate : best
+          }, labelY)
+          return (
+            <Group name="panel-terminal-strip-graphic" listening={false}>
+              {positions.map((point, index) => (
+                <Circle
+                  key={index}
+                  x={point.x}
+                  y={point.y}
+                  radius={dotRadius}
+                  fill={secondaryColor}
+                  listening={false}
+                />
+              ))}
+              {connectedPins.map((pin) => {
+                const point = positions[Math.min(pinCount - 1, Math.max(0, pin - 1))]!
+                return (
+                  <Text
+                    key={`terminal-pin-${pin}`}
+                    x={horizontal ? point.x - 8 : slim ? 0 : dotsX + dotRadius + 2}
+                    y={
+                      horizontal
+                        ? point.y - dotRadius - pinFontSize - 1
+                        : slim
+                          ? point.y - dotRadius - pinFontSize - 1
+                          : point.y - pinFontSize / 2
+                    }
+                    width={
+                      horizontal
+                        ? 16
+                        : slim
+                          ? effectiveModuleWidth
+                          : Math.max(1, effectiveModuleWidth - dotsX - dotRadius - 3)
+                    }
+                    text={String(pin)}
+                    fontSize={pinFontSize}
+                    fontStyle="bold"
+                    fontFamily={fontFamily}
+                    fill={textColor}
+                    align={horizontal || slim ? 'center' : 'left'}
+                    listening={false}
+                  />
+                )
+              })}
+              <Rect
+                x={1}
+                y={resolvedLabelY}
+                width={Math.max(1, effectiveModuleWidth - 2)}
+                height={labelHeight}
+                fill={bg}
+                stroke={secondaryColor}
+                strokeWidth={0.7}
+                cornerRadius={1.5}
+                listening={false}
+              />
+              <Text
+                x={1}
+                y={resolvedLabelY}
+                width={Math.max(1, effectiveModuleWidth - 2)}
+                height={labelHeight}
+                text={`X${terminal.stripId}`}
+                fontSize={labelFontSize}
+                fontStyle="bold"
+                fontFamily={fontFamily}
+                fill={textColor}
+                align="center"
+                verticalAlign="middle"
+                wrap="none"
+                listening={false}
+              />
+            </Group>
+          )
+        })()}
+      {isSpdModule &&
+        (() => {
+          const { symbolSize, symbolX, symbolY, specsY, specsHeight } = getSpdPanelModuleLayout({
             moduleWidth: effectiveModuleWidth,
             topBandHeight,
             centerBandHeight,
@@ -751,45 +1021,46 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
             hasLabel: hasSpdLabel,
           })
 
-        return (
-          <Group name="panel-spd-graphic" listening={false}>
-            {spdSymbolImage && (
-              <Image
-                name="panel-spd-symbol"
-                image={spdSymbolImage}
-                x={symbolX}
-                y={symbolY}
-                width={symbolSize}
-                height={symbolSize}
-                offsetX={symbolSize / 2}
-                listening={false}
-              />
-            )}
-            {visibleSpecLines.length > 0 && (
-              <Text
-                ref={specTextRef}
-                x={textSidePadding}
-                y={specsY}
-                width={textWidth}
-                height={specsHeight}
-                text={visibleSpecLines.join('\n')}
-                fontSize={SPEC_FONT_SIZE}
-                lineHeight={SPEC_LINE_HEIGHT / SPEC_FONT_SIZE}
-                fontFamily={fontFamily}
-                fill={secondaryColor}
-                perfectDrawEnabled={false}
-                listening={false}
-                wrap="word"
-                ellipsis={true}
-                align="center"
-                verticalAlign="middle"
-              />
-            )}
-          </Group>
-        )
-      })()}
+          return (
+            <Group name="panel-spd-graphic" listening={false}>
+              {spdSymbolImage && (
+                <Image
+                  name="panel-spd-symbol"
+                  image={spdSymbolImage}
+                  x={symbolX}
+                  y={symbolY}
+                  width={symbolSize}
+                  height={symbolSize}
+                  offsetX={symbolSize / 2}
+                  listening={false}
+                />
+              )}
+              {visibleSpecLines.length > 0 && (
+                <Text
+                  ref={specTextRef}
+                  x={textSidePadding}
+                  y={specsY}
+                  width={textWidth}
+                  height={specsHeight}
+                  text={visibleSpecLines.join('\n')}
+                  fontSize={SPEC_FONT_SIZE}
+                  lineHeight={SPEC_LINE_HEIGHT / SPEC_FONT_SIZE}
+                  fontFamily={fontFamily}
+                  fill={secondaryColor}
+                  perfectDrawEnabled={false}
+                  listening={false}
+                  wrap="word"
+                  ellipsis={true}
+                  align="center"
+                  verticalAlign="middle"
+                />
+              )}
+            </Group>
+          )
+        })()}
       {/* Energy conversion domain indicators (AC/DC) for trunk devices */}
-      {isEnergyConversionModule && energyDomains && (
+      {isEnergyConversionModule &&
+        energyDomains &&
         (() => {
           const effectiveWidth = effectiveModuleWidth
           const iconSize = Math.min(effectiveWidth, centerBandHeight) * 0.22
@@ -801,7 +1072,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
             ? getConverterArtworkLayout(
                 energyDomains.inputDomain,
                 energyDomains.outputDomain,
-                SUPPLY_ASSEMBLY_CONNECTION_DOMAINS,
+                SUPPLY_ASSEMBLY_CONNECTION_DOMAINS
               )
             : null
 
@@ -816,7 +1087,9 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
               const isOutput = domain === energyDomains.outputDomain
               return {
                 x: isOutput ? padding + iconSize / 2 : effectiveWidth - padding - iconSize / 2,
-                y: isOutput ? centerTop + padding + iconSize / 2 : centerBottom - padding - iconSize / 2,
+                y: isOutput
+                  ? centerTop + padding + iconSize / 2
+                  : centerBottom - padding - iconSize / 2,
               }
             }
             const point = getConverterCornerPosition(
@@ -824,7 +1097,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
               effectiveWidth,
               centerBandHeight,
               padding,
-              iconSize,
+              iconSize
             )
             return {
               x: effectiveWidth / 2 + point.x,
@@ -838,8 +1111,18 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
               <Line
                 points={
                   artworkLayout?.diagonal === 'top-left-to-bottom-right'
-                    ? [padding, centerTop + padding, effectiveWidth - padding, centerBottom - padding]
-                    : [padding, centerBottom - padding, effectiveWidth - padding, centerTop + padding]
+                    ? [
+                        padding,
+                        centerTop + padding,
+                        effectiveWidth - padding,
+                        centerBottom - padding,
+                      ]
+                    : [
+                        padding,
+                        centerBottom - padding,
+                        effectiveWidth - padding,
+                        centerTop + padding,
+                      ]
                 }
                 stroke={debugBorder}
                 strokeWidth={1}
@@ -865,9 +1148,10 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
               })}
             </>
           )
-        })()
-      )}
-      {isDirectionalEnergyConversion && energyBaseImage && energyDiagonalImage && (
+        })()}
+      {isDirectionalEnergyConversion &&
+        energyBaseImage &&
+        energyDiagonalImage &&
         (() => {
           const symbolSize = Math.min(effectiveModuleWidth * 0.48, centerBandHeight * 0.72)
           return (
@@ -894,7 +1178,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
                   getConverterArtworkLayout(
                     energyDomains?.inputDomain ?? 'AC',
                     energyDomains?.outputDomain ?? 'DC',
-                    SUPPLY_ASSEMBLY_CONNECTION_DOMAINS,
+                    SUPPLY_ASSEMBLY_CONNECTION_DOMAINS
                   ).diagonal === 'top-left-to-bottom-right'
                     ? -1
                     : 1
@@ -903,9 +1187,9 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
               />
             </>
           )
-        })()
-      )}
-      {isEnergyConversionModule && energyDeviceImage && (
+        })()}
+      {isEnergyConversionModule &&
+        energyDeviceImage &&
         (() => {
           const effectiveWidth = effectiveModuleWidth
           const symbolSize = Math.min(effectiveWidth * 0.48, centerBandHeight * 0.72)
@@ -921,22 +1205,21 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
               listening={false}
             />
           )
-        })()
-      )}
-      {isSelectorSwitchModule && (
+        })()}
+      {isSelectorSwitchModule &&
         (() => {
           const padding = 3
           const centerTop = topBandHeight
           const dialRadius = Math.max(
             4.5,
-            Math.min(centerBandHeight * 0.29, effectiveModuleWidth * 0.23),
+            Math.min(centerBandHeight * 0.29, effectiveModuleWidth * 0.23)
           )
           const dialX = effectiveModuleWidth / 2
           const dialY = centerTop + centerBandHeight / 2
           const positionFontSize = SPEC_FONT_SIZE
           const symbolSize = Math.max(
             6,
-            Math.min(topBandHeight - padding * 2, effectiveModuleWidth * 0.34),
+            Math.min(topBandHeight - padding * 2, effectiveModuleWidth * 0.34)
           )
           return (
             <Group name="panel-rotating-switch-graphic" listening={false}>
@@ -997,12 +1280,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
                 listening={false}
               />
               <Line
-                points={[
-                  dialX,
-                  dialY + dialRadius * 0.72,
-                  dialX,
-                  dialY - dialRadius * 0.72,
-                ]}
+                points={[dialX, dialY + dialRadius * 0.72, dialX, dialY - dialRadius * 0.72]}
                 stroke={secondaryColor}
                 strokeWidth={Math.max(1.4, dialRadius * 0.24)}
                 lineCap="round"
@@ -1019,9 +1297,8 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
               />
             </Group>
           )
-        })()
-      )}
-      {info.relay && (
+        })()}
+      {info.relay &&
         (() => {
           const symbolSize = Math.min(effectiveModuleWidth * 0.72, centerBandHeight * 0.58)
           const symbolX = effectiveModuleWidth / 2
@@ -1072,35 +1349,40 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
               />
             </Group>
           )
-        })()
-      )}
+        })()}
       {/* Label - prominent, bold */}
-      <Text
-        ref={labelTextRef}
-        x={textSidePadding}
-        y={topTextY}
-        width={textWidth}
-        height={topTextHeight}
-        text={
-          isSelectorSwitchModule
-            ? selectorSwitchCustomLabel
-            : isSpdModule
-              ? (hasSpdLabel ? spdRawLabel : '')
-              : energyMeterCircuitLabel
-        }
-        fontSize={LABEL_FONT_SIZE}
-        fontStyle={isEnergyMeterDevice ? 'italic bold' : 'bold'}
-        fontFamily={fontFamily}
-        fill={textColor}
-        perfectDrawEnabled={false}
-        listening={false}
-        wrap="none"
-        ellipsis={true}
-        align="center"
-        verticalAlign="middle"
-      />
+      {!isTerminalStripModule && (
+        <Text
+          ref={labelTextRef}
+          x={textSidePadding}
+          y={topTextY}
+          width={textWidth}
+          height={topTextHeight}
+          text={
+            compactLabelMode
+              ? info.label
+              : isSelectorSwitchModule
+              ? selectorSwitchCustomLabel
+              : isSpdModule
+                ? hasSpdLabel
+                  ? spdRawLabel
+                  : ''
+                : energyMeterCircuitLabel
+          }
+          fontSize={LABEL_FONT_SIZE}
+          fontStyle={isEnergyMeterDevice ? 'italic bold' : 'bold'}
+          fontFamily={fontFamily}
+          fill={textColor}
+          perfectDrawEnabled={false}
+          listening={false}
+          wrap="none"
+          ellipsis={true}
+          align="center"
+          verticalAlign="middle"
+        />
+      )}
       {/* Spec block - vertically centered as one multiline text box. */}
-      {visibleSpecLines.length > 0 && !isSpdModule && (
+      {visibleSpecLines.length > 0 && !isSpdModule && !isTerminalStripModule && (
         <Text
           ref={specTextRef}
           x={textSidePadding}
@@ -1126,7 +1408,12 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
           {/* Control icons: 2x2 grid for 4 controls on narrow modules, otherwise single centered row (live during resize) */}
           {(() => {
             const activeKeys = (domoticaProps.control ?? []).filter((key) =>
-              ['programmed_control', 'wireless_control', 'detection_control', 'button_control'].includes(key),
+              [
+                'programmed_control',
+                'wireless_control',
+                'detection_control',
+                'button_control',
+              ].includes(key)
             ) as Array<keyof typeof DOMOTICA_CONTROL_OVERLAY_PATHS>
             const count = activeKeys.length
             if (count === 0) return null
@@ -1188,7 +1475,8 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
           })()}
 
           {/* Main device symbol, centered underneath controls (live during resize) */}
-          {domoticaMainImage && domoticaMainType && (
+          {domoticaMainImage &&
+            domoticaMainType &&
             (() => {
               const effectiveWidth = effectiveModuleWidth
               const moduleCols = Math.max(1, Math.round(effectiveWidth / CELL_W))
@@ -1207,13 +1495,12 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
                   listening={false}
                 />
               )
-            })()
-          )}
+            })()}
         </>
       )}
 
       {/* Energy meter label: draw centered \"kWh\" text inside module, with a box (live during resize) */}
-      {isEnergyMeterDevice && (
+      {isEnergyMeterDevice &&
         (() => {
           const effectiveWidth = effectiveModuleWidth
           const boxWidth = effectiveWidth * 0.6
@@ -1249,8 +1536,7 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
               />
             </>
           )
-        })()
-      )}
+        })()}
       {info.phaseLabel && (
         <Text
           x={textSidePadding}
@@ -1270,14 +1556,42 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
           verticalAlign="middle"
         />
       )}
+      {isTerminalStripModule && liveWidth != null && (
+        <Group x={effectiveModuleWidth + 8} y={height / 2 - 9} listening={false}>
+          <Rect
+            width={48}
+            height={18}
+            fill={colors.panelFrameFill}
+            stroke={colors.moduleBorderSelected}
+            strokeWidth={1}
+            cornerRadius={5}
+            shadowColor="#000"
+            shadowBlur={3}
+            shadowOpacity={0.18}
+          />
+          <Text
+            x={3}
+            y={3}
+            width={42}
+            height={12}
+            text={`~${((effectiveModuleWidth / CELL_W) * 18).toFixed(1)} mm`}
+            fontSize={8}
+            fontFamily={fontFamily}
+            fontStyle="bold"
+            fill={textColor}
+            align="center"
+            verticalAlign="middle"
+          />
+        </Group>
+      )}
       {/* Resize handle — visible when selected, but not during rewire mode */}
       {isSelected && onResizeEnd && !onRewireDragStart && !isRewireTarget && (
         <>
           <Rect
             ref={handleVisualRef}
-            x={width - 2}
+            x={width - (isTerminalStripModule && width < CELL_W * 0.5 ? 0 : 2)}
             y={height * 0.15}
-            width={4}
+            width={resizeHandleVisualWidth}
             height={height * 0.7}
             fill={resizeInvalid ? '#ef4444' : '#0284c7'}
             opacity={0.9}
@@ -1286,15 +1600,21 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
             listening={false}
           />
           <Rect
-            x={width - RESIZE_HANDLE_W / 2}
+            x={width - resizeHandleOffset}
             y={0}
-            width={RESIZE_HANDLE_W}
+            width={resizeHandleHitWidth}
             height={height}
             fill="transparent"
             draggable
-            onMouseDown={(e: KonvaEventObject<MouseEvent>) => { e.cancelBubble = true }}
-            onClick={(e: KonvaEventObject<MouseEvent>) => { e.cancelBubble = true }}
-            onTap={(e: KonvaEventObject<TouchEvent>) => { e.cancelBubble = true }}
+            onMouseDown={(e: KonvaEventObject<MouseEvent>) => {
+              e.cancelBubble = true
+            }}
+            onClick={(e: KonvaEventObject<MouseEvent>) => {
+              e.cancelBubble = true
+            }}
+            onTap={(e: KonvaEventObject<TouchEvent>) => {
+              e.cancelBubble = true
+            }}
             onDragStart={(e: KonvaEventObject<DragEvent>) => {
               e.cancelBubble = true
               resizeWidthRef.current = width
@@ -1304,18 +1624,27 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
             onDragMove={(e: KonvaEventObject<DragEvent>) => {
               e.cancelBubble = true
               const node = e.target
-              const handleCenter = node.x() + RESIZE_HANDLE_W / 2
-              const newCols = Math.max(1, Math.min(maxWidthCols ?? 999, Math.round(handleCenter / CELL_W)))
+              const handleCenter = node.x() + resizeHandleOffset
+              const rawCols = isTerminalStripModule
+                ? width / CELL_W + ((handleCenter - width) / CELL_W) * (width < CELL_W ? 0.3 : 0.55)
+                : handleCenter / CELL_W
+              const newCols = isTerminalStripModule
+                ? snapTerminalStripWidth(rawCols, maxWidthCols ?? 999)
+                : Math.max(1, Math.min(maxWidthCols ?? 999, Math.round(rawCols)))
               const snapped = newCols * CELL_W
-              const invalid = isResizeWidthValid
-                ? !isResizeWidthValid(moduleRef, newCols)
-                : false
+              const invalid = isResizeWidthValid ? !isResizeWidthValid(moduleRef, newCols) : false
               const nextTextPadding = Math.min(4, Math.max(2, snapped * 0.08))
               const nextTextWidth = Math.max(1, snapped - nextTextPadding * 2)
-              node.x(snapped - RESIZE_HANDLE_W / 2)
+              const nextThin = isTerminalStripModule && snapped < CELL_W * 0.5
+              const nextHitWidth = nextThin ? 5 : RESIZE_HANDLE_W
+              node.width(nextHitWidth)
+              node.x(snapped - (nextThin ? 0 : nextHitWidth / 2))
               node.y(0)
               bgRectRef.current?.width(snapped)
-              handleVisualRef.current?.x(snapped - 2)
+              handleVisualRef.current?.x(snapped - (nextThin ? 0 : 2))
+              handleVisualRef.current?.width(
+                nextThin ? 1.5 + Math.max(0, Math.min(1, snapped / CELL_W / 0.5)) * 1.5 : 4
+              )
               labelTextRef.current?.x(nextTextPadding)
               labelTextRef.current?.width(nextTextWidth)
               specTextRef.current?.x(nextTextPadding)
@@ -1328,15 +1657,23 @@ function ModuleBox({ moduleRef, x, y, width, height, info, onDragEnd, onDragMove
             onDragEnd={(e: KonvaEventObject<DragEvent>) => {
               e.cancelBubble = true
               const finalWidthPx = resizeWidthRef.current ?? width
-              const finalCols = Math.round(finalWidthPx / CELL_W)
-              const originalCols = Math.round(width / CELL_W)
+              const finalCols = isTerminalStripModule
+                ? snapTerminalStripWidth(finalWidthPx / CELL_W, maxWidthCols ?? 999)
+                : Math.round(finalWidthPx / CELL_W)
+              const originalCols = isTerminalStripModule
+                ? snapTerminalStripWidth(width / CELL_W, maxWidthCols ?? 999)
+                : Math.round(width / CELL_W)
               resizeWidthRef.current = null
               if (!resizeInvalidRef.current && finalCols !== originalCols && onResizeEnd) {
                 onResizeEnd(moduleRef, finalCols)
               } else {
-                e.target.x(width - RESIZE_HANDLE_W / 2)
+                e.target.width(resizeHandleHitWidth)
+                e.target.x(width - resizeHandleOffset)
                 bgRectRef.current?.width(width)
-                handleVisualRef.current?.x(width - 2)
+                handleVisualRef.current?.x(
+                  width - (isTerminalStripModule && width < CELL_W * 0.5 ? 0 : 2)
+                )
+                handleVisualRef.current?.width(resizeHandleVisualWidth)
                 labelTextRef.current?.x(textSidePadding)
                 labelTextRef.current?.width(textWidth)
                 specTextRef.current?.x(textSidePadding)

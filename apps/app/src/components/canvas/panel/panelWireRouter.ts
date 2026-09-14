@@ -5,6 +5,11 @@ export type WirePathPoint = { x: number; y: number }
 export type WirePathSegment = {
   from: WirePathPoint
   to: WirePathPoint
+  /** Scene connector endpoints, never its intermediate corridor bends. */
+  fromPortal?: boolean
+  toPortal?: boolean
+  fromSurfaceId?: string
+  toSurfaceId?: string
 }
 
 export type WirePathDebug = {
@@ -23,6 +28,7 @@ export type WirePathResult = {
 /** One board-level ladder: side corridors plus one horizontal corridor per row gap. */
 export type PanelWirePathRegion = {
   id: string
+  surfaceId?: string
   left: number
   right: number
   horizontalYs: number[]
@@ -337,13 +343,29 @@ export function routePanelWire(
     bottom: Math.max(...pathwayGuidePointsList.map((point) => point.y)) + 60,
   }
   const sceneRects = placements
-    .map((placement) => ({
-      placement,
-      left: placement.x - CLEARANCE,
-      top: placement.y - CLEARANCE,
-      right: placement.x + placement.width + CLEARANCE,
-      bottom: placement.y + placement.height + CLEARANCE,
-    }))
+    .map((placement) => {
+      const rect = {
+        placement,
+        left: placement.x - CLEARANCE,
+        top: placement.y - CLEARANCE,
+        right: placement.x + placement.width + CLEARANCE,
+        bottom: placement.y + placement.height + CLEARANCE,
+      }
+      for (const endpoint of [source, target]) {
+        if (pointTouchesPlacement(placement, endpoint)) continue
+        if (endpoint.x >= placement.x + placement.width && endpoint.x < rect.right) {
+          rect.right = endpoint.x
+        } else if (endpoint.x <= placement.x && endpoint.x > rect.left) {
+          rect.left = endpoint.x
+        }
+        if (endpoint.y >= placement.y + placement.height && endpoint.y < rect.bottom) {
+          rect.bottom = endpoint.y
+        } else if (endpoint.y <= placement.y && endpoint.y > rect.top) {
+          rect.top = endpoint.y
+        }
+      }
+      return rect
+    })
     .filter(
       (rect) =>
         rect.right >= routeBounds.left &&
@@ -464,6 +486,9 @@ export function routePanelWire(
     for (let index = 1; index < ordered.length; index += 1) {
       const upper = ordered[index - 1]!
       const lower = ordered[index]!
+      // Explicit scene links own all transitions between separate enclosures.
+      if (options.pathwayLinks != null &&
+        (!upper.surfaceId || upper.surfaceId !== lower.surfaceId)) continue
       const upperBottom = Math.max(...upper.horizontalYs)
       const lowerTop = Math.min(...lower.horizontalYs)
       const overlapLeft = Math.max(upper.left, lower.left)
@@ -501,23 +526,38 @@ export function routePanelWire(
   // row gaps inside those frames. Join each connector portal to its nearest ladder
   // without opening an unrestricted vertical lane through the whole scene.
   if (regions.length > 0) {
-    const addNearestPathwayAccess = (point: WirePathPoint) => {
-      const nearestRegionLane = regions
-        .filter((region) => point.x >= region.left - EPSILON && point.x <= region.right + EPSILON)
-        .flatMap((region) => region.horizontalYs)
-        .reduce<number | null>((nearest, y) => {
-          if (nearest == null) return y
-          return Math.abs(y - point.y) < Math.abs(nearest - point.y) ? y : nearest
-        }, null)
-      if (nearestRegionLane == null || Math.abs(nearestRegionLane - point.y) <= EPSILON) return
+    const addNearestPathwayAccess = (point: WirePathPoint, surfaceId?: string) => {
+      const nearest = regions
+        .filter((region) => surfaceId != null ? region.surfaceId === surfaceId :
+          point.x >= region.left - EPSILON && point.x <= region.right + EPSILON)
+        .flatMap((region) => region.horizontalYs.map((y) => ({
+          x: Math.max(region.left, Math.min(region.right, point.x)), y,
+        })))
+        .sort((a, b) => manhattan(point, a) - manhattan(point, b))[0]
+      if (!nearest) return
+      // Side portals enter horizontally, then follow the board's side corridor.
+      const approach = { x: nearest.x, y: point.y }
       basePathways.push({
-        from: { x: point.x, y: point.y },
-        to: { x: point.x, y: nearestRegionLane },
+        from: point,
+        to: approach,
+      }, {
+        from: approach,
+        to: nearest,
       })
     }
-    for (const link of options.pathwayLinks ?? []) {
-      addNearestPathwayAccess(link.from)
-      addNearestPathwayAccess(link.to)
+    const links = options.pathwayLinks ?? []
+    const hasExplicitPortals = links.some((link) => link.fromPortal || link.toPortal)
+    for (const link of links) {
+      // Legacy callers have no endpoint metadata; only unshared chain ends are portals.
+      const isChainEnd = (point: WirePathPoint) => links.reduce((count, candidate) =>
+        count + Number(pointKey(candidate.from) === pointKey(point)) +
+        Number(pointKey(candidate.to) === pointKey(point)), 0) === 1
+      if (hasExplicitPortals ? link.fromPortal : isChainEnd(link.from)) {
+        addNearestPathwayAccess(link.from, link.fromSurfaceId)
+      }
+      if (hasExplicitPortals ? link.toPortal : isChainEnd(link.to)) {
+        addNearestPathwayAccess(link.to, link.toSurfaceId)
+      }
     }
   }
 

@@ -1,8 +1,8 @@
 import { getModuleDisplayInfo } from '@/components/canvas/panel/getModuleDisplayInfo'
-import { panelGridModuleRefKey } from '@/components/canvas/panel/panelGridLayout'
+import { panelGridModuleRefKey } from '@/lib/panel/panelGridModuleRef'
 import type { PanelGridModuleRef } from '@/types/schema'
 import type { ProjectWithOptionalV2Electrical } from '@/lib/projectV2/electrical'
-import { findTrunkDeviceInProject } from '@/utils/project'
+import { findTrunkDeviceInProject } from '@/lib/eendraad/findTrunkDeviceInProject'
 
 export interface PanelGridDuplicateCandidate {
   ref: PanelGridModuleRef
@@ -20,14 +20,9 @@ export interface PanelGridDuplicateFinding {
   hideModuleKeys: string[]
 }
 
-function normalizeVisibleLabel(label: string): string | null {
-  const normalized = label.trim().toLowerCase()
-  return normalized.length > 0 ? normalized : null
-}
-
 function candidateScore(
   candidate: PanelGridDuplicateCandidate,
-  project: ProjectWithOptionalV2Electrical,
+  project: ProjectWithOptionalV2Electrical
 ): number {
   const info = getModuleDisplayInfo(candidate.ref, project)
   let score = 0
@@ -51,7 +46,7 @@ function candidateScore(
 function compareCandidates(
   a: PanelGridDuplicateCandidate,
   b: PanelGridDuplicateCandidate,
-  project: ProjectWithOptionalV2Electrical,
+  project: ProjectWithOptionalV2Electrical
 ): number {
   const scoreDiff = candidateScore(b, project) - candidateScore(a, project)
   if (scoreDiff !== 0) return scoreDiff
@@ -63,10 +58,9 @@ function compareCandidates(
 
 export function findPanelGridDuplicateFindings(
   project: ProjectWithOptionalV2Electrical,
-  candidates: PanelGridDuplicateCandidate[],
+  candidates: PanelGridDuplicateCandidate[]
 ): PanelGridDuplicateFinding[] {
   const findings: PanelGridDuplicateFinding[] = []
-  const dedupedCandidates: PanelGridDuplicateCandidate[] = []
 
   const byModuleKey = new Map<string, PanelGridDuplicateCandidate[]>()
   for (const candidate of candidates) {
@@ -80,7 +74,6 @@ export function findPanelGridDuplicateFindings(
     const sorted = [...group].sort((a, b) => compareCandidates(a, b, project))
     const keep = sorted[0]
     if (!keep) continue
-    dedupedCandidates.push(keep)
     const remove = sorted.slice(1)
     if (remove.length === 0) continue
     const info = getModuleDisplayInfo(keep.ref, project)
@@ -93,45 +86,15 @@ export function findPanelGridDuplicateFindings(
     })
   }
 
-  const byVisibleLabel = new Map<string, PanelGridDuplicateCandidate[]>()
-  for (const candidate of dedupedCandidates) {
-    const info = getModuleDisplayInfo(candidate.ref, project)
-    const normalizedLabel = normalizeVisibleLabel(info.label)
-    if (!normalizedLabel) continue
-    const group = byVisibleLabel.get(normalizedLabel)
-    if (group) group.push(candidate)
-    else byVisibleLabel.set(normalizedLabel, [candidate])
-  }
-
-  for (const group of byVisibleLabel.values()) {
-    if (group.length < 2) continue
-    if (!group.some((candidate) => candidate.ref.kind === 'protection')) continue
-
-    const sorted = [...group].sort((a, b) => compareCandidates(a, b, project))
-    const keep = sorted[0]
-    if (!keep) continue
-
-    const remove = sorted.filter(
-      (candidate) => panelGridModuleRefKey(candidate.ref) !== panelGridModuleRefKey(keep.ref),
-    )
-    if (remove.length === 0) continue
-
-    const info = getModuleDisplayInfo(keep.ref, project)
-    findings.push({
-      reason: 'duplicateVisibleLabel',
-      summaryLabel: info.label.trim() || panelGridModuleRefKey(keep.ref),
-      keep,
-      remove,
-      hideModuleKeys: [...new Set(remove.map((candidate) => panelGridModuleRefKey(candidate.ref)))],
-    })
-  }
+  // Equal display labels are a naming/validation issue, not duplicated panel-grid identity.
+  // Distinct module refs must remain visible and must never be reported as structural orphans.
 
   return findings
 }
 
 function isFeedPathProtectionTrunkRef(
   ref: PanelGridModuleRef,
-  project: ProjectWithOptionalV2Electrical,
+  project: ProjectWithOptionalV2Electrical
 ): boolean {
   if (ref.kind !== 'trunkDevice') return false
   const device = findTrunkDeviceInProject(project, ref.id)
@@ -144,7 +107,7 @@ function isFeedPathProtectionTrunkRef(
  */
 export function isSupplyBusProtectionLabelCollision(
   finding: PanelGridDuplicateFinding,
-  project: ProjectWithOptionalV2Electrical,
+  project: ProjectWithOptionalV2Electrical
 ): boolean {
   if (finding.reason !== 'duplicateVisibleLabel') return false
   const candidates = [finding.keep, ...finding.remove]
@@ -162,7 +125,7 @@ export function isSupplyBusProtectionLabelCollision(
 
 export function getSuppressedPanelGridModuleKeys(
   project: ProjectWithOptionalV2Electrical,
-  candidates: PanelGridDuplicateCandidate[],
+  candidates: PanelGridDuplicateCandidate[]
 ): Set<string> {
   const suppressed = new Set<string>()
   for (const finding of findPanelGridDuplicateFindings(project, candidates)) {

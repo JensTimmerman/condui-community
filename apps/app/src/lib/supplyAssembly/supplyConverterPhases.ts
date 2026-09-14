@@ -64,8 +64,10 @@ export function getSupplyConverterAcPhaseAssignment(
       }
     }
   }
+  const stored = device.conversionProps?.acPhaseAssignment
   return (
-    device.conversionProps?.acPhaseAssignment ?? getDefaultSupplyConverterAcPhaseAssignment(system)
+    (stored?.source === 'derived_from_voltage' ? undefined : stored) ??
+    getDefaultSupplyConverterAcPhaseAssignment(system)
   )
 }
 
@@ -109,13 +111,19 @@ export function getSupplyInverterUnitPhaseAssignments(
   count: number
 ): CircuitPhaseAssignment[] {
   const defaults = getDefaultSupplyInverterUnitPhaseAssignments(system, count)
-  const stored = device.conversionProps?.acPhaseAssignments ?? []
-  const shared = device.conversionProps?.acPhaseAssignment
+  const stored = (device.conversionProps?.acPhaseAssignments ?? []).map((assignment) =>
+    assignment?.source === 'derived_from_voltage' ? undefined : assignment
+  )
+  const storedShared = device.conversionProps?.acPhaseAssignment
+  const shared =
+    storedShared?.source === 'derived_from_voltage' ? undefined : storedShared
   // A single native multiphase inverter is one source and may legitimately widen a
   // reduced grid input back to its configured three-phase backup output. Shared
   // multiphase assignments must only be split into per-phase defaults for an actual
   // multiplied inverter group.
-  if (count === 1) return [stored[0] ?? shared ?? defaults[0]!]
+  if (count === 1) {
+    return [stored[0] ?? shared ?? getDefaultSupplyConverterAcPhaseAssignment(system)]
+  }
   const reducedShared =
     shared?.kind === 'single_phase' || shared?.kind === 'phase_to_phase' ? shared : undefined
   return defaults.map((fallback, index) =>

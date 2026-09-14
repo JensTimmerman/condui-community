@@ -122,7 +122,7 @@ export function PlanNote({ note, onDragEnd, onDragMove, interactive = true }: Pl
   
   // Render parsed text segments
   let yOffset = 0
-  const textElements: JSX.Element[] = []
+  const textElements: React.JSX.Element[] = []
   
   parsedLines.forEach((line, lineIndex) => {
     let xOffset = 0

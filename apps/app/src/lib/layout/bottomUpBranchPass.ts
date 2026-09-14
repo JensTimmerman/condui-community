@@ -1,11 +1,14 @@
-import type { Circuit, Panel } from '@/types/schema'
+import type { Circuit, Endpoint, Panel } from '@/types/schema'
 import { getCircuitBranches } from './endpointChains'
 import type { BranchLayout, TrunkLayout } from './wireSegments'
 import { calculateBranchWidth } from './bottomUpBranchWidths'
 import { getVisibleConversionLabelParts, getVisibleEndpointNoteText } from '@/lib/conversionLabels'
 import { getVisibleCertificationLabelParts } from '@/lib/certificationLabels'
 import { countSymbolLabelVisualLines } from '@/lib/symbolLabelMetrics'
-import { getEndpointBranchLabelPrefix } from '@/lib/eendraad/automaticEndpointBranchNaming'
+import {
+  getEndpointBranchLabelPrefix,
+  getExpectedBranchLabel,
+} from '@/lib/eendraad/automaticEndpointBranchNaming'
 import {
   CIRCUIT_CONVERTER_OUTPUT_ROW_SPACING,
   getCircuitConverterDcConnectionCount,
@@ -13,6 +16,11 @@ import {
   isCircuitConverterDcChild,
   supportsCircuitConverterDcConnections,
 } from './circuitConverterGeometry'
+import {
+  getProtectionToTrunkDeviceCenterGap,
+  getTrunkDeviceToFirstBranchExtraGap,
+} from './trunkDeviceSpacing'
+import { getBranchConverterMetadataCalloutHeight } from './circuitConverterMetadataCallouts'
 
 export interface BranchPassConstants {
   BRANCH_LEAD_IN: number
@@ -48,6 +56,11 @@ export interface BranchLayoutPassResult {
 const NESTED_BRANCH_LABEL_CLEARANCE = 10
 const ENDPOINT_LABEL_LINE_HEIGHT = 10
 const ENDPOINT_LABEL_FIXED_VERTICAL_CLEARANCE = 25
+const BRANCH_METADATA_CARD_GAP = 28
+// The placement solver keeps a 6px callout clearance around a 4px symbol
+// obstacle rectangle. Add one pixel so the inclusive rectangle intersection
+// test does not treat a just-touching border as a collision.
+const BRANCH_METADATA_COLLISION_CLEARANCE = 11
 
 function endpointUsesRightSideLabel(endpoint: Circuit['endpoints'][number], isBranchEnd: boolean) {
   return (
@@ -76,7 +89,7 @@ export function getBranchBottomLabelHeight(branchEndpoints: Circuit['endpoints']
 
 function getSequentialBranchLabelFallback(circuit: Circuit, branchIndex: number): string {
   const prefix = getEndpointBranchLabelPrefix(circuit)
-  return prefix ? `${prefix}${branchIndex + 1}` : ''
+  return prefix ? getExpectedBranchLabel(circuit, prefix, branchIndex) : ''
 }
 
 export function buildBranchCircuitMap(panel?: Panel): Map<string, Circuit> {
@@ -132,7 +145,9 @@ export function calculateFirstBranchY(
 ): number {
   const mcbStartY = circuitLayout.parentRcd ? startY - constants.MCB_Y_OFFSET : startY
   const trunkDevicesBeforeBranches = (circuitLayout.circuit.trunkDevices || []).filter(
-    (d) => d.trunkPosition === 0
+    // A DC rail is the terminal branch row itself, not another inline device
+    // that should push that row farther away from the converter.
+    (d) => d.trunkPosition === 0 && d.type !== 'dc_bus'
   )
   const converterReserve = trunkDevicesBeforeBranches.reduce(
     (reserve, device) =>
@@ -143,12 +158,22 @@ export function calculateFirstBranchY(
         : 0),
     0
   )
+  const firstDeviceGap = trunkDevicesBeforeBranches[0]
+    ? getProtectionToTrunkDeviceCenterGap(
+        trunkDevicesBeforeBranches[0],
+        constants.TRUNK_DEVICE_MCB_GAP
+      )
+    : constants.TRUNK_DEVICE_MCB_GAP
+  const firstBranchExtraGap = getTrunkDeviceToFirstBranchExtraGap(
+    trunkDevicesBeforeBranches[0]
+  )
   return trunkDevicesBeforeBranches.length > 0
     ? mcbStartY -
-        constants.TRUNK_DEVICE_MCB_GAP -
+        firstDeviceGap -
         (trunkDevicesBeforeBranches.length - 1) *
           (constants.TRUNK_DEVICE_SPACING + constants.SYMBOL_SIZE) -
         constants.BRANCH_START_OFFSET -
+        firstBranchExtraGap -
         converterReserve
     : mcbStartY - constants.BRANCH_START_OFFSET
 }
@@ -161,10 +186,18 @@ function getNonPanelEndpoints(circuit: Circuit) {
 
 function getStandardCircuitBranches(circuit: Circuit) {
   const primaryEndpointIds = getCircuitConverterPrimaryEndpointIds(circuit)
+  const dcBusEndpointIds = new Set(
+    (circuit.branches ?? [])
+      .filter((branch) => !!branch.dcBusId)
+      .flatMap((branch) => branch.endpointIds)
+  )
   return getCircuitBranches(circuit).filter(
     (branchEndpoints) =>
       !branchEndpoints.some(
-        (endpoint) => isCircuitConverterDcChild(endpoint) || primaryEndpointIds.has(endpoint.id)
+        (endpoint) =>
+          isCircuitConverterDcChild(endpoint) ||
+          primaryEndpointIds.has(endpoint.id) ||
+          dcBusEndpointIds.has(endpoint.id)
       )
   )
 }
@@ -198,14 +231,32 @@ function getDomoticaExtraRows(
 ): number {
   const domotica = branchEndpoints.find((ep) => ep.symbol === 'domotica' && !ep.domoticaChildProps)
   if (!domotica) return 0
-  const endpointCount = Math.max(
-    constants.DOMOTICA_MIN_ENDPOINT_OUTPUTS,
-    Math.min(
-      constants.DOMOTICA_MAX_ENDPOINT_OUTPUTS,
-      Math.trunc(domotica.domoticaProps?.endpointCount ?? constants.DOMOTICA_MIN_ENDPOINT_OUTPUTS)
+  const byParent = new Map<string, Endpoint[]>()
+  for (const endpoint of branchEndpoints) {
+    const parentId = endpoint.domoticaChildProps?.parentEndpointId
+    if (!parentId) continue
+    const children = byParent.get(parentId) ?? []
+    children.push(endpoint)
+    byParent.set(parentId, children)
+  }
+  const visit = (module: Endpoint, inputRow: number, ancestry: Set<string>): number => {
+    if (ancestry.has(module.id)) return inputRow
+    const nextAncestry = new Set(ancestry).add(module.id)
+    const endpointCount = Math.max(
+      constants.DOMOTICA_MIN_ENDPOINT_OUTPUTS,
+      Math.min(
+        constants.DOMOTICA_MAX_ENDPOINT_OUTPUTS,
+        Math.trunc(module.domoticaProps?.endpointCount ?? constants.DOMOTICA_MIN_ENDPOINT_OUTPUTS)
+      )
     )
-  )
-  return Math.max(0, endpointCount - 1)
+    const firstOutputRow = inputRow + Math.max(0, endpointCount - 1)
+    return (byParent.get(module.id) ?? []).reduce((maxRow, child) => {
+      if (child.symbol !== 'domotica') return maxRow
+      const childInputRow = firstOutputRow - (child.domoticaChildProps?.outputIndex ?? 0)
+      return Math.max(maxRow, visit(child, childInputRow, nextAncestry))
+    }, firstOutputRow)
+  }
+  return visit(domotica, 0, new Set())
 }
 
 function createEndpointBranchRows(
@@ -217,10 +268,11 @@ function createEndpointBranchRows(
   nestedBranchLabelClearance: number
 ): BranchLayout[] {
   const endpointBranches = getStandardCircuitBranches(circuit)
-  const storedBranches = circuit.branches ?? []
+  const storedBranches = (circuit.branches ?? []).filter((branch) => !branch.dcBusId)
   const result: BranchLayout[] = []
   let domoticaVerticalReserve = 0
   let labelVerticalReserve = 0
+  let metadataVerticalReserve = 0
   const nestedBranchGroupOffset =
     (circuit.trunkDevices || []).length === 0 ? nestedBranchLabelClearance : 0
 
@@ -246,13 +298,38 @@ function createEndpointBranchRows(
       0,
       getBranchBottomLabelHeight(branchEndpoints) - availableLabelHeight
     )
-    const branchY =
+    let branchY =
       firstBranchY -
       branchIndex * constants.ENDPOINT_BRANCH_SPACING -
       interBranchTrunkDeviceOffset -
       domoticaVerticalReserve -
       labelVerticalReserve -
+      metadataVerticalReserve -
       nestedBranchGroupOffset
+
+    // A detached card sits above its owning endpoint. If the next branch is
+    // close enough to enter that card's vertical band, increase the row gap
+    // instead of allowing the renderer to escape sideways into the next trunk.
+    const previousBranch = result.at(-1)
+    if (previousBranch) {
+      const previousCardHeight = Math.max(
+        ...previousBranch.endpoints.map(getBranchConverterMetadataCalloutHeight),
+        0
+      )
+      if (previousCardHeight > 0) {
+        const requiredBranchGap =
+          previousCardHeight +
+          BRANCH_METADATA_CARD_GAP +
+          constants.SYMBOL_SIZE / 2 +
+          BRANCH_METADATA_COLLISION_CLEARANCE
+        const actualBranchGap = previousBranch.branchY - branchY
+        const additionalReserve = Math.max(0, requiredBranchGap - actualBranchGap)
+        if (additionalReserve > 0) {
+          metadataVerticalReserve += additionalReserve
+          branchY -= additionalReserve
+        }
+      }
+    }
 
     const storedBranch = storedBranches[branchIndex]
     const storedLabel = storedBranch?.label?.trim() ?? ''
@@ -271,12 +348,17 @@ function createEndpointBranchRows(
       trunkY: startY,
       branchX: startX,
       branchY,
-      branchWidth: calculateBranchWidth(
-        branchEndpoints,
-        constants.BRANCH_LEAD_IN,
-        constants.ENDPOINT_HORIZONTAL_SPACING,
-        constants.APPLIANCE_AFTER_SOCKET_GAP
-      ),
+      // A converter DC-bus branch is a vertical tap from the rail. Its
+      // endpoint is aligned with the branch/MCP anchor, so it must not reserve
+      // or render the normal horizontal lead-in.
+      branchWidth: circuit.dcBusSource
+        ? 0
+        : calculateBranchWidth(
+            branchEndpoints,
+            constants.BRANCH_LEAD_IN,
+            constants.ENDPOINT_HORIZONTAL_SPACING,
+            constants.APPLIANCE_AFTER_SOCKET_GAP
+          ),
       endpoints: branchEndpoints,
       isStraight: false,
     })

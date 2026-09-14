@@ -4,6 +4,7 @@
  */
 
 import { applyTouchHitPadding } from '@/lib/canvas/touchHitZones'
+import { INTERACTIVE_OVERLAY_EXPORT_NAME } from '@/lib/export/interactiveOverlayExport'
 import {
   canvasSizeWithScreenMinimum,
   HOVER_OUTLINE_DASH_PX,
@@ -103,8 +104,7 @@ export function getPanelBodyWidth(symbolWidth: number): number {
 
 /** Circuit tick span as a proportion of the visible body in the site-plan symbol. */
 export const PANEL_CIRCUIT_LINE_BODY_SPAN_RATIO =
-  PANEL_CIRCUIT_LINE_SPACING /
-  (getPanelBodyWidth(PANEL_SYMBOL_WIDTH) * PLAN_PANEL_VISUAL_SCALE)
+  PANEL_CIRCUIT_LINE_SPACING / (getPanelBodyWidth(PANEL_SYMBOL_WIDTH) * PLAN_PANEL_VISUAL_SCALE)
 
 /** Circuit tick layout for the 1-wire panel symbol at its native render size. */
 export function getEendraadPanelCircuitLineMetrics() {
@@ -320,6 +320,7 @@ export function getEendraadSelectionRectProps(
 ) {
   const inset = getSelectionOutlineInsetCanvas(zoom)
   return {
+    name: INTERACTIVE_OVERLAY_EXPORT_NAME,
     x: x - inset,
     y: y - inset,
     width: width + inset * 2,
@@ -381,6 +382,7 @@ export function getEndpointOutlineRectProps(
 export function getSelectionOutlineProps(zoom: number, outlineSize: number) {
   const rect = getVisualOutlineRectProps(zoom, outlineSize)
   return {
+    name: INTERACTIVE_OVERLAY_EXPORT_NAME,
     ...rect,
     fill: 'transparent' as const,
     stroke: SELECTION_COLOR,
@@ -400,6 +402,7 @@ export function getRectSelectionOutlineProps(
 ) {
   const rect = getVisualRectOutlineProps(zoom, width, height, offsetY)
   return {
+    name: INTERACTIVE_OVERLAY_EXPORT_NAME,
     ...rect,
     fill: 'transparent' as const,
     stroke: SELECTION_COLOR,
@@ -414,6 +417,7 @@ export function getRectSelectionOutlineProps(
 export function getHoverOutlineProps(zoom: number, outlineSize: number) {
   const rect = getVisualOutlineRectProps(zoom, outlineSize)
   return {
+    name: INTERACTIVE_OVERLAY_EXPORT_NAME,
     ...rect,
     fill: 'transparent' as const,
     stroke: SELECTION_COLOR,
@@ -433,6 +437,7 @@ export function getRectHoverOutlineProps(
 ) {
   const rect = getVisualRectOutlineProps(zoom, width, height, offsetY)
   return {
+    name: INTERACTIVE_OVERLAY_EXPORT_NAME,
     ...rect,
     fill: 'transparent' as const,
     stroke: SELECTION_COLOR,
@@ -447,6 +452,7 @@ export function getRectHoverOutlineProps(
 export function getPreviewOutlineProps(zoom: number, outlineSize: number) {
   const rect = getVisualOutlineRectProps(zoom, outlineSize)
   return {
+    name: INTERACTIVE_OVERLAY_EXPORT_NAME,
     ...rect,
     fill: 'transparent' as const,
     stroke: SELECTION_COLOR,
@@ -459,6 +465,7 @@ export function getPreviewOutlineProps(zoom: number, outlineSize: number) {
 export function getEndpointSelectionOutlineProps(zoom: number, width: number, height: number) {
   const rect = getEndpointOutlineRectProps(zoom, width, height)
   return {
+    name: INTERACTIVE_OVERLAY_EXPORT_NAME,
     ...rect,
     fill: 'transparent' as const,
     stroke: SELECTION_COLOR,
@@ -470,6 +477,7 @@ export function getEndpointSelectionOutlineProps(zoom: number, width: number, he
 export function getEndpointHoverOutlineProps(zoom: number, width: number, height: number) {
   const rect = getEndpointOutlineRectProps(zoom, width, height)
   return {
+    name: INTERACTIVE_OVERLAY_EXPORT_NAME,
     ...rect,
     fill: 'transparent' as const,
     stroke: SELECTION_COLOR,
@@ -481,6 +489,7 @@ export function getEndpointHoverOutlineProps(zoom: number, width: number, height
 export function getEndpointPreviewOutlineProps(zoom: number, width: number, height: number) {
   const rect = getEndpointOutlineRectProps(zoom, width, height)
   return {
+    name: INTERACTIVE_OVERLAY_EXPORT_NAME,
     ...rect,
     fill: 'transparent' as const,
     stroke: SELECTION_COLOR,
@@ -503,6 +512,7 @@ export function getPaddedRectSelectionOutlineProps(
   const cx = x + width / 2
   const cy = y + height / 2
   return {
+    name: INTERACTIVE_OVERLAY_EXPORT_NAME,
     x: cx - w / 2,
     y: cy - h / 2,
     width: w,
@@ -527,6 +537,7 @@ export function getPaddedRectHoverOutlineProps(
   const cx = x + width / 2
   const cy = y + height / 2
   return {
+    name: INTERACTIVE_OVERLAY_EXPORT_NAME,
     x: cx - w / 2,
     y: cy - h / 2,
     width: w,

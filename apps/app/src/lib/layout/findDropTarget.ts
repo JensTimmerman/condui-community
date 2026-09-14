@@ -54,6 +54,12 @@ export interface FindDropTargetOptions {
    * instead of accidentally promoting it to the secondary panel's incoming protection.
    */
   preferMainBusOverSupplyWire?: boolean
+  /**
+   * When placing a DC rail, prefer an overlapping circuit-trunk wire over the
+   * generic circuit-nest continuation so one-port converter outputs retain
+   * their DC segment/domain metadata.
+   */
+  preferCircuitTrunkWire?: boolean
 }
 
 export interface DropTarget {
@@ -86,6 +92,8 @@ export interface DropTarget {
   branchEndpoints?: string[] // Endpoints on the branch that was dropped on
   /** Layout branch id (`branch-{circuitId}-{index}`) when the drop is on a branch wire */
   branchId?: string
+  /** Insertion point for a branch-local DC device, measured from the bus. */
+  branchDeviceInsertIndex?: number
   /** Insert index for supply trunk devices (used when type === 'supplyWire') */
   supplyDeviceInsertIndex?: number
   /** Which feed path a supply-wire drop should target on a main panel. */
@@ -99,6 +107,8 @@ export interface DropTarget {
   supplyDcBusBranchId?: string
   /** Geometry selected on the converter grid-input path. */
   converterGridPlacement?: 'inline' | 'input-leg'
+  /** Geometry selected on the modular changeover grid-input path. */
+  changeoverGridPlacement?: 'inline' | 'input-leg'
   /** True only on the direct converter's load-side junction slot. */
   supplyConverterChangeoverSlot?: boolean
   /** Insert index for ground trunk devices (used when type === 'groundWire') */
@@ -226,11 +236,13 @@ export function getHitZoneBounds(node: LayoutNode, mode: 'core' | 'padded' = 'co
   if (mode === 'core' || !node.hitZone) return eff
 
   const padding = node.hitZone.padding || 0
+  const paddingX = node.hitZone.paddingX ?? padding
+  const paddingY = node.hitZone.paddingY ?? padding
   return {
-    left: eff.left - padding,
-    top: eff.top - padding,
-    right: eff.right + padding,
-    bottom: eff.bottom + padding,
+    left: eff.left - paddingX,
+    top: eff.top - paddingY,
+    right: eff.right + paddingX,
+    bottom: eff.bottom + paddingY,
   }
 }
 
@@ -250,6 +262,84 @@ function isPointInPadded(node: LayoutNode, point: Point): boolean {
   return point.x >= eff.left && point.x <= eff.right && point.y >= eff.top && point.y <= eff.bottom
 }
 
+/** Horizontal reach of the dashed invitation for creating a secondary bus. */
+export const SECONDARY_BUS_PREVIEW_STUB_LENGTH = 32
+const SECONDARY_BUS_PREVIEW_HIT_PADDING = 12
+const SECONDARY_BUS_PREVIEW_DOT_RADIUS = 8
+
+const subtreeHitBoundsCache = new WeakMap<LayoutNode, HitBounds | null>()
+const EXPLICIT_DROP_HINT_RADIUS = 10
+const PENDING_SECONDARY_BUS_EXTRA_RIGHT =
+  SECONDARY_BUS_PREVIEW_STUB_LENGTH + SECONDARY_BUS_PREVIEW_HIT_PADDING
+
+function unionHitBounds(left: HitBounds | null, right: HitBounds): HitBounds {
+  if (!left) return right
+  return {
+    left: Math.min(left.left, right.left),
+    top: Math.min(left.top, right.top),
+    right: Math.max(left.right, right.right),
+    bottom: Math.max(left.bottom, right.bottom),
+  }
+}
+
+/**
+ * Aggregate every real hit zone in a subtree. Children are allowed to sit well
+ * outside their parent's visual bounds, so parent bounds alone are not a safe
+ * pruning condition; this cached union is.
+ */
+function getSubtreeHitBounds(node: LayoutNode): HitBounds | null {
+  const cached = subtreeHitBoundsCache.get(node)
+  if (cached !== undefined) return cached
+
+  let aggregate: HitBounds | null = node.hitZone?.type ? getHitZoneBounds(node, 'padded') : null
+  const dropHintAnchor = node.hitZone?.dropHintAnchor
+  if (dropHintAnchor) {
+    aggregate = unionHitBounds(aggregate, {
+      left: dropHintAnchor.x - EXPLICIT_DROP_HINT_RADIUS,
+      top: dropHintAnchor.y - EXPLICIT_DROP_HINT_RADIUS,
+      right: dropHintAnchor.x + EXPLICIT_DROP_HINT_RADIUS,
+      bottom: dropHintAnchor.y + EXPLICIT_DROP_HINT_RADIUS,
+    })
+  }
+  if (node.id?.startsWith('circuit-nest-')) {
+    const bounds = getHitZoneBounds(node, 'core')
+    const anchorX = (bounds.left + bounds.right) / 2
+    const anchorY = (bounds.top + bounds.bottom) / 2
+    aggregate = unionHitBounds(aggregate, {
+      left: anchorX - SECONDARY_BUS_PREVIEW_DOT_RADIUS,
+      top: anchorY - SECONDARY_BUS_PREVIEW_HIT_PADDING,
+      right: anchorX + PENDING_SECONDARY_BUS_EXTRA_RIGHT,
+      bottom: anchorY + SECONDARY_BUS_PREVIEW_HIT_PADDING,
+    })
+  }
+  if (node.id?.startsWith('secondary-bus-segment-')) {
+    const bounds = getHitZoneBounds(node, 'padded')
+    aggregate = unionHitBounds(aggregate, {
+      ...bounds,
+      top: bounds.top - 4,
+      bottom: bounds.bottom + 4,
+    })
+  }
+  for (const child of node.children) {
+    const childBounds = getSubtreeHitBounds(child)
+    if (!childBounds) continue
+    aggregate = unionHitBounds(aggregate, childBounds)
+  }
+  subtreeHitBoundsCache.set(node, aggregate)
+  return aggregate
+}
+
+function pointCanHitSubtree(node: LayoutNode, position: Point): boolean {
+  const bounds = getSubtreeHitBounds(node)
+  return (
+    !!bounds &&
+    position.x >= bounds.left &&
+    position.x <= bounds.right &&
+    position.y >= bounds.top &&
+    position.y <= bounds.bottom
+  )
+}
+
 /**
  * Circuit nesting dots are explicit targets and can overlap the secondary bus
  * that feeds their protection. Resolve them before the general tree walk so a
@@ -265,6 +355,7 @@ function findCircuitNestDropInPanel(
   } = { current: null }
 
   const visit = (node: LayoutNode) => {
+    if (!pointCanHitSubtree(node, position)) return
     const inBounds =
       mode === 'core' ? isPointInCore(node, position) : isPointInPadded(node, position)
     if (node.id?.startsWith('circuit-nest-') && inBounds) {
@@ -295,32 +386,13 @@ function findCircuitNestDropInPanel(
   }
 }
 
-/** Horizontal reach of the dashed invitation for creating a secondary bus. */
-export const SECONDARY_BUS_PREVIEW_STUB_LENGTH = 32
-const SECONDARY_BUS_PREVIEW_HIT_PADDING = 12
-const SECONDARY_BUS_PREVIEW_DOT_RADIUS = 8
-
 function findDirectConverterChangeoverSlotInPanel(
   panelNode: LayoutNode,
   position: Point,
   ctx: WalkContext,
   expandAcrossConverterAcPaths = false
 ): DropTarget | null {
-  let canonicalTarget: DropTarget | null = null
-  const findCanonical = (node: LayoutNode): void => {
-    if (node.hitZone?.supplyConverterChangeoverSlot) {
-      canonicalTarget = {
-        type: 'supplyWire',
-        panelId: node.hitZone.supplyPanelId ?? ctx.panelId,
-        diagramId: ctx.diagramId,
-        supplyFeedScope: node.hitZone.supplyFeedScope ?? 'root',
-        supplyDeviceInsertIndex: node.hitZone.supplyInsertIndex,
-        supplyConverterChangeoverSlot: true,
-      }
-    }
-    node.children.forEach(findCanonical)
-  }
-  findCanonical(panelNode)
+  const canonicalTarget = getDirectConverterChangeoverTarget(panelNode, ctx)
   if (!canonicalTarget) return null
 
   const isCanonicalHit = (node: LayoutNode) =>
@@ -330,10 +402,45 @@ function findDirectConverterChangeoverSlotInPanel(
     (node.hitZone?.type === 'supplyConverterGridWire' ||
       node.hitZone?.type === 'supplyConverterBackupWire') &&
     isPointInCore(node, position)
-  const matches = (node: LayoutNode): boolean =>
-    isCanonicalHit(node) || matchesExpandedAcPath(node) || node.children.some(matches)
+  const matches = (node: LayoutNode): boolean => {
+    if (!pointCanHitSubtree(node, position)) return false
+    return isCanonicalHit(node) || matchesExpandedAcPath(node) || node.children.some(matches)
+  }
 
   return matches(panelNode) ? canonicalTarget : null
+}
+
+const directConverterChangeoverTargetCache = new WeakMap<LayoutNode, DropTarget | null>()
+
+function getDirectConverterChangeoverTarget(
+  panelNode: LayoutNode,
+  ctx: WalkContext
+): DropTarget | null {
+  const cached = directConverterChangeoverTargetCache.get(panelNode)
+  if (cached !== undefined) return cached
+  let canonicalTarget: DropTarget | null = null
+  const visit = (node: LayoutNode): void => {
+    if (node.hitZone?.supplyConverterChangeoverSlot) {
+      const candidate: DropTarget = {
+        type: 'supplyWire',
+        panelId: node.hitZone.supplyPanelId ?? ctx.panelId,
+        diagramId: ctx.diagramId,
+        supplyFeedScope: node.hitZone.supplyFeedScope ?? 'root',
+        supplyDeviceInsertIndex: node.hitZone.supplyInsertIndex,
+        supplyConverterChangeoverSlot: true,
+      }
+      if (
+        canonicalTarget === null ||
+        (candidate.supplyDeviceInsertIndex ?? -1) > (canonicalTarget.supplyDeviceInsertIndex ?? -1)
+      ) {
+        canonicalTarget = candidate
+      }
+    }
+    node.children.forEach(visit)
+  }
+  visit(panelNode)
+  directConverterChangeoverTargetCache.set(panelNode, canonicalTarget)
+  return canonicalTarget
 }
 
 /**
@@ -352,6 +459,7 @@ function findSecondaryBusDropInPanel(
   const extraY = 4
 
   const visit = (node: LayoutNode, walkCtx: WalkContext) => {
+    if (!pointCanHitSubtree(node, position)) return
     const childCtx = accumulateContext(node, walkCtx)
     if (
       node.type === 'wire' &&
@@ -439,6 +547,7 @@ function findPendingSecondaryBusDropInPanel(
   ctx: WalkContext
 ): { target: DropTarget; node: LayoutNode } | null {
   const visit = (node: LayoutNode): { target: DropTarget; node: LayoutNode } | null => {
+    if (!pointCanHitSubtree(node, position)) return null
     if (node.type === 'mcb') {
       const nestedProtections = node.children.filter(
         (child) => child.type === 'mcb' && !!child.circuitIdForWires
@@ -484,12 +593,13 @@ function findExplicitDropHintTargetInPanel(
   position: Point,
   ctx: WalkContext
 ): DropTarget | null {
-  const radius = 10
+  const radius = EXPLICIT_DROP_HINT_RADIUS
   const best: {
     current: { target: DropTarget; distanceSquared: number } | null
   } = { current: null }
 
   const visit = (node: LayoutNode, nodeCtx: WalkContext) => {
+    if (!pointCanHitSubtree(node, position)) return
     const anchor = node.hitZone?.dropHintAnchor
     if (anchor && node.hitZone?.type) {
       const dx = position.x - anchor.x
@@ -1030,6 +1140,8 @@ function findTarget(
   ignoreGroundWireHits = false,
   ignoreSupplyWireHits = false
 ): DropTarget | null {
+  if (!pointCanHitSubtree(node, position)) return null
+
   // Accumulate context from this node (e.g., circuitId from MCB)
   const childCtx = accumulateContext(node, ctx)
 
@@ -1050,8 +1162,9 @@ function findTarget(
   // For core hits, endpoint symbols should outrank wire hit zones. Domotica
   // output wires can sit underneath child symbols; if the wire wins first,
   // dropping on a child becomes slot insertion instead of branch chaining.
-  const children = getHitTestChildren(node, mode)
+  const children = getHitTestChildren(node, mode, options)
   for (const child of children) {
+    if (!pointCanHitSubtree(child, position)) continue
     const match = findTarget(
       child,
       position,
@@ -1114,6 +1227,8 @@ function findTargetWithDebug(
   }
   debugPath.push(step)
 
+  if (!pointCanHitSubtree(node, position)) return null
+
   if (
     options?.preferSecondaryBusForNestedProtection &&
     node.type === 'mcb' &&
@@ -1125,8 +1240,9 @@ function findTargetWithDebug(
   }
 
   // ALWAYS check children first (depth-first: deeper = higher priority)
-  const children = getHitTestChildren(node, mode)
+  const children = getHitTestChildren(node, mode, options)
   for (const child of children) {
+    if (!pointCanHitSubtree(child, position)) continue
     const match = findTargetWithDebug(
       child,
       position,
@@ -1161,7 +1277,11 @@ function findTargetWithDebug(
   return null
 }
 
-function getHitTestChildren(node: LayoutNode, mode: 'core' | 'padded'): LayoutNode[] {
+function getHitTestChildren(
+  node: LayoutNode,
+  mode: 'core' | 'padded',
+  options?: FindDropTargetOptions
+): LayoutNode[] {
   if (node.children.length <= 1) return node.children
 
   // A parent circuit's nest zone overlaps the lower part of protections already
@@ -1173,7 +1293,16 @@ function getHitTestChildren(node: LayoutNode, mode: 'core' | 'padded'): LayoutNo
     node.children.some((child) => child.type === 'mcb')
   ) {
     return [...node.children].sort((a, b) => {
-      const priority = (child: LayoutNode) => (child.type === 'mcb' ? -1 : 0)
+      const priority = (child: LayoutNode) => {
+        if (
+          options?.preferCircuitTrunkWire &&
+          child.type === 'wire' &&
+          child.id?.startsWith('circuit-trunk-')
+        ) {
+          return -2
+        }
+        return child.type === 'mcb' ? -1 : 0
+      }
       return priority(a) - priority(b)
     })
   }
@@ -1181,6 +1310,13 @@ function getHitTestChildren(node: LayoutNode, mode: 'core' | 'padded'): LayoutNo
   if (mode !== 'core') return node.children
   return [...node.children].sort((a, b) => {
     const priority = (child: LayoutNode): number => {
+      if (
+        options?.preferCircuitTrunkWire &&
+        child.type === 'wire' &&
+        child.id?.startsWith('circuit-trunk-')
+      ) {
+        return -6
+      }
       if (child.type === 'mcb') return -5
       if (child.id?.startsWith('circuit-nest-')) return -4
       if (child.id?.startsWith('secondary-bus-segment-')) return -3
@@ -1245,7 +1381,11 @@ function accumulateContext(node: LayoutNode, ctx: WalkContext): WalkContext {
   if (node.type === 'secondaryBus') {
     return { ...ctx, secondaryBusNode: node }
   }
-  if (node.type === 'trunkDevice' && node.hitZone?.dcBusId) {
+  if (
+    node.type === 'trunkDevice' &&
+    node.hitZone?.dcBusId &&
+    !node.id?.startsWith('dc-bus-branch-device-')
+  ) {
     return { ...ctx, secondaryBusNode: node }
   }
 
@@ -1269,6 +1409,12 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
     diagramId: ctx.diagramId,
   }
 
+  if ('branchInsertAfterEndpointId' in (node.hitZone ?? {})) {
+    target.insertAfterEndpointId = node.hitZone?.branchInsertAfterEndpointId
+    if (ctx.branchId) target.branchId = ctx.branchId
+    if (ctx.branchEndpoints !== undefined) target.branchEndpoints = ctx.branchEndpoints
+  }
+
   switch (node.type) {
     case 'endpoint': {
       target.endpointId = node.domainId
@@ -1277,8 +1423,7 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
       if (endpointRef?.converterDcConnection) {
         target.converterDcConnection = endpointRef.converterDcConnection
       }
-      const isDomoticaParent =
-        endpointRef?.symbol === 'domotica' && !endpointRef?.domoticaChildProps
+      const isDomoticaParent = endpointRef?.symbol === 'domotica'
       // Dropping on the domotica module body: treat as drop on first output branch
       // so we don't create a bogus "insert after domotica on main branch" slot.
       if (isDomoticaParent) {
@@ -1304,7 +1449,7 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
           : node.domainId
             ? [node.domainId]
             : []
-      } else {
+      } else if (!('branchInsertAfterEndpointId' in (node.hitZone ?? {}))) {
         // Use full branch list from context when inside a branch; fallback to single id
         target.branchEndpoints = ctx.branchEndpoints?.length
           ? ctx.branchEndpoints
@@ -1369,7 +1514,9 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
       target.branchEndpoints = collectBranchEndpoints(node)
       target.branchId = node.domainId
       // Position-aware insertion: use cursor X to find which wire segment we're on
-      if (position) {
+      if ('branchInsertAfterEndpointId' in (node.hitZone ?? {})) {
+        target.insertAfterEndpointId = node.hitZone?.branchInsertAfterEndpointId
+      } else if (position) {
         const positions = collectBranchEndpointPositions(node)
         const posResult = findInsertAfterByPosition(position.x, positions)
         target.insertAfterEndpointId = posResult === undefined ? null : posResult
@@ -1412,6 +1559,9 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
       if (ctx.branchId) {
         target.branchId = ctx.branchId
       }
+      if ('branchInsertAfterEndpointId' in (node.hitZone ?? {})) {
+        target.insertAfterEndpointId = node.hitZone?.branchInsertAfterEndpointId
+      }
 
       // Domotica output hit zones are modeled as wire nodes whose domainId is the
       // parent domotica endpoint. Expose that as endpointId so downstream logic
@@ -1433,6 +1583,12 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
       // actually dropped on (e.g. last segment = insert at end). Fall back to position-based if no id.
       if (target.type === 'mainBus' && ctx.mainBusNode && typeof ctx.panelId === 'string') {
         target.busSectionId = node.hitZone?.busSectionId
+        if (typeof node.hitZone?.mainBusInsertIndex === 'number') {
+          target.mainBusInsertIndex = node.hitZone.mainBusInsertIndex
+          const { itemCount } = computeMainBusInsertIndex(ctx.mainBusNode, 0)
+          target.mainBusItemCount = itemCount
+          break
+        }
         const segPrefix = `main-bus-segment-${ctx.panelId}-`
         const segRest = node.id?.startsWith(segPrefix) ? node.id.slice(segPrefix.length) : undefined
         const segIndex =
@@ -1456,14 +1612,28 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
         target.type === 'circuit' &&
         position &&
         ctx.secondaryBusNode &&
-        !node.id?.startsWith('circuit-nest-')
+        !node.id?.startsWith('circuit-nest-') &&
+        !node.id?.startsWith('dc-bus-branch-')
       ) {
-        const { insertIndex, itemCount } = computeSecondaryBusInsertIndex(
-          ctx.secondaryBusNode,
-          position.x
-        )
-        target.secondaryBusInsertIndex = insertIndex
-        target.secondaryBusItemCount = itemCount
+        const dcBusSegmentMatch = node.id?.match(/^secondary-bus-segment-.+-(\d+)$/)
+        if (node.hitZone?.dcBusId && dcBusSegmentMatch) {
+          // The layout emits one horizontal segment per DC-rail insertion
+          // slot. Its suffix is the stable slot index, so use it directly
+          // instead of deriving a position from the padded hitbox.
+          const { itemCount } = computeSecondaryBusInsertIndex(
+            ctx.secondaryBusNode,
+            position.x
+          )
+          target.secondaryBusInsertIndex = Number.parseInt(dcBusSegmentMatch[1]!, 10)
+          target.secondaryBusItemCount = itemCount
+        } else {
+          const { insertIndex, itemCount } = computeSecondaryBusInsertIndex(
+            ctx.secondaryBusNode,
+            position.x
+          )
+          target.secondaryBusInsertIndex = insertIndex
+          target.secondaryBusItemCount = itemCount
+        }
       }
 
       break
@@ -1506,16 +1676,18 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
     target.supplyDcBusId = node.hitZone?.supplyDcBusId
     target.supplyDcBusBranchId = node.hitZone?.supplyDcBusBranchId
     target.converterGridPlacement = node.hitZone?.converterGridPlacement
+    target.changeoverGridPlacement = node.hitZone?.changeoverGridPlacement
     target.supplyConverterChangeoverSlot = node.hitZone?.supplyConverterChangeoverSlot
     if (node.type === 'trunkDevice' && typeof node.hitZone?.supplyInsertIndex === 'number') {
-      target.supplyDeviceInsertIndex =
-        isVerticalSupplyDevice(node.domainRef as import('@/types/schema').TrunkDevice)
-          ? position.y < node.bounds.y
-            ? node.hitZone.supplyInsertIndex + 1
-            : node.hitZone.supplyInsertIndex
-          : position.x < node.bounds.x
-            ? node.hitZone.supplyInsertIndex + 1
-            : node.hitZone.supplyInsertIndex
+      target.supplyDeviceInsertIndex = isVerticalSupplyDevice(
+        node.domainRef as import('@/types/schema').TrunkDevice
+      )
+        ? position.y < node.bounds.y
+          ? node.hitZone.supplyInsertIndex + 1
+          : node.hitZone.supplyInsertIndex
+        : position.x < node.bounds.x
+          ? node.hitZone.supplyInsertIndex + 1
+          : node.hitZone.supplyInsertIndex
     } else if (typeof node.hitZone?.supplyInsertIndex === 'number') {
       target.supplyDeviceInsertIndex = node.hitZone.supplyInsertIndex
     } else {
@@ -1540,9 +1712,15 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
     target.converterDcConnection = node.hitZone.converterDcConnection
     target.wireDomain = 'DC'
   }
+  if (node.hitZone?.wireDomain) {
+    target.wireDomain = node.hitZone.wireDomain
+  }
   if (node.hitZone?.dcBusId) {
     target.dcBusId = node.hitZone.dcBusId
     target.wireDomain = 'DC'
+  }
+  if (typeof node.hitZone?.branchDeviceInsertIndex === 'number') {
+    target.branchDeviceInsertIndex = node.hitZone.branchDeviceInsertIndex
   }
 
   return target
@@ -1790,6 +1968,17 @@ function computeSecondaryBusInsertIndex(
     if (metaXs && metaXs.length > 0) {
       childXs = [...metaXs].sort((a, b) => a - b)
     }
+  }
+
+  // Ordinary DC rails render their branch trunks as `branch` children of the
+  // bus device rather than as MCB/endpoint children. Include those anchors in
+  // the same insertion calculation so a drop between two rail branches keeps
+  // its intended slot instead of falling back to the end of the rail.
+  if (childXs.length === 0) {
+    childXs = busNode.children
+      .filter((child) => child.type === 'branch' && child.id?.startsWith('dc-bus-branch-'))
+      .map((child) => child.bounds.x + child.bounds.width / 2)
+      .sort((a, b) => a - b)
   }
 
   const itemCount = childXs.length

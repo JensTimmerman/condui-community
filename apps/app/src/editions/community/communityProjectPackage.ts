@@ -31,9 +31,7 @@ export async function importCommunityProject(file: Blob): Promise<ProjectV2> {
   }
   const raw = JSON.parse(json) as LegacyProjectDocument
   const project = sanitizeLegacyV2Project(normalizeStoredProjectToV2(raw)).project
-  const validation = validateProjectStructure(
-    project as unknown as import('@/types/schema').Project,
-  )
+  const validation = validateProjectStructure(project)
   if (!validation.valid) throw new Error('The project file is invalid.')
   return project
 }

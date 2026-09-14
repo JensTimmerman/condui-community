@@ -1,9 +1,9 @@
 import {
-  getBuildingFloorsFromProject,
+  selectProjectBuildingFloors,
   type ProjectWithOptionalV2Building,
 } from '@/lib/projectV2/buildingFloors'
 import {
-  getElectricalPanelsFromProject,
+  selectProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import type { Circuit, Panel } from '@/types/schema'
@@ -24,7 +24,7 @@ export function resolveSitplanTargetFloorId(
   project: SitplanTargetFloorProject,
   uiActiveFloorId: string | null
 ): string | null {
-  const floors = getBuildingFloorsFromProject(project)
+  const floors = selectProjectBuildingFloors(project)
   if (!floors.length) return null
 
   if (uiActiveFloorId && floors.some((f) => f.id === uiActiveFloorId)) {
@@ -71,8 +71,8 @@ export function resolveCircuitSitplanTargetFloorId(
   const preferred = resolveSitplanTargetFloorId(project, uiActiveFloorId)
   if (preferred) return preferred
 
-  const validFloorIds = new Set(getBuildingFloorsFromProject(project).map((floor) => floor.id))
-  const owner = findOwningPanelAndCircuit(getElectricalPanelsFromProject(project), circuitId)
+  const validFloorIds = new Set(selectProjectBuildingFloors(project).map((floor) => floor.id))
+  const owner = findOwningPanelAndCircuit(selectProjectElectricalPanels(project), circuitId)
   if (!owner) return null
 
   for (const endpoint of owner.circuit.endpoints) {

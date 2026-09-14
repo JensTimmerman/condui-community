@@ -22,6 +22,8 @@ function CanvasForType({ type }: { type: CanvasType }) {
       return <PlanCanvas />
     case 'panel':
       return <PanelCanvas />
+    case 'structure':
+      return null
   }
 }
 
@@ -62,4 +64,5 @@ export function ExportCanvasPool() {
         </div>
       ))}
     </div>
-  )}
+  )
+}

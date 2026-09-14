@@ -13,7 +13,7 @@ import type {
   ProtectionDevice,
 } from '@/types/schema'
 import type { WireSegment } from '@/types/schema'
-import { getPortDomainsForSymbol, DEFAULT_ELECTRICAL_DOMAIN } from '@/lib/symbols'
+import { getPortDomainsForSymbol, DEFAULT_ELECTRICAL_DOMAIN, symbolInheritsWireDomain } from '@/lib/symbols'
 import { calculateBottomUpLayout } from '@/lib/layout/bottomUpLayout'
 import { computeAreiCircuitEndpointLimitCount } from '@/lib/validation/areiCircuitEndpointCount'
 import { listLightingFeedCircuits } from '@/lib/validation/areiLightingCircuitCount'
@@ -38,12 +38,15 @@ import {
   cableForSupplyWireRole,
   type SupplyWireRole,
 } from '@/lib/supplyWireCables'
-import { resolvePanelSupplyLinkForPanel } from '@/lib/eendraad/panelSupplyLink'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  resolvePanelSupplyLinkForPanel,
+  resolvePanelSupplyLinkForPanelInPanels,
+} from '@/lib/eendraad/panelSupplyLink'
+import {
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
 } from '@/lib/projectV2/electrical'
-import i18n from '@/i18n'
+import i18n from '@/lib/validation/validationI18n'
 
 export type {
   CheckContext,
@@ -89,6 +92,7 @@ export {
   cableExplicitlyWithoutPe,
   cableForSupplyWireRole,
   resolvePanelSupplyLinkForPanel,
+  resolvePanelSupplyLinkForPanelInPanels,
   i18n,
 }
 
@@ -111,11 +115,11 @@ export function isValidationDebugEnabled(): boolean {
 export const VALIDATION_DEBUG = isValidationDebugEnabled()
 
 export function projectPanels(project: ValidationProject): Panel[] {
-  return getElectricalPanelsFromProject(project)
+  return getProjectElectricalPanels(project)
 }
 
 export function projectInstallation(project: ValidationProject) {
-  return getElectricalInstallationFromProject(project)
+  return getProjectElectricalInstallation(project)
 }
 
 export function validationCircuitCode(code: string | undefined | null): string {
@@ -227,31 +231,31 @@ export function getElementPortDomains(
     case 'mainBus':
     case 'secondaryBus':
     case 'ground':
-      return fallback
+      return elementType === 'ground' ? fallback : ['AC', 'DC']
     case 'rcd':
       return getPortDomainsForSymbol('rcd')
     case 'protection': {
       const protection = query.getProtectionById(elementId)
       if (!protection) return fallback
       const symbolId = protection.type.toLowerCase()
-      return getPortDomainsForSymbol(symbolId)
+      return symbolInheritsWireDomain(symbolId) ? ['AC', 'DC'] : getPortDomainsForSymbol(symbolId)
     }
     case 'endpoint': {
       const endpoint = query.getEndpointById(elementId)
       if (endpoint) {
         const symbolId = endpoint.symbol ?? 'socket'
-        return getPortDomainsForSymbol(symbolId)
+        return symbolInheritsWireDomain(symbolId) ? ['AC', 'DC'] : getPortDomainsForSymbol(symbolId)
       }
       // Trunk devices are wired as endpoint anchors in eendraad metadata.
       // Resolve them here to avoid falling back to AC/AC and creating
       // premature domain mismatch warnings for valid converters.
       const trunkDevice = query.getTrunkDeviceById(elementId)
-      if (trunkDevice) return getPortDomainsForSymbol(trunkDevice.symbol)
+      if (trunkDevice) return symbolInheritsWireDomain(trunkDevice.symbol) ? ['AC', 'DC'] : getPortDomainsForSymbol(trunkDevice.symbol)
       return fallback
     }
     default: {
       const trunkDevice = query.getTrunkDeviceById(elementId)
-      if (trunkDevice) return getPortDomainsForSymbol(trunkDevice.symbol)
+      if (trunkDevice) return symbolInheritsWireDomain(trunkDevice.symbol) ? ['AC', 'DC'] : getPortDomainsForSymbol(trunkDevice.symbol)
       return fallback
     }
   }

@@ -2,12 +2,12 @@ import i18n from '@/i18n'
 import { useDialogStore } from '@/stores/dialogStore'
 import { useProjectStore } from '@/stores/projectStore'
 import { useUIStore } from '@/stores/uiStore'
-import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
+import { getProjectElectricalInstallation } from '@/lib/projectV2/electrical'
 
 /** Remove earthing from the installation (one-line diagram and situation plan). */
 export function performDeleteEarthing(clearSelection = true): void {
   const store = useProjectStore.getState()
-  if (!store.currentProject || !getElectricalInstallationFromProject(store.currentProject)) return
+  if (!store.currentProject || !getProjectElectricalInstallation(store.currentProject)) return
   store.updateInstallation({ hasGround: false, earthingPlacements: [] })
   if (clearSelection) {
     useUIStore.getState().clearSelection()

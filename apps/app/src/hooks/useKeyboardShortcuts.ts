@@ -16,9 +16,10 @@ import {
 } from '@/lib/eendraad/duplicateSelection'
 import { canDuplicatePlanSelection, runPlanDuplicate } from '@/lib/plan/planDuplicateSelection'
 import type { CanvasType, ViewportLayout } from '@/types/ui'
+import { isStructuralCanvasEnabled } from '@/lib/structuralCanvas/availability'
 import type { EditorCapabilities } from '@/lib/viewerMode'
 import { isKeyboardTypingTarget } from '@/lib/ui/keyboardTypingTarget'
-import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
+import { getProjectElectricalInstallation } from '@/lib/projectV2/electrical'
 import { useDialogStore } from '@/stores/dialogStore'
 import HiddenItemsDialog, { type HiddenItem } from '@/components/common/HiddenItemsDialog'
 import { getSymbolById } from '@/lib/symbols'
@@ -27,6 +28,14 @@ import { generateId } from '@/utils/project'
 import i18n from '@/i18n'
 import { restoreHiddenSituationPlanPlacementsToActiveView } from '@/lib/plan/restoreHiddenSituationPlanPlacements'
 import { hasCustomPlacement } from '@/lib/plan/customPlacement'
+import {
+  createSyncSupplyInverterMultiplierDeps,
+  syncSupplyDeviceMultiplierCount,
+} from '@/lib/eendraad/syncSupplyInverterMultiplier'
+import {
+  createSyncEndpointMultiplierDeps,
+  syncEndpointMultiplierCount,
+} from '@/lib/eendraad/syncEndpointMultiplierCount'
 
 /**
  * Hook to handle global keyboard shortcuts for the application.
@@ -268,14 +277,14 @@ export function useKeyboardShortcuts(options?: { capabilities?: EditorCapabiliti
                 getCurrentProject: () => store.currentProject,
                 getSupplyTrunkDeviceIndex: (id: string) =>
                   (store.currentProject
-                    ? getElectricalInstallationFromProject(store.currentProject)
+                    ? getProjectElectricalInstallation(store.currentProject)
                     : undefined
                   )?.mainSupply?.supplyTrunkDevices?.findIndex(
                     (d: { id: string }) => d.id === id
                   ) ?? -1,
                 getGroundTrunkDeviceIndex: (id: string) =>
                   (store.currentProject
-                    ? getElectricalInstallationFromProject(store.currentProject)
+                    ? getProjectElectricalInstallation(store.currentProject)
                     : undefined
                   )?.groundTrunkDevices?.findIndex((d: { id: string }) => d.id === id) ?? -1,
               }
@@ -285,10 +294,22 @@ export function useKeyboardShortcuts(options?: { capabilities?: EditorCapabiliti
                   getters,
                   {
                     addEndpoint: store.addEndpoint,
+                    syncEndpointMultiplierCount: (endpointId: string, count: number) =>
+                      syncEndpointMultiplierCount(
+                        createSyncEndpointMultiplierDeps(),
+                        endpointId,
+                        count
+                      ),
                     addCircuit: store.addCircuit,
                     addTrunkDevice: store.addTrunkDevice,
                     updateTrunkDevice: store.updateTrunkDevice,
                     addSupplyTrunkDevice: store.addSupplyTrunkDevice,
+                    syncSupplyDeviceMultiplierCount: (deviceId: string, count: number) =>
+                      syncSupplyDeviceMultiplierCount(
+                        createSyncSupplyInverterMultiplierDeps(),
+                        deviceId,
+                        count
+                      ),
                     addGroundTrunkDevice: store.addGroundTrunkDevice,
                     insertProtectionAfter: store.insertProtectionAfter,
                     updateCircuit: store.updateCircuit,
@@ -346,9 +367,11 @@ export function useKeyboardShortcuts(options?: { capabilities?: EditorCapabiliti
           F1: 'eendraad',
           F2: 'plan',
           F3: 'panel',
+          F4: 'structure',
         }
         const switchTargetCanvas = canvasSwitchByFunctionKey[e.key]
         if (switchTargetCanvas) {
+          if (switchTargetCanvas === 'structure' && !isStructuralCanvasEnabled()) return
           const panelIdx =
             findPanelIndexAtPoint(mousePos.current.x, mousePos.current.y) ??
             findPanelIndexFromTarget(e.target)
@@ -422,7 +445,7 @@ export function useKeyboardShortcuts(options?: { capabilities?: EditorCapabiliti
                         circuitId,
                         floorId,
                         placementId: generateId(),
-                    }) ?? undefined
+                      }) ?? undefined
                     if (placement) {
                       store.addPlacement(endpointId, placement)
                     }
@@ -511,7 +534,7 @@ export function useKeyboardShortcuts(options?: { capabilities?: EditorCapabiliti
                     options: {
                       moveToCurrentView: boolean
                       moveToCurrentViewOverridden: boolean
-                    },
+                    }
                   ) => {
                     restoreHiddenSituationPlanPlacementsToActiveView(selectedIds, {
                       moveToActiveView: options.moveToCurrentViewOverridden

@@ -2,6 +2,7 @@ import type { Point } from '@/types/ui'
 import type { TrunkDevice } from '@/types/schema'
 import { getSupplyDeviceMultiplier } from '@/lib/supplyAssembly/inverterMultipliers'
 import { getMetadataCalloutGroups } from '@/lib/metadataCalloutGrouping'
+import { isVerticalSupplyDevice } from '@/lib/layout/supplyDeviceOrientation'
 
 export interface SupplyMetadataCalloutSegment {
   startPoint: Point
@@ -25,7 +26,7 @@ export interface SupplyMetadataCalloutGroupItem {
   symbolPosition: Point
   width: number
   height: number
-  placement?: 'upper-left' | 'top'
+  placement?: 'upper-left' | 'top' | 'top-right'
 }
 
 export interface SupplyMetadataCalloutGroupPlacement extends SupplyMetadataCalloutGroupItem {
@@ -41,6 +42,36 @@ export interface SupplyMetadataCalloutCluster {
   representativeId: string
   targetIds: string[]
   totalMultiplier: number
+}
+
+/**
+ * Supply metadata cards belong to the horizontal supply lane. Devices mounted
+ * on a DC bus are rendered on vertical branch risers, where their labels must
+ * not participate in the horizontal card packing or frame sizing.
+ */
+export function isSupplyMetadataCalloutDevice(device: TrunkDevice): boolean {
+  return (
+    !device.supplyDcBusId &&
+    (device.symbol === 'inverter' ||
+      device.symbol === 'dc_dc_converter' ||
+      device.symbol === 'solar_panel' ||
+      device.symbol === 'battery')
+  )
+}
+
+/**
+ * Automatic supply cards may be attached to the horizontal rail or to a
+ * vertical top-port riser. Ordinary vertical circuit devices and DC-bus
+ * branch devices stay with their inline side labels.
+ */
+export function canRenderSupplyMetadataCallout(
+  device: TrunkDevice,
+  isHorizontal?: boolean
+): boolean {
+  return (
+    isSupplyMetadataCalloutDevice(device) &&
+    (isHorizontal === true || isVerticalSupplyDevice(device))
+  )
 }
 
 /**
@@ -101,10 +132,13 @@ export function getSupplyMetadataCalloutClusters(
 export function getSupplyMetadataCalloutPlacementKind({
   symbol,
   peerCount,
+  stackVertically = false,
 }: {
   symbol?: string
   peerCount: number
+  stackVertically?: boolean
 }): SupplyMetadataCalloutPlacementKind {
+  if (stackVertically) return 'top'
   return symbol === 'inverter' && peerCount > 1 ? 'upper-left' : 'top'
 }
 
@@ -290,6 +324,15 @@ function rectIntersectsRect(a: SupplyMetadataCalloutRect, b: SupplyMetadataCallo
   return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom)
 }
 
+function expandRect(rect: SupplyMetadataCalloutRect, amount: number): SupplyMetadataCalloutRect {
+  return {
+    left: rect.left - amount,
+    top: rect.top - amount,
+    right: rect.right + amount,
+    bottom: rect.bottom + amount,
+  }
+}
+
 function getCalloutRect(
   symbolPosition: Point,
   placement: SupplyMetadataCalloutPlacement,
@@ -319,6 +362,8 @@ export function getSupplyMetadataCalloutGroupPlacements({
   symbolRects = [],
   packRows = true,
   preferRightNudges = false,
+  stackVertically = false,
+  stackBelowY,
 }: {
   items: SupplyMetadataCalloutGroupItem[]
   segments: SupplyMetadataCalloutSegment[]
@@ -328,6 +373,10 @@ export function getSupplyMetadataCalloutGroupPlacements({
   packRows?: boolean
   /** For vertically staggered symbols, try the shorter right-side detour first. */
   preferRightNudges?: boolean
+  /** Keep supply cards on one preferred side of the bus and stack them vertically. */
+  stackVertically?: boolean
+  /** Main bus Y coordinate used as the hard lower edge for a vertical card stack. */
+  stackBelowY?: number
 }): Map<string, SupplyMetadataCalloutGroupPlacement> {
   const placed = new Map<string, SupplyMetadataCalloutGroupPlacement>()
   const basePlacements = items.map((item) => {
@@ -362,7 +411,7 @@ export function getSupplyMetadataCalloutGroupPlacements({
   // outer cards absorb the small movement with a compact, visible gap.
   const CALLOUT_GROUP_GAP = 6
   const CALLOUT_COLLISION_GAP = 8
-  const groups = new Map<'upper-left' | 'top', typeof basePlacements>()
+  const groups = new Map<'upper-left' | 'top' | 'top-right', typeof basePlacements>()
   basePlacements.forEach((entry) => {
     const kind = entry.item.placement ?? 'upper-left'
     const group = groups.get(kind) ?? []
@@ -370,50 +419,89 @@ export function getSupplyMetadataCalloutGroupPlacements({
     groups.set(kind, group)
   })
 
-  groups.forEach((group) => {
-    const ordered = [...group].sort((left, right) => left.rect.left - right.rect.left)
-    if (packRows && ordered.length > 1) {
-      const centerIndex = Math.floor((ordered.length - 1) / 2)
-      const centerLeft = ordered[centerIndex]!.rect.left
-      const centerRight = ordered[centerIndex]!.rect.right
-      const anchor = (centerLeft + centerRight) / 2
-      const totalWidth =
-        ordered.reduce((total, entry) => total + entry.item.width, 0) +
-        CALLOUT_GROUP_GAP * (ordered.length - 1)
-      let nextLeft = anchor - totalWidth / 2
-      ordered.forEach((entry) => {
-        entry.relativePlacement = {
-          x: nextLeft - entry.item.symbolPosition.x,
-          y: entry.relativePlacement.y,
-        }
-        entry.rect = getCalloutRect(
-          entry.item.symbolPosition,
-          entry.relativePlacement,
-          entry.item.width,
-          entry.item.height
-        )
-        nextLeft += entry.item.width + CALLOUT_GROUP_GAP
-      })
-    }
+  if (stackVertically && basePlacements.length > 1) {
+    const ordered = [...basePlacements]
+    const stackWidth = Math.max(...ordered.map((entry) => entry.item.width))
+    const stackLeft = preferRightNudges
+      ? Math.max(...ordered.map((entry) => entry.item.symbolPosition.x)) + 30
+      : Math.min(...ordered.map((entry) => entry.item.symbolPosition.x)) - 30 - stackWidth
+    const stackGap = CALLOUT_COLLISION_GAP
+    const totalHeight =
+      ordered.reduce((total, entry) => total + entry.item.height, 0) +
+      stackGap * (ordered.length - 1)
+    const preferredBottom =
+      (stackBelowY ?? Math.min(...ordered.map((entry) => entry.rect.bottom + totalHeight))) -
+      CALLOUT_COLLISION_GAP
+    let nextTop = preferredBottom - totalHeight
 
     ordered.forEach((entry) => {
-      const result = {
+      entry.relativePlacement = {
+        x: stackLeft - entry.item.symbolPosition.x,
+        y: nextTop - entry.item.symbolPosition.y,
+      }
+      entry.rect = getCalloutRect(
+        entry.item.symbolPosition,
+        entry.relativePlacement,
+        entry.item.width,
+        entry.item.height
+      )
+      nextTop += entry.item.height + stackGap
+      placed.set(entry.item.id, {
         ...entry.item,
         x: entry.relativePlacement.x,
         y: entry.relativePlacement.y,
         rect: entry.rect,
-      }
-      placed.set(entry.item.id, result)
+      })
     })
-  })
+  } else {
+    groups.forEach((group) => {
+      const ordered = [...group].sort((left, right) => left.rect.left - right.rect.left)
+      if (packRows && ordered.length > 1) {
+        const centerIndex = Math.floor((ordered.length - 1) / 2)
+        const centerLeft = ordered[centerIndex]!.rect.left
+        const centerRight = ordered[centerIndex]!.rect.right
+        const anchor = (centerLeft + centerRight) / 2
+        const totalWidth =
+          ordered.reduce((total, entry) => total + entry.item.width, 0) +
+          CALLOUT_GROUP_GAP * (ordered.length - 1)
+        let nextLeft = anchor - totalWidth / 2
+        ordered.forEach((entry) => {
+          entry.relativePlacement = {
+            x: nextLeft - entry.item.symbolPosition.x,
+            y: entry.relativePlacement.y,
+          }
+          entry.rect = getCalloutRect(
+            entry.item.symbolPosition,
+            entry.relativePlacement,
+            entry.item.width,
+            entry.item.height
+          )
+          nextLeft += entry.item.width + CALLOUT_GROUP_GAP
+        })
+      }
+
+      ordered.forEach((entry) => {
+        const result = {
+          ...entry.item,
+          x: entry.relativePlacement.x,
+          y: entry.relativePlacement.y,
+          rect: entry.rect,
+        }
+        placed.set(entry.item.id, result)
+      })
+    })
+  }
 
   // A converter/inverter card can use a different orientation from the solar
   // and battery cards. Resolve those cross-group frame collisions last while
-  // leaving the centered top-card row intact.
+  // leaving the centered top-card row intact. Re-check the actual rail and
+  // symbol obstacles after packing: packing deliberately changes the initial
+  // collision-free placements and used to be able to put a card back over a
+  // busbar.
   const allResults = [...placed.values()]
   allResults.forEach((current, index) => {
     let attempts = 0
-    while (attempts < 24) {
+    while (attempts < 64) {
       const overlappingPrevious = allResults
         .slice(0, index)
         .filter((previous) =>
@@ -426,21 +514,115 @@ export function getSupplyMetadataCalloutGroupPlacements({
                 current.rect.top >= previous.rect.bottom + CALLOUT_COLLISION_GAP
               )
         )
-      if (overlappingPrevious.length === 0) break
-      current.x += packRows
-        ? current.width + CALLOUT_GROUP_GAP
-        : Math.max(...overlappingPrevious.map((previous) => previous.rect.right)) -
-          current.rect.left +
-          CALLOUT_COLLISION_GAP
-      current.rect = getCalloutRect(
+      const protectedRect = getCalloutRect(
         current.symbolPosition,
         { x: current.x, y: current.y },
         current.width,
-        current.height
+        current.height,
+        CALLOUT_WIRE_CLEARANCE
       )
+      const overlapsProtectedContent =
+        symbolRects.some((symbolRect) => rectIntersectsRect(protectedRect, symbolRect)) ||
+        segments.some((segment) => segmentIntersectsRect(segment, protectedRect))
+
+      if (overlappingPrevious.length === 0 && !overlapsProtectedContent) break
+
+      if (overlapsProtectedContent) {
+        const repairedPlacement = getSupplyMetadataCalloutPlacement({
+          symbolPosition: current.symbolPosition,
+          width: current.width,
+          height: current.height,
+          segments,
+          placement: current.placement,
+          preferRightNudges,
+          avoidRects: [
+            ...symbolRects,
+            ...allResults
+              .slice(0, index)
+              .map((previous) => expandRect(previous.rect, CALLOUT_COLLISION_GAP)),
+          ],
+        })
+        const repairedRect = getCalloutRect(
+          current.symbolPosition,
+          repairedPlacement,
+          current.width,
+          current.height
+        )
+        const didMove = repairedPlacement.x !== current.x || repairedPlacement.y !== current.y
+        current.x = repairedPlacement.x
+        current.y = repairedPlacement.y
+        current.rect = repairedRect
+
+        // The candidate grid is intentionally bounded. If every candidate is
+        // occupied, move beyond the rightmost finite obstacle so the card can
+        // never silently remain on top of a rail or symbol.
+        if (!didMove) {
+          const rightmostObstacle = Math.max(
+            current.symbolPosition.x,
+            ...symbolRects.map((rect) => rect.right),
+            ...segments.flatMap((segment) => [segment.startPoint.x, segment.endPoint.x]),
+            ...allResults.slice(0, index).map((previous) => previous.rect.right)
+          )
+          current.x = rightmostObstacle + CALLOUT_COLLISION_GAP - current.symbolPosition.x
+          current.rect = getCalloutRect(
+            current.symbolPosition,
+            { x: current.x, y: current.y },
+            current.width,
+            current.height
+          )
+        }
+      } else {
+        current.x += packRows
+          ? current.width + CALLOUT_GROUP_GAP
+          : Math.max(...overlappingPrevious.map((previous) => previous.rect.right)) -
+            current.rect.left +
+            CALLOUT_COLLISION_GAP
+        current.rect = getCalloutRect(
+          current.symbolPosition,
+          { x: current.x, y: current.y },
+          current.width,
+          current.height
+        )
+      }
       attempts += 1
     }
   })
+
+  // Final invariant: cards from different placement groups must still be
+  // separated after all per-card repairs. Sort by the current rendered edge and
+  // push later cards right when their vertical bands overlap. This pass is
+  // intentionally independent of the candidate grid so a late mirror or a
+  // differing orientation can never reintroduce a card-on-card intersection.
+  const orderedResults = [...allResults].sort((left, right) => left.rect.left - right.rect.left)
+  for (let pass = 0; pass < orderedResults.length; pass += 1) {
+    let moved = false
+    for (let currentIndex = 1; currentIndex < orderedResults.length; currentIndex += 1) {
+      const current = orderedResults[currentIndex]!
+      for (let previousIndex = 0; previousIndex < currentIndex; previousIndex += 1) {
+        const previous = orderedResults[previousIndex]!
+        const separationGap =
+          current.placement === previous.placement ? CALLOUT_GROUP_GAP : CALLOUT_COLLISION_GAP
+        const verticalBandsOverlap = !(
+          current.rect.bottom + separationGap <= previous.rect.top ||
+          current.rect.top >= previous.rect.bottom + separationGap
+        )
+        if (!verticalBandsOverlap) continue
+
+        const requiredLeft = previous.rect.right + separationGap
+        if (current.rect.left >= requiredLeft) continue
+
+        current.x += requiredLeft - current.rect.left
+        current.rect = getCalloutRect(
+          current.symbolPosition,
+          { x: current.x, y: current.y },
+          current.width,
+          current.height
+        )
+        moved = true
+      }
+    }
+    if (!moved) break
+  }
 
   return placed
 }
@@ -461,25 +643,37 @@ export function getSupplyMetadataCalloutPlacement({
   segments: SupplyMetadataCalloutSegment[]
   /** Existing device labels/callouts that this card must not cover. */
   avoidRects?: SupplyMetadataCalloutRect[]
-  placement?: 'upper-left' | 'top'
+  placement?: 'upper-left' | 'top' | 'top-right'
   preferRightNudges?: boolean
 }): SupplyMetadataCalloutPlacement {
   const preferred =
     placement === 'top'
       ? { x: -width / 2, y: -height - 28 }
-      : // Sit clearly above the phase/domain labels around the inverter while keeping
-        // the callout close enough that its leader remains short and unambiguous.
-        { x: -width - 30, y: -height - 40 }
+      : placement === 'top-right'
+        ? { x: 18, y: -height - 28 }
+        : // Sit clearly above the phase/domain labels around the inverter while keeping
+          // the callout close enough that its leader remains short and unambiguous.
+          // Keep the same 28px symbol-to-card gap as the centered top placement so
+          // grouped cards stay inside the supply frame when there is room below.
+          { x: -width - 30, y: -height - 28 }
   const preferredCandidates =
     placement === 'top'
       ? [
           preferred,
           ...(preferRightNudges
             ? [
-                { x: preferred.x + width + 12, y: preferred.y },
-                { x: preferred.x + 24, y: preferred.y },
-                { x: preferred.x - width - 12, y: preferred.y },
-                { x: preferred.x - 24, y: preferred.y },
+                // Branch converter cards usually only need to clear a trunk
+                // by a few pixels. Try compact right-side steps first so a
+                // collision does not jump an entire card width into the next
+                // circuit column.
+                ...Array.from({ length: Math.ceil((width + 12) / 12) }, (_, index) => ({
+                  x: preferred.x + (index + 1) * 12,
+                  y: preferred.y,
+                })),
+                ...Array.from({ length: Math.ceil((width + 12) / 12) }, (_, index) => ({
+                  x: preferred.x - (index + 1) * 12,
+                  y: preferred.y,
+                })),
               ]
             : [
                 // Supply rows traditionally expand toward their source side first.
@@ -490,25 +684,36 @@ export function getSupplyMetadataCalloutPlacement({
               ]),
           { x: preferred.x, y: preferred.y - 20 },
         ]
-      : [
-          preferred,
-          { x: preferred.x, y: preferred.y - 40 },
-          { x: preferred.x + 20, y: preferred.y - 20 },
-          { x: preferred.x - 28, y: preferred.y - 20 },
-          { x: preferred.x - 56, y: preferred.y },
-        ]
+      : placement === 'top-right'
+        ? [
+            preferred,
+            { x: preferred.x + width + 12, y: preferred.y },
+            { x: preferred.x - width - 12, y: preferred.y },
+            { x: preferred.x + 20, y: preferred.y - 20 },
+            { x: preferred.x, y: preferred.y - 40 },
+          ]
+        : [
+            preferred,
+            { x: preferred.x, y: preferred.y - 40 },
+            { x: preferred.x + 20, y: preferred.y - 20 },
+            { x: preferred.x - 28, y: preferred.y - 20 },
+            { x: preferred.x - 56, y: preferred.y },
+          ]
 
   // The named candidates preserve the established compact placements. If all
   // of those are occupied, expand into a small deterministic grid rather than
   // falling back to a position that can still overlap another frame.
   const gridXOffsets = [0, -(width + 12), width + 12, -2 * (width + 12), 2 * (width + 12)]
   const gridYOffsets = [0, -(height + 20), height + 20, -2 * (height + 20), 2 * (height + 20)]
+  const gridBaseX =
+    placement === 'top' ? -width / 2 : placement === 'top-right' ? 18 : -width - 30
+  const gridBaseY = placement === 'upper-left' ? -height - 40 : -height - 28
   const candidates = [
     ...preferredCandidates,
     ...gridYOffsets.flatMap((yOffset) =>
       gridXOffsets.map((xOffset) => ({
-        x: (placement === 'top' ? -width / 2 : -width - 30) + xOffset,
-        y: (placement === 'top' ? -height - 28 : -height - 40) + yOffset,
+        x: gridBaseX + xOffset,
+        y: gridBaseY + yOffset,
       }))
     ),
   ]

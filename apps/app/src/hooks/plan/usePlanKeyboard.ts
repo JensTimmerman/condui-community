@@ -14,8 +14,8 @@ import {
 import { resolveSelectionToEndpointIds } from '@/lib/plan/selectionResolvers'
 import { confirmDeleteEarthing } from '@/lib/installation/deleteEarthing'
 import {
-  getBuildingFloorsFromProject,
-  getCompatibilityFloorsFromProject,
+  selectProjectBuildingFloors,
+  readLegacyCompatibilityFloors,
   type ProjectWithOptionalV2Building,
 } from '@/lib/projectV2/buildingFloors'
 import type { ProjectWithOptionalV2Electrical } from '@/lib/projectV2/electrical'
@@ -27,6 +27,8 @@ import {
 } from '@/lib/plan/planKeyboardDecisions'
 import { explicitClockwiseRotationPatch } from '@/lib/plan/situationPlanRotation'
 import { deleteSelectedPlanGraphicElements } from '@/lib/plan/planGraphicElementDeletion'
+import { mergeHiddenSituationPlanPlacementIds } from '@/lib/plan/hideSituationPlanPlacements'
+import { openSituationPlanBulkDeleteWarning } from '@/components/plan/SituationPlanBulkDeleteWarningDialog'
 
 type PlanKeyboardProject = ProjectWithOptionalV2Building & ProjectWithOptionalV2Electrical
 
@@ -197,7 +199,7 @@ type FloorPlacement = Placement & {
  */
 export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyboardOptions) {
   const { t } = useTranslation()
-  const { getEndpointById } = useProjectStore()
+  const getEndpointById = useProjectStore((state) => state.getEndpointById)
   const { openDialog } = useDialogStore()
   const onDeleteFloorPlanSelection = options?.onDeleteFloorPlanSelection
   const pointerOverPlanRef = options?.pointerOverPlanRef
@@ -219,30 +221,30 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
 
   useEffect(() => {
     const getProjectFloors = (project: PlanKeyboardProject | null | undefined): Floor[] =>
-      project ? getBuildingFloorsFromProject(project) : []
+      project ? selectProjectBuildingFloors(project) : []
     const getCurrentProjectFloors = (): Floor[] =>
       getProjectFloors(useProjectStore.getState().currentProject)
     const getAllPlanWalls = (project: PlanKeyboardProject | null): Wall[] =>
       project
-        ? getCompatibilityFloorsFromProject(project).flatMap(
+        ? readLegacyCompatibilityFloors(project).flatMap(
             (floor) => floor.floorPlan?.walls ?? []
           )
         : []
     const getAllPlanDoors = (project: PlanKeyboardProject | null): Door[] =>
       project
-        ? getCompatibilityFloorsFromProject(project).flatMap(
+        ? readLegacyCompatibilityFloors(project).flatMap(
             (floor) => floor.floorPlan?.doors ?? []
           )
         : []
     const getAllPlanWindows = (project: PlanKeyboardProject | null): Window[] =>
       project
-        ? getCompatibilityFloorsFromProject(project).flatMap(
+        ? readLegacyCompatibilityFloors(project).flatMap(
             (floor) => floor.floorPlan?.windows ?? []
           )
         : []
     const getAllPlanStairs = (project: PlanKeyboardProject | null): Stair[] =>
       project
-        ? getCompatibilityFloorsFromProject(project).flatMap(
+        ? readLegacyCompatibilityFloors(project).flatMap(
             (floor) => floor.floorPlan?.stairs ?? []
           )
         : []
@@ -480,6 +482,7 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
           deleteStair,
           updateStair,
           deletePlanGraphicElement,
+          updateFloor,
           withSingleUndoEntry,
         } = useProjectStore.getState()
         const project = useProjectStore.getState().currentProject
@@ -629,7 +632,7 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
             if (toDeleteFiltered.length === 0) {
               return
             }
-            const selectedPlacementIds = new Set<string>(
+            const selectedPlacementIdSet = new Set<string>(
               toDeleteFiltered.map((p: FloorPlacement) => p.id)
             )
             const endpointIds = [
@@ -646,7 +649,7 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
               const deleteWholeEndpoint =
                 !endpointSupportsMultiplier(endpoint) ||
                 endpoint.placements.every((placement: Placement) =>
-                  selectedPlacementIds.has(placement.id)
+                  selectedPlacementIdSet.has(placement.id)
                 )
               if (deleteWholeEndpoint) endpointsToDelete.push(endpointId)
             }
@@ -663,21 +666,50 @@ export function usePlanKeyboard(activeFloorId: string | null, options?: PlanKeyb
                 endpointsToDelete,
               })
             }
-            withSingleUndoEntry(
-              () => {
-                if (placementIdsToDelete.length === 1 && endpointsToDelete.length === 0) {
-                  deletePlacement(placementIdsToDelete[0]!)
-                } else if (placementIdsToDelete.length > 0) {
-                  deletePlacements(placementIdsToDelete)
+            const selectedPlacementIds = toDeleteFiltered.map((placement) => placement.id)
+            const deleteSelection = () => {
+              withSingleUndoEntry(
+                () => {
+                  if (placementIdsToDelete.length === 1 && endpointsToDelete.length === 0) {
+                    deletePlacement(placementIdsToDelete[0]!)
+                  } else if (placementIdsToDelete.length > 0) {
+                    deletePlacements(placementIdsToDelete)
+                  }
+                  if (endpointsToDelete.length > 0) {
+                    deleteEndpoints(endpointsToDelete)
+                  }
+                  return placementIdsToDelete.length > 0 || endpointsToDelete.length > 0
+                },
+                { sessionLabel: 'delete plan selection' }
+              )
+              useUIStore.getState().clearSelection()
+            }
+            const hideSelection = () => {
+              if (activeFloorId) {
+                const floor = useProjectStore.getState().getFloorById(activeFloorId)
+                if (floor) {
+                  updateFloor(activeFloorId, {
+                    hiddenSitplanPlacementIds: mergeHiddenSituationPlanPlacementIds(
+                      floor.hiddenSitplanPlacementIds,
+                      selectedPlacementIds,
+                    ),
+                  })
                 }
-                if (endpointsToDelete.length > 0) {
-                  deleteEndpoints(endpointsToDelete)
-                }
-                return placementIdsToDelete.length > 0 || endpointsToDelete.length > 0
-              },
-              { sessionLabel: 'delete plan selection' }
-            )
-            useUIStore.getState().clearSelection()
+              }
+              useUIStore.getState().clearSelection()
+            }
+            if (
+              openSituationPlanBulkDeleteWarning({
+                projectId: project?.project.id ?? '',
+                placementIds: selectedPlacementIds,
+                t,
+                onDelete: deleteSelection,
+                onHide: hideSelection,
+              })
+            ) {
+              return
+            }
+            deleteSelection()
           } else if (selection.type === 'endpoint' || selection.type === 'panel') {
             // Delete placements and endpoints (resolve panel IDs to endpoint IDs if needed)
             e.preventDefault()

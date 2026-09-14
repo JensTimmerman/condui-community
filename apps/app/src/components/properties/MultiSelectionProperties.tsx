@@ -8,6 +8,7 @@ import {
   applyCableKindChange,
   getAcWireTypeOptions,
   getDcWireTypeOptions,
+  getWireSectionOptions,
 } from '@/lib/wires/cableWireTypes'
 import { getWireConductorOptions, resolveConductorDropdownValue } from '@/lib/wireConductorOptions'
 import {
@@ -48,7 +49,7 @@ import type {
   WireSegment,
 } from '@/types/schema'
 import type { Selection } from '@/types/ui'
-import { labelClass, selectClass } from './shared/propertiesSharedUtils'
+import { labelClass, panelStringT, selectClass } from './shared/propertiesSharedUtils'
 import {
   ApplianceTypeDropdown,
   LightPointOptionsGrid,
@@ -237,7 +238,7 @@ function ProtectionMultiEditor({ protections }: { protections: ProtectionDevice[
   const allBreakers = allTypesMatch(['MCB', 'RCBO'])
   const showBreakingCapacity = allSpd || allBreakers
   const showDeviceNotes = protections.every((item) => !item.circuits?.length)
-  const typeOptions = useMemo(() => getProtectionTypeDropdownOptions(t, 'panel'), [t])
+  const typeOptions = useMemo(() => getProtectionTypeDropdownOptions(panelStringT(t), 'panel'), [t])
   return (
     <div className="space-y-4">
       <BatchHeader count={protections.length} />
@@ -734,7 +735,7 @@ function EndpointMultiEditor({ endpoints }: { endpoints: Endpoint[] }) {
       {allSolarPanels && (
         <div className="space-y-2 border-t border-gray-200 pt-2 dark:border-gray-700">
           <MixedNumberField
-            label={t('endpoints.solarPanel.wattage', 'Wattage (W)')}
+            label={t('endpoints.solarPanel.wattage', 'Wattage (Wp)')}
             shared={shared((item) => item.solarPanelProps?.wattageW ?? 1000)}
             onCommit={(value) =>
               apply((item) => patchNested(item, 'solarPanelProps', { wattageW: value }))
@@ -933,7 +934,9 @@ function WireMultiEditor({ selection }: { selection: Selection }) {
   )
   const wireTypeOptionsByTarget = targets.map((target) =>
     target.segment.domain === 'DC'
-      ? getDcWireTypeOptions(t('wires.other', 'Other'))
+      ? getDcWireTypeOptions(t('wires.other', 'Other'), {
+          batteryCable: t('wires.batteryCable', 'Battery cable'),
+        })
       : getAcWireTypeOptions(t('wires.other', 'Other'))
   )
   const sharedWireTypeOptions = wireTypeOptionsByTarget[0]!.filter((option) =>
@@ -950,9 +953,7 @@ function WireMultiEditor({ selection }: { selection: Selection }) {
     )
   )
   const thicknessOptionsByTarget = targets.map((target) =>
-    target.segment.domain === 'DC'
-      ? [0.22, 0.34, 0.6, 0.72, 0.75, 0.8, 1, 1.5, 2.5, 4, 6, 10, 16, 25, 35, 50]
-      : [1.5, 2.5, 4, 6, 10, 16, 25, 35, 50]
+    getWireSectionOptions(target.segment.domain === 'DC')
   )
   const sharedThicknessOptions = thicknessOptionsByTarget[0]!.filter((value) =>
     thicknessOptionsByTarget.every((options) => options.includes(value))

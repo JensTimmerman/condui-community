@@ -45,7 +45,7 @@ export function endpointBranchLabelsWouldChange(circuit: Circuit, circuitCodeFor
   if (!branches?.length) return false
   for (let i = 0; i < branches.length; i++) {
     const branch = branches[i]!
-    const expected = `${code}${i + 1}`
+    const expected = getExpectedBranchLabel(circuit, code, i)
     if ((branch.label ?? '').trim() !== expected) return true
     for (const id of branch.endpointIds) {
       const ep = circuit.endpoints.find((e) => e.id === id)
@@ -53,6 +53,22 @@ export function endpointBranchLabelsWouldChange(circuit: Circuit, circuitCodeFor
     }
   }
   return false
+}
+
+/**
+ * DC-bus branches already carry their hierarchical branch number in the
+ * circuit code (for example A1.2). Do not append another flat `1` to it.
+ */
+export function getExpectedBranchLabel(
+  circuit: Circuit,
+  code: string,
+  branchIndex: number
+): string {
+  return circuit.dcBusSource && code.includes('.')
+    ? branchIndex === 0
+      ? code
+      : `${code}.${branchIndex + 1}`
+    : `${code}${branchIndex + 1}`
 }
 
 /**
@@ -68,7 +84,7 @@ export function syncSequentialEndpointBranchLabelsToCircuit(circuit: Circuit): v
   const branches = circuit.branches
   if (!branches?.length) return
   for (let i = 0; i < branches.length; i++) {
-    const label = `${code}${i + 1}`
+    const label = getExpectedBranchLabel(circuit, code, i)
     const branch = branches[i]!
     branch.label = label
     for (const id of branch.endpointIds) {

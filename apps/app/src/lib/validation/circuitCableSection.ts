@@ -9,8 +9,8 @@ import { calculateBottomUpLayout } from '@/lib/layout/bottomUpLayout'
 import { buildLayoutTree } from '@/lib/layout/layoutTree'
 import { deriveWires } from '@/lib/layout/deriveWires'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
 } from '@/lib/projectV2/electrical'
 
 /** AREI Book 1 table 4.11: max circuit-breaker rating (A) per conductor section (mm²). */
@@ -168,13 +168,13 @@ export function getCircuitSegmentsForValidation(query: InstallationQueryAPI, cir
   const storedSegments = (query.getCableSegments(circuitId) ?? []).filter((segment) => segment.circuitId === circuitId)
   let derivedSegments: WireSegment[] = []
   try {
-    const project = (query as { project?: import('@/types/schema').Project }).project
+    const project = (query as { project?: import('@/types/projectV2').ProjectV2 }).project
     if (project) {
       const layout = calculateBottomUpLayout(project, new Map())
       const tree = buildLayoutTree(layout)
-      const installation = getElectricalInstallationFromProject(project)
+      const installation = getProjectElectricalInstallation(project)
       if (installation) {
-        derivedSegments = deriveWires(tree, getElectricalPanelsFromProject(project), installation).filter(
+        derivedSegments = deriveWires(tree, getProjectElectricalPanels(project), installation).filter(
           (segment) => segment.circuitId === circuitId
         )
       }

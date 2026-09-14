@@ -1,8 +1,8 @@
 import { ensureInstallationFeedTopology } from '@/lib/feedTopology'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
-  getMutableSupplyAssembliesForProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
+  editProjectSupplyAssemblies,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { setPanelFeedOrganizationInProject } from '@/lib/panel/panelFeedOrganization'
@@ -28,9 +28,9 @@ export function disconnectSupplyInverterGridInputInProject(
   assemblyId: string,
   panelId: string
 ): boolean {
-  const installation = getElectricalInstallationFromProject(project)
-  const panels = getElectricalPanelsFromProject(project)
-  let assembly = getMutableSupplyAssembliesForProject(project).find(
+  const installation = getProjectElectricalInstallation(project)
+  const panels = getProjectElectricalPanels(project)
+  let assembly = editProjectSupplyAssemblies(project).find(
     (candidate) => candidate.id === assemblyId
   )
   if (!installation || !assembly) return false
@@ -64,7 +64,7 @@ export function disconnectSupplyInverterGridInputInProject(
 
   // Split-feed setup may normalize/replace topology records. Resolve the canonical
   // records again before persisting the intentional disconnect.
-  assembly = getMutableSupplyAssembliesForProject(project).find(
+  assembly = editProjectSupplyAssemblies(project).find(
     (candidate) => candidate.id === assemblyId
   )
   topology = ensureInstallationFeedTopology(installation, panels)

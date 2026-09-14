@@ -8,6 +8,7 @@ import {
   applyCableKindChange,
   getAcWireTypeOptions,
   getDcWireTypeOptions,
+  getWireSectionOptions,
 } from '@/lib/wires/cableWireTypes'
 import { getWireConductorOptions, resolveConductorDropdownValue } from '@/lib/wireConductorOptions'
 import {
@@ -236,11 +237,11 @@ export function WireRouteAndCableForm({
   const selectedConductorValue = resolveConductorDropdownValue(state.cable, isDC)
 
   const wireTypes = isDC
-    ? getDcWireTypeOptions(t('wires.other', 'Other'))
+    ? getDcWireTypeOptions(t('wires.other', 'Other'), {
+        batteryCable: t('wires.batteryCable', 'Battery cable'),
+      })
     : getAcWireTypeOptions(t('wires.other', 'Other'))
-  const thicknessOptions = isDC
-    ? [0.22, 0.34, 0.6, 0.72, 0.75, 0.8, 1, 1.5, 2.5, 4, 6, 10, 16, 25, 35, 50]
-    : [1.5, 2.5, 4, 6, 10, 16, 25, 35, 50]
+  const thicknessOptions = getWireSectionOptions(isDC)
   const fireClassOptions: Array<NonNullable<CableSpec['fireClass']>> = [
     'Aca',
     'B1ca',

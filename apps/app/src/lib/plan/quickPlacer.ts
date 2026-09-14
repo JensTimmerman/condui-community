@@ -2,11 +2,11 @@ import { groupEndpointsIntoBranches, initializeBranchesIfNeeded } from '@/lib/la
 import { getMainBusOrder } from '@/lib/eendraad/mainBusOrder'
 import { hasCustomPlacement } from '@/lib/plan/customPlacement'
 import {
-  getBuildingFloorsFromProject,
+  selectProjectBuildingFloors,
   type ProjectWithOptionalV2Building,
 } from '@/lib/projectV2/buildingFloors'
 import {
-  getElectricalPanelsFromProject,
+  selectProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import type { Circuit, Endpoint, Panel, ProtectionDevice, Placement } from '@/types/schema'
@@ -174,7 +174,7 @@ export function buildQuickPlacerCircuits(
   if (!project) return []
 
   const floorNameById = new Map(
-    getBuildingFloorsFromProject(project).map((floor) => [floor.id, floor.name])
+    selectProjectBuildingFloors(project).map((floor) => [floor.id, floor.name])
   )
 
   const orderedCircuits: Array<{
@@ -183,7 +183,7 @@ export function buildQuickPlacerCircuits(
     panelPath: Panel[]
     protection?: ProtectionDevice
   }> = []
-  for (const rootPanel of getElectricalPanelsFromProject(project)) {
+  for (const rootPanel of selectProjectElectricalPanels(project)) {
     appendQuickPlacerCircuits(rootPanel, orderedCircuits)
   }
 

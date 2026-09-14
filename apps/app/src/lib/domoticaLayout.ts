@@ -8,6 +8,8 @@ export const DOMOTICA_BASE_HEIGHT = 26
 export const DOMOTICA_OUTPUT_SPACING = 20
 export const DOMOTICA_BRANCH_LEAD = 25
 export const DOMOTICA_BRANCH_CONTROL_LEAD = 15
+/** Gap between the rightmost output symbol and its row label. */
+export const DOMOTICA_CHILD_LABEL_GAP = 8
 export const DOMOTICA_ENDPOINT_OUTPUT_START_Y = 0
 export const DOMOTICA_CONTROL_OUTPUT_Y = 0
 export const DOMOTICA_MIN_ENDPOINT_OUTPUTS = 1

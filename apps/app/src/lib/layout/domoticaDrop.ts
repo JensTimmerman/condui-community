@@ -28,7 +28,7 @@ export function getDomoticaDropContextForCircuit(
     return null
   }
   const parent = circuit.endpoints.find((e) => e.id === dropTarget.endpointId)
-  if (!parent || parent.symbol !== 'domotica' || parent.domoticaChildProps) {
+  if (!parent || parent.symbol !== 'domotica') {
     return null
   }
   return {

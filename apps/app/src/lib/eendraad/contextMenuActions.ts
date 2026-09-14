@@ -8,6 +8,7 @@ import type { Point } from '@/types/ui'
 import type { Selection } from '@/types/ui'
 import type { Endpoint, TrunkDevice, Circuit, ProtectionDevice, Panel } from '@/types/schema'
 import { generateId } from '@/utils'
+import { clonePlacementsForDuplicate } from '@/lib/eendraad/duplicateSitplanHelpers'
 import { useProjectStore } from '@/stores/projectStore'
 import {
   canDuplicateEendraadSelection,
@@ -24,7 +25,14 @@ export interface ProjectStoreGetters {
   getEndpointById: (id: string) => Endpoint | undefined
   getCircuitById: (id: string) => Circuit | undefined
   findCircuitForEndpoint: (endpointId: string) => { circuit: Circuit; panel: { id: string }; protection?: unknown } | undefined
-  getTrunkDeviceById: (deviceId: string) => { device: TrunkDevice; circuit: Circuit | null; isSupplyDevice?: boolean; isGroundDevice?: boolean } | undefined
+  getTrunkDeviceById: (deviceId: string) => {
+    device: TrunkDevice
+    circuit: Circuit | null
+    isSupplyDevice?: boolean
+    supplyFeedScope?: 'shared' | 'root'
+    supplyPanelId?: string
+    isGroundDevice?: boolean
+  } | undefined
   getProtectionById?: (id: string) => ProtectionDevice | undefined
   getPanelForProtection?: (protectionId: string) => Panel | undefined
   getCircuitsByPanel?: (panelId: string) => Circuit[]
@@ -35,10 +43,16 @@ export interface ProjectStoreGetters {
 
 export interface ProjectStoreActions {
   addEndpoint: (circuitId: string, endpoint: Endpoint, insertAfterEndpointId?: string | null) => void
+  syncEndpointMultiplierCount?: (endpointId: string, count: number) => boolean
   addCircuit: (panelId: string, circuit: Circuit, protectionId?: string) => void
   addTrunkDevice: (circuitId: string, device: TrunkDevice) => void
   updateTrunkDevice: (circuitId: string, deviceId: string, updates: Partial<TrunkDevice>) => void
-  addSupplyTrunkDevice: (device: TrunkDevice, insertIndex?: number) => void
+  addSupplyTrunkDevice: (
+    device: TrunkDevice,
+    insertIndex?: number,
+    target?: { panelId?: string; feedScope?: 'shared' | 'root' },
+  ) => void
+  syncSupplyDeviceMultiplierCount?: (deviceId: string, count: number) => boolean
   addGroundTrunkDevice: (device: TrunkDevice, insertIndex?: number) => void
   insertProtectionAfter: (panelId: string, protection: ProtectionDevice, afterProtectionId: string) => void
   updateCircuit: (circuitId: string, updates: Partial<Circuit>) => void
@@ -98,7 +112,13 @@ export function doEendraadPaste(
       if (devices.length === 0) return false
       const insertIndex = target.supplyDeviceInsertIndex ?? 0
       devices.forEach((r, i) => {
-        const clone: TrunkDevice = { ...JSON.parse(JSON.stringify(r.device)), id: generateId() }
+        const clone: TrunkDevice = {
+          ...JSON.parse(JSON.stringify(r.device)),
+          id: generateId(),
+          placements: r.device.placements?.length
+            ? clonePlacementsForDuplicate(r.device.placements, { symbolType: r.device.symbol })
+            : r.device.placements,
+        }
         actions.addSupplyTrunkDevice(clone, insertIndex + i)
       })
       return true
@@ -110,7 +130,13 @@ export function doEendraadPaste(
       if (devices.length === 0) return false
       const insertIndex = target.groundDeviceInsertIndex ?? 0
       devices.forEach((r, i) => {
-        const clone: TrunkDevice = { ...JSON.parse(JSON.stringify(r.device)), id: generateId() }
+        const clone: TrunkDevice = {
+          ...JSON.parse(JSON.stringify(r.device)),
+          id: generateId(),
+          placements: r.device.placements?.length
+            ? clonePlacementsForDuplicate(r.device.placements, { symbolType: r.device.symbol })
+            : r.device.placements,
+        }
         actions.addGroundTrunkDevice(clone, insertIndex + i)
       })
       return true
@@ -155,6 +181,9 @@ export function doEendraadPaste(
         ...JSON.parse(JSON.stringify(r.device)),
         id: generateId(),
         trunkPosition: (r.device.trunkPosition ?? 0) + 0.5 + i,
+        placements: r.device.placements?.length
+          ? clonePlacementsForDuplicate(r.device.placements, { symbolType: r.device.symbol })
+          : r.device.placements,
       }
       actions.addTrunkDevice(circuitId, clone)
       newIds.push(clone.id)

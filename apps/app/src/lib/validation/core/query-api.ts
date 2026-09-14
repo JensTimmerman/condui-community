@@ -16,7 +16,7 @@ import type { ValidationProject } from './types'
 import { trunkDeviceCountsAsProtection } from '@/lib/protectionKind'
 import { getDerivedCircuitKind } from '@/lib/circuitKind'
 import { ProjectIndex } from './projectIndex'
-import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
+import { getProjectElectricalInstallation } from '@/lib/projectV2/electrical'
 
 export interface CircuitIdentifier {
   circuitCode: string // e.g. "A"
@@ -146,7 +146,7 @@ export class DefaultQueryAPI implements InstallationQueryAPI {
   }
 
   getMainSupplyProtections(): TrunkDevice[] {
-    const installation = getElectricalInstallationFromProject(this.project)
+    const installation = getProjectElectricalInstallation(this.project)
     return (
       installation?.mainSupply?.supplyTrunkDevices?.filter((td) =>
         trunkDeviceCountsAsProtection(td),
@@ -274,6 +274,6 @@ export class DefaultQueryAPI implements InstallationQueryAPI {
   }
 
   getSupplyOrigin(): 'grid' | 'generator' | 'pv_inverter' | 'unknown' | undefined {
-    return getElectricalInstallationFromProject(this.project)?.mainSupply.origin
+    return getProjectElectricalInstallation(this.project)?.mainSupply.origin
   }
 }

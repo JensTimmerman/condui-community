@@ -11,8 +11,8 @@ import { normalizeExportOptions, type ExportOptions } from '@/lib/export/types'
 import { buildLayoutTree } from '@/lib/layout/layoutTree'
 import { deriveWires } from '@/lib/layout/deriveWires'
 import { resolveSupplyDeviceMounting } from '@/lib/panel/auxiliarySupplyEnclosures'
-import { getElectricalInstallationFromProject, getElectricalPanelsFromProject, getSupplyAssembliesFromProject } from '@/lib/projectV2/electrical'
-import { getOneWireSegmentsFromProject } from '@/lib/projectV2/annotations'
+import { getProjectElectricalInstallation, getProjectElectricalPanels, selectProjectSupplyAssemblies } from '@/lib/projectV2/electrical'
+import { queryOneWireSegments } from '@/lib/projectV2/annotations'
 
 export function useExportDialog() {
   const { t } = useTranslation()
@@ -36,14 +36,14 @@ export function useExportDialog() {
 
     try {
       await new Promise((resolve) => requestAnimationFrame(resolve))
-      let eendraadWireSegments = getOneWireSegmentsFromProject(currentProject)
+      let eendraadWireSegments = queryOneWireSegments(currentProject)
       if (options.includeEendraad && eendraadLayout) {
         const tree = buildLayoutTree(eendraadLayout)
         eendraadWireSegments = deriveWires(
           tree,
-          getElectricalPanelsFromProject(currentProject),
-          getElectricalInstallationFromProject(currentProject),
-          getSupplyAssembliesFromProject(currentProject),
+          getProjectElectricalPanels(currentProject),
+          getProjectElectricalInstallation(currentProject),
+          selectProjectSupplyAssemblies(currentProject),
           (deviceId) => resolveSupplyDeviceMounting(currentProject, deviceId),
         )
       }

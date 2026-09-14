@@ -7,7 +7,7 @@ import { buildSitplanExportTargets } from './sitplanExportPlan'
 import { estimateEendraadPageCount } from './slicing/eendraadSlicing'
 import type { ProjectWithOptionalV2Building } from '@/lib/projectV2/buildingFloors'
 import {
-  getElectricalPanelsFromProject,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { buildPanelExportTargets, countElectricalPanels } from './exportPlan'
@@ -58,7 +58,7 @@ export function calculatePageCounts(
 
   // Calculate panel pages (1 per panel)
   if (options.includePanel === true) {
-    const projectPanels = getElectricalPanelsFromProject(project)
+    const projectPanels = getProjectElectricalPanels(project)
     panel = buildPanelExportTargets(project).length
     if (projectPanels.length > 0) {
       panel += 1
@@ -71,7 +71,7 @@ export function calculatePageCounts(
       eendraad = estimateEendraadPageCount(layout.panels)
     } else {
       // No layout available - estimate based on number of panels
-      const panelCount = countElectricalPanels(getElectricalPanelsFromProject(project))
+      const panelCount = countElectricalPanels(getProjectElectricalPanels(project))
       // Rough estimate: assume 1 page per panel (will be more accurate during actual export)
       eendraad = panelCount
     }

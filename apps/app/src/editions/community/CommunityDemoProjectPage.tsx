@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { getBuildingFloorsFromProject } from '@/lib/projectV2/buildingFloors'
+import { selectProjectBuildingFloors } from '@/lib/projectV2/buildingFloors'
 import { logger } from '@/lib/logger'
 import { startDemoProjectExpiry } from '@/lib/demoProject'
 import { preloadProjectRasterImages } from '@/lib/preloadProjectRasterImages'
@@ -94,9 +94,9 @@ export default function CommunityDemoProjectPage() {
         project.project.updatedAt = now
 
         if (cancelled) return
-        projectStore.setProject(project as unknown as import('@/types/schema').Project)
+        projectStore.setProject(project)
         useValidationStore.getState().markProjectOpened()
-        ui.setActiveFloor(getBuildingFloorsFromProject(project)[0]?.id ?? null)
+        ui.setActiveFloor(selectProjectBuildingFloors(project)[0]?.id ?? null)
         await preloadProjectRasterImages(project, { concurrency: 2, signal: decodeAbort.signal })
         if (cancelled || useProjectStore.getState().currentProject?.project.id !== demoProjectId) return
         await waitForOpenShellSettle()

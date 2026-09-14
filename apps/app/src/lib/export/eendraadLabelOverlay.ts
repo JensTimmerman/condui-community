@@ -382,7 +382,10 @@ export function collectEendraadWireLabelOverlays(
     if ((wireSegment.diagramId ?? wireSegment.panelId) !== diagramId) continue
     if (!isWireLabelVisibleForSegment(wireSegment)) continue
 
-    const mainText = formatWireLabel(wireSegment, { otherLabel: i18n.t('wires.other') })
+    const mainText = formatWireLabel(wireSegment, {
+      otherLabel: i18n.t('wires.other'),
+      batteryCableLabel: i18n.t('wires.batteryCable', 'Battery cable'),
+    })
     const fireClassText = isFireClassLabelVisibleForSegment(wireSegment)
       ? getWireFireClassLabel(wireSegment.cable)
       : undefined
@@ -687,7 +690,29 @@ export function isOverlayVisibleInClip(
     }
     case 'subpanel-tag':
       return pointOverlapsRect(overlay.x, overlay.y, clipRect)
-    case 'circuit-note':
+    case 'circuit-note': {
+      const textWidth = estimateOverlayTextWidthPx(overlay)
+      const textHeight = estimateOverlayTextHeightPx(overlay)
+
+      // Circuit-note placements are line-level anchors. Horizontal lines use a
+      // left/center anchor at the visual midpoint; rotated lines use a left edge
+      // plus a middle baseline before the -90° transform. Keep the bbox in the
+      // same scene space as the slice clip so notes crossing a page seam remain
+      // eligible for the adjacent slice.
+      if ((overlay.rotationDeg ?? 0) !== 0) {
+        return segmentBoundsOverlapRect(
+          { x: overlay.x - textHeight / 2, y: overlay.y - textWidth },
+          { x: overlay.x + textHeight / 2, y: overlay.y },
+          clipRect,
+        )
+      }
+
+      return segmentBoundsOverlapRect(
+        { x: overlay.x, y: overlay.y - textHeight / 2 },
+        { x: overlay.x + textWidth, y: overlay.y + textHeight / 2 },
+        clipRect,
+      )
+    }
     case 'free-note':
     case 'other':
       break

@@ -51,7 +51,7 @@ export {
 }
 
 export function getProtectionTypeDropdownOptions(
-  t: TFunction,
+  t: (key: string, defaultValue?: string) => string,
   variant: 'panel' | 'supplyTrunk',
 ): CustomDropdownOption[] {
   let devices = getSymbolsByCategory('protection')

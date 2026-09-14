@@ -3,8 +3,8 @@ import { normalizeNominalVoltageSystem } from '@/constants/nominalVoltage'
 import type { EarthingSystemType, Installation, Panel } from '@/types/schema'
 import { resolveEffectiveEarthingSystem } from '@/lib/panel/panelEarthingSync'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import type { ProjectWithOptionalV2Building } from '@/lib/projectV2/buildingFloors'
@@ -123,8 +123,9 @@ export function getPanelFrameTitlePadding(
   options: { frameRole?: 'panel' | 'supply'; backupFeedActive?: boolean } = {}
 ): number {
   const project: PanelDiagramProject = {
-    installation,
-    panels: rootPanels,
+    disciplines: {
+      electrical: { installation, panels: rootPanels, devices: [], oneWire: {} },
+    },
     project: { locale: 'nl-BE' },
   }
   const translate = ((key, opts) => {
@@ -165,11 +166,11 @@ export function buildPanelDiagramHeaderLines(
   options: PanelDiagramHeaderOptions
 ): PanelDiagramHeaderLine[] {
   const displayName = getPanelDisplayName(panel, project)
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   if (!installation) {
     return [{ text: displayName, variant: 'title' }]
   }
-  const rootPanels = getElectricalPanelsFromProject(project)
+  const rootPanels = getProjectElectricalPanels(project)
   const numberingActive =
     !options.suppressNumbering && isPanelNumberingActive(installation, options.advancedLabelsEnabled)
   const netLabelsActive = isPanelNetLabelsActive(installation, options.advancedLabelsEnabled)
@@ -284,7 +285,7 @@ export function buildSupplyDiagramHeaderLines(
   t: TFunction,
   options: Pick<PanelDiagramHeaderOptions, 'advancedLabelsEnabled' | 'backupFeedActive'>
 ): PanelDiagramHeaderLine[] {
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   const lines: PanelDiagramHeaderLine[] = [
     { text: t('canvas.supplyFrame.title', 'Supply'), variant: 'title' },
   ]
@@ -294,7 +295,7 @@ export function buildSupplyDiagramHeaderLines(
 
   const primaryEarthing = resolveEffectiveEarthingSystem(
     panel,
-    getElectricalPanelsFromProject(project)
+    getProjectElectricalPanels(project)
   )
   const backupEarthing =
     options.backupFeedActive !== false ? panel.backupEarthingSystem : undefined
@@ -338,11 +339,11 @@ export function getPanelSymbolLabel(
   advancedLabelsEnabled: boolean
 ): string {
   const displayName = getPanelDisplayName(panel, project)
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   if (!installation || !isPanelNumberingActive(installation, advancedLabelsEnabled)) {
     return displayName
   }
-  const index = buildPanelNumberIndexById(getElectricalPanelsFromProject(project)).get(panel.id)
+  const index = buildPanelNumberIndexById(getProjectElectricalPanels(project)).get(panel.id)
   if (index == null) return displayName
   return `${formatPanelCode(index)}  ${displayName}`
 }

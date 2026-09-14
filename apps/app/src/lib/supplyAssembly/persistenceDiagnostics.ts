@@ -1,6 +1,6 @@
 import {
-  getElectricalInstallationFromProject,
-  getSupplyAssembliesFromProject,
+  getProjectElectricalInstallation,
+  selectProjectSupplyAssemblies,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 
@@ -9,7 +9,7 @@ const DC_SUPPLY_PATHS = new Set(['converter-dc', 'converter-dc-top'])
 export function summarizeConverterDcPersistence(
   project: ProjectWithOptionalV2Electrical
 ): Record<string, unknown> | null {
-  const topology = getElectricalInstallationFromProject(project)?.feedTopology
+  const topology = getProjectElectricalInstallation(project)?.feedTopology
   if (!topology) return null
 
   const rootFeeds = topology.rootFeeds
@@ -29,7 +29,7 @@ export function summarizeConverterDcPersistence(
   if (rootFeeds.length === 0) return null
 
   const dcDeviceIds = new Set(rootFeeds.flatMap((feed) => feed.devices.map((device) => device.id)))
-  const assemblies = getSupplyAssembliesFromProject(project).map((assembly) => ({
+  const assemblies = selectProjectSupplyAssemblies(project).map((assembly) => ({
     id: assembly.id,
     matchingNodeIds: assembly.nodes
       .filter((node) => dcDeviceIds.has(node.id))

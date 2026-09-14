@@ -7,6 +7,11 @@ import {
   getSupplyDeviceMultiplier,
   supportsSupplyDeviceMultiplier,
 } from '@/lib/supplyAssembly/inverterMultipliers'
+import {
+  getMultiplierBadgePosition,
+  getMultiplierBadgeWidth,
+  MULTIPLIER_BADGE_HEIGHT,
+} from './multiplierBadgeGeometry'
 
 export type SameSymbolAddMoreTarget =
   | { endpoint: Endpoint; trunkDevice?: never }
@@ -16,6 +21,10 @@ export interface SameSymbolAddMoreDeps {
   updateSocketCount: (endpointId: string, count: number) => void
   syncEndpointCount: (endpointId: string, count: number) => boolean
   syncSupplyDeviceCount: (deviceId: string, count: number) => boolean
+}
+
+export interface SameSymbolAddMoreUndoDeps extends SameSymbolAddMoreDeps {
+  withSingleUndoEntry: (fn: () => boolean, options?: { sessionLabel?: string }) => boolean
 }
 
 export type SameSymbolAddMoreResult = 'not-applicable' | 'incremented' | 'blocked'
@@ -45,12 +54,6 @@ export interface SameSymbolAddMoreLayoutTarget {
 }
 
 const SAME_SYMBOL_PREVIEW_SIZE = 24
-const MULTIPLIER_BADGE_FONT_SIZE = 8
-
-function multiplierBadgeWidth(count: number): number {
-  return Math.max(9, Math.ceil(`${count}x`.length * MULTIPLIER_BADGE_FONT_SIZE * 0.58))
-}
-
 function getTargetMultiplier(target: SameSymbolAddMoreTarget): number {
   if (target.endpoint) {
     if (target.endpoint.type === 'socket') return target.endpoint.socketProps?.socketCount ?? 1
@@ -59,10 +62,13 @@ function getTargetMultiplier(target: SameSymbolAddMoreTarget): number {
   return getSupplyDeviceMultiplier(target.trunkDevice)
 }
 
-function multiplierBadgePosition(target: SameSymbolAddMoreTarget, center: Point): Point {
-  return target.endpoint
-    ? { x: center.x + 8, y: center.y - 20 }
-    : { x: center.x + 21, y: center.y - 28 }
+function multiplierBadgePosition(
+  bounds: ReturnType<typeof getHitZoneBounds>,
+  count: number
+): Point {
+  // Layout nodes use center-based bounds for symbols. Their top-right corner
+  // is therefore the same anchor used by the rendered multiplier badge.
+  return getMultiplierBadgePosition({ x: bounds.right, y: bounds.top }, count)
 }
 
 function supportsSameSymbolTarget(
@@ -122,7 +128,7 @@ export function findSameSymbolAddMoreLayoutTargets(
           nodeId: node.id,
           target,
           center,
-          badgePosition: multiplierBadgePosition(target, center),
+          badgePosition: multiplierBadgePosition(bounds, getTargetMultiplier(target)),
           outline,
         })
       }
@@ -150,17 +156,13 @@ export function positionHitsMultiplierBadge(layoutTree: LayoutTree, position: Po
       const count = getTargetMultiplier(target)
       if (count > 1) {
         const bounds = getHitZoneBounds(node, 'core')
-        const center = {
-          x: (bounds.left + bounds.right) / 2,
-          y: (bounds.top + bounds.bottom) / 2,
-        }
-        const badge = multiplierBadgePosition(target, center)
-        const width = multiplierBadgeWidth(count)
+        const badge = multiplierBadgePosition(bounds, count)
+        const width = getMultiplierBadgeWidth(count)
         hit =
           position.x >= badge.x - 1 &&
           position.x <= badge.x + width + 1 &&
           position.y >= badge.y - 1 &&
-          position.y <= badge.y + MULTIPLIER_BADGE_FONT_SIZE + 3
+          position.y <= badge.y + MULTIPLIER_BADGE_HEIGHT + 1
       }
     }
     node.children.forEach(visit)
@@ -191,4 +193,25 @@ export function incrementSameSymbolAddMoreTarget(
   return deps.syncSupplyDeviceCount(device.id, getSupplyDeviceMultiplier(device) + 1)
     ? 'incremented'
     : 'blocked'
+}
+
+/** Avoid paying for a whole-project history snapshot unless this drop can add a multiplier. */
+export function incrementSameSymbolAddMoreTargetWithUndo(
+  droppedSymbolId: string,
+  target: SameSymbolAddMoreTarget | null,
+  deps: SameSymbolAddMoreUndoDeps
+): SameSymbolAddMoreResult {
+  if (!target || !canIncrementSameSymbolAddMoreTarget(droppedSymbolId, target)) {
+    return 'not-applicable'
+  }
+
+  let result: SameSymbolAddMoreResult = 'not-applicable'
+  deps.withSingleUndoEntry(
+    () => {
+      result = incrementSameSymbolAddMoreTarget(droppedSymbolId, target, deps)
+      return result === 'incremented'
+    },
+    { sessionLabel: 'add more by dropping same symbol' }
+  )
+  return result
 }

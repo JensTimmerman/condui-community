@@ -11,6 +11,7 @@
 
 import type { LightPointDeviceProps, MotionDetectorDeviceProps } from '@/types/schema'
 import { showLightPointDecentralOverlay } from '@/lib/lightPointProps'
+import { SYMBOL_SIZE } from '@/components/canvas/eendraad/canvasSymbols'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -60,7 +61,6 @@ export const MOTION_DETECTOR_GENERIC_INSETS: WireInsets = {
   left: 5.5,
   right: 5.5,
 }
-
 export const WIRE_INSETS: Record<string, WireInsets> = {
   // ── Node types ──────────────────────────────────────────
   mainBus: _,
@@ -75,6 +75,7 @@ export const WIRE_INSETS: Record<string, WireInsets> = {
   // Junction boxes
   junction_box: { top: 6, bottom: 6, left: 6, right: 6 },
   junction_panel: { top: 2, bottom: 2, left: 8, right: 8 },
+  terminal_strip: { top: 3, bottom: 3, left: 3, right: 3 },
 
   // Protection devices (mcb + rcd both resolve here, see NODE_TYPE_CATEGORY)
   protection: { top: 8, bottom: 6, left: 8, right: 6 },
@@ -111,7 +112,13 @@ export const WIRE_INSETS: Record<string, WireInsets> = {
   // Stop vertical feeders at the lower edge and horizontal feeders at the panel body.
   panel_distribution: { top: 0, bottom: 6.5, left: 12.5, right: 12.5 },
 
-  relay: { top: 6, bottom: 6, left: 8.5, right: 8.5 },
+  // Actual image size, not the larger layout slot: relay.svg body in a 48-unit viewBox.
+  relay: {
+    top: (24 - 14.2) / 48 * SYMBOL_SIZE,
+    bottom: (33.7 - 24) / 48 * SYMBOL_SIZE,
+    left: (24 - 3.2) / 48 * SYMBOL_SIZE,
+    right: (44.8 - 24) / 48 * SYMBOL_SIZE,
+  },
   // Domotica wires are fully controlled by custom geometry (deriveWires/layoutTree); no automatic insets.
   domotica: { top: 0, bottom: 0, left: 0, right: 0 },
 
@@ -205,7 +212,10 @@ export function getWireInsets(
   if (symbolId === 'light_point' && showLightPointDecentralOverlay(options.lightPointProps)) {
     return LIGHT_POINT_DECENTRAL_INSETS
   }
-  if (symbolId === 'motion_detector' && (options.motionDetectorProps?.type ?? 'spread') === 'generic') {
+  if (
+    symbolId === 'motion_detector' &&
+    (options.motionDetectorProps?.type ?? 'spread') === 'generic'
+  ) {
     return MOTION_DETECTOR_GENERIC_INSETS
   }
   if (symbolId) {

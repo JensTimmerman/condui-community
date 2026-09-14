@@ -12,6 +12,15 @@ export function isDcOnlyEndpointSymbol(symbol: SymbolMetadata): boolean {
   return symbol.id === 'solar_panel' || symbol.id === 'battery'
 }
 
+export function isEnergyConversionEndpointSymbol(symbol: string | undefined): boolean {
+  return (
+    symbol === 'transformer' ||
+    symbol === 'rectifier' ||
+    symbol === 'inverter' ||
+    symbol === 'dc_dc_converter'
+  )
+}
+
 /**
  * Compute insert position for a new endpoint on a branch (shared by drop + preview).
  */
@@ -60,9 +69,12 @@ export function computeEndpointInsertAfter(
     }
 
     const isFixedAppliance = isFixedApplianceSymbol(symbol)
-    if (branchIds?.length && isFixedAppliance && typeof target.insertAfterEndpointId === 'string') {
+    if (branchIds?.length && typeof target.insertAfterEndpointId === 'string') {
       const insertAfterEp = circuit.endpoints.find((e) => e.id === target.insertAfterEndpointId)
-      if (insertAfterEp?.type === 'socket') {
+      const isFixedAfterSocket = isFixedAppliance && insertAfterEp?.type === 'socket'
+      const isDcAfterConversion =
+        isDcOnlyEndpointSymbol(symbol) && isEnergyConversionEndpointSymbol(insertAfterEp?.symbol)
+      if (insertAfterEp && (isFixedAfterSocket || isDcAfterConversion)) {
         return { insertAfterEndpointId: insertAfterEp.id, createNewBranch: false }
       }
     }

@@ -59,6 +59,32 @@ export function assertNoHostedDxfModules(moduleIds: Iterable<string>): void {
   }
 }
 
+const electricalVisionModulePrefixes = [
+  'apps/app/src/components/vision/',
+  'apps/app/src/lib/vision/',
+] as const
+
+export function assertNoElectricalVisionModules(moduleIds: Iterable<string>): void {
+  const leaked = [...new Set(moduleIds)].filter((moduleId) =>
+    electricalVisionModulePrefixes.some((prefix) => moduleId.startsWith(prefix)),
+  )
+  if (leaked.length > 0) {
+    throw new Error(`Community build includes electrical vision module(s): ${leaked.join(', ')}`)
+  }
+}
+
+function stripDisabledElectricalVisionScanSource(source: string): string {
+  return source
+    .replace(
+      /\{\s*\/\*\s*@vision-scan-strip-start\s*\*\/\s*\}[\s\S]*?\{\s*\/\*\s*@vision-scan-strip-end\s*\*\/\s*\}/g,
+      '',
+    )
+    .replace(
+      /\/\*\s*@vision-scan-strip-start\s*\*\/[\s\S]*?\/\*\s*@vision-scan-strip-end\s*\*\//g,
+      '',
+    )
+}
+
 const aliases = {
   '@/hooks/useExportDialog': './src/editions/community/useCommunityExportDialog.tsx',
   '@/hooks/useAuthSession': './src/editions/community/communityAuthSession.ts',
@@ -105,39 +131,47 @@ function cleanOutput() {
   }
 }
 
+function createCommunitySourceBoundaryPlugin() {
+  return {
+    name: 'community-source-boundary',
+    enforce: 'pre' as const,
+    resolveId(source: string) {
+      return source === '/src/main.tsx' ? path.resolve(appRoot, 'src/main.community.tsx') : null
+    },
+    transformIndexHtml(html: string) {
+      return html.replace(
+        /<!--\s*@community-strip-start\s*-->[\s\S]*?<!--\s*@community-strip-end\s*-->/g,
+        '',
+      )
+    },
+    transform(source: string, id: string) {
+      let code = stripDisabledElectricalVisionScanSource(source)
+      code = code.replace(
+        /\/\*\s*@community-strip-start\s*\*\/[\s\S]*?\/\*\s*@community-strip-end\s*\*\//g,
+        '',
+      )
+      if (/[/\\]src[/\\].+\.[jt]sx?$/.test(id)) {
+        code = code
+          .replaceAll("from '@/hooks'", "from '@/editions/community/communityHooks'")
+          .replaceAll(
+            "from '@eendra/installer-profile'",
+            "from '@/editions/community/communityInstallerProfileModel'",
+          )
+      }
+      return code === source ? null : code
+    },
+  }
+}
+
 export default defineConfig({
   plugins: [
     {
-      name: 'community-source-boundary',
-      enforce: 'pre',
-      resolveId(source) {
-        return source === '/src/main.tsx' ? path.resolve(appRoot, 'src/main.community.tsx') : null
-      },
-      transformIndexHtml(html) {
-        return html.replace(
-          /<!--\s*@community-strip-start\s*-->[\s\S]*?<!--\s*@community-strip-end\s*-->/g,
-          '',
-        )
-      },
-      transform(source, id) {
-        let code = source.replace(
-          /\/\*\s*@community-strip-start\s*\*\/[\s\S]*?\/\*\s*@community-strip-end\s*\*\//g,
-          '',
-        )
-        if (/[/\\]src[/\\].+\.[jt]sx?$/.test(id)) {
-          code = code
-            .replaceAll("from '@/hooks'", "from '@/editions/community/communityHooks'")
-            .replaceAll(
-              "from '@eendra/installer-profile'",
-              "from '@/editions/community/communityInstallerProfileModel'",
-            )
-        }
-        return code === source ? null : code
-      },
+      ...createCommunitySourceBoundaryPlugin(),
       generateBundle() {
         const modules = normalizeCommunityModuleIds(this.getModuleIds())
         assertNoHostedTemplateModules(modules)
         assertNoHostedDxfModules(modules)
+        assertNoElectricalVisionModules(modules)
         fs.writeFileSync(
           path.resolve(appRoot, '.community-module-audit.local.json'),
           `${JSON.stringify({ modules: [...new Set(modules)] }, null, 2)}\n`,
@@ -194,6 +228,7 @@ export default defineConfig({
           "img-src 'self' data: blob:",
           "font-src 'self' data:",
           "worker-src 'self' blob:",
+          "frame-src 'self' blob:",
           "connect-src 'self'",
           "object-src 'none'",
           "base-uri 'self'",
@@ -206,6 +241,9 @@ export default defineConfig({
       },
     },
   ],
+  worker: {
+    plugins: () => [createCommunitySourceBoundaryPlugin()],
+  },
   resolve: {
     alias: {
       ...Object.fromEntries(

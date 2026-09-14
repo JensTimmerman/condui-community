@@ -10,6 +10,7 @@ import type {
   MotionDetectorType,
   PolesConfig,
   RelayControlMode,
+  RelayDeviceProps,
   SmokeDetectorType,
   SymbolKey,
 } from '@/types/schema'
@@ -67,7 +68,15 @@ export function RelayEndpointFields({
   onUpdate: (id: string, updates: Partial<Endpoint>) => void
   t: (key: string, defaultValue?: string) => string
 }) {
-  const relay = endpoint.relayProps || {}
+  return <RelayDeviceFields relay={endpoint.relayProps} onChange={(relayProps) => onUpdate(endpointId, { relayProps })} t={t} />
+}
+
+/** The same electrical relay controls serve circuit endpoints and supply trunk devices. */
+export function RelayDeviceFields({ relay = {}, onChange, t }: {
+  relay?: RelayDeviceProps
+  onChange: (relayProps: RelayDeviceProps) => void
+  t: (key: string, defaultValue?: string) => string
+}) {
   const relayControlOptions: RelayControlMode[] = [
     'standard',
     'timer',
@@ -91,9 +100,7 @@ export function RelayEndpointFields({
                 type="button"
                 onClick={() => {
                   if (isActive) return
-                  onUpdate(endpointId, {
-                    relayProps: { ...relay, control: mode },
-                  })
+                  onChange({ ...relay, control: mode })
                 }}
                 className={`flex flex-col items-center justify-center gap-1 px-2 py-2 rounded-md border-2 text-xs font-medium transition-colors ${
                   isActive
@@ -127,12 +134,21 @@ export function RelayEndpointFields({
           type="number"
           value={relay.poles ?? 1}
           onChange={(e) =>
-            onUpdate(endpointId, {
-              relayProps: { ...relay, poles: e.target.value ? Number(e.target.value) : 1 },
-            })
+            onChange({ ...relay, poles: e.target.value ? Number(e.target.value) : 1 })
           }
           min={1}
           max={4}
+          className={selectClass}
+        />
+      </div>
+      <div>
+        <label className={labelClass}>{t('endpoints.relay.maxCurrentRating', 'Max Current Rating')} (A)</label>
+        <input
+          type="number"
+          value={relay.maxCurrentRatingA ?? ''}
+          onChange={(e) => onChange({ ...relay, maxCurrentRatingA: e.target.value ? Number(e.target.value) : undefined })}
+          min={0}
+          step="any"
           className={selectClass}
         />
       </div>
@@ -1482,6 +1498,27 @@ export function EndpointCertificationSection({
         }
         visibilityToggleClass={visibilityToggleClass}
       />
+      {symbol === 'ev' ? (
+        <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+          <input
+            type="checkbox"
+            checked={endpoint.evChargerProps?.integratedDcResidualProtection ?? false}
+            onChange={(event) =>
+              onUpdate(endpointId, {
+                evChargerProps: {
+                  ...(endpoint.evChargerProps ?? {}),
+                  integratedDcResidualProtection: event.target.checked,
+                },
+              })
+            }
+            className="h-4 w-4 rounded border-gray-300 text-sky-600 focus:ring-sky-500 dark:border-gray-600 dark:bg-gray-700"
+          />
+          {t(
+            'endpoints.evCharger.integratedDcResidualProtection',
+            'Built-in DC residual-current detection (6 mA)',
+          )}
+        </label>
+      ) : null}
       {canUseSynergridList ? (
         <SynergridListPicker
           open={synergridPickerOpen}

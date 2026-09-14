@@ -8,7 +8,7 @@ import type { BottomUpLayoutResult } from '@/lib/layout/bottomUpLayout'
 
 import type { PlanGraphicExportDescriptor } from '@/lib/export/planGraphicSvgInject'
 import type { SymbolExportDescriptor } from '@/lib/export/symbolSvgInject'
-import type { ProjectWithOptionalV2Annotations } from '@/lib/projectV2/annotations'
+import type { AnnotationProject } from '@/lib/projectV2/annotations'
 import type { ProjectWithOptionalV2Building } from '@/lib/projectV2/buildingFloors'
 import type { ProjectWithOptionalV2Electrical } from '@/lib/projectV2/electrical'
 
@@ -172,7 +172,7 @@ export type ExportProjectInstallerOverride = {
 
 export type ExportProject = ProjectWithOptionalV2Electrical &
   ProjectWithOptionalV2Building &
-  ProjectWithOptionalV2Annotations & {
+  AnnotationProject & {
     project: {
       id: string
       name?: string

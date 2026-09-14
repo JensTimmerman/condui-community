@@ -14,899 +14,927 @@ import {
 import { ensureElectricalLayerOnFloor } from '@/lib/plan/floorLayers'
 import { resolvePlanWiringVisibility } from '@/lib/plan/planWiring'
 import {
+  isInverterSituationPlanPlacement,
   showSituationPlanPlacementInPanel,
   showSituationPlanPlacementOnPlan,
 } from '@/lib/plan/panelPlanPlacementVisibility'
 import {
-  getCompatibilityFloorsFromProject,
-  getPlanScaleFromProject,
-  getMutableCompatibilityFloorsForProject,
+  readLegacyCompatibilityFloors,
+  selectProjectPlanScale,
+  addBuildingFloorView,
+  mutateBuildingFloorViews,
   removeBuildingFloor,
-  reorderBuildingFloorsFromCompatibility,
-  syncBuildingFloorFromCompatibility,
-  syncFloorPlanAssetsFromCompatibility,
+  commitBuildingFloorView,
   setPlanScaleForProject,
 } from '@/lib/projectV2/buildingFloors'
 import {
-  getElectricalInstallationFromProject,
-  getMutableElectricalPanelsForProject,
+  selectProjectElectricalInstallation,
+  editProjectElectricalPanels,
 } from '@/lib/projectV2/electrical'
-import { ensureMutablePlanWiringForProject } from '@/lib/projectV2/planWiring'
+import {
+  selectProjectPlanWiringVisibility,
+  replacePlanWiringVisibilityForProject,
+} from '@/lib/projectV2/planWiring'
 import type { PlanGraphicElement, Point2, Wall } from '@/types/schema'
 import { generateId } from '@/utils/project'
 import { useUIStore } from '@/stores/uiStore'
 import { isCurvedWall } from '@/lib/plan/wallCurve'
 
 export const createBuildingFloorSlice: ProjectSliceCreator = (set, get) => ({
-    // Floor actions
-    addFloor: (floor) =>
-      set((state) => {
-        if (state.currentProject) {
-          const sharedScale = getPlanScaleFromProject(state.currentProject)
-          if (floor.scale) {
-            setPlanScaleForProject(state.currentProject, floor.scale)
-          } else if (sharedScale) {
-            floor.scale = sharedScale
-          }
-          ensureElectricalLayerOnFloor(floor)
-          getMutableCompatibilityFloorsForProject(state.currentProject).push(floor)
-          syncBuildingFloorFromCompatibility(state.currentProject, floor.id)
-          state.isDirty = true
+  // Floor actions
+  addFloor: (floor) =>
+    set((state) => {
+      if (state.currentProject) {
+        const sharedScale = selectProjectPlanScale(state.currentProject)
+        if (floor.scale) {
+          setPlanScaleForProject(state.currentProject, floor.scale)
+        } else if (sharedScale) {
+          floor.scale = sharedScale
         }
-      }),
+        ensureElectricalLayerOnFloor(floor)
+        addBuildingFloorView(state.currentProject, floor)
+        state.isDirty = true
+      }
+    }),
 
-    updateFloor: (id, updates) =>
-      set((state) => {
-        if (state.currentProject) {
-          const floor = getMutableCompatibilityFloorsForProject(state.currentProject).find((f) => f.id === id)
-          if (floor) {
-            const previouslyHidden = new Set(floor.hiddenSitplanPlacementIds ?? [])
-            Object.assign(floor, updates)
-            if (Object.prototype.hasOwnProperty.call(updates, 'hiddenSitplanPlacementIds')) {
-              const nextHiddenIds = updates.hiddenSitplanPlacementIds ?? []
-              const nextHidden = new Set(nextHiddenIds)
-              const preferredPanelId = useUIStore.getState().activePanelId
-              for (const placementId of nextHiddenIds) {
-                if (previouslyHidden.has(placementId)) continue
-                showSituationPlanPlacementInPanel(
-                  state.currentProject,
-                  placementId,
-                  preferredPanelId,
-                )
+  updateFloor: (id, updates) =>
+    set((state) => {
+      if (state.currentProject) {
+        const floor = readLegacyCompatibilityFloors(state.currentProject).find(
+          (f) => f.id === id
+        )
+        if (floor) {
+          const previouslyHidden = new Set(floor.hiddenSitplanPlacementIds ?? [])
+          Object.assign(floor, updates)
+          if (Object.prototype.hasOwnProperty.call(updates, 'hiddenSitplanPlacementIds')) {
+            const nextHiddenIds = updates.hiddenSitplanPlacementIds ?? []
+            const nextHidden = new Set(nextHiddenIds)
+            const preferredPanelId = useUIStore.getState().activePanelId
+            for (const placementId of nextHiddenIds) {
+              if (previouslyHidden.has(placementId)) continue
+              if (!isInverterSituationPlanPlacement(state.currentProject, placementId)) {
+                showSituationPlanPlacementInPanel(state.currentProject, placementId, preferredPanelId)
               }
-              for (const placementId of previouslyHidden) {
-                if (nextHidden.has(placementId)) continue
+            }
+            for (const placementId of previouslyHidden) {
+              if (nextHidden.has(placementId)) continue
+              if (!isInverterSituationPlanPlacement(state.currentProject, placementId)) {
                 showSituationPlanPlacementOnPlan(state.currentProject, placementId)
               }
             }
-            if (updates.scale) setPlanScaleForProject(state.currentProject, updates.scale)
-            ensureElectricalLayerOnFloor(floor)
-            syncBuildingFloorFromCompatibility(state.currentProject, id)
-            state.isDirty = true
           }
-        }
-      }),
-
-    updatePlanWiringVisibility: (updates) =>
-      set((state) => {
-        if (!state.currentProject) return
-        const current = ensureMutablePlanWiringForProject(state.currentProject)
-        const nextPlanWiring = {
-          ...current,
-          version: 1 as const,
-          routes: current.routes ?? [],
-          visibility: {
-            ...resolvePlanWiringVisibility(current),
-            ...updates,
-          },
-        }
-        Object.assign(current, nextPlanWiring)
-        state.currentProject.project.updatedAt = new Date().toISOString()
-        state.isDirty = true
-      }),
-
-    applyPlanRescale: (floorId, floorUpdates, placementUpdates) =>
-      set((state) => {
-        if (!state.currentProject) return
-        const floor = getMutableCompatibilityFloorsForProject(state.currentProject).find((f) => f.id === floorId)
-        if (floor) {
-          Object.assign(floor, floorUpdates)
-          if (floorUpdates.scale) setPlanScaleForProject(state.currentProject, floorUpdates.scale)
-          syncBuildingFloorFromCompatibility(state.currentProject, floorId)
-          syncFloorPlanAssetsFromCompatibility(state.currentProject)
+          if (updates.scale) setPlanScaleForProject(state.currentProject, updates.scale)
+          ensureElectricalLayerOnFloor(floor)
+          commitBuildingFloorView(state.currentProject, id, floor)
           state.isDirty = true
         }
-        if (placementUpdates.length === 0) return
-        const idToPos = new Map<string, Point2>(placementUpdates.map((u) => [u.id, u.pos]))
-        for (const panel of getMutableElectricalPanelsForProject(state.currentProject)) {
+      }
+    }),
+
+  updatePlanWiringVisibility: (updates) =>
+    set((state) => {
+      if (!state.currentProject) return
+      const currentVisibility = selectProjectPlanWiringVisibility(state.currentProject)
+      replacePlanWiringVisibilityForProject(state.currentProject, {
+        ...resolvePlanWiringVisibility({ version: 1, routes: [], visibility: currentVisibility }),
+        ...updates,
+      })
+      state.currentProject.project.updatedAt = new Date().toISOString()
+      state.isDirty = true
+    }),
+
+  applyPlanRescale: (floorId, floorUpdates, placementUpdates) =>
+    set((state) => {
+      if (!state.currentProject) return
+      const floor = readLegacyCompatibilityFloors(state.currentProject).find(
+        (f) => f.id === floorId
+      )
+      if (floor) {
+        Object.assign(floor, floorUpdates)
+        if (floorUpdates.scale) setPlanScaleForProject(state.currentProject, floorUpdates.scale)
+        commitBuildingFloorView(state.currentProject, floorId, floor)
+        state.isDirty = true
+      }
+      if (placementUpdates.length === 0) return
+      const idToPos = new Map<string, Point2>(placementUpdates.map((u) => [u.id, u.pos]))
+      for (const panel of editProjectElectricalPanels(state.currentProject)) {
+        const endpoints = getAllEndpoints(panel)
+        for (const endpoint of endpoints) {
+          for (const placement of endpoint.placements) {
+            const newPos = idToPos.get(placement.id)
+            if (newPos) {
+              placement.pos = newPos
+            }
+          }
+        }
+      }
+    }),
+
+  deleteFloor: (id) =>
+    set((state) => {
+      if (state.currentProject) {
+        const floors = readLegacyCompatibilityFloors(state.currentProject)
+        if (floors.length <= 1) return
+        const floorIndex = floors.findIndex((f) => f.id === id)
+        if (floorIndex < 0) return
+        const reassignedFloorId =
+          (floorIndex > 0 ? floors[floorIndex - 1]?.id : undefined) ??
+          floors[floorIndex + 1]?.id ??
+          floors.find((f) => f.id !== id)?.id
+
+        removeBuildingFloor(state.currentProject, id)
+        // Preserve placements by moving them to the nearest remaining floor.
+        for (const panel of editProjectElectricalPanels(state.currentProject)) {
           const endpoints = getAllEndpoints(panel)
           for (const endpoint of endpoints) {
-            for (const placement of endpoint.placements) {
-              const newPos = idToPos.get(placement.id)
-              if (newPos) {
-                placement.pos = newPos
-              }
-            }
+            if (!reassignedFloorId) continue
+            endpoint.placements = endpoint.placements.map((p) =>
+              p.floorId === id ? { ...p, floorId: reassignedFloorId } : p
+            )
           }
         }
-      }),
-
-    deleteFloor: (id) =>
-      set((state) => {
-        if (state.currentProject) {
-          const floors = getMutableCompatibilityFloorsForProject(state.currentProject)
-          if (floors.length <= 1) return
-          const floorIndex = floors.findIndex((f) => f.id === id)
-          if (floorIndex < 0) return
-          const reassignedFloorId =
-            (floorIndex > 0 ? floors[floorIndex - 1]?.id : undefined) ??
-            floors[floorIndex + 1]?.id ??
-            floors.find((f) => f.id !== id)?.id
-
-          floors.splice(0, floors.length, ...floors.filter((f) => f.id !== id))
-          removeBuildingFloor(state.currentProject, id)
-          // Preserve placements by moving them to the nearest remaining floor.
-          for (const panel of getMutableElectricalPanelsForProject(state.currentProject)) {
-            const endpoints = getAllEndpoints(panel)
-            for (const endpoint of endpoints) {
-              if (!reassignedFloorId) continue
-              endpoint.placements = endpoint.placements.map((p) =>
-                p.floorId === id ? { ...p, floorId: reassignedFloorId } : p
-              )
-            }
+        if (reassignedFloorId) {
+          const installation = selectProjectElectricalInstallation(state.currentProject)
+          for (const placement of installation?.earthingPlacements ?? []) {
+            if (placement.floorId === id) placement.floorId = reassignedFloorId
           }
-          if (reassignedFloorId) {
-            const installation = getElectricalInstallationFromProject(state.currentProject)
-            for (const placement of installation?.earthingPlacements ?? []) {
-              if (placement.floorId === id) placement.floorId = reassignedFloorId
-            }
-            for (const placement of installation?.junctionPanelPlacements ?? []) {
-              if (placement.floorId === id) placement.floorId = reassignedFloorId
-            }
+          for (const placement of installation?.junctionPanelPlacements ?? []) {
+            if (placement.floorId === id) placement.floorId = reassignedFloorId
           }
-          state.isDirty = true
         }
-        delete state.planFloorOverlayVisibleByBaseFloorId[id]
-        for (const baseId of Object.keys(state.planFloorOverlayVisibleByBaseFloorId)) {
-          const list = state.planFloorOverlayVisibleByBaseFloorId[baseId]
-          if (!list?.length) continue
-          const next = list.filter((fid) => fid !== id)
-          if (next.length === 0) delete state.planFloorOverlayVisibleByBaseFloorId[baseId]
-          else state.planFloorOverlayVisibleByBaseFloorId[baseId] = next
-        }
-        delete state.planCanvasPlanImageOffsetByFloorId[id]
-      }),
+        state.isDirty = true
+      }
+      delete state.planFloorOverlayVisibleByBaseFloorId[id]
+      for (const baseId of Object.keys(state.planFloorOverlayVisibleByBaseFloorId)) {
+        const list = state.planFloorOverlayVisibleByBaseFloorId[baseId]
+        if (!list?.length) continue
+        const next = list.filter((fid) => fid !== id)
+        if (next.length === 0) delete state.planFloorOverlayVisibleByBaseFloorId[baseId]
+        else state.planFloorOverlayVisibleByBaseFloorId[baseId] = next
+      }
+      delete state.planCanvasPlanImageOffsetByFloorId[id]
+    }),
 
-    togglePlanFloorOverlayFloor: (baseFloorId, overlayFloorId) =>
-      set((state) => {
-        if (baseFloorId === overlayFloorId) return
-        const cur = state.planFloorOverlayVisibleByBaseFloorId[baseFloorId] ?? []
-        const setIds = new Set(cur)
-        if (setIds.has(overlayFloorId)) setIds.delete(overlayFloorId)
-        else setIds.add(overlayFloorId)
-        const next = [...setIds]
-        if (next.length === 0) delete state.planFloorOverlayVisibleByBaseFloorId[baseFloorId]
-        else state.planFloorOverlayVisibleByBaseFloorId[baseFloorId] = next
-      }),
+  togglePlanFloorOverlayFloor: (baseFloorId, overlayFloorId) =>
+    set((state) => {
+      if (baseFloorId === overlayFloorId) return
+      const cur = state.planFloorOverlayVisibleByBaseFloorId[baseFloorId] ?? []
+      const setIds = new Set(cur)
+      if (setIds.has(overlayFloorId)) setIds.delete(overlayFloorId)
+      else setIds.add(overlayFloorId)
+      const next = [...setIds]
+      if (next.length === 0) delete state.planFloorOverlayVisibleByBaseFloorId[baseFloorId]
+      else state.planFloorOverlayVisibleByBaseFloorId[baseFloorId] = next
+    }),
 
-    ensurePlanReferenceOverlayAboveInList: (baseFloorId) =>
-      set((state) => {
-        if (!state.currentProject) return
-        const floors = getMutableCompatibilityFloorsForProject(state.currentProject)
-        const cur = state.planFloorOverlayVisibleByBaseFloorId[baseFloorId] ?? []
-        if (cur.length > 0) return
-        const defaultOverlayFloorId = pickDefaultPlanReferenceOverlayFloor(floors, baseFloorId)
-        if (!defaultOverlayFloorId) return
-        state.planFloorOverlayVisibleByBaseFloorId[baseFloorId] = [defaultOverlayFloorId]
-      }),
+  ensurePlanReferenceOverlayAboveInList: (baseFloorId) =>
+    set((state) => {
+      if (!state.currentProject) return
+      const floors = readLegacyCompatibilityFloors(state.currentProject)
+      const cur = state.planFloorOverlayVisibleByBaseFloorId[baseFloorId] ?? []
+      if (cur.length > 0) return
+      const defaultOverlayFloorId = pickDefaultPlanReferenceOverlayFloor(floors, baseFloorId)
+      if (!defaultOverlayFloorId) return
+      state.planFloorOverlayVisibleByBaseFloorId[baseFloorId] = [defaultOverlayFloorId]
+    }),
 
-    setPlanCanvasPlanImageOffset: (floorId, pos) =>
-      set((state) => {
-        state.planCanvasPlanImageOffsetByFloorId[floorId] = { x: pos.x, y: pos.y }
-      }),
+  setPlanCanvasPlanImageOffset: (floorId, pos) =>
+    set((state) => {
+      state.planCanvasPlanImageOffsetByFloorId[floorId] = { x: pos.x, y: pos.y }
+    }),
 
-    reorderFloors: (fromIndex, toIndex) =>
-      set((state) => {
-        if (!state.currentProject || fromIndex === toIndex) return
-        const floors = getMutableCompatibilityFloorsForProject(state.currentProject)
+  reorderFloors: (fromIndex, toIndex) =>
+    set((state) => {
+      if (!state.currentProject || fromIndex === toIndex) return
+      const reordered = mutateBuildingFloorViews(state.currentProject, (floors) => {
         if (fromIndex < 0 || fromIndex >= floors.length || toIndex < 0 || toIndex >= floors.length)
           return
         const [removed] = floors.splice(fromIndex, 1)
         floors.splice(toIndex, 0, removed!)
-        reorderBuildingFloorsFromCompatibility(state.currentProject)
-        state.isDirty = true
-      }),
+      })
+      if (
+        fromIndex < 0 ||
+        fromIndex >= reordered.length ||
+        toIndex < 0 ||
+        toIndex >= reordered.length
+      )
+        return
+      state.isDirty = true
+    }),
 
-    // Floor plan actions
-    addWall: (floorId, wall) =>
-      set((state) => {
-        if (state.currentProject) {
-          const floor = getMutableCompatibilityFloorsForProject(state.currentProject).find((f) => f.id === floorId)
-          if (floor) {
-            if (!floor.floorPlan) {
-              floor.floorPlan = {
-                walls: [],
-                doors: [],
-                windows: [],
-                stairs: [],
-                graphicElements: [],
-                masterWallThickness: 20,
-              }
+  // Floor plan actions
+  addWall: (floorId, wall) =>
+    set((state) => {
+      if (state.currentProject) {
+        const floor = readLegacyCompatibilityFloors(state.currentProject).find(
+          (f) => f.id === floorId
+        )
+        if (floor) {
+          if (!floor.floorPlan) {
+            floor.floorPlan = {
+              walls: [],
+              doors: [],
+              windows: [],
+              stairs: [],
+              graphicElements: [],
+              masterWallThickness: 20,
             }
-            const DEDUP_THRESHOLD = 1.0
-            const isDuplicate = !wall.curve && floor.floorPlan.walls.some((existing) => {
-              if (isCurvedWall(existing) || existing.points.length !== wall.points.length) return false
+          }
+          const DEDUP_THRESHOLD = 1.0
+          const isDuplicate =
+            !wall.curve &&
+            floor.floorPlan.walls.some((existing) => {
+              if (isCurvedWall(existing) || existing.points.length !== wall.points.length)
+                return false
               const n = wall.points.length
               const allMatch = (forward: boolean) =>
                 wall.points.every((p, i) => {
                   const q = existing.points[forward ? i : n - 1 - i]!
-                  return Math.abs(p.x - q.x) <= DEDUP_THRESHOLD && Math.abs(p.y - q.y) <= DEDUP_THRESHOLD
+                  return (
+                    Math.abs(p.x - q.x) <= DEDUP_THRESHOLD && Math.abs(p.y - q.y) <= DEDUP_THRESHOLD
+                  )
                 })
               return allMatch(true) || allMatch(false)
             })
-            if (isDuplicate) return
-            floor.floorPlan.walls.push({
-              ...wall,
-              id: generateId(),
-            })
-            state.isDirty = true
-          }
+          if (isDuplicate) return
+          floor.floorPlan.walls.push({
+            ...wall,
+            id: generateId(),
+          })
+          commitBuildingFloorView(state.currentProject, floor.id, floor)
+          state.isDirty = true
         }
-      }),
+      }
+    }),
 
-    updateWall: (wallId, updates) =>
-      set((state) => {
-        if (state.currentProject) {
-          for (const floor of getMutableCompatibilityFloorsForProject(state.currentProject)) {
-            if (floor.floorPlan) {
-              const wall = floor.floorPlan.walls.find((w) => w.id === wallId)
-              if (wall) {
-                const payload = updates as Partial<Wall> & {
-                  doorUpdates?: Array<{ id: string; position: number }>
-                  windowUpdates?: Array<{ id: string; position: number }>
-                }
-                const updateKeys = Object.keys(payload)
-                const passedDoorUpdates = payload.doorUpdates
-                const passedWindowUpdates = payload.windowUpdates
-                const { doorUpdates: _du, windowUpdates: _wu, ...wallUpdates } = payload
-                const hadPointsUpdate = wallUpdates.points != null && wallUpdates.points.length >= 2
-                const oldPoints = hadPointsUpdate ? wall.points : null
-                const doorsBefore = floor.floorPlan.doors
-                  .filter((d) => d.wallId === wallId)
-                  .map((d) => ({ id: d.id, position: d.position }))
-                const windowsBefore = floor.floorPlan.windows
-                  .filter((w) => w.wallId === wallId)
-                  .map((w) => ({ id: w.id, position: w.position }))
-                Object.assign(wall, wallUpdates)
-                if (hadPointsUpdate && wall.points.length >= 2 && oldPoints) {
-                  // Only recompute opening positions when the caller explicitly passed door/window updates
-                  // (e.g. vertex drag with constraints). Whole-shape move only sends { points } – openings
-                  // are relative to the path, so we leave them unchanged.
-                  const callerSentOpeningUpdates =
-                    (passedDoorUpdates?.length ?? 0) > 0 || (passedWindowUpdates?.length ?? 0) > 0
-                  logger.info('[updateWall]', {
-                    wallId,
-                    updateKeys,
-                    hadPointsUpdate: true,
-                    callerSentOpeningUpdates,
-                    doorsBefore,
-                    windowsBefore,
-                  })
-                  if (callerSentOpeningUpdates) {
-                    const wallDoors = floor.floorPlan.doors.filter((d) => d.wallId === wallId)
-                    const wallWindows = floor.floorPlan.windows.filter((w) => w.wallId === wallId)
-                    for (const u of passedDoorUpdates ?? []) {
-                      const d = floor.floorPlan!.doors.find((x) => x.id === u.id)
-                      if (d) d.position = u.position
-                    }
-                    for (const u of passedWindowUpdates ?? []) {
-                      const w = floor.floorPlan!.windows.find((x) => x.id === u.id)
-                      if (w) w.position = u.position
-                    }
-                    const excludeIds = new Set([
-                      ...(passedDoorUpdates ?? []).map((u) => u.id),
-                      ...(passedWindowUpdates ?? []).map((u) => u.id),
-                    ])
-                    const { doorUpdates: preservedDoors, windowUpdates: preservedWindows } =
-                      preserveOpeningPositionsAfterPointChange(
-                        oldPoints,
-                        wall.points,
-                        wallDoors,
-                        wallWindows,
-                        excludeIds
-                      )
-                    for (const u of preservedDoors) {
-                      const d = floor.floorPlan!.doors.find((x) => x.id === u.id)
-                      if (d) d.position = u.position
-                    }
-                    for (const u of preservedWindows) {
-                      const w = floor.floorPlan!.windows.find((x) => x.id === u.id)
-                      if (w) w.position = u.position
-                    }
-                    const finalWallDoors = floor.floorPlan.doors.filter((d) => d.wallId === wallId)
-                    const finalWallWindows = floor.floorPlan.windows.filter(
-                      (w) => w.wallId === wallId
-                    )
-                    recomputeOpeningLocalFromNormalized(
+  updateWall: (wallId, updates) =>
+    set((state) => {
+      if (state.currentProject) {
+        for (const floor of readLegacyCompatibilityFloors(state.currentProject)) {
+          if (floor.floorPlan) {
+            const wall = floor.floorPlan.walls.find((w) => w.id === wallId)
+            if (wall) {
+              const payload = updates as Partial<Wall> & {
+                doorUpdates?: Array<{ id: string; position: number }>
+                windowUpdates?: Array<{ id: string; position: number }>
+              }
+              const updateKeys = Object.keys(payload)
+              const passedDoorUpdates = payload.doorUpdates
+              const passedWindowUpdates = payload.windowUpdates
+              const { doorUpdates: _du, windowUpdates: _wu, ...wallUpdates } = payload
+              const hadPointsUpdate = wallUpdates.points != null && wallUpdates.points.length >= 2
+              const oldPoints = hadPointsUpdate ? wall.points : null
+              const doorsBefore = floor.floorPlan.doors
+                .filter((d) => d.wallId === wallId)
+                .map((d) => ({ id: d.id, position: d.position }))
+              const windowsBefore = floor.floorPlan.windows
+                .filter((w) => w.wallId === wallId)
+                .map((w) => ({ id: w.id, position: w.position }))
+              Object.assign(wall, wallUpdates)
+              if (hadPointsUpdate && wall.points.length >= 2 && oldPoints) {
+                // Only recompute opening positions when the caller explicitly passed door/window updates
+                // (e.g. vertex drag with constraints). Whole-shape move only sends { points } – openings
+                // are relative to the path, so we leave them unchanged.
+                const callerSentOpeningUpdates =
+                  (passedDoorUpdates?.length ?? 0) > 0 || (passedWindowUpdates?.length ?? 0) > 0
+                logger.info('[updateWall]', {
+                  wallId,
+                  updateKeys,
+                  hadPointsUpdate: true,
+                  callerSentOpeningUpdates,
+                  doorsBefore,
+                  windowsBefore,
+                })
+                if (callerSentOpeningUpdates) {
+                  const wallDoors = floor.floorPlan.doors.filter((d) => d.wallId === wallId)
+                  const wallWindows = floor.floorPlan.windows.filter((w) => w.wallId === wallId)
+                  for (const u of passedDoorUpdates ?? []) {
+                    const d = floor.floorPlan!.doors.find((x) => x.id === u.id)
+                    if (d) d.position = u.position
+                  }
+                  for (const u of passedWindowUpdates ?? []) {
+                    const w = floor.floorPlan!.windows.find((x) => x.id === u.id)
+                    if (w) w.position = u.position
+                  }
+                  const excludeIds = new Set([
+                    ...(passedDoorUpdates ?? []).map((u) => u.id),
+                    ...(passedWindowUpdates ?? []).map((u) => u.id),
+                  ])
+                  const { doorUpdates: preservedDoors, windowUpdates: preservedWindows } =
+                    preserveOpeningPositionsAfterPointChange(
+                      oldPoints,
                       wall.points,
-                      finalWallDoors,
-                      finalWallWindows
+                      wallDoors,
+                      wallWindows,
+                      excludeIds
                     )
+                  for (const u of preservedDoors) {
+                    const d = floor.floorPlan!.doors.find((x) => x.id === u.id)
+                    if (d) d.position = u.position
                   }
+                  for (const u of preservedWindows) {
+                    const w = floor.floorPlan!.windows.find((x) => x.id === u.id)
+                    if (w) w.position = u.position
+                  }
+                  const finalWallDoors = floor.floorPlan.doors.filter((d) => d.wallId === wallId)
+                  const finalWallWindows = floor.floorPlan.windows.filter(
+                    (w) => w.wallId === wallId
+                  )
+                  recomputeOpeningLocalFromNormalized(wall.points, finalWallDoors, finalWallWindows)
                 }
-                const doorsAfter = floor.floorPlan.doors
-                  .filter((d) => d.wallId === wallId)
-                  .map((d) => ({ id: d.id, position: d.position }))
-                const windowsAfter = floor.floorPlan.windows
-                  .filter((w) => w.wallId === wallId)
-                  .map((w) => ({ id: w.id, position: w.position }))
-                const doorPositionsChanged =
-                  JSON.stringify(doorsBefore) !== JSON.stringify(doorsAfter)
-                const windowPositionsChanged =
-                  JSON.stringify(windowsBefore) !== JSON.stringify(windowsAfter)
-                if (doorPositionsChanged || windowPositionsChanged) {
-                  logger.info('[updateWall] openings changed', { wallId, doorsAfter, windowsAfter })
-                }
-                state.isDirty = true
-                return
               }
+              const doorsAfter = floor.floorPlan.doors
+                .filter((d) => d.wallId === wallId)
+                .map((d) => ({ id: d.id, position: d.position }))
+              const windowsAfter = floor.floorPlan.windows
+                .filter((w) => w.wallId === wallId)
+                .map((w) => ({ id: w.id, position: w.position }))
+              const doorPositionsChanged =
+                JSON.stringify(doorsBefore) !== JSON.stringify(doorsAfter)
+              const windowPositionsChanged =
+                JSON.stringify(windowsBefore) !== JSON.stringify(windowsAfter)
+              if (doorPositionsChanged || windowPositionsChanged) {
+                logger.info('[updateWall] openings changed', { wallId, doorsAfter, windowsAfter })
+              }
+              commitBuildingFloorView(state.currentProject, floor.id, floor)
+              state.isDirty = true
+              return
             }
           }
         }
-      }),
+      }
+    }),
 
-    deleteWall: (wallId) =>
-      set((state) => {
-        if (state.currentProject) {
-          for (const floor of getMutableCompatibilityFloorsForProject(state.currentProject)) {
-            if (floor.floorPlan) {
-              const wallIndex = floor.floorPlan.walls.findIndex((w) => w.id === wallId)
-              if (wallIndex !== -1) {
-                // Also delete doors and windows on this wall
-                floor.floorPlan.doors = floor.floorPlan.doors.filter((d) => d.wallId !== wallId)
-                floor.floorPlan.windows = floor.floorPlan.windows.filter((w) => w.wallId !== wallId)
-                // Remove attachments from other walls that reference this wall
-                for (const otherWall of floor.floorPlan.walls) {
-                  if (otherWall.attachedPoints) {
-                    otherWall.attachedPoints = otherWall.attachedPoints.filter(
-                      (ap) => ap.wallId !== wallId
-                    )
-                  }
-                }
-                floor.floorPlan.walls.splice(wallIndex, 1)
-                state.isDirty = true
-                return
-              }
-            }
-          }
-        }
-      }),
-
-    deleteWalls: (wallIds) =>
-      set((state) => {
-        if (state.currentProject) {
-          const wallIdSet = new Set(wallIds)
-          for (const floor of getMutableCompatibilityFloorsForProject(state.currentProject)) {
-            if (floor.floorPlan) {
-              // Delete doors and windows on these walls
-              floor.floorPlan.doors = floor.floorPlan.doors.filter((d) => !wallIdSet.has(d.wallId))
-              floor.floorPlan.windows = floor.floorPlan.windows.filter(
-                (w) => !wallIdSet.has(w.wallId)
-              )
-              // Remove attachments from other walls
+  deleteWall: (wallId) =>
+    set((state) => {
+      if (state.currentProject) {
+        for (const floor of readLegacyCompatibilityFloors(state.currentProject)) {
+          if (floor.floorPlan) {
+            const wallIndex = floor.floorPlan.walls.findIndex((w) => w.id === wallId)
+            if (wallIndex !== -1) {
+              // Also delete doors and windows on this wall
+              floor.floorPlan.doors = floor.floorPlan.doors.filter((d) => d.wallId !== wallId)
+              floor.floorPlan.windows = floor.floorPlan.windows.filter((w) => w.wallId !== wallId)
+              // Remove attachments from other walls that reference this wall
               for (const otherWall of floor.floorPlan.walls) {
                 if (otherWall.attachedPoints) {
                   otherWall.attachedPoints = otherWall.attachedPoints.filter(
-                    (ap) => !wallIdSet.has(ap.wallId)
+                    (ap) => ap.wallId !== wallId
                   )
                 }
               }
-              floor.floorPlan.walls = floor.floorPlan.walls.filter((w) => !wallIdSet.has(w.id))
+              floor.floorPlan.walls.splice(wallIndex, 1)
+              commitBuildingFloorView(state.currentProject, floor.id, floor)
               state.isDirty = true
+              return
             }
           }
         }
-      }),
+      }
+    }),
 
-    mergeWallPoints: (floorId, wallId1, pointIndex1, wallId2, pointIndex2) => {
-      const state = get()
-      const floor = state.currentProject
-        ? getMutableCompatibilityFloorsForProject(state.currentProject).find((f) => f.id === floorId)
-        : undefined
-      if (!floor?.floorPlan) return false
-      const walls = floor.floorPlan.walls
-      const wall1 = walls.find((w) => w.id === wallId1)
-      const wall2 = walls.find((w) => w.id === wallId2)
-      if (!wall1 || !wall2 || wall1.points.length < 2 || wall2.points.length < 2) return false
-      // Curves remain standalone entities; their middle point is a geometric control, not a join vertex.
-      if (isCurvedWall(wall1) || isCurvedWall(wall2)) return false
+  deleteWalls: (wallIds) =>
+    set((state) => {
+      if (state.currentProject) {
+        const wallIdSet = new Set(wallIds)
+        for (const floor of readLegacyCompatibilityFloors(state.currentProject)) {
+          if (floor.floorPlan) {
+            // Delete doors and windows on these walls
+            floor.floorPlan.doors = floor.floorPlan.doors.filter((d) => !wallIdSet.has(d.wallId))
+            floor.floorPlan.windows = floor.floorPlan.windows.filter(
+              (w) => !wallIdSet.has(w.wallId)
+            )
+            // Remove attachments from other walls
+            for (const otherWall of floor.floorPlan.walls) {
+              if (otherWall.attachedPoints) {
+                otherWall.attachedPoints = otherWall.attachedPoints.filter(
+                  (ap) => !wallIdSet.has(ap.wallId)
+                )
+              }
+            }
+            floor.floorPlan.walls = floor.floorPlan.walls.filter((w) => !wallIdSet.has(w.id))
+            commitBuildingFloorView(state.currentProject, floor.id, floor)
+            state.isDirty = true
+          }
+        }
+      }
+    }),
 
-      const p1 = wall1.points[pointIndex1]
-      const p2 = wall2.points[pointIndex2]
-      if (!p1 || !p2) return false
+  mergeWallPoints: (floorId, wallId1, pointIndex1, wallId2, pointIndex2) => {
+    const state = get()
+    const floor = state.currentProject
+      ? readLegacyCompatibilityFloors(state.currentProject).find((f) => f.id === floorId)
+      : undefined
+    if (!floor?.floorPlan) return false
+    const walls = floor.floorPlan.walls
+    const wall1 = walls.find((w) => w.id === wallId1)
+    const wall2 = walls.find((w) => w.id === wallId2)
+    if (!wall1 || !wall2 || wall1.points.length < 2 || wall2.points.length < 2) return false
+    // Curves remain standalone entities; their middle point is a geometric control, not a join vertex.
+    if (isCurvedWall(wall1) || isCurvedWall(wall2)) return false
 
-      const MERGE_THRESHOLD = 1.0
-      const dx = p2.x - p1.x
-      const dy = p2.y - p1.y
-      if (Math.sqrt(dx * dx + dy * dy) > MERGE_THRESHOLD) return false
+    const p1 = wall1.points[pointIndex1]
+    const p2 = wall2.points[pointIndex2]
+    if (!p1 || !p2) return false
 
-      const mergedPoint: Point2 = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
+    const MERGE_THRESHOLD = 1.0
+    const dx = p2.x - p1.x
+    const dy = p2.y - p1.y
+    if (Math.sqrt(dx * dx + dy * dy) > MERGE_THRESHOLD) return false
 
-      if (wallId1 === wallId2) {
-        const i = Math.min(pointIndex1, pointIndex2)
-        const j = Math.max(pointIndex1, pointIndex2)
-        if (i === j) return false
-        const newPoints = [...wall1.points.slice(0, i), mergedPoint, ...wall1.points.slice(j + 1)]
-        if (newPoints.length < 2) return false
-        state.updateWall(wallId1, { points: newPoints })
+    const mergedPoint: Point2 = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
+
+    if (wallId1 === wallId2) {
+      const i = Math.min(pointIndex1, pointIndex2)
+      const j = Math.max(pointIndex1, pointIndex2)
+      if (i === j) return false
+      const newPoints = [...wall1.points.slice(0, i), mergedPoint, ...wall1.points.slice(j + 1)]
+      if (newPoints.length < 2) return false
+      state.updateWall(wallId1, { points: newPoints })
+      return true
+    }
+
+    const n1 = wall1.points.length
+    const n2 = wall2.points.length
+    const is1Last = pointIndex1 === n1 - 1
+    const is1First = pointIndex1 === 0
+    const is2Last = pointIndex2 === n2 - 1
+    const is2First = pointIndex2 === 0
+
+    // Detect fully overlapping walls: all segments of one wall coincide with segments of the other.
+    if (wallId1 !== wallId2 && n1 === n2) {
+      const allMatch = (forward: boolean) =>
+        wall1.points.every((p, i) => {
+          const q = wall2.points[forward ? i : n2 - 1 - i]!
+          return Math.abs(p.x - q.x) <= MERGE_THRESHOLD && Math.abs(p.y - q.y) <= MERGE_THRESHOLD
+        })
+      if (allMatch(true) || allMatch(false)) {
+        // Walls are duplicates — keep the first, transfer openings, delete the second.
+        for (const door of floor.floorPlan.doors) {
+          if (door.wallId === wall2.id) {
+            state.updateDoor(door.id, { wallId: wall1.id })
+          }
+        }
+        for (const window of floor.floorPlan.windows) {
+          if (window.wallId === wall2.id) {
+            state.updateWindow(window.id, { wallId: wall1.id })
+          }
+        }
+        state.deleteWall(wall2.id)
         return true
       }
+    }
 
-      const n1 = wall1.points.length
-      const n2 = wall2.points.length
-      const is1Last = pointIndex1 === n1 - 1
-      const is1First = pointIndex1 === 0
-      const is2Last = pointIndex2 === n2 - 1
-      const is2First = pointIndex2 === 0
+    const endpointMerge = (is1Last && is2First) || (is1First && is2Last)
+    if (!endpointMerge) return false
 
-      // Detect fully overlapping walls: all segments of one wall coincide with segments of the other.
-      if (wallId1 !== wallId2 && n1 === n2) {
-        const allMatch = (forward: boolean) =>
-          wall1.points.every((p, i) => {
-            const q = wall2.points[forward ? i : n2 - 1 - i]!
-            return Math.abs(p.x - q.x) <= MERGE_THRESHOLD && Math.abs(p.y - q.y) <= MERGE_THRESHOLD
-          })
-        if (allMatch(true) || allMatch(false)) {
-          // Walls are duplicates — keep the first, transfer openings, delete the second.
-          for (const door of floor.floorPlan.doors) {
-            if (door.wallId === wall2.id) {
-              state.updateDoor(door.id, { wallId: wall1.id })
+    let keeperWall: Wall
+    let otherWall: Wall
+    let mergedPoints: Point2[]
+
+    if (is1Last && is2First) {
+      keeperWall = wall1
+      otherWall = wall2
+      mergedPoints = [...wall1.points.slice(0, -1), mergedPoint, ...wall2.points.slice(1)]
+    } else {
+      keeperWall = wall2
+      otherWall = wall1
+      mergedPoints = [...wall2.points.slice(0, -1), mergedPoint, ...wall1.points.slice(1)]
+    }
+    if (mergedPoints.length < 2) return false
+
+    const totalMerged = getWallTotalLengthFromPoints(mergedPoints)
+    if (totalMerged < 1e-10) return false
+
+    const keeperPoints = keeperWall.points
+    const otherPoints = otherWall.points
+    const cumKeeper = cumulativeLengths(keeperPoints)
+    const cumOther = cumulativeLengths(otherPoints)
+    const totalOther = cumOther[cumOther.length - 1] ?? 0
+    const distToM = cumKeeper[cumKeeper.length - 2] ?? 0
+    const firstSegLenOther = totalOther > 0 ? (cumOther[1] ?? 0) - (cumOther[0] ?? 0) : 0
+    const distMToOther1 = Math.sqrt(
+      (otherPoints[1]!.x - mergedPoint.x) ** 2 + (otherPoints[1]!.y - mergedPoint.y) ** 2
+    )
+    const startOfOtherPart = distToM + distMToOther1
+
+    const mapPosition = (positionOnOther: number): number => {
+      const distOnOther = positionOnOther * totalOther
+      const newDist =
+        distOnOther <= firstSegLenOther
+          ? startOfOtherPart
+          : startOfOtherPart + (distOnOther - firstSegLenOther)
+      return clamp(newDist / totalMerged, 0, 1)
+    }
+
+    state.updateWall(keeperWall.id, { points: mergedPoints })
+
+    for (const door of floor.floorPlan.doors) {
+      if (door.wallId === otherWall.id) {
+        state.updateDoor(door.id, { wallId: keeperWall.id, position: mapPosition(door.position) })
+      }
+    }
+    for (const window of floor.floorPlan.windows) {
+      if (window.wallId === otherWall.id) {
+        state.updateWindow(window.id, {
+          wallId: keeperWall.id,
+          position: mapPosition(window.position),
+        })
+      }
+    }
+
+    state.deleteWall(otherWall.id)
+    return true
+  },
+
+  getWallsByFloor: (floorId) => {
+    const { currentProject } = get()
+    if (!currentProject) return []
+    const floor = readLegacyCompatibilityFloors(currentProject).find((f) => f.id === floorId)
+    return floor?.floorPlan?.walls ?? []
+  },
+
+  addDoor: (floorId, door) =>
+    set((state) => {
+      if (state.currentProject) {
+        const floor = readLegacyCompatibilityFloors(state.currentProject).find(
+          (f) => f.id === floorId
+        )
+        if (floor) {
+          if (!floor.floorPlan) {
+            floor.floorPlan = {
+              walls: [],
+              doors: [],
+              windows: [],
+              stairs: [],
+              graphicElements: [],
+              masterWallThickness: 20,
             }
           }
-          for (const window of floor.floorPlan.windows) {
-            if (window.wallId === wall2.id) {
-              state.updateWindow(window.id, { wallId: wall1.id })
+          const wall = floor.floorPlan.walls.find((w) => w.id === door.wallId)
+          if (!wall || isCurvedWall(wall)) return
+          const newDoor = { ...door, id: generateId() }
+          floor.floorPlan.doors.push(newDoor)
+          if (wall && wall.points.length >= 2) {
+            const wallDoors = floor.floorPlan.doors.filter((d) => d.wallId === door.wallId)
+            const wallWindows = floor.floorPlan.windows.filter((w) => w.wallId === door.wallId)
+            const { doorUpdates, windowUpdates } = sanitizeWallOpeningPositions(
+              wall.points,
+              wallDoors,
+              wallWindows
+            )
+            for (const u of doorUpdates) {
+              const d = floor.floorPlan!.doors.find((x) => x.id === u.id)
+              if (d) d.position = u.position
             }
+            for (const u of windowUpdates) {
+              const w = floor.floorPlan!.windows.find((x) => x.id === u.id)
+              if (w) w.position = u.position
+            }
+            const finalWallDoors = floor.floorPlan.doors.filter((d) => d.wallId === door.wallId)
+            const finalWallWindows = floor.floorPlan.windows.filter((w) => w.wallId === door.wallId)
+            recomputeOpeningLocalFromNormalized(wall.points, finalWallDoors, finalWallWindows)
           }
-          state.deleteWall(wall2.id)
-          return true
+          commitBuildingFloorView(state.currentProject, floor.id, floor)
+          state.isDirty = true
         }
       }
+    }),
 
-      const endpointMerge = (is1Last && is2First) || (is1First && is2Last)
-      if (!endpointMerge) return false
-
-      let keeperWall: Wall
-      let otherWall: Wall
-      let mergedPoints: Point2[]
-
-      if (is1Last && is2First) {
-        keeperWall = wall1
-        otherWall = wall2
-        mergedPoints = [...wall1.points.slice(0, -1), mergedPoint, ...wall2.points.slice(1)]
-      } else {
-        keeperWall = wall2
-        otherWall = wall1
-        mergedPoints = [...wall2.points.slice(0, -1), mergedPoint, ...wall1.points.slice(1)]
+  updateDoor: (doorId, updates) =>
+    set((state) => {
+      if (state.currentProject) {
+        for (const floor of readLegacyCompatibilityFloors(state.currentProject)) {
+          if (floor.floorPlan) {
+            const door = floor.floorPlan.doors.find((d) => d.id === doorId)
+            if (door) {
+              Object.assign(door, updates)
+              const wall = floor.floorPlan.walls.find((w) => w.id === door.wallId)
+              if (
+                wall &&
+                wall.points.length >= 2 &&
+                (updates.position !== undefined || updates.width !== undefined)
+              ) {
+                if (updates.width !== undefined && updates.position === undefined) {
+                  const adjusted = resizeOpeningTowardFreeSpace(
+                    wall.points,
+                    floor.floorPlan.doors.filter((d) => d.wallId === door.wallId),
+                    floor.floorPlan.windows.filter((w) => w.wallId === door.wallId),
+                    door.id,
+                    'door',
+                    updates.width
+                  )
+                  if (adjusted) {
+                    door.width = adjusted.width
+                    door.position = adjusted.position
+                  }
+                }
+                const wallDoors = floor.floorPlan.doors.filter((d) => d.wallId === door.wallId)
+                const wallWindows = floor.floorPlan.windows.filter((w) => w.wallId === door.wallId)
+                const { doorUpdates, windowUpdates } = sanitizeWallOpeningPositions(
+                  wall.points,
+                  wallDoors,
+                  wallWindows
+                )
+                for (const u of doorUpdates) {
+                  const d = floor.floorPlan!.doors.find((x) => x.id === u.id)
+                  if (d) d.position = u.position
+                }
+                for (const u of windowUpdates) {
+                  const w = floor.floorPlan!.windows.find((x) => x.id === u.id)
+                  if (w) w.position = u.position
+                }
+                const finalWallDoors = floor.floorPlan.doors.filter((d) => d.wallId === door.wallId)
+                const finalWallWindows = floor.floorPlan.windows.filter(
+                  (w) => w.wallId === door.wallId
+                )
+                recomputeOpeningLocalFromNormalized(wall.points, finalWallDoors, finalWallWindows)
+              }
+              commitBuildingFloorView(state.currentProject, floor.id, floor)
+              state.isDirty = true
+              return
+            }
+          }
+        }
       }
-      if (mergedPoints.length < 2) return false
+    }),
 
-      const totalMerged = getWallTotalLengthFromPoints(mergedPoints)
-      if (totalMerged < 1e-10) return false
+  deleteDoor: (doorId) =>
+    set((state) => {
+      if (state.currentProject) {
+        for (const floor of readLegacyCompatibilityFloors(state.currentProject)) {
+          if (floor.floorPlan) {
+            const doorIndex = floor.floorPlan.doors.findIndex((d) => d.id === doorId)
+            if (doorIndex !== -1) {
+              floor.floorPlan.doors.splice(doorIndex, 1)
+              commitBuildingFloorView(state.currentProject, floor.id, floor)
+              state.isDirty = true
+              return
+            }
+          }
+        }
+      }
+    }),
 
-      const keeperPoints = keeperWall.points
-      const otherPoints = otherWall.points
-      const cumKeeper = cumulativeLengths(keeperPoints)
-      const cumOther = cumulativeLengths(otherPoints)
-      const totalOther = cumOther[cumOther.length - 1] ?? 0
-      const distToM = cumKeeper[cumKeeper.length - 2] ?? 0
-      const firstSegLenOther = totalOther > 0 ? (cumOther[1] ?? 0) - (cumOther[0] ?? 0) : 0
-      const distMToOther1 = Math.sqrt(
-        (otherPoints[1]!.x - mergedPoint.x) ** 2 + (otherPoints[1]!.y - mergedPoint.y) ** 2
+  addWindow: (floorId, window) =>
+    set((state) => {
+      if (state.currentProject) {
+        const floor = readLegacyCompatibilityFloors(state.currentProject).find(
+          (f) => f.id === floorId
+        )
+        if (floor) {
+          if (!floor.floorPlan) {
+            floor.floorPlan = {
+              walls: [],
+              doors: [],
+              windows: [],
+              stairs: [],
+              graphicElements: [],
+              masterWallThickness: 20,
+            }
+          }
+          const wall = floor.floorPlan.walls.find((w) => w.id === window.wallId)
+          if (!wall || isCurvedWall(wall)) return
+          const newWindow = { ...window, id: generateId() }
+          floor.floorPlan.windows.push(newWindow)
+          if (wall && wall.points.length >= 2) {
+            const wallDoors = floor.floorPlan.doors.filter((d) => d.wallId === window.wallId)
+            const wallWindows = floor.floorPlan.windows.filter((w) => w.wallId === window.wallId)
+            const { doorUpdates, windowUpdates } = sanitizeWallOpeningPositions(
+              wall.points,
+              wallDoors,
+              wallWindows
+            )
+            for (const u of doorUpdates) {
+              const d = floor.floorPlan!.doors.find((x) => x.id === u.id)
+              if (d) d.position = u.position
+            }
+            for (const u of windowUpdates) {
+              const w = floor.floorPlan!.windows.find((x) => x.id === u.id)
+              if (w) w.position = u.position
+            }
+            const finalWallDoors = floor.floorPlan.doors.filter((d) => d.wallId === window.wallId)
+            const finalWallWindows = floor.floorPlan.windows.filter(
+              (w) => w.wallId === window.wallId
+            )
+            recomputeOpeningLocalFromNormalized(wall.points, finalWallDoors, finalWallWindows)
+          }
+          commitBuildingFloorView(state.currentProject, floor.id, floor)
+          state.isDirty = true
+        }
+      }
+    }),
+
+  updateWindow: (windowId, updates) =>
+    set((state) => {
+      if (state.currentProject) {
+        for (const floor of readLegacyCompatibilityFloors(state.currentProject)) {
+          if (floor.floorPlan) {
+            const window = floor.floorPlan.windows.find((w) => w.id === windowId)
+            if (window) {
+              Object.assign(window, updates)
+              const wall = floor.floorPlan.walls.find((w) => w.id === window.wallId)
+              if (
+                wall &&
+                wall.points.length >= 2 &&
+                (updates.position !== undefined || updates.width !== undefined)
+              ) {
+                if (updates.width !== undefined && updates.position === undefined) {
+                  const adjusted = resizeOpeningTowardFreeSpace(
+                    wall.points,
+                    floor.floorPlan.doors.filter((d) => d.wallId === window.wallId),
+                    floor.floorPlan.windows.filter((w) => w.wallId === window.wallId),
+                    window.id,
+                    'window',
+                    updates.width
+                  )
+                  if (adjusted) {
+                    window.width = adjusted.width
+                    window.position = adjusted.position
+                  }
+                }
+                const wallDoors = floor.floorPlan.doors.filter((d) => d.wallId === window.wallId)
+                const wallWindows = floor.floorPlan.windows.filter(
+                  (w) => w.wallId === window.wallId
+                )
+                const { doorUpdates, windowUpdates } = sanitizeWallOpeningPositions(
+                  wall.points,
+                  wallDoors,
+                  wallWindows
+                )
+                for (const u of doorUpdates) {
+                  const d = floor.floorPlan!.doors.find((x) => x.id === u.id)
+                  if (d) d.position = u.position
+                }
+                for (const u of windowUpdates) {
+                  const w = floor.floorPlan!.windows.find((x) => x.id === u.id)
+                  if (w) w.position = u.position
+                }
+                const finalWallDoors = floor.floorPlan.doors.filter(
+                  (d) => d.wallId === window.wallId
+                )
+                const finalWallWindows = floor.floorPlan.windows.filter(
+                  (w) => w.wallId === window.wallId
+                )
+                recomputeOpeningLocalFromNormalized(wall.points, finalWallDoors, finalWallWindows)
+              }
+              commitBuildingFloorView(state.currentProject, floor.id, floor)
+              state.isDirty = true
+              return
+            }
+          }
+        }
+      }
+    }),
+
+  deleteWindow: (windowId) =>
+    set((state) => {
+      if (state.currentProject) {
+        for (const floor of readLegacyCompatibilityFloors(state.currentProject)) {
+          if (floor.floorPlan) {
+            const windowIndex = floor.floorPlan.windows.findIndex((w) => w.id === windowId)
+            if (windowIndex !== -1) {
+              floor.floorPlan.windows.splice(windowIndex, 1)
+              commitBuildingFloorView(state.currentProject, floor.id, floor)
+              state.isDirty = true
+              return
+            }
+          }
+        }
+      }
+    }),
+
+  addStair: (floorId, stair) =>
+    set((state) => {
+      if (!state.currentProject) return
+      const floor = readLegacyCompatibilityFloors(state.currentProject).find(
+        (f) => f.id === floorId
       )
-      const startOfOtherPart = distToM + distMToOther1
-
-      const mapPosition = (positionOnOther: number): number => {
-        const distOnOther = positionOnOther * totalOther
-        const newDist =
-          distOnOther <= firstSegLenOther
-            ? startOfOtherPart
-            : startOfOtherPart + (distOnOther - firstSegLenOther)
-        return clamp(newDist / totalMerged, 0, 1)
-      }
-
-      state.updateWall(keeperWall.id, { points: mergedPoints })
-
-      for (const door of floor.floorPlan.doors) {
-        if (door.wallId === otherWall.id) {
-          state.updateDoor(door.id, { wallId: keeperWall.id, position: mapPosition(door.position) })
+      if (!floor) return
+      if (!floor.floorPlan) {
+        floor.floorPlan = {
+          walls: [],
+          doors: [],
+          windows: [],
+          stairs: [],
+          graphicElements: [],
+          masterWallThickness: 20,
         }
       }
-      for (const window of floor.floorPlan.windows) {
-        if (window.wallId === otherWall.id) {
-          state.updateWindow(window.id, {
-            wallId: keeperWall.id,
-            position: mapPosition(window.position),
-          })
-        }
+      if (!Array.isArray(floor.floorPlan.stairs)) {
+        floor.floorPlan.stairs = []
       }
+      floor.floorPlan.stairs.push({ ...stair, id: generateId() })
+      commitBuildingFloorView(state.currentProject, floor.id, floor)
+      state.isDirty = true
+    }),
 
-      state.deleteWall(otherWall.id)
-      return true
-    },
-
-    getWallsByFloor: (floorId) => {
-      const { currentProject } = get()
-      if (!currentProject) return []
-      const floor = getCompatibilityFloorsFromProject(currentProject).find((f) => f.id === floorId)
-      return floor?.floorPlan?.walls ?? []
-    },
-
-    addDoor: (floorId, door) =>
-      set((state) => {
-        if (state.currentProject) {
-          const floor = getMutableCompatibilityFloorsForProject(state.currentProject).find((f) => f.id === floorId)
-          if (floor) {
-            if (!floor.floorPlan) {
-              floor.floorPlan = {
-                walls: [],
-                doors: [],
-                windows: [],
-                stairs: [],
-                graphicElements: [],
-                masterWallThickness: 20,
-              }
-            }
-            const wall = floor.floorPlan.walls.find((w) => w.id === door.wallId)
-            if (!wall || isCurvedWall(wall)) return
-            const newDoor = { ...door, id: generateId() }
-            floor.floorPlan.doors.push(newDoor)
-            if (wall && wall.points.length >= 2) {
-              const wallDoors = floor.floorPlan.doors.filter((d) => d.wallId === door.wallId)
-              const wallWindows = floor.floorPlan.windows.filter((w) => w.wallId === door.wallId)
-              const { doorUpdates, windowUpdates } = sanitizeWallOpeningPositions(
-                wall.points,
-                wallDoors,
-                wallWindows
-              )
-              for (const u of doorUpdates) {
-                const d = floor.floorPlan!.doors.find((x) => x.id === u.id)
-                if (d) d.position = u.position
-              }
-              for (const u of windowUpdates) {
-                const w = floor.floorPlan!.windows.find((x) => x.id === u.id)
-                if (w) w.position = u.position
-              }
-              const finalWallDoors = floor.floorPlan.doors.filter((d) => d.wallId === door.wallId)
-              const finalWallWindows = floor.floorPlan.windows.filter(
-                (w) => w.wallId === door.wallId
-              )
-              recomputeOpeningLocalFromNormalized(wall.points, finalWallDoors, finalWallWindows)
-            }
-            state.isDirty = true
-          }
-        }
-      }),
-
-    updateDoor: (doorId, updates) =>
-      set((state) => {
-        if (state.currentProject) {
-          for (const floor of getMutableCompatibilityFloorsForProject(state.currentProject)) {
-            if (floor.floorPlan) {
-              const door = floor.floorPlan.doors.find((d) => d.id === doorId)
-              if (door) {
-                Object.assign(door, updates)
-                const wall = floor.floorPlan.walls.find((w) => w.id === door.wallId)
-                if (
-                  wall &&
-                  wall.points.length >= 2 &&
-                  (updates.position !== undefined || updates.width !== undefined)
-                ) {
-                  if (updates.width !== undefined && updates.position === undefined) {
-                    const adjusted = resizeOpeningTowardFreeSpace(
-                      wall.points,
-                      floor.floorPlan.doors.filter((d) => d.wallId === door.wallId),
-                      floor.floorPlan.windows.filter((w) => w.wallId === door.wallId),
-                      door.id,
-                      'door',
-                      updates.width
-                    )
-                    if (adjusted) {
-                      door.width = adjusted.width
-                      door.position = adjusted.position
-                    }
-                  }
-                  const wallDoors = floor.floorPlan.doors.filter((d) => d.wallId === door.wallId)
-                  const wallWindows = floor.floorPlan.windows.filter(
-                    (w) => w.wallId === door.wallId
-                  )
-                  const { doorUpdates, windowUpdates } = sanitizeWallOpeningPositions(
-                    wall.points,
-                    wallDoors,
-                    wallWindows
-                  )
-                  for (const u of doorUpdates) {
-                    const d = floor.floorPlan!.doors.find((x) => x.id === u.id)
-                    if (d) d.position = u.position
-                  }
-                  for (const u of windowUpdates) {
-                    const w = floor.floorPlan!.windows.find((x) => x.id === u.id)
-                    if (w) w.position = u.position
-                  }
-                  const finalWallDoors = floor.floorPlan.doors.filter(
-                    (d) => d.wallId === door.wallId
-                  )
-                  const finalWallWindows = floor.floorPlan.windows.filter(
-                    (w) => w.wallId === door.wallId
-                  )
-                  recomputeOpeningLocalFromNormalized(wall.points, finalWallDoors, finalWallWindows)
-                }
-                state.isDirty = true
-                return
-              }
-            }
-          }
-        }
-      }),
-
-    deleteDoor: (doorId) =>
-      set((state) => {
-        if (state.currentProject) {
-          for (const floor of getMutableCompatibilityFloorsForProject(state.currentProject)) {
-            if (floor.floorPlan) {
-              const doorIndex = floor.floorPlan.doors.findIndex((d) => d.id === doorId)
-              if (doorIndex !== -1) {
-                floor.floorPlan.doors.splice(doorIndex, 1)
-                state.isDirty = true
-                return
-              }
-            }
-          }
-        }
-      }),
-
-    addWindow: (floorId, window) =>
-      set((state) => {
-        if (state.currentProject) {
-          const floor = getMutableCompatibilityFloorsForProject(state.currentProject).find((f) => f.id === floorId)
-          if (floor) {
-            if (!floor.floorPlan) {
-              floor.floorPlan = {
-                walls: [],
-                doors: [],
-                windows: [],
-                stairs: [],
-                graphicElements: [],
-                masterWallThickness: 20,
-              }
-            }
-            const wall = floor.floorPlan.walls.find((w) => w.id === window.wallId)
-            if (!wall || isCurvedWall(wall)) return
-            const newWindow = { ...window, id: generateId() }
-            floor.floorPlan.windows.push(newWindow)
-            if (wall && wall.points.length >= 2) {
-              const wallDoors = floor.floorPlan.doors.filter((d) => d.wallId === window.wallId)
-              const wallWindows = floor.floorPlan.windows.filter((w) => w.wallId === window.wallId)
-              const { doorUpdates, windowUpdates } = sanitizeWallOpeningPositions(
-                wall.points,
-                wallDoors,
-                wallWindows
-              )
-              for (const u of doorUpdates) {
-                const d = floor.floorPlan!.doors.find((x) => x.id === u.id)
-                if (d) d.position = u.position
-              }
-              for (const u of windowUpdates) {
-                const w = floor.floorPlan!.windows.find((x) => x.id === u.id)
-                if (w) w.position = u.position
-              }
-              const finalWallDoors = floor.floorPlan.doors.filter((d) => d.wallId === window.wallId)
-              const finalWallWindows = floor.floorPlan.windows.filter(
-                (w) => w.wallId === window.wallId
-              )
-              recomputeOpeningLocalFromNormalized(wall.points, finalWallDoors, finalWallWindows)
-            }
-            state.isDirty = true
-          }
-        }
-      }),
-
-    updateWindow: (windowId, updates) =>
-      set((state) => {
-        if (state.currentProject) {
-          for (const floor of getMutableCompatibilityFloorsForProject(state.currentProject)) {
-            if (floor.floorPlan) {
-              const window = floor.floorPlan.windows.find((w) => w.id === windowId)
-              if (window) {
-                Object.assign(window, updates)
-                const wall = floor.floorPlan.walls.find((w) => w.id === window.wallId)
-                if (
-                  wall &&
-                  wall.points.length >= 2 &&
-                  (updates.position !== undefined || updates.width !== undefined)
-                ) {
-                  if (updates.width !== undefined && updates.position === undefined) {
-                    const adjusted = resizeOpeningTowardFreeSpace(
-                      wall.points,
-                      floor.floorPlan.doors.filter((d) => d.wallId === window.wallId),
-                      floor.floorPlan.windows.filter((w) => w.wallId === window.wallId),
-                      window.id,
-                      'window',
-                      updates.width
-                    )
-                    if (adjusted) {
-                      window.width = adjusted.width
-                      window.position = adjusted.position
-                    }
-                  }
-                  const wallDoors = floor.floorPlan.doors.filter((d) => d.wallId === window.wallId)
-                  const wallWindows = floor.floorPlan.windows.filter(
-                    (w) => w.wallId === window.wallId
-                  )
-                  const { doorUpdates, windowUpdates } = sanitizeWallOpeningPositions(
-                    wall.points,
-                    wallDoors,
-                    wallWindows
-                  )
-                  for (const u of doorUpdates) {
-                    const d = floor.floorPlan!.doors.find((x) => x.id === u.id)
-                    if (d) d.position = u.position
-                  }
-                  for (const u of windowUpdates) {
-                    const w = floor.floorPlan!.windows.find((x) => x.id === u.id)
-                    if (w) w.position = u.position
-                  }
-                  const finalWallDoors = floor.floorPlan.doors.filter(
-                    (d) => d.wallId === window.wallId
-                  )
-                  const finalWallWindows = floor.floorPlan.windows.filter(
-                    (w) => w.wallId === window.wallId
-                  )
-                  recomputeOpeningLocalFromNormalized(wall.points, finalWallDoors, finalWallWindows)
-                }
-                state.isDirty = true
-                return
-              }
-            }
-          }
-        }
-      }),
-
-    deleteWindow: (windowId) =>
-      set((state) => {
-        if (state.currentProject) {
-          for (const floor of getMutableCompatibilityFloorsForProject(state.currentProject)) {
-            if (floor.floorPlan) {
-              const windowIndex = floor.floorPlan.windows.findIndex((w) => w.id === windowId)
-              if (windowIndex !== -1) {
-                floor.floorPlan.windows.splice(windowIndex, 1)
-                state.isDirty = true
-                return
-              }
-            }
-          }
-        }
-      }),
-
-    addStair: (floorId, stair) =>
-      set((state) => {
-        if (!state.currentProject) return
-        const floor = getMutableCompatibilityFloorsForProject(state.currentProject).find((f) => f.id === floorId)
-        if (!floor) return
-        if (!floor.floorPlan) {
-          floor.floorPlan = {
-            walls: [],
-            doors: [],
-            windows: [],
-            stairs: [],
-            graphicElements: [],
-            masterWallThickness: 20,
-          }
-        }
-        if (!Array.isArray(floor.floorPlan.stairs)) {
-          floor.floorPlan.stairs = []
-        }
-        floor.floorPlan.stairs.push({ ...stair, id: generateId() })
+  updateStair: (stairId, updates) =>
+    set((state) => {
+      if (!state.currentProject) return
+      for (const floor of readLegacyCompatibilityFloors(state.currentProject)) {
+        const stair = floor.floorPlan?.stairs?.find((s) => s.id === stairId)
+        if (!stair) continue
+        Object.assign(stair, updates)
+        commitBuildingFloorView(state.currentProject, floor.id, floor)
         state.isDirty = true
-      }),
+        return
+      }
+    }),
 
-    updateStair: (stairId, updates) =>
-      set((state) => {
-        if (!state.currentProject) return
-        for (const floor of getMutableCompatibilityFloorsForProject(state.currentProject)) {
-          const stair = floor.floorPlan?.stairs?.find((s) => s.id === stairId)
-          if (!stair) continue
-          Object.assign(stair, updates)
+  deleteStair: (stairId) =>
+    set((state) => {
+      if (!state.currentProject) return
+      for (const floor of readLegacyCompatibilityFloors(state.currentProject)) {
+        if (!floor.floorPlan?.stairs) continue
+        const before = floor.floorPlan.stairs.length
+        floor.floorPlan.stairs = floor.floorPlan.stairs.filter((s) => s.id !== stairId)
+        if (floor.floorPlan.stairs.length !== before) {
+          commitBuildingFloorView(state.currentProject, floor.id, floor)
           state.isDirty = true
           return
         }
-      }),
+      }
+    }),
 
-    deleteStair: (stairId) =>
-      set((state) => {
-        if (!state.currentProject) return
-        for (const floor of getMutableCompatibilityFloorsForProject(state.currentProject)) {
-          if (!floor.floorPlan?.stairs) continue
-          const before = floor.floorPlan.stairs.length
-          floor.floorPlan.stairs = floor.floorPlan.stairs.filter((s) => s.id !== stairId)
-          if (floor.floorPlan.stairs.length !== before) {
-            state.isDirty = true
-            return
-          }
+  addPlanGraphicElement: (floorId: string, element: Omit<PlanGraphicElement, 'id'>) =>
+    set((state) => {
+      if (!state.currentProject) return
+      const floor = readLegacyCompatibilityFloors(state.currentProject).find(
+        (f) => f.id === floorId
+      )
+      if (!floor) return
+      if (!floor.floorPlan) {
+        floor.floorPlan = {
+          walls: [],
+          doors: [],
+          windows: [],
+          stairs: [],
+          graphicElements: [],
+          masterWallThickness: 20,
         }
-      }),
+      }
+      if (!Array.isArray(floor.floorPlan.graphicElements)) {
+        floor.floorPlan.graphicElements = []
+      }
+      floor.floorPlan.graphicElements.push({ ...element, id: generateId() })
+      commitBuildingFloorView(state.currentProject, floor.id, floor)
+      state.isDirty = true
+    }),
 
-    addPlanGraphicElement: (floorId: string, element: Omit<PlanGraphicElement, 'id'>) =>
-      set((state) => {
-        if (!state.currentProject) return
-        const floor = getMutableCompatibilityFloorsForProject(state.currentProject).find((f) => f.id === floorId)
-        if (!floor) return
-        if (!floor.floorPlan) {
-          floor.floorPlan = {
-            walls: [],
-            doors: [],
-            windows: [],
-            stairs: [],
-            graphicElements: [],
-            masterWallThickness: 20,
-          }
-        }
-        if (!Array.isArray(floor.floorPlan.graphicElements)) {
-          floor.floorPlan.graphicElements = []
-        }
-        floor.floorPlan.graphicElements.push({ ...element, id: generateId() })
+  updatePlanGraphicElement: (elementId: string, updates: Partial<PlanGraphicElement>) =>
+    set((state) => {
+      if (!state.currentProject) return
+      for (const floor of readLegacyCompatibilityFloors(state.currentProject)) {
+        const element = floor.floorPlan?.graphicElements?.find((entry) => entry.id === elementId)
+        if (!element) continue
+        Object.assign(element, updates)
+        commitBuildingFloorView(state.currentProject, floor.id, floor)
         state.isDirty = true
-      }),
+        return
+      }
+    }),
 
-    updatePlanGraphicElement: (elementId: string, updates: Partial<PlanGraphicElement>) =>
-      set((state) => {
-        if (!state.currentProject) return
-        for (const floor of getMutableCompatibilityFloorsForProject(state.currentProject)) {
-          const element = floor.floorPlan?.graphicElements?.find((entry) => entry.id === elementId)
-          if (!element) continue
-          Object.assign(element, updates)
+  deletePlanGraphicElement: (elementId: string) =>
+    set((state) => {
+      if (!state.currentProject) return
+      for (const floor of readLegacyCompatibilityFloors(state.currentProject)) {
+        if (!floor.floorPlan?.graphicElements) continue
+        const before = floor.floorPlan.graphicElements.length
+        floor.floorPlan.graphicElements = floor.floorPlan.graphicElements.filter(
+          (entry) => entry.id !== elementId
+        )
+        if (floor.floorPlan.graphicElements.length !== before) {
+          commitBuildingFloorView(state.currentProject, floor.id, floor)
           state.isDirty = true
           return
         }
-      }),
+      }
+    }),
 
-    deletePlanGraphicElement: (elementId: string) =>
-      set((state) => {
-        if (!state.currentProject) return
-        for (const floor of getMutableCompatibilityFloorsForProject(state.currentProject)) {
-          if (!floor.floorPlan?.graphicElements) continue
-          const before = floor.floorPlan.graphicElements.length
-          floor.floorPlan.graphicElements = floor.floorPlan.graphicElements.filter(
-            (entry) => entry.id !== elementId
-          )
-          if (floor.floorPlan.graphicElements.length !== before) {
-            state.isDirty = true
-            return
-          }
-        }
-      }),
-
-    updateFloorPlanSettings: (floorId, settings) =>
-      set((state) => {
-        if (state.currentProject) {
-          const floor = getMutableCompatibilityFloorsForProject(state.currentProject).find((f) => f.id === floorId)
-          if (floor) {
-            if (!floor.floorPlan) {
-              floor.floorPlan = {
-                walls: [],
-                doors: [],
-                windows: [],
-                stairs: [],
-                graphicElements: [],
-                masterWallThickness: 20,
-              }
+  updateFloorPlanSettings: (floorId, settings) =>
+    set((state) => {
+      if (state.currentProject) {
+        const floor = readLegacyCompatibilityFloors(state.currentProject).find(
+          (f) => f.id === floorId
+        )
+        if (floor) {
+          if (!floor.floorPlan) {
+            floor.floorPlan = {
+              walls: [],
+              doors: [],
+              windows: [],
+              stairs: [],
+              graphicElements: [],
+              masterWallThickness: 20,
             }
-            if (settings.masterWallThickness !== undefined) {
-              floor.floorPlan.masterWallThickness = settings.masterWallThickness
-            }
-            state.isDirty = true
           }
+          if (settings.masterWallThickness !== undefined) {
+            floor.floorPlan.masterWallThickness = settings.masterWallThickness
+          }
+          commitBuildingFloorView(state.currentProject, floor.id, floor)
+          state.isDirty = true
         }
-      }),
-
+      }
+    }),
 })

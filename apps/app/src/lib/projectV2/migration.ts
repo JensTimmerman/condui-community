@@ -32,18 +32,8 @@ import {
   type ViewModelV2,
 } from '@/types/projectV2'
 import { emptyChronology } from '@/lib/chronology/chronology'
-import {
-  getCompatibilityFloorsFromProject,
-  syncBuildingFloorsFromCompatibility,
-} from './buildingFloors'
 import { sanitizeLegacyV2Project } from './sanitizeLegacyV2Project'
-import { getElectricalInstallationFromProject, getElectricalPanelsFromProject } from './electrical'
-import {
-  getEendraadNotesFromProject,
-  getSitplanNotesFromProject,
-  syncAnnotationsFromCompatibility,
-} from './annotations'
-import { syncPlanWiringFromCompatibility } from './planWiring'
+import { normalizeLegacyPlanWiringAtBoundary } from './planWiring'
 
 type ProjectV2BeforeScopes = Omit<ProjectV2, 'schemaVersion' | 'collaboration'> & {
   schemaVersion: '2.0.0'
@@ -384,6 +374,7 @@ function placementToElement(endpoint: Endpoint, placement: Placement): ElementMo
 function planWireRouteToElement(route: PlanWireRoute): ElementModelV2 {
   return {
     id: `elem_plan_wire_${route.id}`,
+    scopeId: 'electrical',
     kind: `electrical.plan-wire.${route.kind}`,
     floorId: route.floorId,
     systemId: SYSTEM_ELECTRICAL,
@@ -690,14 +681,9 @@ export function migrateProjectV1ToV2(project: Project): ProjectV2 {
   )
   const layers = collectLayers(project)
   const electrical = collectElectricalElementsAndDevices(project)
-  const planWireElements = (project.planWiring?.routes ?? [])
-    .filter((route) => !route.hidden)
-    .map(planWireRouteToElement)
+  const planWireElements = (project.planWiring?.routes ?? []).map(planWireRouteToElement)
   const sitplanNoteElements = (project.sitplanNotes ?? []).map((note) =>
     noteToElement(note, 'sitplan')
-  )
-  const eendraadNoteElements = (project.eendraadNotes ?? []).map((note) =>
-    noteToElement(note, 'eendraad')
   )
 
   return applyScopeContract({
@@ -735,7 +721,6 @@ export function migrateProjectV1ToV2(project: Project): ProjectV2 {
       ...electrical.elements,
       ...planWireElements,
       ...sitplanNoteElements,
-      ...eendraadNoteElements,
     ],
     relationships: electrical.relationships,
     views: collectViews(project, layers),
@@ -745,7 +730,9 @@ export function migrateProjectV1ToV2(project: Project): ProjectV2 {
         installation: project.installation,
         panels: project.panels,
         devices: electrical.devices,
-        planWiring: project.planWiring,
+        planWiring: project.planWiring
+          ? { version: 1, routes: [], visibility: project.planWiring.visibility }
+          : undefined,
         oneWire: {
           notes: project.eendraadNotes,
           frames: project.eendraadFrames,
@@ -762,17 +749,20 @@ export function migrateProjectV1ToV2(project: Project): ProjectV2 {
 }
 
 export function normalizeStoredProjectToV2(document: LegacyProjectDocument): ProjectV2 {
-  if (isProjectV2(document)) return document
+  if (isProjectV2(document)) {
+    if ((document.disciplines.electrical?.planWiring?.routes.length ?? 0) === 0) return document
+    const normalized = cloneJsonProject(document)
+    normalizeLegacyPlanWiringAtBoundary(normalized)
+    return normalized
+  }
   if (isProjectV2BeforeScopes(document)) {
     const { schemaVersion: _schemaVersion, ...project } = document
-    return applyScopeContract(project)
+    const normalized = applyScopeContract(project)
+    normalizeLegacyPlanWiringAtBoundary(normalized)
+    return normalized
   }
   if (isProjectV1(document)) return migrateProjectV1ToV2(document)
   throw new Error('Unsupported project schema version.')
-}
-
-function isRuntimeGeneratedElectricalElement(element: ElementModelV2): boolean {
-  return element.kind.startsWith('electrical.') && !element.kind.startsWith('electrical.plan-wire.')
 }
 
 function cloneJsonProject(project: ProjectV2): ProjectV2 {
@@ -780,76 +770,11 @@ function cloneJsonProject(project: ProjectV2): ProjectV2 {
   return JSON.parse(JSON.stringify(project)) as ProjectV2
 }
 
-export function stripLazyElementGraphForRuntime(project: ProjectV2): void {
-  const runtimeProject = project as ProjectV2 & { sitplanNotes?: Note[] }
-  if (runtimeProject.sitplanNotes === undefined) {
-    const sitplanNotes = getSitplanNotesFromProject(runtimeProject)
-    if (sitplanNotes.length > 0) runtimeProject.sitplanNotes = sitplanNotes
-  }
-  project.elements = []
-  project.relationships = []
-  if (project.disciplines?.electrical) {
-    project.disciplines.electrical.devices = []
-  }
-}
-
-export function materializeLazyElementGraphForStorage(project: ProjectV2): ProjectV2 {
-  const next = cloneJsonProject(project)
-  const compatibilityProject = next as ProjectV2 & {
-    floors?: Floor[]
-    installation?: Project['installation']
-    panels?: Project['panels']
-    eendraadNotes?: Note[]
-  }
-  const nativeBuildingFloors = Array.isArray(next.building?.floors)
-    ? typeof structuredClone === 'function'
-      ? structuredClone(next.building.floors)
-      : (JSON.parse(JSON.stringify(next.building.floors)) as FloorV2[])
-    : undefined
-  const nativeAssets = Array.isArray(next.assets)
-    ? typeof structuredClone === 'function'
-      ? structuredClone(next.assets)
-      : (JSON.parse(JSON.stringify(next.assets)) as AssetModelV2[])
-    : undefined
-  const hasRuntimeCompatibilityFloors = Array.isArray(compatibilityProject.floors)
-
-  if (!hasRuntimeCompatibilityFloors) {
-    compatibilityProject.floors = getCompatibilityFloorsFromProject(next)
-  }
-  syncBuildingFloorsFromCompatibility(compatibilityProject)
-  if (nativeBuildingFloors) {
-    next.building.floors = nativeBuildingFloors
-  }
-  if (!hasRuntimeCompatibilityFloors && nativeAssets) {
-    next.assets = nativeAssets
-  }
-  syncPlanWiringFromCompatibility(compatibilityProject)
-  if (!Array.isArray(compatibilityProject.eendraadNotes)) {
-    compatibilityProject.eendraadNotes = getEendraadNotesFromProject(compatibilityProject)
-  }
-  syncAnnotationsFromCompatibility(compatibilityProject)
-
-  const installation = getElectricalInstallationFromProject(compatibilityProject)
-  const panels = getElectricalPanelsFromProject(compatibilityProject)
-  const electrical = installation
-    ? collectElectricalElementsAndDevicesFromCompatibility(installation, panels)
-    : { elements: [], devices: [], relationships: [] }
-
-  next.elements = [
-    ...(next.elements ?? []).filter((element) => !isRuntimeGeneratedElectricalElement(element)),
-    ...electrical.elements,
-  ]
-  next.relationships = [
-    ...(next.relationships ?? []).filter(
-      (relationship) => relationship.kind !== 'electrical-circuit'
-    ),
-    ...electrical.relationships,
-  ]
-  if (next.disciplines.electrical) {
-    next.disciplines.electrical.devices = electrical.devices
-  }
-
-  return next
+export function cloneCanonicalProjectForStorage(project: ProjectV2): ProjectV2 {
+  // V2 graph containers are canonical runtime state. Legacy V1 documents are materialized once
+  // by migrateProjectV1ToV2; the storage boundary must only clone, never regenerate those facts
+  // from compatibility/domain mirrors.
+  return cloneJsonProject(project)
 }
 
 function stripRuntimeElectricalCompatibilityFields(project: ProjectV2): ProjectV2 {
@@ -859,13 +784,21 @@ function stripRuntimeElectricalCompatibilityFields(project: ProjectV2): ProjectV
     floors?: unknown
     sitplanNotes?: unknown
     eendraadNotes?: unknown
+    eendraadFrames?: unknown
+    wireSegments?: unknown
+    planWiring?: unknown
+    quarantinedItems?: unknown
   }
   if (
     !Object.prototype.hasOwnProperty.call(runtimeProject, 'installation') &&
     !Object.prototype.hasOwnProperty.call(runtimeProject, 'panels') &&
     !Object.prototype.hasOwnProperty.call(runtimeProject, 'floors') &&
     !Object.prototype.hasOwnProperty.call(runtimeProject, 'sitplanNotes') &&
-    !Object.prototype.hasOwnProperty.call(runtimeProject, 'eendraadNotes')
+    !Object.prototype.hasOwnProperty.call(runtimeProject, 'eendraadNotes') &&
+    !Object.prototype.hasOwnProperty.call(runtimeProject, 'eendraadFrames') &&
+    !Object.prototype.hasOwnProperty.call(runtimeProject, 'wireSegments') &&
+    !Object.prototype.hasOwnProperty.call(runtimeProject, 'planWiring') &&
+    !Object.prototype.hasOwnProperty.call(runtimeProject, 'quarantinedItems')
   ) {
     return project
   }
@@ -875,6 +808,10 @@ function stripRuntimeElectricalCompatibilityFields(project: ProjectV2): ProjectV
     floors: _floors,
     sitplanNotes: _sitplanNotes,
     eendraadNotes: _eendraadNotes,
+    eendraadFrames: _eendraadFrames,
+    wireSegments: _wireSegments,
+    planWiring: _planWiring,
+    quarantinedItems: _quarantinedItems,
     ...nativeProject
   } = runtimeProject
   return nativeProject as ProjectV2
@@ -883,7 +820,7 @@ function stripRuntimeElectricalCompatibilityFields(project: ProjectV2): ProjectV
 export function projectToStoredProjectV2(project: LegacyProjectDocument): ProjectV2 {
   const normalized = sanitizeLegacyV2Project(normalizeStoredProjectToV2(project)).project
   const stored = stripRuntimeElectricalCompatibilityFields(
-    materializeLazyElementGraphForStorage(normalized)
+    cloneCanonicalProjectForStorage(normalized)
   )
   const { schemaVersion: _schemaVersion, collaboration, ...nativeProject } = stored
   return applyScopeContract(nativeProject, collaboration.contributions)

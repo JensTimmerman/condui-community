@@ -10,8 +10,8 @@ import { installationHideFeederLetters } from '@/lib/eendraad/eendraadNamingInst
 import { getMainBusOrder } from '@/lib/eendraad/mainBusOrder'
 import { renameCircuitCodeKeepingEndpoints } from '@/lib/eendraad/circuitEndpointLabels'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 
@@ -142,6 +142,117 @@ function normalizeProtectionLabelForUniqueness(label: string): string {
   return label.trim().toLocaleLowerCase()
 }
 
+/** Automatic circuit names use Excel-style uppercase letters: A..Z, AA, AB, ... */
+export function isRegularAutomaticCircuitLabel(label: string): boolean {
+  return /^[A-Z]+$/.test(label.trim())
+}
+
+export interface ManualCircuitLabelWarnings {
+  nonStandard: boolean
+  duplicate: boolean
+}
+
+export function projectHasManualEendraadLabelOverrides(
+  project: ProjectWithOptionalV2Electrical,
+): boolean {
+  const visit = (panels: Panel[]): boolean => {
+    for (const panel of panels) {
+      let found = false
+      forEachCircuitOnPanel(panel, (circuit) => {
+        if (circuit.eendraadManualCodeLock === true) found = true
+      })
+      if (found || visit(panel.subPanels ?? [])) return true
+    }
+    return false
+  }
+  return visit(getProjectElectricalPanels(project))
+}
+
+/** Clear every per-row label override and immediately restore automatic naming. */
+export function resetAllManualEendraadLabelOverrides(
+  project: ProjectWithOptionalV2Electrical,
+): boolean {
+  let changed = false
+  const visit = (panels: Panel[]) => {
+    for (const panel of panels) {
+      forEachCircuitOnPanel(panel, (circuit) => {
+        if (circuit.eendraadManualCodeLock !== true) return
+        delete circuit.eendraadManualCodeLock
+        changed = true
+      })
+      visit(panel.subPanels ?? [])
+    }
+  }
+  visit(getProjectElectricalPanels(project))
+  if (!changed) return false
+
+  const installation = getProjectElectricalInstallation(project)
+  if (!installation?.eendraadAutomaticNaming) return true
+  const opts = resolveAutomaticNamingOptsFromInstallation(installation)
+  const rename = (panels: Panel[]) => {
+    for (const panel of panels) {
+      applyAutomaticMainBusNamingToPanel(panel, opts, project)
+      rename(panel.subPanels ?? [])
+    }
+  }
+  rename(getProjectElectricalPanels(project))
+  return true
+}
+
+/**
+ * Describe non-blocking warnings for a manually named one-wire row.
+ * Duplicate checks use the same panel-local namespace as automatic naming: protection rows,
+ * unprotected/direct circuit rows, and protection devices on the panel supply path.
+ */
+export function getManualCircuitLabelWarnings(
+  panel: Panel | undefined,
+  circuitId: string,
+  project: ProjectWithOptionalV2Electrical,
+  labelOverride?: string,
+): ManualCircuitLabelWarnings {
+  const empty = { nonStandard: false, duplicate: false }
+  if (!panel) return empty
+
+  const owningProtection = findProtectionOwningCircuit(panel, circuitId)
+  const circuit = owningProtection?.circuits?.find((candidate) => candidate.id === circuitId)
+    ?? panel.circuits.find((candidate) => candidate.id === circuitId)
+  if (!circuit) return empty
+
+  const label = (labelOverride ?? owningProtection?.label ?? circuit.code ?? '').trim()
+  if (!label) return { nonStandard: true, duplicate: false }
+
+  const targetKey = normalizeProtectionLabelForUniqueness(label)
+  const targetRowKey = owningProtection ? `protection:${owningProtection.id}` : `circuit:${circuit.id}`
+  const labels: Array<{ rowKey: string; label: string }> = []
+
+  for (const protection of panel.protections ?? []) {
+    labels.push({ rowKey: `protection:${protection.id}`, label: protection.label ?? '' })
+  }
+
+  const protectedCircuitIds = new Set(
+    (panel.protections ?? []).flatMap((protection) =>
+      (protection.circuits ?? []).map((candidate) => candidate.id),
+    ),
+  )
+  for (const directCircuit of panel.circuits ?? []) {
+    if (directCircuit.code === 'PANEL' || protectedCircuitIds.has(directCircuit.id)) continue
+    labels.push({ rowKey: `circuit:${directCircuit.id}`, label: directCircuit.code ?? '' })
+  }
+
+  for (const device of collectFeedPathProtectionDevicesOnPanel(panel, project)) {
+    labels.push({ rowKey: `supply:${device.id}`, label: device.label ?? '' })
+  }
+
+  return {
+    nonStandard: !isRegularAutomaticCircuitLabel(label),
+    duplicate: labels.some(
+      (candidate) =>
+        candidate.rowKey !== targetRowKey &&
+        normalizeProtectionLabelForUniqueness(candidate.label) === targetKey,
+    ),
+  }
+}
+
 function excelColumnLabelToZeroBasedIndex(label: string): number {
   let n = 0
   for (const char of label) {
@@ -173,8 +284,8 @@ function collectFeedPathProtectionDevicesOnPanel(
   project: ProjectWithOptionalV2Electrical
 ): TrunkDevice[] {
   const devices: TrunkDevice[] = []
-  const installation = getElectricalInstallationFromProject(project)
-  const panels = getElectricalPanelsFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
+  const panels = getProjectElectricalPanels(project)
   for (const device of installation ? getPanelSupplyTrunkDevices(installation, panels, panel) : []) {
     if (device.type === 'protection') devices.push(device)
   }
@@ -216,8 +327,8 @@ export function collectReservedAlphabeticLabelsOnPanel(
   project: ProjectWithOptionalV2Electrical
 ): Set<string> {
   const reserved = new Set<string>()
-  const installation = getElectricalInstallationFromProject(project)
-  const panels = getElectricalPanelsFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
+  const panels = getProjectElectricalPanels(project)
   for (const device of installation ? getPanelSupplyTrunkDevices(installation, panels, panel) : []) {
     if (device.type === 'protection') {
       addAlphabeticLabelToReservedSet(reserved, device.label)
@@ -283,9 +394,9 @@ function nextUniqueSuffixedLabel(requested: string, usedLabels: Set<string>): st
 }
 
 /**
- * Manual labels share the same panel-local namespace as automatic bus letters.
- * Keep user-entered labels unique so duplicate protection names cannot corrupt
- * downstream circuit/orphan resolution.
+ * Resolve a protection label for flows that require panel-local uniqueness, such as automatic
+ * naming and creating a new protection. Existing protection edits bypass this helper when
+ * automatic naming is disabled, so manual labels remain fully user-controlled.
  */
 export function resolveUniqueProtectionLabelOnPanel(
   panel: Panel,
@@ -437,6 +548,7 @@ interface NamingVisitor {
   onDirectCircuit: (circuit: Circuit, code: string, showLetter: boolean) => void
   onManualProtection?: (protection: ProtectionDevice, primary: Circuit) => void
   onManualDirectCircuit?: (circuit: Circuit) => void
+  onDirectDcBusBranchOmitted?: (protection: ProtectionDevice, primary: Circuit) => void
   onFeederParentOmitted?: (protection: ProtectionDevice, primary: Circuit) => void
   onDirectFeederParentOmitted?: (circuit: Circuit) => void
 }
@@ -454,11 +566,18 @@ function collectNamingTargets(panel: Panel, opts: AutomaticMainBusNamingOpts): {
 } {
   const primarySequence: NamingTarget[] = []
   const deferredFeeders: NamingTarget[] = []
+  // A preserved nested panel feeder can temporarily be listed both as a child of
+  // its parent circuit and as an additional circuit on the parent protection.
+  // Treat repeated ownership as one naming subtree so legacy/transition states
+  // cannot recurse forever.
+  const visitedProtectionIds = new Set<string>()
+  const visitedCircuitIds = new Set<string>()
 
   const shouldTakePrimarySlot = (
     primaryCircuit: Circuit,
     protection?: ProtectionDevice,
   ): boolean => {
+    if (protection?.directDcBusFeeder === true) return false
     if (!opts.hideFeederLetters) return true
     return !circuitIsFeederParentWithSubCircuits(primaryCircuit, { protection })
   }
@@ -498,6 +617,9 @@ function collectNamingTargets(panel: Panel, opts: AutomaticMainBusNamingOpts): {
    *   feeder protection that is shown keeps the first letter for its branch.
    */
   function appendProtectionSubtree(protection: ProtectionDevice) {
+    if (visitedProtectionIds.has(protection.id)) return
+    visitedProtectionIds.add(protection.id)
+
     const primary = protection.circuits![0]!
     if (opts.hideFeederLetters) {
       appendSubCircuitRows(primary.subCircuitIds)
@@ -509,6 +631,9 @@ function collectNamingTargets(panel: Panel, opts: AutomaticMainBusNamingOpts): {
   }
 
   function appendDirectCircuitSubtree(circuit: Circuit) {
+    if (visitedCircuitIds.has(circuit.id)) return
+    visitedCircuitIds.add(circuit.id)
+
     const owner = findProtectionOwningCircuit(panel, circuit.id)
     if (opts.hideFeederLetters) {
       appendSubCircuitRows(circuit.subCircuitIds)
@@ -555,6 +680,10 @@ function applyTargetsWithVisitor(
       if (!primary) continue
       if (protectionHasManualCodeLock(protection)) {
         visitor.onManualProtection?.(protection, primary)
+        continue
+      }
+      if (protection.directDcBusFeeder === true) {
+        visitor.onDirectDcBusBranchOmitted?.(protection, primary)
         continue
       }
       if (protectionOmittedFromAutomaticNamingLetter(protection, primary)) {
@@ -656,6 +785,14 @@ export function automaticMainBusNamingWouldChangePanel(
     onManualDirectCircuit(circuit) {
       assignedCodes.set(circuit.id, (circuit.code ?? '').trim())
     },
+    onDirectDcBusBranchOmitted(protection, primary) {
+      if ((protection.label ?? '').trim() !== '') wouldChange = true
+      for (const c of protection.circuits ?? []) {
+        assignedCodes.set(c.id, (c.code ?? '').trim())
+        if (letterShownOnOneWire(c)) wouldChange = true
+      }
+      void primary
+    },
     onFeederParentOmitted(protection, primary) {
       if (protectionOmittedFromAutomaticNamingLetter(protection, primary)) {
         if ((protection.label ?? '').trim() !== '') wouldChange = true
@@ -699,7 +836,7 @@ export function automaticMainBusNamingWouldChangeProject(
     }
     return false
   }
-  return walk(getElectricalPanelsFromProject(project))
+  return walk(getProjectElectricalPanels(project))
 }
 
 export function resolveAutomaticNamingOptsFromInstallation(
@@ -732,6 +869,10 @@ export function applyAutomaticMainBusNamingToPanel(
     onManualProtection: setLockedProtectionLabelFromPrimary,
     onManualDirectCircuit(circuit) {
       delete circuit.eendraadLetterVisible
+    },
+    onDirectDcBusBranchOmitted(protection) {
+      protection.label = ''
+      setCircuitsLetterShownOnOneWire(protection.circuits ?? [], false)
     },
     onFeederParentOmitted: clearFeederParentNaming,
     onDirectFeederParentOmitted: clearDirectFeederParentNaming,

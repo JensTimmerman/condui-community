@@ -1,7 +1,7 @@
 import { findPanelById } from '@/lib/panel/panelTree'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import type { Circuit, ProtectionDevice } from '@/types/schema'
@@ -68,7 +68,7 @@ export function findDirectConverterBackupProtection(
   panelId: string,
   converterId: string
 ): DirectConverterBackupProtection | null {
-  const panel = findPanelById(getElectricalPanelsFromProject(project), panelId)
+  const panel = findPanelById(getProjectElectricalPanels(project), panelId)
   if (!panel) return null
   for (const protection of panel.protections) {
     const circuit = (protection.circuits ?? []).find(
@@ -85,8 +85,8 @@ export function panelHasPopulatedDirectConverterBackup(
   project: ProjectWithOptionalV2Electrical,
   panelId: string
 ): boolean {
-  const panels = getElectricalPanelsFromProject(project)
-  const installation = getElectricalInstallationFromProject(project)
+  const panels = getProjectElectricalPanels(project)
+  const installation = getProjectElectricalInstallation(project)
   if (!installation) return false
   const converter = getSupplyFeedDevicesForPanel(installation, panels, panelId, 'root').find(
     (device) => device.supplyPath === 'converter-branch'
@@ -149,7 +149,7 @@ export function restoreDirectConverterBackupProtectionFromTrunkDevices(
   const ordered = [...devices].sort((a, b) => a.trunkPosition - b.trunkPosition)
   const source = ordered.find((device) => device.type === 'protection')
   if (!source) return null
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   const circuit: Circuit = {
     id: generateId(),
     code: source.label,

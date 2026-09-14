@@ -9,11 +9,11 @@ import { selectRulePack } from './ruleset-resolver'
 import { getPrimitive } from './primitives'
 import { logOrphanReport } from '@/lib/validation/orphanDetection'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
-  getSupplyAssembliesFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
+  selectProjectSupplyAssemblies,
 } from '@/lib/projectV2/electrical'
-import i18n from '@/i18n'
+import i18n from '@/lib/validation/validationI18n'
 
 export interface ValidationOptions {
   packs?: RulePack[]
@@ -136,7 +136,7 @@ function mergeIssuesByMergeBucket(issues: Issue[]): Issue[] {
 function enumerateScopes(project: ValidationProject): Scope[] {
   const scopes: Scope[] = []
 
-  for (const assembly of getSupplyAssembliesFromProject(project)) {
+  for (const assembly of selectProjectSupplyAssemblies(project)) {
     scopes.push({ type: 'subgraph', id: assembly.id })
   }
 
@@ -187,7 +187,7 @@ function enumerateScopes(project: ValidationProject): Scope[] {
     }
   }
 
-  collectScopes(getElectricalPanelsFromProject(project))
+  collectScopes(getProjectElectricalPanels(project))
   return scopes
 }
 
@@ -260,7 +260,8 @@ function runRule(
       if (!result.passed) {
         const offenders = result.offenders || [
           {
-            kind: scope.type === 'circuit' ? 'circuit' : scope.type === 'board' ? 'board' : 'device',
+            kind:
+              scope.type === 'circuit' ? 'circuit' : scope.type === 'board' ? 'board' : 'device',
             id: scope.id,
             viewHint: 'eendraad',
           },
@@ -297,10 +298,7 @@ function runRule(
             : undefined,
           citations: rule.citations.map((citation) => ({
             ...citation,
-            title: translateMessage(
-              `validation.citations.${citation.code}.title`,
-              citation.title
-            ),
+            title: translateMessage(`validation.citations.${citation.code}.title`, citation.title),
           })),
           tags: rule.tags,
           ...(result.mergeBucket ? { mergeBucket: result.mergeBucket } : {}),
@@ -319,14 +317,18 @@ function runRule(
 /**
  * Validate a project against rule packs
  */
-export function validateProject(project: ValidationProject, options: ValidationOptions = {}): Issue[] {
+export function validateProject(
+  project: ValidationProject,
+  options: ValidationOptions = {}
+): Issue[] {
   const allIssues: Issue[] = []
 
   // Log eendraad orphans immediately to the console (so they're visible even before opening validation UI)
   logOrphanReport(project)
 
   // Get jurisdiction from project
-  const jurisdiction = getElectricalInstallationFromProject(project)?.address.country || 'BE'
+  const jurisdiction = getProjectElectricalInstallation(project)?.address.country || 'BE'
+  if (jurisdiction !== 'BE') return allIssues
 
   // Get rule packs (for now, empty array - will be loaded from rules directory)
   const packs: RulePack[] = options.packs || []
@@ -379,8 +381,14 @@ export function validateProject(project: ValidationProject, options: ValidationO
     if (a.offenders.length !== b.offenders.length) {
       return a.offenders.length - b.offenders.length
     }
-    const aOffenderIds = a.offenders.map((o) => o.id).sort().join(',')
-    const bOffenderIds = b.offenders.map((o) => o.id).sort().join(',')
+    const aOffenderIds = a.offenders
+      .map((o) => o.id)
+      .sort()
+      .join(',')
+    const bOffenderIds = b.offenders
+      .map((o) => o.id)
+      .sort()
+      .join(',')
     return aOffenderIds.localeCompare(bOffenderIds)
   })
 
@@ -402,8 +410,14 @@ export function validateProject(project: ValidationProject, options: ValidationO
     if (a.offenders.length !== b.offenders.length) {
       return a.offenders.length - b.offenders.length
     }
-    const aOffenderIds = a.offenders.map((o) => o.id).sort().join(',')
-    const bOffenderIds = b.offenders.map((o) => o.id).sort().join(',')
+    const aOffenderIds = a.offenders
+      .map((o) => o.id)
+      .sort()
+      .join(',')
+    const bOffenderIds = b.offenders
+      .map((o) => o.id)
+      .sort()
+      .join(',')
     return aOffenderIds.localeCompare(bOffenderIds)
   })
 

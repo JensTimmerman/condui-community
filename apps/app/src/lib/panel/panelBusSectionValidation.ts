@@ -2,6 +2,7 @@ import type { FeedTopology, Installation, Panel } from '@/types/schema'
 import type { OffGridSupplyAssembly, SupplyAttachmentRef } from '@/types/supplyAssembly'
 import { walkPanels } from './panelTree'
 import { getPrimaryPanelBusSectionId, hasExplicitPanelBusSections } from './panelBusSections'
+import { isGeneratedChangeoverNormalHandoff } from './panelBusSectionSupply'
 
 export type PanelBusSectionValidationCode =
   | 'empty-bus-sections'
@@ -175,6 +176,34 @@ export function validatePanelBusSectionTopology(
   }
 
   const topology: FeedTopology | undefined = installation?.feedTopology
+  const generatedNormalHandoffKeys = new Set<string>()
+  for (const assembly of assemblies) {
+    for (const handoff of assembly.loadHandoffs) {
+      if (handoff.target.kind !== 'panel-bus-input') continue
+      const panel = panelsById.get(handoff.target.panelId)
+      if (
+        panel &&
+        isGeneratedChangeoverNormalHandoff(
+          assembly,
+          handoff,
+          panel,
+          handoff.target.busSectionId,
+        )
+      ) {
+        generatedNormalHandoffKeys.add(
+          JSON.stringify([handoff.target.panelId, handoff.target.busSectionId]),
+        )
+      }
+    }
+  }
+  const rootFeedCounts = new Map<string, number>()
+  for (const feed of topology?.rootFeeds ?? []) {
+    const panel = panelsById.get(feed.panelId)
+    if (!panel) continue
+    const busSectionId = feed.busSectionId ?? getPrimaryPanelBusSectionId(panel)
+    const key = JSON.stringify([panel.id, busSectionId])
+    rootFeedCounts.set(key, (rootFeedCounts.get(key) ?? 0) + 1)
+  }
   for (const feed of topology?.rootFeeds ?? []) {
     const panel = panelsById.get(feed.panelId)
     if (!panel) {
@@ -201,7 +230,10 @@ export function validatePanelBusSectionTopology(
       )
       continue
     }
-    addSupply(JSON.stringify([panel.id, busSectionId]), feed.id)
+    const key = JSON.stringify([panel.id, busSectionId])
+    if (!(rootFeedCounts.get(key) === 1 && generatedNormalHandoffKeys.has(key))) {
+      addSupply(key, feed.id)
+    }
   }
 
   for (const assembly of assemblies) {
@@ -215,8 +247,8 @@ export function validatePanelBusSectionTopology(
     if (sources.length <= 1) continue
     const [panelId, busSectionId] = JSON.parse(key) as [string, string]
     const panel = panelsById.get(panelId!)
-    // Preserve legacy assemblies that model their whole-panel handoff alongside
-    // the one historical root feed. Explicit split sections require one handoff.
+    // A generated switched normal handoff is the graph projection of the one
+    // root-feed carrier and is excluded above. Any remaining duplicate is real.
     if (!panel || !hasExplicitPanelBusSections(panel)) continue
     issues.push(
       issue(

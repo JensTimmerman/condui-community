@@ -1,7 +1,43 @@
 import type { WireSegment } from '@/types/schema'
+import type { BottomUpPanelLayout } from './bottomUpLayout'
 import type { LayoutNode } from './layoutTree'
 
 const GEOMETRY_EPSILON = 0.001
+
+export interface PreviewPanelTranslation {
+  x: number
+  y: number
+}
+
+/**
+ * Keep a detached supply preview on the same visual anchor as the committed frame.
+ *
+ * Supply frames are allowed to grow to the left and may be moved down when the
+ * simulated frame would overlap another panel. The electrical handoff is the
+ * stable point in both cases; the frame bounds are not.
+ */
+export function getPreviewPanelTranslation(
+  currentPanelLayout: BottomUpPanelLayout | undefined,
+  previewPanelLayout: BottomUpPanelLayout
+): PreviewPanelTranslation {
+  if (!currentPanelLayout || previewPanelLayout.frameRole !== 'supply') {
+    return { x: 0, y: 0 }
+  }
+
+  const currentHandoff = {
+    x: currentPanelLayout.mainBus.x + currentPanelLayout.mainBus.width,
+    y: currentPanelLayout.mainBus.y,
+  }
+  const previewHandoff = {
+    x: previewPanelLayout.mainBus.x + previewPanelLayout.mainBus.width,
+    y: previewPanelLayout.mainBus.y,
+  }
+
+  return {
+    x: currentHandoff.x - previewHandoff.x,
+    y: currentHandoff.y - previewHandoff.y,
+  }
+}
 
 function sameCoordinate(a: number, b: number): boolean {
   return Math.abs(a - b) <= GEOMETRY_EPSILON

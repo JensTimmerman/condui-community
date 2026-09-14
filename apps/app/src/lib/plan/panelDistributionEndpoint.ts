@@ -1,7 +1,7 @@
 import type { Endpoint, Panel } from '@/types/schema'
 import { findPanelById, findPanelByName } from '@/lib/panel/panelTree'
 import {
-  getElectricalPanelsFromProject,
+  selectProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 
@@ -14,7 +14,7 @@ export function resolvePanelForDistributionEndpoint(
   endpoint: Pick<Endpoint, 'symbol' | 'label' | 'panelId'>
 ): Panel | null {
   if (endpoint.symbol !== 'panel_distribution') return null
-  const panels = getElectricalPanelsFromProject(project)
+  const panels = selectProjectElectricalPanels(project)
   if (endpoint.panelId) {
     const byId = findPanelById(panels, endpoint.panelId)
     if (byId) return byId

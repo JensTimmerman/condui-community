@@ -1,9 +1,11 @@
-import type { Installation, Panel, PlanWireRoute, PlanWiringModel } from '@/types/schema'
 import type {
-  DisciplineModelsV2,
-  ElementModelV2,
-  GeometryModelV2,
-} from '@/types/projectV2'
+  Installation,
+  Panel,
+  PlanWireRoute,
+  PlanWiringModel,
+  PlanWiringVisibility,
+} from '@/types/schema'
+import type { DisciplineModelsV2, ElementModelV2, GeometryModelV2 } from '@/types/projectV2'
 
 export type ProjectWithOptionalV2PlanWiring = {
   installation?: Installation
@@ -15,11 +17,7 @@ export type ProjectWithOptionalV2PlanWiring = {
 
 const SYSTEM_ELECTRICAL = 'system_electrical'
 const ELECTRICAL_WIRING_LAYER_NAME = 'electrical-wiring'
-const EMPTY_PLAN_WIRING: PlanWiringModel = { version: 1, routes: [] }
-
-function hasCompatibilityPlanWiringField(document: ProjectWithOptionalV2PlanWiring): boolean {
-  return Object.prototype.hasOwnProperty.call(document, 'planWiring')
-}
+const EMPTY_VISIBILITY: PlanWiringVisibility = {}
 
 function layerIdFor(floorId: string | undefined, layerName: string): string {
   const normalized =
@@ -37,6 +35,7 @@ function planWireGeometry(route: PlanWireRoute): GeometryModelV2 {
 function planWireRouteToElement(route: PlanWireRoute): ElementModelV2 {
   return {
     id: `elem_plan_wire_${route.id}`,
+    scopeId: 'electrical',
     kind: `electrical.plan-wire.${route.kind}`,
     floorId: route.floorId,
     systemId: SYSTEM_ELECTRICAL,
@@ -58,68 +57,98 @@ function isPlanWireElement(element: ElementModelV2): boolean {
   return element.kind.startsWith('electrical.plan-wire.')
 }
 
-export function getPlanWiringFromProject(
-  document: ProjectWithOptionalV2PlanWiring
-): PlanWiringModel {
-  return document.disciplines?.electrical?.planWiring ?? document.planWiring ?? EMPTY_PLAN_WIRING
-}
-
-export function getMutablePlanWiringFromProject(
-  document: ProjectWithOptionalV2PlanWiring
-): PlanWiringModel | undefined {
-  return document.disciplines?.electrical?.planWiring ?? document.planWiring
-}
-
-export function ensureMutablePlanWiringForProject(
-  document: ProjectWithOptionalV2PlanWiring
-): PlanWiringModel {
-  const existing = getMutablePlanWiringFromProject(document)
-  if (existing) return existing
-
-  const planWiring: PlanWiringModel = { version: 1, routes: [] }
-  const electrical = document.disciplines?.electrical
-  if (electrical) {
-    electrical.planWiring = planWiring
-    return planWiring
+function routeFromElement(element: ElementModelV2): PlanWireRoute | undefined {
+  if (!isPlanWireElement(element)) return undefined
+  const route = element.properties?.route
+  if (!route || typeof route !== 'object' || typeof (route as PlanWireRoute).id !== 'string') {
+    return undefined
   }
-
-  if (hasCompatibilityPlanWiringField(document)) {
-    document.planWiring = planWiring
-    return planWiring
+  const typedRoute = route as PlanWireRoute
+  // Keep this projection compatible with Immer drafts: route readers are also called from
+  // inside store mutations, where structuredClone cannot clone the proxy-backed payload.
+  return {
+    ...typedRoute,
+    from: { ...typedRoute.from },
+    to: { ...typedRoute.to },
+    ...(typedRoute.waypoints
+      ? { waypoints: typedRoute.waypoints.map((point) => ({ ...point })) }
+      : {}),
   }
-
-  document.planWiring = planWiring
-  return planWiring
 }
 
-export function deletePlanWiringFromProject(document: ProjectWithOptionalV2PlanWiring): void {
+/** Canonical plan-wire query. Routes are owned by generic V2 elements. */
+export function selectProjectPlanWireRoutes(
+  document: ProjectWithOptionalV2PlanWiring
+): PlanWireRoute[] {
+  return (document.elements ?? [])
+    .map(routeFromElement)
+    .filter((route): route is PlanWireRoute => route !== undefined)
+}
+
+/** Atomic canonical route replacement; callers never mutate element payloads in place. */
+export function replacePlanWireRoutesForProject(
+  document: ProjectWithOptionalV2PlanWiring,
+  routes: readonly PlanWireRoute[]
+): void {
+  if (!document.elements) document.elements = []
+  const retained = document.elements.filter((element) => !isPlanWireElement(element))
+  document.elements = [
+    ...retained,
+    ...routes.map((route) => planWireRouteToElement(structuredClone(route))),
+  ]
+}
+
+export function updatePlanWireRoutesForProject(
+  document: ProjectWithOptionalV2PlanWiring,
+  update: (routes: readonly PlanWireRoute[]) => readonly PlanWireRoute[]
+): void {
+  replacePlanWireRoutesForProject(document, update(selectProjectPlanWireRoutes(document)))
+}
+
+export function selectProjectPlanWiringVisibility(
+  document: ProjectWithOptionalV2PlanWiring
+): PlanWiringVisibility {
+  return document.disciplines?.electrical?.planWiring?.visibility ?? EMPTY_VISIBILITY
+}
+
+export function replacePlanWiringVisibilityForProject(
+  document: ProjectWithOptionalV2PlanWiring,
+  visibility: PlanWiringVisibility | undefined
+): void {
   const electrical = document.disciplines?.electrical
-  if (electrical) {
+  if (!electrical) throw new Error('Electrical discipline is required to edit plan wiring.')
+  if (!visibility && selectProjectPlanWireRoutes(document).length === 0) {
     delete electrical.planWiring
     return
   }
-
-  delete document.planWiring
+  electrical.planWiring = { version: 1, routes: [], visibility }
 }
 
-export function syncPlanWiringFromCompatibility(
+/** Read-only view projection retained for canvas/export consumers during the UI migration. */
+export function selectProjectPlanWiringProjection(
+  document: ProjectWithOptionalV2PlanWiring
+): PlanWiringModel {
+  return {
+    version: 1,
+    routes: selectProjectPlanWireRoutes(document),
+    visibility: selectProjectPlanWiringVisibility(document),
+  }
+}
+
+export function clearPlanWiringForProject(document: ProjectWithOptionalV2PlanWiring): void {
+  replacePlanWireRoutesForProject(document, [])
+  replacePlanWiringVisibilityForProject(document, undefined)
+}
+
+/** One-shot storage/import normalization; ordinary runtime code must never call this. */
+export function normalizeLegacyPlanWiringAtBoundary(
   document: ProjectWithOptionalV2PlanWiring
 ): void {
-  const electrical = document.disciplines?.electrical
-  const planWiring = document.planWiring ?? electrical?.planWiring
-  if (electrical) {
-    if (document.installation) electrical.installation = document.installation
-    if (document.panels) electrical.panels = document.panels
-    if (document.planWiring) {
-      electrical.planWiring = document.planWiring
-    } else if (hasCompatibilityPlanWiringField(document)) {
-      delete electrical.planWiring
-    }
+  const legacy = document.disciplines?.electrical?.planWiring
+  if (!legacy || legacy.routes.length === 0) return
+  const existing = selectProjectPlanWireRoutes(document)
+  if (legacy.routes.length > 0 && existing.length === 0) {
+    replacePlanWireRoutesForProject(document, legacy.routes)
   }
-
-  const nonPlanWireElements = Array.isArray(document.elements)
-    ? document.elements.filter((element) => !isPlanWireElement(element))
-    : []
-  const planWireElements = (planWiring?.routes ?? []).map(planWireRouteToElement)
-  document.elements = [...nonPlanWireElements, ...planWireElements]
+  replacePlanWiringVisibilityForProject(document, legacy.visibility)
 }

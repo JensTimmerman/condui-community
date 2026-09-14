@@ -3,8 +3,18 @@
  * Does not expand the user's row count; overflow goes to the same overflow column band as manual layout.
  */
 import type { PanelGridModuleRef, PanelGridSlot } from '@/types/schema'
+import {
+  PANEL_GRID_OVERFLOW_GAP_MODULES,
+  PANEL_GRID_UNITS_PER_MODULE,
+  panelGridUnitsToModules,
+  panelModulesToGridUnits,
+} from '@/lib/panel/panelGridUnits'
 
-function mapLogicalRowToStored(logicalRow: number, panelRows: number, feedFromTop: boolean): number {
+function mapLogicalRowToStored(
+  logicalRow: number,
+  panelRows: number,
+  feedFromTop: boolean
+): number {
   return feedFromTop ? logicalRow : panelRows - 1 - logicalRow
 }
 
@@ -21,12 +31,12 @@ export interface AutoArrangeGroup<T> {
   align?: 'left' | 'right'
 }
 
-export function packAnchoredSegmentsIntoRows<T>(
+function packAnchoredSegmentsIntoUnitRows<T>(
   anchorItems: T[],
   segments: T[][],
   panelCols: number,
   getWidth: (item: T) => number,
-  side: 'left' | 'right' = 'left',
+  side: 'left' | 'right' = 'left'
 ): T[][] {
   const cols = Math.max(1, panelCols)
   const rows: T[][] = []
@@ -82,11 +92,27 @@ export function packAnchoredSegmentsIntoRows<T>(
   return rows
 }
 
-export function packAutoArrangeSupplySlots<T>(
+export function packAnchoredSegmentsIntoRows<T>(
+  anchorItems: T[],
+  segments: T[][],
+  panelCols: number,
+  getWidth: (item: T) => number,
+  side: 'left' | 'right' = 'left'
+): T[][] {
+  return packAnchoredSegmentsIntoUnitRows(
+    anchorItems,
+    segments,
+    panelModulesToGridUnits(panelCols),
+    (item) => panelModulesToGridUnits(getWidth(item)),
+    side
+  )
+}
+
+function packAutoArrangeSupplyUnitSlots<T>(
   orderedItems: T[],
   panelRows: number,
   panelCols: number,
-  getWidth: (item: T) => number,
+  getWidth: (item: T) => number
 ): { placed: Array<PackedSupplyItem<T>>; overflow: T[] } {
   const rows = Math.max(1, panelRows)
   const cols = Math.max(1, panelCols)
@@ -116,14 +142,36 @@ export function packAutoArrangeSupplySlots<T>(
   return { placed, overflow }
 }
 
+export function packAutoArrangeSupplySlots<T>(
+  orderedItems: T[],
+  panelRows: number,
+  panelCols: number,
+  getWidth: (item: T) => number
+): { placed: Array<PackedSupplyItem<T>>; overflow: T[] } {
+  const result = packAutoArrangeSupplyUnitSlots(
+    orderedItems,
+    panelRows,
+    panelModulesToGridUnits(panelCols),
+    (item) => panelModulesToGridUnits(getWidth(item))
+  )
+  return {
+    ...result,
+    placed: result.placed.map((item) => ({
+      ...item,
+      col: panelGridUnitsToModules(item.col),
+      width: panelGridUnitsToModules(item.width),
+    })),
+  }
+}
+
 function packOverflowSlots(
   items: Array<{ ref: PanelGridModuleRef; w: number }>,
   panelRows: number,
   panelCols: number,
-  feedFromTop: boolean,
+  feedFromTop: boolean
 ): PanelGridSlot[] {
   if (items.length === 0) return []
-  const overflowStart = panelCols + 1
+  const overflowStart = panelCols + PANEL_GRID_OVERFLOW_GAP_MODULES * PANEL_GRID_UNITS_PER_MODULE
   const used = new Set<string>()
   const cellKey = (r: number, c: number) => `${r},${c}`
   const isFree = (r: number, c: number, w: number) => {
@@ -159,13 +207,13 @@ function packOverflowSlots(
   return out
 }
 
-export function packAutoArrangeMainSlots(
+function packAutoArrangeMainUnitSlots(
   orderedRefs: PanelGridModuleRef[],
   panelRows: number,
   panelCols: number,
   feedFromTop: boolean,
   getWidth: (ref: PanelGridModuleRef) => number,
-  preferredSide: 'left' | 'right' = 'left',
+  preferredSide: 'left' | 'right' = 'left'
 ): PanelGridSlot[] {
   const rows = Math.max(1, panelRows)
   const cols = Math.max(1, panelCols)
@@ -213,6 +261,24 @@ export function packAutoArrangeMainSlots(
   return slots
 }
 
+export function packAutoArrangeMainSlots(
+  orderedRefs: PanelGridModuleRef[],
+  panelRows: number,
+  panelCols: number,
+  feedFromTop: boolean,
+  getWidth: (ref: PanelGridModuleRef) => number,
+  preferredSide: 'left' | 'right' = 'left'
+): PanelGridSlot[] {
+  return packAutoArrangeMainUnitSlots(
+    orderedRefs,
+    panelRows,
+    panelModulesToGridUnits(panelCols),
+    feedFromTop,
+    (ref) => panelModulesToGridUnits(getWidth(ref)),
+    preferredSide
+  ).map((slot) => ({ ...slot, col: panelGridUnitsToModules(slot.col) }))
+}
+
 function groupRowWidth<T>(row: T[], getWidth: (item: T) => number): number {
   return row.reduce((sum, item) => sum + Math.max(1, getWidth(item)), 0)
 }
@@ -225,14 +291,20 @@ function flattenGroupItems<T>(group: AutoArrangeGroup<T>): T[] {
   return group.rows.flat()
 }
 
-export function packGroupsIntoLocalRows<T>(
+function packGroupsIntoLocalUnitRows<T>(
   groups: AutoArrangeGroup<T>[],
   panelCols: number,
   getWidth: (item: T) => number,
-  preferredSide: 'left' | 'right' = 'left',
+  preferredSide: 'left' | 'right' = 'left'
 ): T[][] {
   const cols = Math.max(1, panelCols)
-  const placements: Array<{ group: AutoArrangeGroup<T>; x: number; y: number; width: number; height: number }> = []
+  const placements: Array<{
+    group: AutoArrangeGroup<T>
+    x: number
+    y: number
+    width: number
+    height: number
+  }> = []
   const used = new Set<string>()
   const cellKey = (r: number, c: number) => `${r},${c}`
   const isRectFree = (y: number, x: number, width: number, height: number) => {
@@ -310,17 +382,31 @@ export function packGroupsIntoLocalRows<T>(
   return rows.map((segments) =>
     segments
       .sort((a, b) => (preferredSide === 'right' ? b.x - a.x : a.x - b.x))
-      .flatMap((segment) => segment.items),
+      .flatMap((segment) => segment.items)
   )
 }
 
-export function packAutoArrangeMainGroupSlots(
+export function packGroupsIntoLocalRows<T>(
+  groups: AutoArrangeGroup<T>[],
+  panelCols: number,
+  getWidth: (item: T) => number,
+  preferredSide: 'left' | 'right' = 'left'
+): T[][] {
+  return packGroupsIntoLocalUnitRows(
+    groups,
+    panelModulesToGridUnits(panelCols),
+    (item) => panelModulesToGridUnits(getWidth(item)),
+    preferredSide
+  )
+}
+
+function packAutoArrangeMainGroupUnitSlots(
   groups: AutoArrangeGroup<PanelGridModuleRef>[],
   panelRows: number,
   panelCols: number,
   feedFromTop: boolean,
   getWidth: (ref: PanelGridModuleRef) => number,
-  preferredSide: 'left' | 'right' = 'left',
+  preferredSide: 'left' | 'right' = 'left'
 ): PanelGridSlot[] {
   const rows = Math.max(1, panelRows)
   const cols = Math.max(1, panelCols)
@@ -421,12 +507,30 @@ export function packAutoArrangeMainGroupSlots(
   return slots
 }
 
-export function findFirstFreeMainOrOverflowSlot(
+export function packAutoArrangeMainGroupSlots(
+  groups: AutoArrangeGroup<PanelGridModuleRef>[],
+  panelRows: number,
+  panelCols: number,
+  feedFromTop: boolean,
+  getWidth: (ref: PanelGridModuleRef) => number,
+  preferredSide: 'left' | 'right' = 'left'
+): PanelGridSlot[] {
+  return packAutoArrangeMainGroupUnitSlots(
+    groups,
+    panelRows,
+    panelModulesToGridUnits(panelCols),
+    feedFromTop,
+    (ref) => panelModulesToGridUnits(getWidth(ref)),
+    preferredSide
+  ).map((slot) => ({ ...slot, col: panelGridUnitsToModules(slot.col) }))
+}
+
+function findFirstFreeMainOrOverflowUnitSlot(
   occupied: Array<{ row: number; col: number; width: number }>,
   width: number,
   panelRows: number,
   panelCols: number,
-  feedFromTop: boolean,
+  feedFromTop: boolean
 ): { row: number; col: number; isOverflow: boolean } {
   const rows = Math.max(1, panelRows)
   const cols = Math.max(1, panelCols)
@@ -459,7 +563,7 @@ export function findFirstFreeMainOrOverflowSlot(
     }
   }
 
-  const overflowStart = cols + 1
+  const overflowStart = cols + PANEL_GRID_OVERFLOW_GAP_MODULES * PANEL_GRID_UNITS_PER_MODULE
   for (const row of rowOrder) {
     const colLimit = overflowStart + Math.max(cols, w) * 8
     for (let col = overflowStart; col <= colLimit; col++) {
@@ -468,4 +572,25 @@ export function findFirstFreeMainOrOverflowSlot(
   }
 
   return { row: rowOrder[0] ?? 0, col: overflowStart, isOverflow: true }
+}
+
+export function findFirstFreeMainOrOverflowSlot(
+  occupied: Array<{ row: number; col: number; width: number }>,
+  width: number,
+  panelRows: number,
+  panelCols: number,
+  feedFromTop: boolean
+): { row: number; col: number; isOverflow: boolean } {
+  const result = findFirstFreeMainOrOverflowUnitSlot(
+    occupied.map((slot) => ({
+      ...slot,
+      col: panelModulesToGridUnits(slot.col),
+      width: panelModulesToGridUnits(slot.width),
+    })),
+    panelModulesToGridUnits(width),
+    panelRows,
+    panelModulesToGridUnits(panelCols),
+    feedFromTop
+  )
+  return { ...result, col: panelGridUnitsToModules(result.col) }
 }

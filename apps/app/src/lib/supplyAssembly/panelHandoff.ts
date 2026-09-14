@@ -1,7 +1,7 @@
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
-  getMutableSupplyAssembliesForProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
+  editProjectSupplyAssemblies,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { getInstallationPhases } from '@/lib/wires/phaseAssignment'
@@ -13,24 +13,28 @@ import type {
   SupplyPort,
 } from '@/types/supplyAssembly'
 import { enableDirectInverterPanelBackup } from './directInverterPanelBackup'
-import { reconcileSupplyAssemblyAcConductorFlow } from './editorIntegration'
+import {
+  reconcileDirectConverterCommonLoadPath,
+  reconcileSupplyAssemblyAcConductorFlow,
+} from './editorIntegration'
 import {
   panelHasModularChangeover,
   panelRequiresSplitFeed,
   setPanelFeedOrganizationInProject,
 } from '@/lib/panel/panelFeedOrganization'
 import { ensureInstallationFeedTopology } from '@/lib/feedTopology'
+import { resolveAssemblyPanelInput, resolveCommonLoadTail } from './electricalTopology'
 
 function rootFeedTargetsPanel(
   project: ProjectWithOptionalV2Electrical,
   rootFeedId: string,
-  panelId: string,
+  panelId: string
 ): boolean {
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   if (!installation) return false
   return ensureInstallationFeedTopology(
     installation,
-    getElectricalPanelsFromProject(project),
+    getProjectElectricalPanels(project)
   ).rootFeeds.some((feed) => feed.id === rootFeedId && feed.panelId === panelId)
 }
 
@@ -39,7 +43,7 @@ function attachmentTargetsPanel(
   attachment:
     | OffGridSupplyAssembly['incomingAttachment']
     | OffGridSupplyAssembly['loadHandoffs'][number]['target'],
-  panelId: string,
+  panelId: string
 ): boolean {
   if (
     (attachment.kind === 'panel-input' || attachment.kind === 'panel-bus-input') &&
@@ -47,34 +51,36 @@ function attachmentTargetsPanel(
   ) {
     return true
   }
-  return attachment.kind === 'root-feed' && rootFeedTargetsPanel(project, attachment.rootFeedId, panelId)
+  return (
+    attachment.kind === 'root-feed' && rootFeedTargetsPanel(project, attachment.rootFeedId, panelId)
+  )
 }
 
 function panelIsReferencedByAssembly(
   project: ProjectWithOptionalV2Electrical,
   assembly: OffGridSupplyAssembly,
-  panelId: string,
+  panelId: string
 ): boolean {
   if (attachmentTargetsPanel(project, assembly.incomingAttachment, panelId)) {
     return true
   }
   return assembly.loadHandoffs.some((handoff) =>
-    attachmentTargetsPanel(project, handoff.target, panelId),
+    attachmentTargetsPanel(project, handoff.target, panelId)
   )
 }
 
 function panelHandoffForAssembly(
   project: ProjectWithOptionalV2Electrical,
   assembly: OffGridSupplyAssembly,
-  panelId: string,
+  panelId: string
 ) {
   return assembly.loadHandoffs.find((handoff) =>
-    attachmentTargetsPanel(project, handoff.target, panelId),
+    attachmentTargetsPanel(project, handoff.target, panelId)
   )
 }
 
 function acConductors(project: ProjectWithOptionalV2Electrical): AcPhase[] {
-  const system = getElectricalInstallationFromProject(project)?.nominalVoltage.system
+  const system = getProjectElectricalInstallation(project)?.nominalVoltage.system
   const phases = getInstallationPhases(system ?? '1N~')
   return phases.length > 0 ? phases : ['L1', 'N']
 }
@@ -160,7 +166,7 @@ function addPanelHandoff(
  */
 function configureRootPanelFeedOrganization(
   project: ProjectWithOptionalV2Electrical,
-  panelId: string,
+  panelId: string
 ): boolean {
   return setPanelFeedOrganizationInProject(
     project,
@@ -169,7 +175,7 @@ function configureRootPanelFeedOrganization(
       ? 'split-switchable'
       : panelRequiresSplitFeed(project, panelId)
         ? 'split-backup'
-        : 'single',
+        : 'single'
   )
 }
 
@@ -185,14 +191,12 @@ export function attachRootPanelToExistingSupplyAssembly(
   project: ProjectWithOptionalV2Electrical,
   panelId: string
 ): boolean {
-  const panel = getElectricalPanelsFromProject(project).find(
-    (candidate) => candidate.id === panelId
-  )
+  const panel = getProjectElectricalPanels(project).find((candidate) => candidate.id === panelId)
   if (!panel || panel.isMain === false) return false
 
-  const panels = getElectricalPanelsFromProject(project)
-  const assemblies = getMutableSupplyAssembliesForProject(project)
-  const assembly = assemblies.find((candidate) => {
+  const panels = getProjectElectricalPanels(project)
+  const assemblies = editProjectSupplyAssemblies(project)
+  const eligibleAssemblies = assemblies.filter((candidate) => {
     if (panelIsReferencedByAssembly(project, candidate, panelId)) return false
     return panels.some(
       (candidatePanel) =>
@@ -201,18 +205,25 @@ export function attachRootPanelToExistingSupplyAssembly(
         panelIsReferencedByAssembly(project, candidate, candidatePanel.id)
     )
   })
-  if (!assembly) return false
+  if (eligibleAssemblies.length !== 1) return false
+  const assembly = eligibleAssemblies[0]!
 
   const phases = acConductors(project)
   const changeover = assembly.nodes.find((node) => node.kind === 'changeover-switch')
   if (changeover) {
-    const load = acPort(changeover, 'load')
-    if (!load) return false
+    const tail = resolveCommonLoadTail(assembly, project)
+    const load =
+      tail &&
+      acPort(
+        assembly.nodes.find((node) => node.id === tail.nodeId),
+        tail.portId
+      )
+    if (!load || !tail) return false
     const changed = addPanelHandoff(
       project,
       assembly,
       panel,
-      { nodeId: changeover.id, portId: 'load', pathRole: 'load-ac' },
+      { ...tail, pathRole: 'load-ac' },
       load.conductors.length > 0 ? (load.conductors as AcPhase[]) : phases
     )
     const flowChanged = reconcileSupplyAssemblyAcConductorFlow(project)
@@ -235,17 +246,26 @@ export function attachRootPanelToExistingSupplyAssembly(
     return changed || organizationChanged
   }
 
-  const utility = assembly.nodes.find((node) => node.kind === 'utility-source')
-  const utilityPort = acPort(utility, 'out')
-  if (!utility || !utilityPort) return false
+  const owner = resolveAssemblyPanelInput(project, assembly.incomingAttachment)
+  const commonChanged = owner
+    ? reconcileDirectConverterCommonLoadPath(project, owner.panelId)
+    : false
+  const tail = resolveCommonLoadTail(assembly, project)
+  const loadPort =
+    tail &&
+    acPort(
+      assembly.nodes.find((node) => node.id === tail.nodeId),
+      tail.portId
+    )
+  if (!tail || !loadPort) return false
   const changed = addPanelHandoff(
     project,
     assembly,
     panel,
-    { nodeId: utility.id, portId: 'out', pathRole: 'grid-only-bypass-ac' },
-    utilityPort.conductors.length > 0 ? (utilityPort.conductors as AcPhase[]) : phases
+    { ...tail, pathRole: 'grid-only-bypass-ac' },
+    loadPort.conductors.length > 0 ? (loadPort.conductors as AcPhase[]) : phases
   )
   const flowChanged = reconcileSupplyAssemblyAcConductorFlow(project)
   const organizationChanged = configureRootPanelFeedOrganization(project, panel.id)
-  return changed || flowChanged || organizationChanged
+  return commonChanged || changed || flowChanged || organizationChanged
 }

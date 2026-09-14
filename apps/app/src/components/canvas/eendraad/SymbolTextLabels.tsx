@@ -36,6 +36,8 @@ interface SymbolTextLabelsProps {
   symbolWidth?: number
   symbolHeight?: number
   offsetFromSymbol?: number
+  /** Collision-solver adjustment applied after the normal anchored position. */
+  positionOffset?: { x: number; y: number }
   lineSpacing?: number
   sequenceJoiner?: string
   /**
@@ -45,7 +47,7 @@ interface SymbolTextLabelsProps {
   sideLabelBlockAlign?: 'auto' | 'center'
   /** Minimum left edge for bottom-positioned lines; wider lines shift right to respect it. */
   bottomMinimumLeftX?: number
-  /** Maximum right edge for bottom-positioned lines; overflowing text uses an ellipsis. */
+  /** Maximum right edge for bottom-positioned lines; crowded text uses an ellipsis. */
   bottomMaximumRightX?: number
   /** When set, this label block is pointer-interactive and selects the owning symbol (same as clicking the symbol). */
   onLabelClick?: (e: unknown) => void
@@ -64,6 +66,7 @@ export function SymbolTextLabels({
   symbolWidth,
   symbolHeight,
   offsetFromSymbol = 5,
+  positionOffset,
   lineSpacing = 2,
   sequenceJoiner = ' ',
   sideLabelBlockAlign = 'auto',
@@ -141,7 +144,13 @@ export function SymbolTextLabels({
         : -(halfSymbolWidth + offsetFromSymbol)
     const hitX = position === 'right' ? -labelHitPad : -(maxLineWidth + labelHitPad)
     return (
-      <Group x={x} y={0} listening={!!onLabelClick} onClick={onLabelClick} onTap={onLabelClick}>
+      <Group
+        x={x + (positionOffset?.x ?? 0)}
+        y={positionOffset?.y ?? 0}
+        listening={!!onLabelClick}
+        onClick={onLabelClick}
+        onTap={onLabelClick}
+      >
         {onLabelClick && (
           <Rect
             x={hitX}
@@ -174,7 +183,13 @@ export function SymbolTextLabels({
       : halfSymbolHeight + offsetFromSymbol
   const lineBaseY = 0
   return (
-    <Group x={0} y={y} listening={!!onLabelClick} onClick={onLabelClick} onTap={onLabelClick}>
+    <Group
+      x={positionOffset?.x ?? 0}
+      y={y + (positionOffset?.y ?? 0)}
+      listening={!!onLabelClick}
+      onClick={onLabelClick}
+      onTap={onLabelClick}
+    >
       {onLabelClick && (
         <Rect
           x={labelLeftX - labelHitPad}

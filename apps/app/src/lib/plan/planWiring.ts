@@ -1,18 +1,19 @@
 import { getThemeColor } from '@/lib/theme/colors'
 import type { ThemeMode } from '@/lib/theme/types'
 import {
-  getElectricalPanelsFromProject,
+  selectProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import {
-  getBuildingFloorsFromProject,
+  selectProjectBuildingFloors,
   type ProjectWithOptionalV2Building,
 } from '@/lib/projectV2/buildingFloors'
 import {
-  deletePlanWiringFromProject,
-  ensureMutablePlanWiringForProject,
-  getMutablePlanWiringFromProject,
-  getPlanWiringFromProject,
+  clearPlanWiringForProject,
+  selectProjectPlanWireRoutes,
+  selectProjectPlanWiringProjection,
+  replacePlanWireRoutesForProject,
+  replacePlanWiringVisibilityForProject,
   type ProjectWithOptionalV2PlanWiring,
 } from '@/lib/projectV2/planWiring'
 import type {
@@ -78,12 +79,7 @@ const SWITCH_SYMBOLS = new Set<string>([
   'switch_double',
 ])
 
-const SOCKET_SYMBOLS = new Set<string>([
-  'socket',
-  'socket_gnd',
-  'socket_child',
-  'socket_gnd_child',
-])
+const SOCKET_SYMBOLS = new Set<string>(['socket', 'socket_gnd', 'socket_child', 'socket_gnd_child'])
 
 function endpointSymbol(endpoint: Endpoint): string | undefined {
   return endpoint.symbol
@@ -361,7 +357,12 @@ function findCircuitMatchForPlacement(
         return { panel, circuit, branchId: branch?.id, endpoint: { endpoint, placement } }
       }
     }
-    const nested = findCircuitMatchForPlacement(project, panel.subPanels ?? [], floorId, placementId)
+    const nested = findCircuitMatchForPlacement(
+      project,
+      panel.subPanels ?? [],
+      floorId,
+      placementId
+    )
     if (nested) return nested
   }
   const mainPanel = findMainPanel(panels)
@@ -373,10 +374,22 @@ function findCircuitMatchForPlacement(
     if (!placement) continue
     return {
       panel: mainPanel,
-      circuit: { id: `supply:${mainPanel.id}`, code: 'SUPPLY', kind: 'other', cable: { kind: 'XVB', conductors: 2, sectionMm2: 1 }, endpoints: [] },
+      circuit: {
+        id: `supply:${mainPanel.id}`,
+        code: 'SUPPLY',
+        kind: 'other',
+        cable: { kind: 'XVB', conductors: 2, sectionMm2: 1 },
+        endpoints: [],
+      },
       branchId: undefined,
       endpoint: {
-        endpoint: { id: device.id, type: 'fixed_appliance', label: device.label, symbol: device.symbol, placements: device.placements ?? [] },
+        endpoint: {
+          id: device.id,
+          type: 'fixed_appliance',
+          label: device.label,
+          symbol: device.symbol,
+          placements: device.placements ?? [],
+        },
         placement,
       },
       trunkDeviceId: device.id,
@@ -386,7 +399,11 @@ function findCircuitMatchForPlacement(
   return null
 }
 
-function panelHasElectricalPathTo(panels: Panel[], sourcePanelId: string, targetPanelId: string): boolean {
+function panelHasElectricalPathTo(
+  panels: Panel[],
+  sourcePanelId: string,
+  targetPanelId: string
+): boolean {
   const findPanel = (candidates: Panel[]): Panel | undefined => {
     for (const panel of candidates) {
       if (panel.id === sourcePanelId) return panel
@@ -449,7 +466,7 @@ export function buildManualOtherPlanWireRoute(
   targetPlacementId: string
 ): PlanWireRoute | null {
   if (sourcePlacementId === targetPlacementId) return null
-  const panels = getElectricalPanelsFromProject(project)
+  const panels = selectProjectElectricalPanels(project)
   const source = findCircuitMatchForPlacement(project, panels, floorId, sourcePlacementId)
   const target = findCircuitMatchForPlacement(project, panels, floorId, targetPlacementId)
   if (!source || !target) return null
@@ -461,12 +478,12 @@ export function buildManualOtherPlanWireRoute(
   ) => {
     const panelId =
       panelSide.endpoint.endpoint.symbol === 'panel_distribution'
-        ? panelSide.endpoint.endpoint.panelId ?? panelSide.panel.id
+        ? (panelSide.endpoint.endpoint.panelId ?? panelSide.panel.id)
         : null
     return Boolean(
       panelId &&
-        panelHasElectricalPathTo(panels, panelId, otherSide.panel.id) &&
-        isCircuitEntryEndpoint(otherSide)
+      panelHasElectricalPathTo(panels, panelId, otherSide.panel.id) &&
+      isCircuitEntryEndpoint(otherSide)
     )
   }
   const hasElectricalPath =
@@ -574,7 +591,7 @@ export function buildManualPlanWireRoutesForPlacementMove(
   targetPlacementId: string
 ): PlanWireRoute[] | null {
   if (sourcePlacementId === targetPlacementId) return null
-  const panels = getElectricalPanelsFromProject(project)
+  const panels = selectProjectElectricalPanels(project)
   const sameBranch = findCircuitSequenceForPlacements(
     panels,
     floorId,
@@ -584,12 +601,7 @@ export function buildManualPlanWireRoutesForPlacementMove(
   const circuitMatch =
     sameBranch ??
     (() => {
-      const found = findCircuitForPlacements(
-        panels,
-        floorId,
-        sourcePlacementId,
-        targetPlacementId
-      )
+      const found = findCircuitForPlacements(panels, floorId, sourcePlacementId, targetPlacementId)
       return found
         ? {
             panel: found.panel,
@@ -650,7 +662,7 @@ export function buildManualPlanWireRoutesForPlacementMove(
     branchId,
     kind: routeKind,
   })
-  const existingGroup = getPlanWiringFromProject(project).routes.filter(
+  const existingGroup = selectProjectPlanWireRoutes(project).filter(
     (route) => planWireSpanSetKey(route) === groupKey
   )
   const baseRoutes =
@@ -748,7 +760,11 @@ export function deriveAutoPlanWireRoutes(
   includeKinds: Iterable<PlanWireKind>
 ): PlanWireRoute[] {
   if (!project || !floorId) return []
-  return collectRoutesForPanels(getElectricalPanelsFromProject(project), floorId, new Set(includeKinds))
+  return collectRoutesForPanels(
+    selectProjectElectricalPanels(project),
+    floorId,
+    new Set(includeKinds)
+  )
 }
 
 /** Match a manual override to its auto-routed equivalent (same id or same symbol pair). */
@@ -774,9 +790,7 @@ export function removePlanWireRouteWaypoint(
   route: PlanWireRoute,
   waypointIndex: number
 ): boolean {
-  const planWiring = getMutablePlanWiringFromProject(project)
-  if (!planWiring?.routes) return false
-  const routes = planWiring.routes
+  const routes = selectProjectPlanWireRoutes(project)
   const existingIndex = routes.findIndex((candidate) => candidate.id === route.id)
   if (existingIndex < 0) return false
   const existing = routes[existingIndex]
@@ -797,6 +811,7 @@ export function removePlanWireRouteWaypoint(
     existing.waypoints = waypoints
     existing.source = 'manual'
   }
+  replacePlanWireRoutesForProject(project, routes)
   return true
 }
 
@@ -806,7 +821,7 @@ export function hidePlanSocketWireRouteForPlacementDrop(
   placementId: string
 ): boolean {
   const autoRoutes = deriveAutoPlanWireRoutes(project, floorId, ['sockets'])
-  const manualRoutes = getPlanWiringFromProject(project).routes.filter(
+  const manualRoutes = selectProjectPlanWireRoutes(project).filter(
     (route) => route.floorId === floorId && route.kind === 'sockets'
   )
   const mergedRoutes = mergePlanWireRoutes(autoRoutes, manualRoutes)
@@ -815,7 +830,7 @@ export function hidePlanSocketWireRouteForPlacementDrop(
   )
   if (routes.length === 0) return false
 
-  const planWiring = ensureMutablePlanWiringForProject(project)
+  const storedRoutes = selectProjectPlanWireRoutes(project)
   const hiddenRoutes: PlanWireRoute[] = routes.map((route) => ({
     ...route,
     source: 'manual',
@@ -823,10 +838,10 @@ export function hidePlanSocketWireRouteForPlacementDrop(
     waypoints: undefined,
   }))
   const hiddenRouteIds = new Set(hiddenRoutes.map((route) => route.id))
-  planWiring.routes = [
-    ...planWiring.routes.filter((candidate) => !hiddenRouteIds.has(candidate.id)),
+  replacePlanWireRoutesForProject(project, [
+    ...storedRoutes.filter((candidate) => !hiddenRouteIds.has(candidate.id)),
     ...hiddenRoutes,
-  ]
+  ])
   return true
 }
 
@@ -864,7 +879,7 @@ export function filterPlanWireRoutesForPanel(
   options?: {
     allowedPlacementIds?: ReadonlySet<string>
     project?: ProjectWithOptionalV2Electrical | null
-  },
+  }
 ): PlanWireRoute[] {
   if (!panelId) return routes
 
@@ -882,15 +897,38 @@ export function filterPlanWireRoutesForPanel(
     }
     if (route.panelId === panelId) return true
     if (!project) return false
-    const panels = getElectricalPanelsFromProject(project)
+    const panels = selectProjectElectricalPanels(project)
     const fromPanel = route.from.endpointId
       ? resolveEndpointPanelId(panels, route.from.endpointId)
       : null
-    const toPanel = route.to.endpointId
-      ? resolveEndpointPanelId(panels, route.to.endpointId)
-      : null
+    const toPanel = route.to.endpointId ? resolveEndpointPanelId(panels, route.to.endpointId) : null
     return fromPanel === panelId && toPanel === panelId
   })
+}
+
+/**
+ * Keep plan wires attached to symbols that are currently visible on the
+ * situation plan. A route with an explicit placement id must match that
+ * placement; legacy routes without placement ids fall back to endpoint or
+ * trunk-device visibility.
+ */
+export function filterPlanWireRoutesForSymbolVisibility(
+  routes: PlanWireRoute[],
+  options: {
+    visiblePlacementIds: ReadonlySet<string>
+    visibleEndpointIds: ReadonlySet<string>
+    visibleTrunkDeviceIds: ReadonlySet<string>
+  }
+): PlanWireRoute[] {
+  const isVisible = (endpoint: PlanWireRoute['from']): boolean => {
+    if (endpoint.placementId) return options.visiblePlacementIds.has(endpoint.placementId)
+    if (endpoint.trunkDeviceId && options.visibleTrunkDeviceIds.has(endpoint.trunkDeviceId)) {
+      return true
+    }
+    return options.visibleEndpointIds.has(endpoint.endpointId)
+  }
+
+  return routes.filter((route) => isVisible(route.from) && isVisible(route.to))
 }
 
 export function mergePlanWireRoutes(
@@ -1078,7 +1116,10 @@ function normalizePlanWireRoute(
   }
 }
 
-function manualPlanWireRouteIsStillLegal(project: PlanWiringProject, route: PlanWireRoute): boolean {
+function manualPlanWireRouteIsStillLegal(
+  project: PlanWiringProject,
+  route: PlanWireRoute
+): boolean {
   const fromPlacementId = route.from.placementId
   const toPlacementId = route.to.placementId
   if (!fromPlacementId || !toPlacementId) return true
@@ -1109,22 +1150,20 @@ function manualPlanWireRouteIsStillLegal(project: PlanWiringProject, route: Plan
  */
 export function healPlanWiring(project: PlanWiringProject): boolean {
   let changed = false
-  const projectFloorIds = new Set(getBuildingFloorsFromProject(project).map((floor) => floor.id))
-  const index = collectPlanWiringIndex(getElectricalPanelsFromProject(project))
+  const projectFloorIds = new Set(selectProjectBuildingFloors(project).map((floor) => floor.id))
+  const index = collectPlanWiringIndex(selectProjectElectricalPanels(project))
 
-  const raw = getMutablePlanWiringFromProject(project)
-  if (!raw) {
+  const raw = selectProjectPlanWiringProjection(project)
+  if (raw.routes.length === 0 && Object.keys(raw.visibility ?? {}).length === 0) {
     return false
   }
 
   if (raw.version !== 1) {
-    raw.version = 1
     changed = true
   }
 
   const routesInput = Array.isArray(raw.routes) ? raw.routes : []
   if (!Array.isArray(raw.routes)) {
-    raw.routes = routesInput
     changed = true
   }
 
@@ -1138,7 +1177,7 @@ export function healPlanWiring(project: PlanWiringProject): boolean {
     healedRoutes.length !== routesInput.length ||
     JSON.stringify(healedRoutes) !== JSON.stringify(routesInput)
   ) {
-    raw.routes = healedRoutes
+    replacePlanWireRoutesForProject(project, healedRoutes)
     changed = true
   }
 
@@ -1146,12 +1185,12 @@ export function healPlanWiring(project: PlanWiringProject): boolean {
   const resolvedVisibility = resolvePlanWiringVisibility(raw)
   const nextVisibility: PlanWiringVisibility = { ...resolvedVisibility }
   if (JSON.stringify(raw.visibility ?? null) !== JSON.stringify(nextVisibility)) {
-    raw.visibility = nextVisibility
+    replacePlanWiringVisibilityForProject(project, nextVisibility)
     changed = true
   }
 
   if (healedRoutes.length === 0 && !hadStoredVisibility) {
-    deletePlanWiringFromProject(project)
+    clearPlanWiringForProject(project)
     changed = true
   }
 

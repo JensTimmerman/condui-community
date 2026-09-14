@@ -21,8 +21,8 @@ import { getEndpointTypeFromSymbol } from '@/utils'
 import { createEmptyCircuitOnPanel } from '@/handlers/plan/dropHandlers'
 import type { Circuit } from '@/types/schema'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  selectProjectElectricalInstallation,
+  selectProjectElectricalPanels,
 } from '@/lib/projectV2/electrical'
 import { APP_MODAL_BACKDROP_ATTR } from '@/lib/ui/appModalInteraction'
 import { clamp } from '@/lib/geometry'
@@ -147,7 +147,7 @@ function PlanDropCircuitPanelInner({
     : dropKind
 
   const panelsFlat = useMemo(
-    () => (currentProject ? flattenPanels(getElectricalPanelsFromProject(currentProject)) : []),
+    () => (currentProject ? flattenPanels(selectProjectElectricalPanels(currentProject)) : []),
     [currentProject]
   )
 
@@ -182,7 +182,7 @@ function PlanDropCircuitPanelInner({
   )
 
   const automaticCircuitNaming = Boolean(
-    currentProject ? getElectricalInstallationFromProject(currentProject)?.eendraadAutomaticNaming : false
+    currentProject ? selectProjectElectricalInstallation(currentProject)?.eendraadAutomaticNaming : false
   )
 
   const ignoredEndpointIds = useMemo(() => new Set(endpointIds), [endpointIds])
@@ -259,7 +259,7 @@ function PlanDropCircuitPanelInner({
     const store = useProjectStore.getState()
     const project = store.currentProject
     if (!project) return
-    const panel = flattenPanels(getElectricalPanelsFromProject(project)).find((p) => p.id === panelId)
+    const panel = flattenPanels(selectProjectElectricalPanels(project)).find((p) => p.id === panelId)
     const circuit = store.getCircuitById(circuitId)
     const code = circuit?.code?.trim()
     if (!panel || !code) return
@@ -280,7 +280,7 @@ function PlanDropCircuitPanelInner({
         const store = useProjectStore.getState()
         const project = store.currentProject
         if (!project) return false
-        const panel = flattenPanels(getElectricalPanelsFromProject(project)).find((p) => p.id === panelId)
+        const panel = flattenPanels(selectProjectElectricalPanels(project)).find((p) => p.id === panelId)
         if (!panel) return false
         const insertIndex = getPlanDropCircuitInsertIndexForCode(panel, targetCircuitId, requestedCode)
         store.updateCircuit(targetCircuitId, {

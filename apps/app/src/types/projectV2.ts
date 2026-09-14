@@ -7,7 +7,9 @@ import type {
   Panel,
   PlanWiringModel,
   Point2,
-  Project,
+  ProjectMetadata,
+  QuarantinedItem,
+  WireSegment,
 } from './schema'
 import type { ViewportLayout } from './ui'
 import type { AuxiliaryElectricalEnclosure, OffGridSupplyAssembly } from './supplyAssembly'
@@ -63,18 +65,18 @@ export interface ProjectV2Meta {
   origin?: ProjectTemplateOriginV2
   locale?: string
   yearOfConstruction?: number
-  installDateColors?: Project['project']['installDateColors']
+  installDateColors?: ProjectMetadata['installDateColors']
   meterEanCode?: string
   lastActiveFloorId?: string
   lastActivePanelId?: string
   lastViewportLayout?: ViewportLayout
   planFloorOverlayVisibleByBaseFloorId?: Record<string, string[]>
-  protectionCreationTemplates?: Project['project']['protectionCreationTemplates']
-  customer?: Project['project']['customer']
-  inspectionAgency?: Project['project']['inspectionAgency']
-  showInspectionAgencyInInfoBlock?: Project['project']['showInspectionAgencyInInfoBlock']
-  installerOverride?: Project['project']['installerOverride']
-  importSources?: Project['project']['importSources']
+  protectionCreationTemplates?: ProjectMetadata['protectionCreationTemplates']
+  customer?: ProjectMetadata['customer']
+  inspectionAgency?: ProjectMetadata['inspectionAgency']
+  showInspectionAgencyInInfoBlock?: ProjectMetadata['showInspectionAgencyInInfoBlock']
+  installerOverride?: ProjectMetadata['installerOverride']
+  importSources?: ProjectMetadata['importSources']
 }
 
 export interface ProjectTemplateOriginV2 {
@@ -390,7 +392,7 @@ export interface ElectricalDeviceV2 {
 export interface OneWireModelV2 {
   notes?: Note[]
   frames?: Frame[]
-  wireSegments?: Project['wireSegments']
+  wireSegments?: WireSegment[]
 }
 
 export interface ElectricalModelV2 {
@@ -414,7 +416,7 @@ export interface DisciplineModelsV2 {
 
 export interface ValidationStateV2 {
   lastValidatedAt?: string
-  quarantinedItems?: Project['quarantinedItems']
+  quarantinedItems?: QuarantinedItem[]
 }
 
 export type ChronologyDateGranularityV2 = 'year' | 'month' | 'day' | 'instant'

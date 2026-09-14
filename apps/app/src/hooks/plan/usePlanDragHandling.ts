@@ -1,6 +1,6 @@
 import { useRef, useCallback, useState } from 'react'
 import { useUIStore } from '@/stores/uiStore'
-import { useProjectStore } from '@/stores/projectStore'
+import { useProjectStore, type ProjectState } from '@/stores/projectStore'
 import { usePlanDragVisualStore } from '@/stores/planDragVisualStore'
 import { resetPlanDragVisualFlush, schedulePlanDragVisualFlush } from './planDragVisualFlush'
 import {
@@ -17,7 +17,7 @@ import type {
   TrunkDevice,
   Wall,
 } from '@/types/schema'
-import { getElectricalInstallationFromProject, getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
+import { selectProjectElectricalInstallation, selectProjectElectricalPanels } from '@/lib/projectV2/electrical'
 import { getPlanPlacementSelectionIds } from '@/lib/plan/planMarqueeSelection'
 
 interface UsePlanDragHandlingResult {
@@ -74,6 +74,22 @@ type DragMoveEvent = {
   }
 }
 
+type SingleDragHandlers = {
+  onDragStart: () => void
+  onDragMove: (e: DragMoveEvent) => void
+  onDragEnd: (finalPos: Point) => void
+}
+
+type SingleDragHandlersCacheEntry = {
+  placement: Placement
+  labelPositions: Map<string, { x: number; y: number }>
+  baseSymbolSizePx: number
+  planImage: HTMLImageElement | null
+  planImagePosition: { x: number; y: number }
+  activeFloorId: string | null
+  handlers: SingleDragHandlers
+}
+
 type PlacementOrientContext = {
   image?: HTMLImageElement | null
   imagePosition?: { x: number; y: number }
@@ -109,16 +125,24 @@ export function usePlanDragHandling(
     (pos: Point) => (snapPlacementPosition ? snapPlacementPosition(pos) : pos),
     [snapPlacementPosition],
   )
-  const {
-    getEndpointById,
-    getPlacementsByFloor,
-    getFloorById,
-    updatePlacement,
-    updatePlacementsBatch,
-    movePlanPlacementsToFloor,
-    updateJunctionPanelPlacement,
-    updateEarthingPlacement,
-  } = useProjectStore()
+  const getEndpointById = useProjectStore((state: ProjectState) => state.getEndpointById)
+  const getPlacementsByFloor = useProjectStore(
+    (state: ProjectState) => state.getPlacementsByFloor
+  )
+  const getFloorById = useProjectStore((state: ProjectState) => state.getFloorById)
+  const updatePlacement = useProjectStore((state: ProjectState) => state.updatePlacement)
+  const updatePlacementsBatch = useProjectStore(
+    (state: ProjectState) => state.updatePlacementsBatch
+  )
+  const movePlanPlacementsToFloor = useProjectStore(
+    (state: ProjectState) => state.movePlanPlacementsToFloor
+  )
+  const updateJunctionPanelPlacement = useProjectStore(
+    (state: ProjectState) => state.updateJunctionPanelPlacement
+  )
+  const updateEarthingPlacement = useProjectStore(
+    (state: ProjectState) => state.updateEarthingPlacement
+  )
   const isDraggingRef = useRef(false)
   const crossFloorContinuationRef = useRef(false)
   const activeDragPlacementIdsRef = useRef<Set<string>>(new Set())
@@ -126,6 +150,7 @@ export function usePlanDragHandling(
   const dragLabelOffsetsRef = useRef<Map<string, { dx: number; dy: number }>>(new Map())
   /** Latest drag positions during multi-drag; ref so drag-end always has last pointer-move values. */
   const dragPositionsCommitRef = useRef<Map<string, Point>>(new Map())
+  const singleDragHandlersCacheRef = useRef<Map<string, SingleDragHandlersCacheEntry>>(new Map())
   const [labelRecalcKey, setLabelRecalcKey] = useState(0)
 
   const seedDragLabels = useCallback((positions: Map<string, { x: number; y: number }>) => {
@@ -419,7 +444,19 @@ export function usePlanDragHandling(
   }, [activeFloorId, clearDragVisuals, getEndpointById, getFloorById, getPlacementsByFloor, initDragLabelOffset, calculateDragLabelPosition, planImage, planImagePosition, seedDragLabels, snapPos, updatePlacement, updatePlacementsBatch, updateJunctionPanelPlacement, updateEarthingPlacement])
 
   const createSingleDragHandlers = useCallback((placement: Placement, labelPositions: Map<string, { x: number; y: number }>, baseSymbolSizePx: number, planImage: HTMLImageElement | null, planImagePosition: { x: number; y: number }, activeFloorId: string | null) => {
-    return {
+    const cached = singleDragHandlersCacheRef.current.get(placement.id)
+    if (
+      cached?.placement === placement &&
+      cached.labelPositions === labelPositions &&
+      cached.baseSymbolSizePx === baseSymbolSizePx &&
+      cached.planImage === planImage &&
+      cached.planImagePosition === planImagePosition &&
+      cached.activeFloorId === activeFloorId
+    ) {
+      return cached.handlers
+    }
+
+    const handlers: SingleDragHandlers = {
       onDragStart: () => {
         isDraggingRef.current = true
         crossFloorContinuationRef.current = false
@@ -538,6 +575,16 @@ export function usePlanDragHandling(
         setLabelRecalcKey((prev) => prev + 1)
       },
     }
+    singleDragHandlersCacheRef.current.set(placement.id, {
+      placement,
+      labelPositions,
+      baseSymbolSizePx,
+      planImage,
+      planImagePosition,
+      activeFloorId,
+      handlers,
+    })
+    return handlers
   }, [clearDragVisuals, initDragLabelOffset, calculateDragLabelPosition, getEndpointById, getFloorById, seedDragLabels, snapPos, updatePlacement])
 
   const createSelectionFrameDragHandlers = useCallback((labelPositions: Map<string, { x: number; y: number }>) => {
@@ -556,7 +603,7 @@ export function usePlanDragHandling(
         const floorPlacements = getPlacementsByFloor(activeFloorId)
         const store = useProjectStore.getState()
         const inst = store.currentProject
-          ? getElectricalInstallationFromProject(store.currentProject)
+          ? selectProjectElectricalInstallation(store.currentProject)
           : undefined
 
         floorPlacements.forEach((row: PlacementRow) => {
@@ -585,7 +632,7 @@ export function usePlanDragHandling(
                 ?.filter(labelMatchesJunction)
                 .forEach((d: TrunkDevice) => candidateIds.push(d.id))
 
-              ;(store.currentProject ? getElectricalPanelsFromProject(store.currentProject) : []).forEach((panel: Panel) => {
+              ;(store.currentProject ? selectProjectElectricalPanels(store.currentProject) : []).forEach((panel: Panel) => {
                 const circuits = [
                   ...(panel.circuits ?? []),
                   ...(panel.protections?.flatMap((pr: ProtectionDevice) => pr.circuits ?? []) ?? []),

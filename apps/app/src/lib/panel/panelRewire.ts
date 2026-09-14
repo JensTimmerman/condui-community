@@ -1,12 +1,19 @@
 import { ensureInstallationFeedTopology, getPanelFeedProjection } from '@/lib/feedTopology'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
+  selectProjectSupplyAssemblies,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { getCircuitIdFromModuleRef } from '@/components/canvas/panel/panelRelationEdges'
 import { panelGridModuleRefKey } from '@/components/canvas/panel/panelGridLayout'
 import { isSupplyTopologyEnabled } from '@/lib/supplyTopologyFeature'
+import {
+  buildSupplyElectricalTopology,
+  getSupplyNodePhysicalDeviceId,
+  resolveAssemblyPanelInput,
+  resolveCommonLoadTail,
+} from '@/lib/supplyAssembly/electricalTopology'
 import type {
   Circuit,
   Panel,
@@ -33,6 +40,13 @@ export type PanelRewireOperation =
       insertIndex: number
       trunkDevice: Omit<TrunkDevice, 'id'>
     }
+  | {
+      kind: 'promoteProtectionToRootSupply'
+      protectionId: string
+      circuit: Circuit
+      insertIndex: number
+      trunkDevice: Omit<TrunkDevice, 'id'>
+    }
   | { kind: 'detachCircuitFromSupplyParent'; parentCircuitId: string; subCircuitIds?: string[] }
   | { kind: 'rewireCircuit'; originCircuitId: string; targetCircuitId: string }
 
@@ -45,9 +59,9 @@ export function getSharedSupplyRefKeysForPanel(
   panel: Panel | null,
 ): Set<string> {
   if (!panel?.isMain) return new Set()
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   if (!installation) return new Set()
-  const projection = getPanelFeedProjection(installation, getElectricalPanelsFromProject(project), panel)
+  const projection = getPanelFeedProjection(installation, getProjectElectricalPanels(project), panel)
   return new Set(
     (projection?.sharedFeed.trunkDevices ?? []).map((device) =>
       panelGridModuleRefKey({ kind: 'trunkDevice', id: device.id, scope: 'supply' }),
@@ -60,9 +74,9 @@ export function getSharedSupplyRefsForPanel(
   panel: Panel | null,
 ): PanelGridModuleRef[] {
   if (!panel?.isMain) return []
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   if (!installation) return []
-  const projection = getPanelFeedProjection(installation, getElectricalPanelsFromProject(project), panel)
+  const projection = getPanelFeedProjection(installation, getProjectElectricalPanels(project), panel)
   return (projection?.sharedFeed.trunkDevices ?? []).map(
     (device) => ({ kind: 'trunkDevice', id: device.id, scope: 'supply' }) as PanelGridModuleRef,
   )
@@ -82,13 +96,43 @@ export function isSharedSupplyTailRef(
   ref: PanelGridModuleRef
 ): ref is SupplyTrunkModuleRef {
   if (!isSupplyTrunkRef(ref)) return false
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   if (!installation) return false
   const topology = ensureInstallationFeedTopology(
     installation,
-    getElectricalPanelsFromProject(project)
+    getProjectElectricalPanels(project)
   )
-  return topology.sharedFeed.trunkDevices?.at(-1)?.id === ref.id
+  const ownedTail = assemblySupplyTail(project, ref)
+  return ownedTail ?? topology.sharedFeed.trunkDevices?.at(-1)?.id === ref.id
+}
+
+/** Undefined means the source is outside assembly ownership, not an unresolved output. */
+function assemblySupplyTail(
+  project: ProjectWithOptionalV2Electrical,
+  ref: SupplyTrunkModuleRef
+): boolean | undefined {
+  const installation = getProjectElectricalInstallation(project)
+  if (!installation) return undefined
+  const topology = ensureInstallationFeedTopology(installation, getProjectElectricalPanels(project))
+  const shared = topology.sharedFeed.trunkDevices?.some((device) => device.id === ref.id)
+  const feeds = topology.rootFeeds.filter((feed) => feed.trunkDevices?.some((device) => device.id === ref.id))
+  const assemblies = selectProjectSupplyAssemblies(project).filter((assembly) =>
+    shared ||
+    assembly.nodes.some((node) => getSupplyNodePhysicalDeviceId(node) === ref.id) ||
+    [assembly.incomingAttachment, ...assembly.loadHandoffs.map((handoff) => handoff.target)].some(
+      (target) => feeds.some((feed) => resolveAssemblyPanelInput(project, target)?.panelId === feed.panelId)
+    )
+  )
+  if (!assemblies.length) return undefined
+  return assemblies.some((assembly) => {
+    const tail = resolveCommonLoadTail(assembly, project)
+    const node = tail && assembly.nodes.find((candidate) => candidate.id === tail.nodeId)
+    if (!node) return false
+    const physicalId = getSupplyNodePhysicalDeviceId(node)
+    if (physicalId) return physicalId === ref.id
+    const parents = buildSupplyElectricalTopology(project).assemblyNodeParents(assembly.id, node.id)
+    return parents.length === 1 && parents[0]?.kind === 'device' && parents[0].deviceId === ref.id
+  })
 }
 
 /** True when a supply-strip device is the terminal device of any root-panel feed. */
@@ -97,13 +141,14 @@ export function isRootSupplyTailRef(
   ref: PanelGridModuleRef
 ): ref is SupplyTrunkModuleRef {
   if (!isSupplyTrunkRef(ref)) return false
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   if (!installation) return false
   const topology = ensureInstallationFeedTopology(
     installation,
-    getElectricalPanelsFromProject(project)
+    getProjectElectricalPanels(project)
   )
-  return topology.rootFeeds.some((feed) => feed.trunkDevices?.at(-1)?.id === ref.id)
+  const ownedTail = assemblySupplyTail(project, ref)
+  return ownedTail ?? topology.rootFeeds.some((feed) => feed.trunkDevices?.at(-1)?.id === ref.id)
 }
 
 export function isRootSupplyTailOrSharedSupplyTailRef(
@@ -290,9 +335,19 @@ export function getPanelRewireOperation(
 
   const originStrip = isModuleRefOnSupplyStrip(panel, origin)
   const targetStrip = isModuleRefOnSupplyStrip(panel, target)
-  if (originStrip != null && targetStrip != null && originStrip !== targetStrip) return null
+  const mainInput = panel.isMain === true
+    ? getPanelRootPromotionTargetRef({ ...panel, isMain: false })
+    : null
+  const connectsMainInput = mainInput != null && (
+    (isSupplyTrunkRef(origin) && panelGridModuleRefKey(mainInput) === panelGridModuleRefKey(target)) ||
+    (isSupplyTrunkRef(target) && panelGridModuleRefKey(mainInput) === panelGridModuleRefKey(origin))
+  )
+  if (
+    originStrip != null && targetStrip != null && originStrip !== targetStrip &&
+    !connectsMainInput
+  ) return null
 
-  const panels = getElectricalPanelsFromProject(currentProject)
+  const panels = getProjectElectricalPanels(currentProject)
   const originIsSupply = isSupplyTrunkRef(origin)
   const targetIsSupply = isSupplyTrunkRef(target)
 
@@ -321,6 +376,14 @@ export function getPanelRewireOperation(
   if (originIsSupply || targetIsSupply) {
     const supplyRef = originIsSupply ? origin : target
     const otherRef = originIsSupply ? target : origin
+    // A panel input cannot be moved into the middle of an assembly by mistaking
+    // an attempted panel rewire for promotion of its first protection.
+    const incomingRef = getPanelRootPromotionTargetRef({ ...panel, isMain: false })
+    if (
+      isSupplyTrunkRef(supplyRef) && assemblySupplyTail(currentProject, supplyRef) !== undefined &&
+      incomingRef &&
+      panelGridModuleRefKey(incomingRef) === panelGridModuleRefKey(otherRef)
+    ) return null
     if (!isSharedSupplyTrunkRef(currentProject, panel, supplyRef)) return null
 
     if (otherRef.kind === 'protection') {
@@ -328,6 +391,27 @@ export function getPanelRewireOperation(
       if (!targetProtection?.circuits?.length) return null
       const circuit = targetProtection.circuits[0]
       if (!circuit || (circuit.subCircuitIds?.length ?? 0) > 1) return null
+      const isPanelInput = panel.isMain === true && incomingRef != null &&
+        panelGridModuleRefKey(incomingRef) === panelGridModuleRefKey(otherRef)
+      if (isPanelInput) {
+        // Connecting a main-panel input must never turn its protection into a
+        // common device upstream of every other main panel.
+        // The promotion writer transfers one circuit; reject a multi-circuit
+        // protection rather than leaving a duplicate protection behind.
+        if (targetProtection.circuits.length !== 1) return null
+        if (!isSharedSupplyTailRef(currentProject, supplyRef)) return null
+        const installation = getProjectElectricalInstallation(currentProject)
+        if (!installation) return null
+        const projection = getPanelFeedProjection(installation, panels, panel)
+        if (projection?.rootFeed?.trunkDevices?.length) return null
+        return {
+          kind: 'promoteProtectionToRootSupply',
+          protectionId: otherRef.id,
+          circuit,
+          insertIndex: 0,
+          trunkDevice: trunkDeviceFromProtection(targetProtection, circuit, 0),
+        }
+      }
       const supplyDeviceIndex = getSharedSupplyDeviceIndex(currentProject, panel, supplyRef.id)
       const insertIndex = supplyDeviceIndex >= 0
         ? supplyDeviceIndex + 1

@@ -147,6 +147,12 @@ function Dialog() {
     return 'bg-gray-100 dark:bg-gray-700'
   }
 
+  const titleIcon = dialog.type === 'custom' ? dialog.titleIcon : renderIcon()
+  const titleIconBackground =
+    dialog.type === 'custom' && dialog.titleIcon
+      ? 'bg-sky-100 text-sky-600 dark:bg-sky-900/30 dark:text-sky-400'
+      : iconBgColor()
+
   if (typeof document === 'undefined') return null
 
   return createPortal(
@@ -165,9 +171,11 @@ function Dialog() {
         {(dialog.title || dialog.showCloseButton !== false) && (
           <div className="flex flex-shrink-0 items-center justify-between gap-3 border-b border-gray-200 px-4 py-3 dark:border-gray-700 sm:px-6 sm:py-4">
             <div className="flex min-w-0 items-center gap-3">
-              {renderIcon() && (
-                <div className={`hidden h-10 w-10 flex-shrink-0 items-center justify-center rounded-full sm:flex ${iconBgColor()}`}>
-                  {renderIcon()}
+              {titleIcon && (
+                <div
+                  className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full ${titleIconBackground}`}
+                >
+                  {titleIcon}
                 </div>
               )}
               {dialog.title && (
@@ -189,174 +197,173 @@ function Dialog() {
         )}
 
         {/* Content */}
-        {(dialog.type === 'custom' ||
-          dialog.type === 'prompt' ||
-          !!dialog.message) && (
-        <div
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 sm:px-6 sm:py-4"
-          style={{ WebkitOverflowScrolling: 'touch' }}
-        >
-          {dialog.type === 'custom' ? (
-            dialog.content
-          ) : (
-            <>
-              {dialog.message && (
-                <p className="text-gray-600 dark:text-gray-400 whitespace-pre-wrap">
-                  {dialog.message}
-                </p>
-              )}
+        {(dialog.type === 'custom' || dialog.type === 'prompt' || !!dialog.message) && (
+          <div
+            data-export-scroll={dialog.id === 'label-strip-export' ? 'true' : undefined}
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 sm:px-6 sm:py-4"
+            style={{ WebkitOverflowScrolling: 'touch' }}
+          >
+            {dialog.type === 'custom' ? (
+              dialog.content
+            ) : (
+              <>
+                {dialog.message && (
+                  <p className="text-gray-600 dark:text-gray-400 whitespace-pre-wrap">
+                    {dialog.message}
+                  </p>
+                )}
 
-              {dialog.type === 'prompt' && (
-                <div className="mt-4">
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    {dialog.inputLabel || t('dialog.inputLabel')}
-                  </label>
-                  <input
-                    ref={inputRef}
-                    type={dialog.inputType || 'text'}
-                    value={promptValue}
-                    onChange={(e) => {
-                      setPromptValue(e.target.value)
-                      if (promptError && dialog.inputValidator) {
-                        const error = dialog.inputValidator(e.target.value)
-                        setPromptError(error)
-                      }
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault()
-                        handlePromptConfirm()
-                      }
-                    }}
-                    onBlur={() => {
-                      if (dialog.inputValidator) {
-                        const error = dialog.inputValidator(promptValue)
-                        setPromptError(error)
-                      }
-                    }}
-                    placeholder={dialog.inputPlaceholder}
-                    className={`w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-sky-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white ${
-                      promptError
-                        ? 'border-red-500 dark:border-red-500'
-                        : 'border-gray-300 dark:border-gray-600'
-                    }`}
-                  />
-                  {promptError && (
-                    <p className="mt-1 text-sm text-red-600 dark:text-red-400">{promptError}</p>
-                  )}
-                </div>
-              )}
-            </>
-          )}
-        </div>
+                {dialog.type === 'prompt' && (
+                  <div className="mt-4">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      {dialog.inputLabel || t('dialog.inputLabel')}
+                    </label>
+                    <input
+                      ref={inputRef}
+                      type={dialog.inputType || 'text'}
+                      value={promptValue}
+                      onChange={(e) => {
+                        setPromptValue(e.target.value)
+                        if (promptError && dialog.inputValidator) {
+                          const error = dialog.inputValidator(e.target.value)
+                          setPromptError(error)
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          handlePromptConfirm()
+                        }
+                      }}
+                      onBlur={() => {
+                        if (dialog.inputValidator) {
+                          const error = dialog.inputValidator(promptValue)
+                          setPromptError(error)
+                        }
+                      }}
+                      placeholder={dialog.inputPlaceholder}
+                      className={`w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-sky-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white ${
+                        promptError
+                          ? 'border-red-500 dark:border-red-500'
+                          : 'border-gray-300 dark:border-gray-600'
+                      }`}
+                    />
+                    {promptError && (
+                      <p className="mt-1 text-sm text-red-600 dark:text-red-400">{promptError}</p>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         )}
 
         {/* Footer / Actions */}
         {dialog.type !== 'custom' || dialog.buttons || dialog.footerStart ? (
-        <div className="flex-shrink-0 border-t border-gray-200 px-4 py-3 dark:border-gray-700 sm:px-6 sm:py-4">
-          {dialog.type === 'custom' && dialog.buttons ? (
-            <div className="flex items-center justify-between gap-3">
-              {dialog.footerStart ? (
-                <div className="min-w-0 flex-1">{dialog.footerStart}</div>
-              ) : null}
-              <div
-                className={`flex min-w-0 flex-wrap justify-end gap-2 sm:gap-3 ${
-                  dialog.footerStart ? '' : 'ml-auto'
-                }`}
-              >
-                {dialog.buttons.map((button, index) => (
-                  <button
-                    key={index}
-                    data-testid={button.testId}
-                    onClick={() => {
-                      button.onClick()
-                      if (!dialog.onClose) {
-                        closeDialog()
-                      }
-                    }}
-                    autoFocus={button.autoFocus}
-                    className={`max-w-full whitespace-normal rounded-md px-4 py-2 text-center font-medium transition-colors ${
-                      button.variant === 'danger'
-                        ? 'bg-red-600 hover:bg-red-700 text-white'
-                        : button.variant === 'primary'
-                          ? 'bg-sky-600 hover:bg-sky-700 text-white'
-                          : 'border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-                    }`}
-                  >
-                    {button.label}
-                  </button>
-                ))}
+          <div className="flex-shrink-0 border-t border-gray-200 px-4 py-3 dark:border-gray-700 sm:px-6 sm:py-4">
+            {dialog.type === 'custom' && dialog.buttons ? (
+              <div className="flex items-center justify-between gap-3">
+                {dialog.footerStart ? (
+                  <div className="min-w-0 flex-1">{dialog.footerStart}</div>
+                ) : null}
+                <div
+                  className={`flex min-w-0 flex-wrap justify-end gap-2 sm:gap-3 ${
+                    dialog.footerStart ? '' : 'ml-auto'
+                  }`}
+                >
+                  {dialog.buttons.map((button, index) => (
+                    <button
+                      key={index}
+                      data-testid={button.testId}
+                      onClick={() => {
+                        button.onClick()
+                        if (!dialog.onClose) {
+                          closeDialog()
+                        }
+                      }}
+                      autoFocus={button.autoFocus}
+                      className={`max-w-full whitespace-normal rounded-md px-4 py-2 text-center font-medium transition-colors ${
+                        button.variant === 'danger'
+                          ? 'bg-red-600 hover:bg-red-700 text-white'
+                          : button.variant === 'primary'
+                            ? 'bg-sky-600 hover:bg-sky-700 text-white'
+                            : 'border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                      }`}
+                    >
+                      {button.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-          ) : dialog.type === 'confirm' ? (
-            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:gap-3">
-              <button
-                onClick={() => {
-                  if (dialog.onCancel) {
-                    dialog.onCancel()
-                  }
-                  handleClose()
-                }}
-                className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 font-medium rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-              >
-                {dialog.cancelLabel || t('common.cancel')}
-              </button>
-              <button
-                autoFocus
-                onClick={() => {
-                  dialog.onConfirm()
-                  handleClose()
-                }}
-                className={`flex-1 px-4 py-2 font-medium rounded-md transition-colors ${
-                  dialog.variant === 'danger'
-                    ? 'bg-red-600 hover:bg-red-700 text-white'
-                    : 'bg-sky-600 hover:bg-sky-700 text-white'
-                }`}
-              >
-                {dialog.confirmLabel || t('common.confirm')}
-              </button>
-            </div>
-          ) : dialog.type === 'prompt' ? (
-            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:gap-3">
-              <button
-                onClick={() => {
-                  if (dialog.onCancel) {
-                    dialog.onCancel()
-                  }
-                  handleClose()
-                }}
-                className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 font-medium rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-              >
-                {dialog.cancelLabel || t('common.cancel')}
-              </button>
-              <button
-                onClick={handlePromptConfirm}
-                disabled={!!promptError || (dialog.inputValidator && !promptValue.trim())}
-                className="flex-1 px-4 py-2 bg-sky-600 hover:bg-sky-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-medium rounded-md transition-colors"
-              >
-                {dialog.confirmLabel || t('common.confirm')}
-              </button>
-            </div>
-          ) : dialog.type === 'info' ? (
-            <div className="flex justify-end">
-              <button
-                onClick={() => {
-                  if (dialog.onConfirm) {
+            ) : dialog.type === 'confirm' ? (
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:gap-3">
+                <button
+                  onClick={() => {
+                    if (dialog.onCancel) {
+                      dialog.onCancel()
+                    }
+                    handleClose()
+                  }}
+                  className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 font-medium rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                >
+                  {dialog.cancelLabel || t('common.cancel')}
+                </button>
+                <button
+                  autoFocus
+                  onClick={() => {
                     dialog.onConfirm()
-                  }
-                  handleClose()
-                }}
-                className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white font-medium rounded-md transition-colors"
-              >
-                {dialog.confirmLabel || t('common.ok')}
-              </button>
-            </div>
-          ) : null}
-        </div>
+                    handleClose()
+                  }}
+                  className={`flex-1 px-4 py-2 font-medium rounded-md transition-colors ${
+                    dialog.variant === 'danger'
+                      ? 'bg-red-600 hover:bg-red-700 text-white'
+                      : 'bg-sky-600 hover:bg-sky-700 text-white'
+                  }`}
+                >
+                  {dialog.confirmLabel || t('common.confirm')}
+                </button>
+              </div>
+            ) : dialog.type === 'prompt' ? (
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:gap-3">
+                <button
+                  onClick={() => {
+                    if (dialog.onCancel) {
+                      dialog.onCancel()
+                    }
+                    handleClose()
+                  }}
+                  className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 font-medium rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                >
+                  {dialog.cancelLabel || t('common.cancel')}
+                </button>
+                <button
+                  onClick={handlePromptConfirm}
+                  disabled={!!promptError || (dialog.inputValidator && !promptValue.trim())}
+                  className="flex-1 px-4 py-2 bg-sky-600 hover:bg-sky-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-medium rounded-md transition-colors"
+                >
+                  {dialog.confirmLabel || t('common.confirm')}
+                </button>
+              </div>
+            ) : dialog.type === 'info' ? (
+              <div className="flex justify-end">
+                <button
+                  onClick={() => {
+                    if (dialog.onConfirm) {
+                      dialog.onConfirm()
+                    }
+                    handleClose()
+                  }}
+                  className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white font-medium rounded-md transition-colors"
+                >
+                  {dialog.confirmLabel || t('common.ok')}
+                </button>
+              </div>
+            ) : null}
+          </div>
         ) : null}
       </div>
     </div>,
-    document.body,
+    document.body
   )
 }
 

@@ -1,9 +1,9 @@
 import {
-  getBuildingFloorsFromProject,
+  selectProjectBuildingFloors,
   type ProjectWithOptionalV2Building,
 } from '@/lib/projectV2/buildingFloors'
 import {
-  getElectricalPanelsFromProject,
+  selectProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import type { Endpoint, Panel } from '@/types/schema'
@@ -58,7 +58,7 @@ function findPanelForEndpointInPanel(
 }
 
 function findPanelForEndpoint(project: SitplanExportProject, endpointId: string): Panel | undefined {
-  for (const panel of getElectricalPanelsFromProject(project)) {
+  for (const panel of selectProjectElectricalPanels(project)) {
     const found = findPanelForEndpointInPanel(panel, endpointId)
     if (found) return found
   }
@@ -113,7 +113,7 @@ function collectSitplanPlacements(project: SitplanExportProject): SitplanPlaceme
     }
   }
 
-  for (const panel of getElectricalPanelsFromProject(project)) {
+  for (const panel of selectProjectElectricalPanels(project)) {
     visitPanel(panel)
   }
   return placements
@@ -155,7 +155,7 @@ export function hasDuplicateSitplanEndpointLabels(project: SitplanExportProject)
     return panel.subPanels.some((subPanel) => visitPanel(subPanel))
   }
 
-  return getElectricalPanelsFromProject(project).some((panel) => visitPanel(panel))
+  return selectProjectElectricalPanels(project).some((panel) => visitPanel(panel))
 }
 
 /**
@@ -181,7 +181,7 @@ export function hasMultipleSitplanPanelsOnSameFloor(project: SitplanExportProjec
 }
 
 export function buildSitplanExportTargets(project: SitplanExportProject): SitplanExportTarget[] {
-  const floors = getBuildingFloorsFromProject(project)
+  const floors = selectProjectBuildingFloors(project)
 
   if (!hasMultipleSitplanPanelsOnSameFloor(project)) {
     return floors.map((floor) => ({
@@ -193,7 +193,7 @@ export function buildSitplanExportTargets(project: SitplanExportProject): Sitpla
   }
 
   const placements = collectSitplanPlacements(project)
-  const panels = collectPanels(getElectricalPanelsFromProject(project))
+  const panels = collectPanels(selectProjectElectricalPanels(project))
   const targets: SitplanExportTarget[] = []
 
   for (const floor of floors) {

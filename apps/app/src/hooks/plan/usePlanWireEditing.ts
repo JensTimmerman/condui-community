@@ -1,6 +1,11 @@
 import { useCallback } from 'react'
 import { useProjectStore, type ProjectState } from '@/stores/projectStore'
-import { ensureMutablePlanWiringForProject } from '@/lib/projectV2/planWiring'
+import {
+  selectProjectPlanWireRoutes,
+  selectProjectPlanWiringVisibility,
+  replacePlanWireRoutesForProject,
+  replacePlanWiringVisibilityForProject,
+} from '@/lib/projectV2/planWiring'
 import {
   buildManualOtherPlanWireRoute,
   buildManualPlanWireRoutesForPlacementMove,
@@ -19,26 +24,25 @@ type UsePlanWireEditingOptions = {
   currentProject: ProjectState['currentProject']
 }
 
-export function usePlanWireEditing({
-  activeFloorId,
-  currentProject,
-}: UsePlanWireEditingOptions) {
+export function usePlanWireEditing({ activeFloorId, currentProject }: UsePlanWireEditingOptions) {
   const insertPlanWireWaypoint = useCallback(
     (route: PlanWireRoute, point: Point2, waypointIndex: number) => {
       useProjectStore.setState((state: ProjectState) => {
         const project = state.currentProject
         if (!project) return
-        const planWiring = ensureMutablePlanWiringForProject(project)
-        planWiring.routes = upsertPlanWireRouteWaypoint(
-          planWiring.routes,
-          route,
-          point,
-          waypointIndex,
+        replacePlanWireRoutesForProject(
+          project,
+          upsertPlanWireRouteWaypoint(
+            selectProjectPlanWireRoutes(project),
+            route,
+            point,
+            waypointIndex
+          )
         )
         state.isDirty = true
       })
     },
-    [],
+    []
   )
 
   const movePlanWireWaypoint = useCallback(
@@ -46,26 +50,24 @@ export function usePlanWireEditing({
       useProjectStore.setState((state: ProjectState) => {
         const project = state.currentProject
         if (!project) return
-        const planWiring = ensureMutablePlanWiringForProject(project)
         const nextRoutes = movePlanWireRouteWaypoint(
-          planWiring.routes,
+          selectProjectPlanWireRoutes(project),
           route,
           waypointIndex,
-          point,
+          point
         )
         if (!nextRoutes) return
-        planWiring.routes = nextRoutes
+        replacePlanWireRoutesForProject(project, nextRoutes)
         state.isDirty = true
       })
     },
-    [],
+    []
   )
 
   const removePlanWireWaypoint = useCallback((route: PlanWireRoute, waypointIndex: number) => {
     useProjectStore.setState((state: ProjectState) => {
       const project = state.currentProject
       if (!project) return
-      ensureMutablePlanWiringForProject(project)
       if (removePlanWireRouteWaypoint(project, route, waypointIndex)) {
         state.isDirty = true
       }
@@ -79,42 +81,43 @@ export function usePlanWireEditing({
         currentProject,
         activeFloorId,
         sourcePlacementId,
-        targetPlacementId,
+        targetPlacementId
       )
       const routes = buildManualPlanWireRoutesForPlacementMove(
         currentProject,
         activeFloorId,
         sourcePlacementId,
-        targetPlacementId,
+        targetPlacementId
       )
       if (!otherRoute && (!routes || routes.length === 0)) return
       useProjectStore.setState((state: ProjectState) => {
         const project = state.currentProject
         if (!project) return
-        const planWiring = ensureMutablePlanWiringForProject(project)
+        const storedRoutes = selectProjectPlanWireRoutes(project)
+        const visibility = selectProjectPlanWiringVisibility(project)
         if (otherRoute) {
-          planWiring.routes = [
-            ...planWiring.routes.filter((route) => route.id !== otherRoute.id),
+          replacePlanWireRoutesForProject(project, [
+            ...storedRoutes.filter((route) => route.id !== otherRoute.id),
             otherRoute,
-          ]
-          planWiring.visibility = {
-            ...planWiring.visibility,
+          ])
+          replacePlanWiringVisibilityForProject(project, {
+            ...visibility,
             wiresVisible: true,
             otherVisible: true,
-          }
+          })
         } else if (routes) {
-          planWiring.routes = replacePlanWireSpanRoutes(planWiring.routes, routes)
+          replacePlanWireRoutesForProject(project, replacePlanWireSpanRoutes(storedRoutes, routes))
           const kind = routes[0]?.kind
-          planWiring.visibility = {
-            ...planWiring.visibility,
+          replacePlanWiringVisibilityForProject(project, {
+            ...visibility,
             wiresVisible: true,
             ...(kind === 'lighting-control' ? { lightingVisible: true } : { socketsVisible: true }),
-          }
+          })
         }
         state.isDirty = true
       })
     },
-    [activeFloorId, currentProject],
+    [activeFloorId, currentProject]
   )
 
   const removeManualOtherPlanWiresFromOrigin = useCallback(
@@ -124,8 +127,8 @@ export function usePlanWireEditing({
       useProjectStore.setState((state: ProjectState) => {
         const project = state.currentProject
         if (!project) return
-        const planWiring = ensureMutablePlanWiringForProject(project)
-        const routes = planWiring.routes.filter(
+        const storedRoutes = selectProjectPlanWireRoutes(project)
+        const routes = storedRoutes.filter(
           (route) =>
             !(
               route.source === 'manual' &&
@@ -134,14 +137,14 @@ export function usePlanWireEditing({
               route.from.placementId === sourcePlacementId
             )
         )
-        if (routes.length === planWiring.routes.length) return
-        planWiring.routes = routes
+        if (routes.length === storedRoutes.length) return
+        replacePlanWireRoutesForProject(project, routes)
         state.isDirty = true
         removed = true
       })
       return removed
     },
-    [activeFloorId],
+    [activeFloorId]
   )
 
   const hideSocketWireRouteForPlacementDrop = useCallback(
@@ -155,7 +158,7 @@ export function usePlanWireEditing({
         }
       })
     },
-    [activeFloorId],
+    [activeFloorId]
   )
 
   return {

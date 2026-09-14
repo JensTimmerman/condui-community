@@ -1,6 +1,6 @@
 import {
   appendUndoSnapshotInStore,
-  cloneProjectForHistory,
+  captureProjectForHistory,
   getProjectStoreApi,
   projectHistory,
 } from './projectStoreHistory'
@@ -14,16 +14,17 @@ import { logger } from '@/lib/logger'
 import {
   EENDRAAD_NAMING_DEBUG,
   cleanupPanelGridSlotsForDevice,
+  collectDomoticaEndpointIdsForDeletion,
   deletePanelFromProject,
   findCircuitById,
   findCircuitOwner,
   findEndpointById,
   getAllCircuits,
   getAllEndpoints,
-  getDomoticaChildEndpointIds,
   getOwningProtectionForCircuit,
   maybeApplyAutomaticEendraadNamingForPanel,
   normalizeDomoticaCircuit,
+  pruneStaleElectricalEndpointRecords,
   removeEndpointIdsFromCircuit,
   syncManualChronologyForInstallDateUpdate,
 } from '@/lib/eendraad/projectElectricalDomain'
@@ -34,16 +35,17 @@ import {
 } from '@/lib/plan/panelDistributionEndpoint'
 import { healPlanWiring } from '@/lib/plan/planWiring'
 import { syncPanelAndSituationPlanDeviceVisibility } from '@/lib/plan/panelPlanPlacementVisibility'
-import { getBuildingFloorsFromProject } from '@/lib/projectV2/buildingFloors'
+import { inheritEendraadLayoutForVisualEndpointChange } from '@/lib/layout/eendraadDerivedLayout'
+import { selectProjectBuildingFloors } from '@/lib/projectV2/buildingFloors'
 import {
-  getMutablePlanWiringFromProject,
-  syncPlanWiringFromCompatibility,
+  selectProjectPlanWireRoutes,
+  replacePlanWireRoutesForProject,
 } from '@/lib/projectV2/planWiring'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
-  getMutableElectricalInstallationForProject,
-  getMutableElectricalPanelsForProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
+  getEditableProjectElectricalInstallation,
+  getEditableProjectElectricalPanels,
 } from '@/lib/projectV2/electrical'
 import type {
   Circuit,
@@ -72,7 +74,7 @@ function findMutablePlacementOwner(
   project: Project,
   placementId: string
 ): MutablePlacementOwner | null {
-  const installation = getMutableElectricalInstallationForProject(project)
+  const installation = getEditableProjectElectricalInstallation(project)
   const installationTrunkDevices = [
     ...getAllSupplyTrunkDevices(project),
     ...(installation?.groundTrunkDevices ?? []),
@@ -82,7 +84,7 @@ function findMutablePlacementOwner(
     if (placement) return { placement }
   }
 
-  for (const panel of getMutableElectricalPanelsForProject(project)) {
+  for (const panel of getEditableProjectElectricalPanels(project)) {
     for (const endpoint of getAllEndpoints(panel)) {
       const placement = endpoint.placements.find((candidate) => candidate.id === placementId)
       if (!placement) continue
@@ -105,7 +107,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
   addGroundTrunkDevice: (device, insertIndex) =>
     set((state) => {
       if (state.currentProject) {
-        const installation = getMutableElectricalInstallationForProject(state.currentProject)
+        const installation = getEditableProjectElectricalInstallation(state.currentProject)
         if (!installation) return
         if (!installation.groundTrunkDevices) {
           installation.groundTrunkDevices = []
@@ -120,7 +122,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
   updateGroundTrunkDevice: (deviceId, updates) =>
     set((state) => {
       if (state.currentProject) {
-        const installation = getElectricalInstallationFromProject(state.currentProject)
+        const installation = getProjectElectricalInstallation(state.currentProject)
         const devices = installation?.groundTrunkDevices
         if (devices) {
           const device = devices.find((d) => d.id === deviceId)
@@ -141,8 +143,8 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
     set((state) => {
       if (state.currentProject) {
         const project = state.currentProject
-        const installation = getElectricalInstallationFromProject(project)
-        const panels = getElectricalPanelsFromProject(project)
+        const installation = getProjectElectricalInstallation(project)
+        const panels = getProjectElectricalPanels(project)
         if (!installation) return
         let removedLabel: string | undefined
         if (installation.groundTrunkDevices) {
@@ -198,11 +200,11 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
   ensureJunctionPanelPlacementForLabel: (label, floorId) => {
     const state = get()
     const project = state.currentProject
-    const installation = project ? getElectricalInstallationFromProject(project) : undefined
+    const installation = project ? getProjectElectricalInstallation(project) : undefined
     if (!project || !installation) return
     const list = installation.junctionPanelPlacements ?? []
     if (list.some((jp) => jp.label === label)) return
-    const floors = getBuildingFloorsFromProject(project)
+    const floors = selectProjectBuildingFloors(project)
     const firstFloorId = floorId ?? floors[0]?.id
     if (!firstFloorId) return
     const placement: JunctionPanelPlacement = {
@@ -220,7 +222,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
   addJunctionPanelPlacement: (placement) =>
     set((state) => {
       if (state.currentProject) {
-        const installation = getElectricalInstallationFromProject(state.currentProject)
+        const installation = getProjectElectricalInstallation(state.currentProject)
         if (!installation) return
         if (!installation.junctionPanelPlacements) {
           installation.junctionPanelPlacements = []
@@ -233,9 +235,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
   updateJunctionPanelPlacement: (id, updates) =>
     set((state) => {
       if (state.currentProject) {
-        const list = getElectricalInstallationFromProject(
-          state.currentProject
-        )?.junctionPanelPlacements
+        const list = getProjectElectricalInstallation(state.currentProject)?.junctionPanelPlacements
         if (!list) return
         const idx = list.findIndex((jp) => jp.id === id)
         if (idx !== -1) {
@@ -252,7 +252,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
   removeJunctionPanelPlacement: (id) =>
     set((state) => {
       if (state.currentProject) {
-        const installation = getElectricalInstallationFromProject(state.currentProject)
+        const installation = getProjectElectricalInstallation(state.currentProject)
         if (!installation?.junctionPanelPlacements) return
         installation.junctionPanelPlacements = installation.junctionPanelPlacements.filter(
           (jp) => jp.id !== id
@@ -264,7 +264,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
   addEarthingPlacement: (placement) =>
     set((state) => {
       if (state.currentProject) {
-        const installation = getElectricalInstallationFromProject(state.currentProject)
+        const installation = getProjectElectricalInstallation(state.currentProject)
         if (!installation) return
         if (!installation.earthingPlacements) {
           installation.earthingPlacements = []
@@ -277,7 +277,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
   updateEarthingPlacement: (id, updates) =>
     set((state) => {
       const list = state.currentProject
-        ? getElectricalInstallationFromProject(state.currentProject)?.earthingPlacements
+        ? getProjectElectricalInstallation(state.currentProject)?.earthingPlacements
         : undefined
       if (!list) return
       const idx = list.findIndex((p) => p.id === id)
@@ -289,7 +289,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
   removeEarthingPlacement: (id) =>
     set((state) => {
       const inst = state.currentProject
-        ? getElectricalInstallationFromProject(state.currentProject)
+        ? getProjectElectricalInstallation(state.currentProject)
         : undefined
       if (!inst?.earthingPlacements) return
       inst.earthingPlacements = inst.earthingPlacements.filter((p) => p.id !== id)
@@ -298,7 +298,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
 
   getJunctionPanelPlacementByLabel: (label) => {
     const project = getProjectStoreApi().getState().currentProject
-    return getElectricalInstallationFromProject(project ?? {})?.junctionPanelPlacements?.find(
+    return getProjectElectricalInstallation(project ?? {})?.junctionPanelPlacements?.find(
       (jp) => jp.label === label
     )
   },
@@ -307,7 +307,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
   addEndpoint: (circuitId, endpoint, insertAfterEndpointId, branchOpts) =>
     set((state) => {
       if (state.currentProject) {
-        const panels = getMutableElectricalPanelsForProject(state.currentProject)
+        const panels = getEditableProjectElectricalPanels(state.currentProject)
         for (const panel of panels) {
           const result = findCircuitById(panel, circuitId)
           if (result) {
@@ -330,7 +330,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
             if (isFirstEndpoint && !hasAlphabeticCode && usesMainBusAutomaticNaming) {
               const project = state.currentProject
               const circuitOwner = project
-                ? findCircuitOwner(getElectricalPanelsFromProject(project), circuitId)
+                ? findCircuitOwner(getProjectElectricalPanels(project), circuitId)
                 : null
               if (project) {
                 const newCode = getNextAvailableCircuitCode(project, circuitOwner?.panel.id)
@@ -480,6 +480,9 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
             syncPlugInPropsForDcEndpoints(result.circuit)
             syncSequentialEndpointBranchLabelsToCircuit(result.circuit)
             healPlanWiring(state.currentProject)
+            if (endpoint.placements.length > 0) {
+              syncPanelAndSituationPlanDeviceVisibility(state.currentProject)
+            }
             const ownerPanel = findCircuitOwner(panels, circuitId)?.panel
             if (ownerPanel) {
               maybeApplyAutomaticEendraadNamingForPanel(state.currentProject, ownerPanel.id)
@@ -495,14 +498,17 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
   addEndpointWithPlacement: (circuitId, endpoint, placement, insertAfterEndpointId, branchOpts) => {
     const projectBefore = get().currentProject
     if (!projectBefore) return
-    const snapshotBefore = cloneProjectForHistory(projectBefore)
-    const { addEndpoint, addPlacement } = get()
+    const snapshotBefore = captureProjectForHistory(projectBefore)
+    const { addEndpoint } = get()
+    const endpointWithPlacement: Endpoint = {
+      ...endpoint,
+      placements: [...(endpoint.placements ?? []), placement],
+    }
 
     // Prevent split history entries (endpoint first, placement second).
     projectHistory.clearPending()
     projectHistory.runWithoutRecording(() => {
-      addEndpoint(circuitId, endpoint, insertAfterEndpointId, branchOpts)
-      addPlacement(endpoint.id, placement)
+      addEndpoint(circuitId, endpointWithPlacement, insertAfterEndpointId, branchOpts)
     })
 
     appendUndoSnapshotInStore(set, snapshotBefore)
@@ -512,7 +518,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
   moveEndpointToCircuit: (endpointId, targetCircuitId) =>
     set((state) => {
       if (!state.currentProject) return
-      const panels = getMutableElectricalPanelsForProject(state.currentProject)
+      const panels = getEditableProjectElectricalPanels(state.currentProject)
       let targetCircuit: { circuit: Circuit; parent: Panel | ProtectionDevice } | null = null
       for (const panel of panels) {
         const found = findCircuitById(panel, targetCircuitId)
@@ -552,7 +558,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
           if (isFirstEndpointOnTarget && !hasAlphabeticCodeOnTarget) {
             const project = state.currentProject
             const circuitOwner = project
-              ? findCircuitOwner(getElectricalPanelsFromProject(project), targetCircuitId)
+              ? findCircuitOwner(getProjectElectricalPanels(project), targetCircuitId)
               : null
             if (project) {
               const newCode = getNextAvailableCircuitCode(project, circuitOwner?.panel.id)
@@ -607,12 +613,17 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
       }
     }),
 
-  updateEndpoint: (id, updates: Partial<Endpoint> & { circuitId?: string }) =>
+  updateEndpoint: (id, updates: Partial<Endpoint> & { circuitId?: string }) => {
+    const previousProject = get().currentProject
+    const isLayoutNeutralSocketOverlayUpdate =
+      Object.keys(updates).every((key) => key === 'socketProps') &&
+      updates.socketProps != null &&
+      !Object.prototype.hasOwnProperty.call(updates.socketProps, 'socketCount')
     set((state) => {
       const hasAnyUpdate = Object.keys(updates).length > 0
       if (!hasAnyUpdate) return
       if (state.currentProject) {
-        for (const panel of getMutableElectricalPanelsForProject(state.currentProject)) {
+        for (const panel of getEditableProjectElectricalPanels(state.currentProject)) {
           const result = findEndpointById(panel, id)
           if (result) {
             const nextLabel = updates.label
@@ -716,7 +727,8 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
               normalizeDomoticaCircuit(result.circuit)
             }
             if (
-              getMutableElectricalInstallationForProject(state.currentProject)
+              (updates.label !== undefined || updates.circuitId !== undefined) &&
+              getEditableProjectElectricalInstallation(state.currentProject)
                 ?.eendraadAutomaticNaming
             ) {
               const circuitIdForRefresh =
@@ -724,7 +736,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
                   ? previousCircuit.id
                   : result.circuit.id
               const owner = findCircuitOwner(
-                getMutableElectricalPanelsForProject(state.currentProject),
+                getEditableProjectElectricalPanels(state.currentProject),
                 circuitIdForRefresh
               )
               if (owner) {
@@ -732,7 +744,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
               }
               if (updates.circuitId && updates.circuitId !== previousCircuit.id) {
                 const destOwner = findCircuitOwner(
-                  getMutableElectricalPanelsForProject(state.currentProject),
+                  getEditableProjectElectricalPanels(state.currentProject),
                   updates.circuitId
                 )
                 if (destOwner && destOwner.panel.id !== owner?.panel.id) {
@@ -752,12 +764,22 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
           }
         }
       }
-    }),
+    })
+    const nextProject = get().currentProject
+    if (
+      isLayoutNeutralSocketOverlayUpdate &&
+      previousProject &&
+      nextProject &&
+      previousProject !== nextProject
+    ) {
+      inheritEendraadLayoutForVisualEndpointChange(previousProject, nextProject)
+    }
+  },
 
   deleteEndpoint: (id) =>
     set((state) => {
       if (state.currentProject) {
-        const panels = getMutableElectricalPanelsForProject(state.currentProject)
+        const panels = getEditableProjectElectricalPanels(state.currentProject)
         for (const panel of panels) {
           const result = findEndpointById(panel, id)
           if (result) {
@@ -777,16 +799,15 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
               )
               if (linkedPanel && !linkedPanel.isMain) {
                 if (deletePanelFromProject(state.currentProject, linkedPanel.id)) {
+                  healPlanWiring(state.currentProject)
+                  pruneStaleElectricalEndpointRecords(state.currentProject)
                   state.isDirty = true
                 }
                 return
               }
             }
-            const idsToDelete = new Set<string>([id])
+            const idsToDelete = collectDomoticaEndpointIdsForDeletion(result.circuit, [id])
             if (result.endpoint.symbol === 'domotica') {
-              for (const childId of getDomoticaChildEndpointIds(result.endpoint)) {
-                idsToDelete.add(childId)
-              }
               cleanupPanelGridSlotsForDevice(panels, {
                 kind: 'domotica',
                 endpointId: result.endpoint.id,
@@ -800,7 +821,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
             syncSequentialEndpointBranchLabelsToCircuit(result.circuit)
             healPlanWiring(state.currentProject)
             if (
-              getMutableElectricalInstallationForProject(state.currentProject)
+              getEditableProjectElectricalInstallation(state.currentProject)
                 ?.eendraadAutomaticNaming
             ) {
               const owner = findCircuitOwner(panels, result.circuit.id)
@@ -809,6 +830,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
               }
             }
             pruneEendraadFrames(state.currentProject, { removedMemberIds: idsToDelete })
+            pruneStaleElectricalEndpointRecords(state.currentProject)
             state.isDirty = true
             return
           }
@@ -823,7 +845,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
         logger.warn('[moveEndpointInBranch] No current project')
         return
       }
-      for (const panel of getMutableElectricalPanelsForProject(state.currentProject)) {
+      for (const panel of getEditableProjectElectricalPanels(state.currentProject)) {
         const result = findEndpointById(panel, endpointId)
         if (result && result.circuit.branches) {
           const branch = result.circuit.branches.find((b) => b.endpointIds.includes(endpointId))
@@ -877,7 +899,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
   moveDomoticaChildOutput: (endpointId, direction) =>
     set((state) => {
       if (!state.currentProject) return
-      for (const panel of getMutableElectricalPanelsForProject(state.currentProject)) {
+      for (const panel of getEditableProjectElectricalPanels(state.currentProject)) {
         const result = findEndpointById(panel, endpointId)
         if (!result) continue
         const { endpoint: child, circuit } = result
@@ -913,7 +935,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
   normalizeDomoticaForCircuit: (circuitId) =>
     set((state) => {
       if (!state.currentProject) return
-      for (const panel of getMutableElectricalPanelsForProject(state.currentProject)) {
+      for (const panel of getEditableProjectElectricalPanels(state.currentProject)) {
         const result = findCircuitById(panel, circuitId)
         if (result) {
           normalizeDomoticaCircuit(result.circuit)
@@ -927,7 +949,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
     set((state) => {
       if (state.currentProject) {
         const project = state.currentProject
-        const panels = getElectricalPanelsFromProject(project)
+        const panels = getProjectElectricalPanels(project)
         const filtered: string[] = ids.filter((id) => {
           for (const panel of panels) {
             const result = findEndpointById(panel, id)
@@ -944,7 +966,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
         const prunedMemberIds = new Set<string>(filtered)
         const panelIdsToDelete = new Set<string>()
         for (const endpointId of filtered) {
-          for (const panel of getElectricalPanelsFromProject(project)) {
+          for (const panel of getProjectElectricalPanels(project)) {
             const result = findEndpointById(panel, endpointId)
             if (!result) continue
             if (result.endpoint.symbol !== 'panel_distribution') continue
@@ -959,17 +981,17 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
         }
         const idsSet = new Set(filtered)
         const modifiedCircuitIds = new Set<string>()
-        const mutablePanels = getMutableElectricalPanelsForProject(state.currentProject)
+        const mutablePanels = getEditableProjectElectricalPanels(state.currentProject)
         for (const panel of mutablePanels) {
           const circuits = getAllCircuits(panel)
           for (const circuit of circuits) {
-            const idsToDelete = new Set(idsSet)
+            const roots = circuit.endpoints
+              .filter((endpoint) => idsSet.has(endpoint.id))
+              .map((endpoint) => endpoint.id)
+            const idsToDelete = collectDomoticaEndpointIdsForDeletion(circuit, roots)
             for (const endpoint of circuit.endpoints) {
-              if (idsSet.has(endpoint.id) && endpoint.symbol === 'domotica') {
-                for (const childId of getDomoticaChildEndpointIds(endpoint)) {
-                  idsToDelete.add(childId)
-                  prunedMemberIds.add(childId)
-                }
+              if (idsToDelete.has(endpoint.id) && endpoint.symbol === 'domotica') {
+                for (const childId of idsToDelete) prunedMemberIds.add(childId)
                 cleanupPanelGridSlotsForDevice(mutablePanels, {
                   kind: 'domotica',
                   endpointId: endpoint.id,
@@ -996,7 +1018,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
           }
         }
         if (
-          getMutableElectricalInstallationForProject(state.currentProject)?.eendraadAutomaticNaming
+          getEditableProjectElectricalInstallation(state.currentProject)?.eendraadAutomaticNaming
         ) {
           const panelsToRename = new Set<string>()
           for (const circuitId of modifiedCircuitIds) {
@@ -1008,6 +1030,8 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
           }
         }
         pruneEendraadFrames(state.currentProject, { removedMemberIds: prunedMemberIds })
+        healPlanWiring(state.currentProject)
+        pruneStaleElectricalEndpointRecords(state.currentProject)
         state.isDirty = true
       }
     }),
@@ -1016,7 +1040,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
   addPlacement: (endpointId, placement) =>
     set((state) => {
       if (state.currentProject) {
-        for (const panel of getMutableElectricalPanelsForProject(state.currentProject)) {
+        for (const panel of getEditableProjectElectricalPanels(state.currentProject)) {
           const result = findEndpointById(panel, endpointId)
           if (result) {
             result.endpoint.placements.push(placement)
@@ -1058,10 +1082,10 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
     set((state) => {
       const project = state.currentProject
       if (!project || moves.length === 0) return
-      if (!getBuildingFloorsFromProject(project).some((floor) => floor.id === floorId)) return
+      if (!selectProjectBuildingFloors(project).some((floor) => floor.id === floorId)) return
 
       const uniqueMoves = new Map(moves.map((move) => [move.id, move]))
-      const installation = getMutableElectricalInstallationForProject(project)
+      const installation = getEditableProjectElectricalInstallation(project)
       const resolved: Array<{
         kind: 'standard' | 'junctionPanel' | 'earthing'
         placement:
@@ -1100,8 +1124,8 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
       // Preserve a manual wire when both of its placement endpoints travel together. Routes
       // with only one moved endpoint are removed by healing below instead of becoming stale.
       const movedPlacementIds = new Set(uniqueMoves.keys())
-      const planWiring = getMutablePlanWiringFromProject(project)
-      planWiring?.routes.forEach((route) => {
+      const planWireRoutes = selectProjectPlanWireRoutes(project)
+      planWireRoutes.forEach((route) => {
         const fromPlacementId = route.from.placementId
         const toPlacementId = route.to.placementId
         if (
@@ -1113,6 +1137,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
           route.floorId = floorId
         }
       })
+      replacePlanWireRoutesForProject(project, planWireRoutes)
 
       resolved.forEach(({ kind, placement, pos }) => {
         const patch = { floorId, ...(pos ? { pos } : {}) }
@@ -1125,7 +1150,6 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
 
       healPlanWiring(project)
       syncPanelAndSituationPlanDeviceVisibility(project)
-      syncPlanWiringFromCompatibility(project)
       state.isDirty = true
       applied = true
     })
@@ -1135,7 +1159,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
   deletePlacement: (id) =>
     set((state) => {
       const inst = state.currentProject
-        ? getMutableElectricalInstallationForProject(state.currentProject)
+        ? getEditableProjectElectricalInstallation(state.currentProject)
         : undefined
       if (inst?.earthingPlacements?.some((p) => p.id === id)) {
         inst.earthingPlacements = inst.earthingPlacements.filter((p) => p.id !== id)
@@ -1152,7 +1176,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
           state.isDirty = true
           return
         }
-        for (const panel of getMutableElectricalPanelsForProject(state.currentProject)) {
+        for (const panel of getEditableProjectElectricalPanels(state.currentProject)) {
           const endpoints = getAllEndpoints(panel)
           for (const endpoint of endpoints) {
             const index = endpoint.placements.findIndex((p) => p.id === id)
@@ -1189,8 +1213,8 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
     set((state) => {
       if (state.currentProject) {
         const project = state.currentProject
-        const installation = getElectricalInstallationFromProject(project)
-        const panels = getElectricalPanelsFromProject(project)
+        const installation = getProjectElectricalInstallation(project)
+        const panels = getProjectElectricalPanels(project)
         const blocked = new Set<string>()
         for (const panel of panels) {
           for (const endpoint of getAllEndpoints(panel)) {
@@ -1251,7 +1275,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
   deletePlacementsByEndpoint: (endpointId) =>
     set((state) => {
       if (state.currentProject) {
-        for (const panel of getMutableElectricalPanelsForProject(state.currentProject)) {
+        for (const panel of getEditableProjectElectricalPanels(state.currentProject)) {
           const result = findEndpointById(panel, endpointId)
           if (result) {
             if (isMainPanelDistributionEndpoint(state.currentProject, result.endpoint)) {

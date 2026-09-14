@@ -2,7 +2,7 @@ import { clamp } from '@/lib/geometry'
 import { findParentCircuitInfo } from '@/lib/eendraad/findParentCircuitInfo'
 import {
   findPanelOwnDistributionEndpoint,
-  resolvePanelSupplyLinkForPanel,
+  resolvePanelSupplyLinkForPanelInPanels,
 } from '@/lib/eendraad/panelSupplyLink'
 import {
   getMainBusOrder,
@@ -10,6 +10,7 @@ import {
   moveProtectionToMainBusInsertIndex,
 } from '@/lib/eendraad/mainBusOrder'
 import { findPanelById } from '@/lib/panel/panelTree'
+import type { DropTarget } from '@/lib/layout/findDropTarget'
 import type { Circuit, Panel, ProtectionDevice } from '@/types/schema'
 import { generateId } from '@/utils/project'
 
@@ -67,6 +68,13 @@ function findCircuitOwner(
   return null
 }
 
+function panelContainsPanel(panel: Panel, candidatePanelId: string): boolean {
+  return (
+    panel.id === candidatePanelId ||
+    (panel.subPanels ?? []).some((child) => panelContainsPanel(child, candidatePanelId))
+  )
+}
+
 function detachFeederFromCurrentLocation(
   panels: Panel[],
   protection: ProtectionDevice,
@@ -109,7 +117,7 @@ function ensureDirectPanelCarrier(
   protection: ProtectionDevice
   feederCircuit: Circuit
 } | null {
-  const link = resolvePanelSupplyLinkForPanel({ panels }, targetPanelId)
+  const link = resolvePanelSupplyLinkForPanelInPanels(panels, targetPanelId)
   if (!link?.feederCircuit) return null
 
   if (link.protection.directPanelFeeder) {
@@ -146,6 +154,86 @@ function ensureDirectPanelCarrier(
 }
 
 /**
+ * Existing panel attachments are terminal consumers: relocating one may append it
+ * to a bus, or attach it to an empty circuit's terminal protection, but may not
+ * put it in front of or between the protections already on that bus. New
+ * `panel_distribution` drops intentionally do not use this guard.
+ */
+export function isPanelAttachmentDropTargetTerminal(
+  panels: Panel[],
+  targetPanelId: string,
+  target: DropTarget
+): boolean {
+  const link = resolvePanelSupplyLinkForPanelInPanels(panels, targetPanelId)
+  if (!link) return false
+  const isCircuitTopTarget =
+    target.type === 'circuit' && target.insertAfterCircuitContent === true
+  if (
+    target.type !== 'endpoint' &&
+    !isCircuitTopTarget &&
+    target.panelId !== link.sourcePanel.id
+  ) {
+    return false
+  }
+
+  if (target.type === 'mainBus') {
+    if (typeof target.mainBusInsertIndex !== 'number') return false
+    const order = getMainBusOrder(link.sourcePanel).filter(
+      (item) => item.type !== 'protection' || item.id !== link.protection.id
+    )
+    return target.mainBusInsertIndex >= order.length
+  }
+
+  if (target.type === 'circuit') {
+    if (target.insertAfterCircuitContent === true) {
+      if (!target.circuitId || typeof target.secondaryBusInsertIndex === 'number') return false
+      const targetOwner = findCircuitOwner(panels, target.circuitId)
+      if (!targetOwner?.protection || targetOwner.protection.subPanelId) return false
+      return !panelContainsPanel(link.targetPanel, targetOwner.panel.id)
+    }
+    if (!target.circuitId || typeof target.secondaryBusInsertIndex !== 'number') return false
+    const targetOwner = findCircuitOwner(panels, target.circuitId)
+    if (!targetOwner?.protection || targetOwner.panel.id !== link.sourcePanel.id) return false
+    const order = targetOwner.circuit.subCircuitIds ?? []
+    const currentIndex = order.indexOf(link.feederCircuit?.id ?? '')
+    const remaining = order.filter(
+      (circuitId) => circuitId !== link.feederCircuit?.id
+    )
+    const adjustedIndex =
+      currentIndex >= 0 && target.secondaryBusInsertIndex > currentIndex
+        ? target.secondaryBusInsertIndex - 1
+        : target.secondaryBusInsertIndex
+    return adjustedIndex >= remaining.length
+  }
+
+  if (target.type === 'rcd') {
+    if (!target.protectionId || typeof target.secondaryBusInsertIndex !== 'number') return false
+    const targetRcd = link.sourcePanel.protections.find(
+      (protection) =>
+        protection.id === target.protectionId &&
+        (protection.type === 'RCD' || protection.type === 'RCBO')
+    )
+    if (!targetRcd || targetRcd.id === link.protection.id) return false
+    const remaining = (targetRcd.circuits ?? []).filter(
+      (circuit) => circuit.id !== link.feederCircuit?.id
+    )
+    return target.secondaryBusInsertIndex >= remaining.length
+  }
+
+  if (target.type === 'endpoint') {
+    if (!target.circuitId || !target.endpointId) return false
+    const targetOwner = findCircuitOwner(panels, target.circuitId)
+    if (!targetOwner?.protection) return false
+    if (panelContainsPanel(link.targetPanel, targetOwner.panel.id)) return false
+    if (targetOwner.protection.subPanelId) return false
+    const endpoint = targetOwner.circuit.endpoints.find((candidate) => candidate.id === target.endpointId)
+    return !!endpoint && endpoint.symbol !== 'panel_distribution'
+  }
+
+  return false
+}
+
+/**
  * Reorder a directly connected secondary panel among the protections on one
  * secondary bus. Legacy implicit attachments are materialized as a panel-only
  * child circuit so their position can use the existing `subCircuitIds` order.
@@ -156,7 +244,7 @@ export function movePanelAttachmentOnSecondaryBus(
   parentCircuitId: string,
   insertIndex: number
 ): MovePanelAttachmentResult | null {
-  const link = resolvePanelSupplyLinkForPanel({ panels }, targetPanelId)
+  const link = resolvePanelSupplyLinkForPanelInPanels(panels, targetPanelId)
   if (!link?.feederCircuit) return null
 
   const protection = link.protection
@@ -164,6 +252,21 @@ export function movePanelAttachmentOnSecondaryBus(
   const targetOwner = findCircuitOwner(panels, parentCircuitId)
   const targetProtection = targetOwner?.protection
   if (!targetOwner || !targetProtection) return null
+  const targetOrder = targetOwner.circuit.subCircuitIds ?? []
+  const targetCurrentIndex = targetOrder.indexOf(link.feederCircuit?.id ?? '')
+  const targetRemainingCount = targetOrder.filter(
+    (circuitId) => circuitId !== link.feederCircuit?.id
+  ).length
+  const adjustedTargetIndex =
+    targetCurrentIndex >= 0 && insertIndex > targetCurrentIndex
+      ? insertIndex - 1
+      : insertIndex
+  if (
+    targetOwner.panel.id !== link.sourcePanel.id ||
+    adjustedTargetIndex < targetRemainingCount
+  ) {
+    return null
+  }
 
   let feederCircuit = link.feederCircuit
   let parentCircuit = existingParent?.parentCircuit
@@ -213,6 +316,18 @@ export function movePanelAttachmentOnRcdBus(
   rcdProtectionId: string,
   insertIndex: number
 ): MovePanelAttachmentResult | null {
+  const initialLink = resolvePanelSupplyLinkForPanelInPanels(panels, targetPanelId)
+  if (
+    !initialLink ||
+    !isPanelAttachmentDropTargetTerminal(panels, targetPanelId, {
+      type: 'rcd',
+      panelId: initialLink.sourcePanel.id,
+      protectionId: rcdProtectionId,
+      secondaryBusInsertIndex: insertIndex,
+    })
+  ) {
+    return null
+  }
   const carrier = ensureDirectPanelCarrier(panels, targetPanelId)
   if (!carrier) return null
 
@@ -352,8 +467,17 @@ export function movePanelAttachmentToMainBus(
   sourcePanelId: string,
   insertIndex: number
 ): MovePanelAttachmentResult | null {
-  const link = resolvePanelSupplyLinkForPanel({ panels }, targetPanelId)
+  const link = resolvePanelSupplyLinkForPanelInPanels(panels, targetPanelId)
   if (!link?.feederCircuit || link.sourcePanel.id !== sourcePanelId) return null
+  if (
+    !isPanelAttachmentDropTargetTerminal(panels, targetPanelId, {
+      type: 'mainBus',
+      panelId: sourcePanelId,
+      mainBusInsertIndex: insertIndex,
+    })
+  ) {
+    return null
+  }
 
   let feederCircuit = link.feederCircuit
   let directProtection = link.protection

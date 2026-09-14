@@ -1,7 +1,7 @@
 import { ensureInstallationFeedTopology } from '@/lib/feedTopology'
 import {
   isPanelDistributionEndpointForPanel,
-  resolvePanelSupplyLinkForPanel,
+  resolvePanelSupplyLinkForPanelInPanels,
 } from '@/lib/eendraad/panelSupplyLink'
 import {
   findProtectionSupplyingPanel,
@@ -67,7 +67,7 @@ function detachPreviousPanelLink(
   previousSourcePanelId?: string
   previousFeederProtectionId?: string
 } {
-  const link = resolvePanelSupplyLinkForPanel({ panels }, panel.id)
+  const link = resolvePanelSupplyLinkForPanelInPanels(panels, panel.id)
   const fallback = findProtectionSupplyingPanel(panels, panel.id)
   const protection = link?.protection ?? fallback?.protection
   if (!protection) return {}

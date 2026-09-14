@@ -64,8 +64,8 @@ export default function CommunityNewProjectDialog({
     if (!name) return
 
     const year = yearOfConstruction.trim() ? Number.parseInt(yearOfConstruction, 10) : undefined
-    if (year !== undefined && (Number.isNaN(year) || year < 1800 || year > 2100)) {
-      window.alert(t('project.yearOfConstructionInvalid', 'Please enter a valid year between 1800 and 2100.'))
+    if (year !== undefined && (Number.isNaN(year) || year < 1500 || year > 2100)) {
+      window.alert(t('project.yearOfConstructionInvalid', 'Please enter a valid year between 1500 and 2100.'))
       return
     }
 
@@ -126,7 +126,7 @@ export default function CommunityNewProjectDialog({
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">{t('project.yearOfConstruction', 'Year of construction')}</label>
-                <input type="number" min={1800} max={2100} value={yearOfConstruction} onChange={(event) => setDraft((current) => ({ ...current, yearOfConstruction: event.target.value }))} className={inputClass} placeholder="e.g. 1995" />
+                <input type="number" min={1500} max={2100} value={yearOfConstruction} onChange={(event) => setDraft((current) => ({ ...current, yearOfConstruction: event.target.value }))} className={inputClass} placeholder="e.g. 1995" />
               </div>
               <div>
                 <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">{t('project.meterEanCode', 'Meter EAN code')}</label>
@@ -141,7 +141,11 @@ export default function CommunityNewProjectDialog({
                   <input type="text" value={address.postalCode} onChange={(event) => setDraft((current) => ({ ...current, address: { ...current.address, postalCode: event.target.value } }))} className={inputClass} placeholder={t('installation.postalCode')} />
                   <input type="text" value={address.city} onChange={(event) => setDraft((current) => ({ ...current, address: { ...current.address, city: event.target.value } }))} className={inputClass} placeholder={t('installation.city')} />
                 </div>
-                <input type="text" value={t('installation.countryBelgium')} disabled className={`${inputClass} cursor-not-allowed bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400`} />
+                <select value={address.country} onChange={(event) => setDraft((current) => ({ ...current, address: { ...current.address, country: event.target.value as 'BE' | 'FR' | 'NL' } }))} className={inputClass}>
+                  <option value="BE">{t('installation.countryBelgium')}</option>
+                  <option value="FR">{t('installation.countryFrance', 'France')}</option>
+                  <option value="NL">{t('installation.countryNetherlands', 'Netherlands')}</option>
+                </select>
               </div>
               <div className="mt-4">
                 <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">{t('installation.voltage')} *</label>

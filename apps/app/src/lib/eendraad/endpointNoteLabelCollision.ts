@@ -1,19 +1,9 @@
 export const ENDPOINT_NOTE_WIRE_CLEARANCE = 4
+export const ENDPOINT_NOTE_SLOT_GAP = 2
 
-/** Minimum label-left X relative to an endpoint, based on the vertical branch wire. */
-export function getEndpointNoteMinimumLeftX(
-  endpointX: number,
-  branchWireX: number,
-): number {
+/** Minimum label-left X relative to an endpoint, keeping the note just clear of the branch wire. */
+export function getEndpointNoteMinimumLeftX(endpointX: number, branchWireX: number): number {
   return branchWireX - endpointX + ENDPOINT_NOTE_WIRE_CLEARANCE
-}
-
-/** Maximum label-right X relative to an endpoint, based on its circuit column. */
-export function getEndpointNoteMaximumRightX(
-  endpointX: number,
-  circuitRightX: number,
-): number {
-  return circuitRightX - endpointX - ENDPOINT_NOTE_WIRE_CLEARANCE
 }
 
 /**
@@ -26,6 +16,43 @@ export function getCollisionSafeCenteredLabelLeftX(
 ): number {
   const centeredLeftX = -labelWidth / 2
   return minimumLeftX == null ? centeredLeftX : Math.max(centeredLeftX, minimumLeftX)
+}
+
+export interface EndpointNoteLabelBounds {
+  minimumLeftX?: number
+  maximumRightX?: number
+}
+
+/**
+ * Give crowded bottom notes a slot between neighboring endpoint symbols.
+ * A single note keeps the branch-growth behavior; this only activates when
+ * at least two bottom notes share the branch.
+ */
+export function getCrowdedEndpointNoteLabelBounds(
+  endpointIndex: number,
+  endpointXs: number[],
+  bottomNoteEndpointIndexes: ReadonlySet<number>,
+  branchWireX: number,
+): EndpointNoteLabelBounds | undefined {
+  if (bottomNoteEndpointIndexes.size < 2 || !bottomNoteEndpointIndexes.has(endpointIndex)) {
+    return undefined
+  }
+
+  const endpointX = endpointXs[endpointIndex]
+  if (endpointX == null) return undefined
+
+  const previousEndpointX = endpointXs[endpointIndex - 1]
+  const nextEndpointX = endpointXs[endpointIndex + 1]
+  return {
+    minimumLeftX:
+      previousEndpointX == null
+        ? getEndpointNoteMinimumLeftX(endpointX, branchWireX)
+        : (previousEndpointX + endpointX) / 2 - endpointX + ENDPOINT_NOTE_SLOT_GAP,
+    maximumRightX:
+      nextEndpointX == null
+        ? undefined
+        : (endpointX + nextEndpointX) / 2 - endpointX - ENDPOINT_NOTE_SLOT_GAP,
+  }
 }
 
 /** Available rendered width before a shifted label reaches its right boundary. */

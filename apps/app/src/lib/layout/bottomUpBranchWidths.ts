@@ -7,6 +7,11 @@ import {
   DOMOTICA_MIN_ENDPOINT_OUTPUTS,
   DOMOTICA_OUTPUT_SPACING,
 } from '@/components/canvas/eendraad/canvasSymbols'
+import { DOMOTICA_CHILD_LABEL_GAP } from '@/lib/domoticaLayout'
+import { getVisibleCertificationLabelParts } from '@/lib/certificationLabels'
+import { getVisibleConversionLabelParts, getVisibleEndpointNoteText } from '@/lib/conversionLabels'
+import { getEndpointNoteMinimumLeftX } from '@/lib/eendraad/endpointNoteLabelCollision'
+import { measureSymbolLabelTextWidth } from '@/lib/symbolLabelTextWidth'
 import type { Endpoint } from '@/types/schema'
 
 /** Keeps consecutive inverter/solar labels readable when they are rendered below the branch. */
@@ -58,6 +63,191 @@ export function getDomoticaRowChainIndex(branchEndpoints: Endpoint[], endpoint: 
 }
 
 /**
+ * X offsets used to paint endpoints on a branch.
+ *
+ * Domotica children are arranged in vertical output rows, so children on
+ * different rows share an X position instead of advancing like an ordinary
+ * horizontal endpoint chain.
+ */
+export function getEndpointLayoutXOffsets(
+  branchEndpoints: Endpoint[],
+  leadIn: number,
+  endpointSpacing: number,
+  applianceAfterSocketGap: number
+): number[] {
+  return getEndpointLayoutOffsets(
+    branchEndpoints,
+    leadIn,
+    endpointSpacing,
+    applianceAfterSocketGap
+  ).map((offset) => offset.x)
+}
+
+export interface EndpointLayoutOffset {
+  x: number
+  /** Vertical offset from the owning circuit branch wire. */
+  y: number
+}
+
+const DOMOTICA_NESTED_CLEARANCE = 6
+const DOMOTICA_LABEL_FONT_SIZE = 11
+const DOMOTICA_LABEL_SAFETY = 2
+
+function getDomoticaEndpointCount(endpoint: Endpoint): number {
+  return Math.max(
+    DOMOTICA_MIN_ENDPOINT_OUTPUTS,
+    Math.min(
+      DOMOTICA_MAX_ENDPOINT_OUTPUTS,
+      Math.trunc(endpoint.domoticaProps?.endpointCount ?? DOMOTICA_MIN_ENDPOINT_OUTPUTS)
+    )
+  )
+}
+
+/**
+ * Resolve the complete recursive Domotica branch geometry.
+ *
+ * A nested module keeps the incoming output row as its bottom row and grows
+ * upward. Before placing its box, move it right until the box clears painted
+ * sibling symbols and their visible row labels.
+ */
+export function getEndpointLayoutOffsets(
+  branchEndpoints: Endpoint[],
+  leadIn: number,
+  endpointSpacing: number,
+  applianceAfterSocketGap: number,
+  symbolSize = 30
+): EndpointLayoutOffset[] {
+  const offsets = getEndpointXOffsets(
+    branchEndpoints,
+    leadIn,
+    endpointSpacing,
+    applianceAfterSocketGap
+  )
+  const result = branchEndpoints.map((_, index) => ({ x: offsets[index] ?? leadIn, y: 0 }))
+  const indexById = new Map(branchEndpoints.map((endpoint, index) => [endpoint.id, index]))
+  const endpointById = new Map(branchEndpoints.map((endpoint) => [endpoint.id, endpoint]))
+  const paintedRects: Array<{ id: string; left: number; right: number; top: number; bottom: number }> = []
+
+  const addPaintedRect = (endpoint: Endpoint, x: number, y: number, includeLabel: boolean) => {
+    const isModule = endpoint.symbol === 'domotica'
+    const variableHeight = isModule
+      ? Math.max(0, getDomoticaEndpointCount(endpoint) - 1) * DOMOTICA_OUTPUT_SPACING
+      : 0
+    const socketExtra =
+      endpoint.type === 'socket'
+        ? Math.max(0, (endpoint.socketProps?.socketCount ?? 1) - 1) * MULTI_SOCKET_OFFSET
+        : 0
+    let right = x + (isModule ? DOMOTICA_BOX_WIDTH / 2 : symbolSize / 2 + socketExtra)
+    if (includeLabel && endpoint.label?.trim()) {
+      const measuredLabelWidth =
+        measureSymbolLabelTextWidth(endpoint.label.trim(), 'Figtree', DOMOTICA_LABEL_FONT_SIZE) +
+        DOMOTICA_LABEL_SAFETY
+      right = Math.max(
+        right,
+        isModule
+          ? x - DOMOTICA_BOX_WIDTH / 2 + measuredLabelWidth
+          : x + symbolSize / 2 + DOMOTICA_CHILD_LABEL_GAP + measuredLabelWidth
+      )
+    }
+    paintedRects.push({
+      id: endpoint.id,
+      left: x - (isModule ? DOMOTICA_BOX_WIDTH / 2 : symbolSize / 2),
+      right,
+      top: y - variableHeight - (isModule ? DOMOTICA_BASE_HEIGHT / 2 : symbolSize / 2),
+      bottom:
+        y +
+        (isModule && includeLabel && endpoint.domoticaChildProps
+          ? DOMOTICA_BASE_HEIGHT / 2 + 23
+          : isModule
+            ? DOMOTICA_BASE_HEIGHT / 2
+            : symbolSize / 2),
+    })
+  }
+
+  const placeModule = (module: Endpoint, moduleX: number, inputY: number, ancestry: Set<string>) => {
+    if (ancestry.has(module.id)) return
+    const moduleIndex = indexById.get(module.id)
+    if (moduleIndex == null) return
+    result[moduleIndex] = { x: moduleX, y: inputY }
+
+    const nextAncestry = new Set(ancestry).add(module.id)
+    const count = getDomoticaEndpointCount(module)
+    const firstOutputY = inputY - Math.max(0, count - 1) * DOMOTICA_OUTPUT_SPACING
+    const directChildren = branchEndpoints.filter(
+      (endpoint) => endpoint.domoticaChildProps?.parentEndpointId === module.id
+    )
+    const rows = new Map<number, Endpoint[]>()
+    for (const child of directChildren) {
+      const row = child.domoticaChildProps?.outputIndex ?? 0
+      const rowChildren = rows.get(row) ?? []
+      rowChildren.push(child)
+      rows.set(row, rowChildren)
+    }
+
+    for (const [row, rowChildren] of rows) {
+      rowChildren.forEach((child, chainIndex) => {
+        const childIndex = indexById.get(child.id)
+        if (childIndex == null) return
+        result[childIndex] = {
+          x: moduleX + DOMOTICA_BOX_WIDTH / 2 + DOMOTICA_BRANCH_LEAD + chainIndex * endpointSpacing,
+          y: firstOutputY + row * DOMOTICA_OUTPUT_SPACING,
+        }
+      })
+      rowChildren.forEach((child, chainIndex) => {
+        if (child.symbol === 'domotica') return
+        const childOffset = result[indexById.get(child.id)!]!
+        addPaintedRect(child, childOffset.x, childOffset.y, chainIndex === rowChildren.length - 1)
+      })
+    }
+
+    const nestedModules = directChildren.filter((child) => child.symbol === 'domotica')
+    for (const nested of nestedModules) {
+      const nestedIndex = indexById.get(nested.id)
+      if (nestedIndex == null) continue
+      const initial = result[nestedIndex]!
+      const nestedVariableHeight =
+        Math.max(0, getDomoticaEndpointCount(nested) - 1) * DOMOTICA_OUTPUT_SPACING
+      const top = initial.y - nestedVariableHeight - DOMOTICA_BASE_HEIGHT / 2
+      const bottom = initial.y + DOMOTICA_BASE_HEIGHT / 2
+      const obstacleRight = paintedRects.reduce(
+        (right, rect) =>
+          rect.id !== nested.id && rect.bottom >= top && rect.top <= bottom
+            ? Math.max(right, rect.right)
+            : right,
+        Number.NEGATIVE_INFINITY
+      )
+      const nestedX = Number.isFinite(obstacleRight)
+        ? Math.max(
+            initial.x,
+            obstacleRight + DOMOTICA_NESTED_CLEARANCE + DOMOTICA_BOX_WIDTH / 2
+          )
+        : initial.x
+      result[nestedIndex] = { x: nestedX, y: initial.y }
+      const nestedRow = rows.get(nested.domoticaChildProps?.outputIndex ?? 0) ?? []
+      addPaintedRect(nested, nestedX, initial.y, nestedRow.at(-1)?.id === nested.id)
+      placeModule(nested, nestedX, initial.y, nextAncestry)
+    }
+  }
+
+  const rootModules = branchEndpoints.filter((endpoint) => {
+    if (endpoint.symbol !== 'domotica') return false
+    const parent = endpoint.domoticaChildProps
+      ? endpointById.get(endpoint.domoticaChildProps.parentEndpointId)
+      : undefined
+    return parent?.symbol !== 'domotica'
+  })
+  for (const root of rootModules) {
+    const rootIndex = indexById.get(root.id)
+    if (rootIndex == null) continue
+    const rootOffset = result[rootIndex]!
+    addPaintedRect(root, rootOffset.x, rootOffset.y, false)
+    placeModule(root, rootOffset.x, rootOffset.y, new Set())
+  }
+
+  return result
+}
+
+/**
  * Calculate horizontal branch width accounting for multi-socket endpoints and appliance-after-socket gap.
  */
 export function calculateBranchWidth(
@@ -68,33 +258,35 @@ export function calculateBranchWidth(
 ): number {
   const domotica = branchEndpoints.find((ep) => ep.symbol === 'domotica' && !ep.domoticaChildProps)
   if (domotica) {
-    const endpointCount = Math.max(
-      DOMOTICA_MIN_ENDPOINT_OUTPUTS,
-      Math.min(
-        DOMOTICA_MAX_ENDPOINT_OUTPUTS,
-        Math.trunc(domotica.domoticaProps?.endpointCount ?? DOMOTICA_MIN_ENDPOINT_OUTPUTS)
-      )
-    )
-    const offsets = getEndpointXOffsets(
+    const endpointCount = getDomoticaEndpointCount(domotica)
+    const layoutOffsets = getEndpointLayoutOffsets(
       branchEndpoints,
       leadIn,
       endpointSpacing,
       applianceAfterSocketGap
     )
-    const domoticaIndex = branchEndpoints.indexOf(domotica)
-    const domoticaParentOffset = domoticaIndex >= 0 ? (offsets[domoticaIndex] ?? leadIn) : leadIn
-    const rowCounts = new Map<number, number>()
-    for (const endpoint of branchEndpoints) {
-      if (endpoint.domoticaChildProps?.parentEndpointId !== domotica.id) continue
-      const index = endpoint.domoticaChildProps.outputIndex
-      rowCounts.set(index, (rowCounts.get(index) ?? 0) + 1)
-    }
-    const maxRowChainLength = Math.max(1, ...rowCounts.values())
-    const maxWireReach =
-      domoticaParentOffset +
-      DOMOTICA_BOX_WIDTH / 2 +
-      DOMOTICA_BRANCH_LEAD +
-      (maxRowChainLength - 1) * endpointSpacing
+    const maxWireReach = branchEndpoints.reduce((right, endpoint, index) => {
+      const offset = layoutOffsets[index]?.x ?? leadIn
+      const socketExtra =
+        endpoint.type === 'socket'
+          ? Math.max(0, (endpoint.socketProps?.socketCount ?? 1) - 1) * MULTI_SOCKET_OFFSET
+          : 0
+      const symbolRight =
+        offset + (endpoint.symbol === 'domotica' ? DOMOTICA_BOX_WIDTH / 2 : 15 + socketExtra)
+      const labelRight = endpoint.domoticaChildProps && endpoint.label?.trim()
+        ? endpoint.symbol === 'domotica'
+          ? offset -
+            DOMOTICA_BOX_WIDTH / 2 +
+            measureSymbolLabelTextWidth(endpoint.label.trim(), 'Figtree', DOMOTICA_LABEL_FONT_SIZE) +
+            DOMOTICA_LABEL_SAFETY
+          : offset +
+            15 +
+            DOMOTICA_CHILD_LABEL_GAP +
+            measureSymbolLabelTextWidth(endpoint.label.trim(), 'Figtree', DOMOTICA_LABEL_FONT_SIZE) +
+            DOMOTICA_LABEL_SAFETY
+        : symbolRight
+      return Math.max(right, symbolRight, labelRight)
+    }, leadIn)
     const outputStackHeight =
       DOMOTICA_BASE_HEIGHT + Math.max(0, endpointCount - 1) * DOMOTICA_OUTPUT_SPACING
     return Math.max(leadIn, maxWireReach, outputStackHeight / 4)
@@ -128,5 +320,33 @@ export function calculateBranchWidth(
 
     maxRight = Math.max(maxRight, (offsets[i] ?? leadIn) + socketExtra + wideSymbolExtra)
   }
+
+  // A single regular endpoint keeps its bottom metadata clear of the branch
+  // wire. The wire itself must grow with the unbounded label so the trunk,
+  // divider, and hitbox move out instead of clipping the rendered text.
+  if (count === 1) {
+    const ep = branchEndpoints[0]
+    const endpointX = offsets[0] ?? leadIn
+    const usesRightLabel =
+      ep?.symbol === 'solar_panel' || ep?.symbol === 'battery' || ep?.symbol === 'ev'
+    if (ep && ep.type !== 'switch' && !usesRightLabel) {
+      const labelLines = [
+        ...getVisibleConversionLabelParts(ep).map((part) => part.text),
+        ...getVisibleCertificationLabelParts(ep).map((part) => part.text),
+        getVisibleEndpointNoteText(ep),
+      ].filter((line) => line.length > 0)
+      const socketLabelOffset =
+        ep.type === 'socket'
+          ? (Math.max(0, (ep.socketProps?.socketCount ?? 1) - 1) * MULTI_SOCKET_OFFSET) / 2
+          : 0
+      const minimumLeftX = getEndpointNoteMinimumLeftX(endpointX, 0)
+      for (const line of labelLines) {
+        const lineWidth = measureSymbolLabelTextWidth(line, 'Figtree', 8)
+        const lineLeft = endpointX + Math.max(socketLabelOffset - lineWidth / 2, minimumLeftX)
+        maxRight = Math.max(maxRight, lineLeft + lineWidth)
+      }
+    }
+  }
+
   return maxRight
 }

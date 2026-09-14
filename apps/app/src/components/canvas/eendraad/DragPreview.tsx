@@ -28,6 +28,7 @@ interface DragPreviewProps {
   layout: BottomUpLayoutResult | null
   wireSegments: WireSegment[]
   symbolData: SymbolMetadata | null
+  showMainBusPositionMarker?: boolean
 }
 
 export function DragPreview({
@@ -36,6 +37,7 @@ export function DragPreview({
   layout,
   wireSegments,
   symbolData,
+  showMainBusPositionMarker = true,
 }: DragPreviewProps) {
   const previewColor = '#0284c7' // Blue for preview
   const previewOpacity = 0.6
@@ -661,7 +663,7 @@ export function DragPreview({
       })()}
       
       {!domoticaCtx && dropTarget.type === 'endpoint' && dropTarget.endpointId && (() => {
-        // Fixed appliance on socket: show blue preview of module after the socket (same branch)
+        // Static device on socket: show blue preview of module after the socket (same branch)
         const targetEndpointId = dropTarget.insertAfterEndpointId || dropTarget.endpointId
         const isApplianceOnSocket = symbolData && isFixedApplianceSymbol(symbolData)
 
@@ -941,16 +943,18 @@ export function DragPreview({
                   listening={false}
                 />
                 {/* Preview circle at drop position */}
-                <Circle
-                  x={position.x}
-                  y={panelLayout.mainBus.y}
-                  radius={15}
-                  fill={previewColor}
-                  opacity={previewOpacity * 0.3}
-                  stroke={previewColor}
-                  strokeWidth={2}
-                  listening={false}
-                />
+                {showMainBusPositionMarker && (
+                  <Circle
+                    x={position.x}
+                    y={panelLayout.mainBus.y}
+                    radius={15}
+                    fill={previewColor}
+                    opacity={previewOpacity * 0.3}
+                    stroke={previewColor}
+                    strokeWidth={2}
+                    listening={false}
+                  />
+                )}
               </>
             )
           }

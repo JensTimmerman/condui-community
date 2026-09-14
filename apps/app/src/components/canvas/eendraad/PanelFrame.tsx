@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useDeferredValue, useMemo } from 'react'
 import { ZOOM_100 } from '@/constants/canvasConstants'
 import { Group, Rect, Text } from 'react-konva'
 import { useTranslation } from 'react-i18next'
@@ -12,6 +12,7 @@ import {
 } from '@/editions/community/communityHooks'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useProjectStore, type ProjectState } from '@/stores/projectStore'
+import { getEendraadRenderProjectRevision } from '@/lib/layout/eendraadDerivedLayout'
 import { useEffectiveInstallerProfile } from '@/hooks/useEffectiveInstallerProfile'
 import { useCanvasFontFamily, useEffectiveCanvasZoom } from '@/editions/community/communityHooks'
 import { useEditionFeatureAvailability } from '@/hooks/useEditionFeatureAvailability'
@@ -45,7 +46,7 @@ import {
   PANEL_FRAME_HEADER_TOP_INSET,
 } from '@/lib/panel/panelDiagramLabels'
 import type { BottomUpPanelLayout } from '@/lib/layout/bottomUpLayout'
-import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
+import { getProjectElectricalPanels } from '@/lib/projectV2/electrical'
 import { panelHasBackupOutput } from '@/lib/panel/panelFeedOrganization'
 import { findPanelById } from '@/lib/panel/panelTree'
 
@@ -75,7 +76,10 @@ export function PanelFrame({ panelLayout, children }: PanelFrameProps) {
   const isSelected = isVirtualSupplyFrame ? supplyIsSelected : panelIsSelected
   const isHovered = !isVirtualSupplyFrame && panelIsHovered
   const canvasZoom = useEffectiveCanvasZoom(ZOOM_100, 'eendraad')
-  const currentProject = useProjectStore((s: ProjectState) => s.currentProject)
+  const liveProject = useProjectStore((s: ProjectState) =>
+    s.currentProject ? getEendraadRenderProjectRevision(s.currentProject) : null
+  )
+  const currentProject = useDeferredValue(liveProject)
   const { advancedPanelLabels } = useEditionFeatureAvailability(currentProject?.project.id)
   const { profile } = useEffectiveInstallerProfile(currentProject ?? null)
   const isDark = theme.mode === 'dark'
@@ -83,7 +87,7 @@ export function PanelFrame({ panelLayout, children }: PanelFrameProps) {
   const frameStrokeWidth = 4
 
   const headerLines = useMemo(() => {
-    const rootPanels = currentProject ? getElectricalPanelsFromProject(currentProject) : []
+    const rootPanels = currentProject ? getProjectElectricalPanels(currentProject) : []
     const ownerPanel =
       (currentProject &&
         findPanelById(rootPanels, panelLayout.ownerPanelId ?? panelLayout.panel.id)) ||

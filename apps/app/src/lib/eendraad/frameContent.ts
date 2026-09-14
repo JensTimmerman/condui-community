@@ -1,15 +1,15 @@
 import type { Circuit, Frame, FrameContentItem, FrameTrunkSpan, Panel, TrunkDevice } from '@/types/schema'
 import {
-  getElectricalPanelsFromProject,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import {
-  getMutableEendraadFramesForProject,
-  type ProjectWithOptionalV2Annotations,
-  replaceEendraadFramesForProject,
+  editOneWireFrames,
+  type AnnotationProject,
+  replaceOneWireFrames,
 } from '@/lib/projectV2/annotations'
 
-type FrameContentProject = ProjectWithOptionalV2Electrical & ProjectWithOptionalV2Annotations
+type FrameContentProject = ProjectWithOptionalV2Electrical & AnnotationProject
 
 export type ResolvedFrameItemKind = 'endpoint' | 'protection' | 'trunkDevice' | 'ground' | 'panelSymbol'
 
@@ -35,7 +35,7 @@ function findCircuitInPanel(panel: Panel, circuitId: string): Circuit | undefine
 }
 
 export function findCircuitInProject(project: ProjectWithOptionalV2Electrical, circuitId: string): Circuit | undefined {
-  for (const panel of getElectricalPanelsFromProject(project)) {
+  for (const panel of getProjectElectricalPanels(project)) {
     const c = findCircuitInPanel(panel, circuitId)
     if (c) return c
   }
@@ -128,6 +128,9 @@ export function collectCircuitFrameRemovalIds(circuit: Circuit): {
   const memberIds: string[] = []
   for (const ep of circuit.endpoints) memberIds.push(ep.id)
   for (const td of circuit.trunkDevices ?? []) memberIds.push(td.id)
+  for (const branch of circuit.branches ?? []) {
+    for (const td of branch.branchDevices ?? []) memberIds.push(td.id)
+  }
   return { memberIds, circuitIds: [circuit.id] }
 }
 
@@ -139,7 +142,7 @@ export function pruneEendraadFrames(project: FrameContentProject, options: Prune
   const circuitIds = new Set(options.removedCircuitIds ?? [])
   if (memberIds.size === 0 && circuitIds.size === 0) return false
 
-  const frames = getMutableEendraadFramesForProject(project)
+  const frames = editOneWireFrames(project)
   if (!frames?.length) return false
 
   let changed = false
@@ -194,7 +197,7 @@ export function pruneEendraadFrames(project: FrameContentProject, options: Prune
 
   if (kept.length !== frames.length) changed = true
   if (changed) {
-    replaceEendraadFramesForProject(project, kept.length > 0 ? kept : [])
+    replaceOneWireFrames(project, kept.length > 0 ? kept : [])
   }
   return changed
 }

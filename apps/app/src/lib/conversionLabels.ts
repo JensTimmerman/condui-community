@@ -45,9 +45,9 @@ export function isConversionLabelVisible(
 }
 
 export function getVisibleEndpointNoteText(
-  endpoint: Pick<Endpoint, 'notes' | 'notesVisible'>
+  endpoint: Pick<Endpoint, 'notes' | 'notesVisible' | 'domoticaChildProps'>
 ): string {
-  if (endpoint.notesVisible === false) return ''
+  if (endpoint.notesVisible === false || endpoint.domoticaChildProps) return ''
   return (endpoint.notes ?? '').trim()
 }
 
@@ -65,7 +65,7 @@ export function getVisibleConversionLabelParts(source: ConversionSource): Conver
   const pMaxSecondary = (conversionProps?.pMaxSecondaryW ?? '').trim()
   const solarPower =
     'solarPanelProps' in source && source.solarPanelProps?.wattageW != null
-      ? `${source.solarPanelProps.wattageW}W`
+      ? `${source.solarPanelProps.wattageW}Wp`
       : ''
   const solarVoltage =
     'solarPanelProps' in source && source.solarPanelProps?.voltageV != null

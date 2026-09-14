@@ -16,12 +16,12 @@ import { isInBetweenEndpoint } from '@/utils/symbolMapping'
 import { resolvePanelSupplyLinksForSourcePanel } from '@/lib/eendraad/panelSupplyLink'
 import { clamp } from '@/lib/geometry'
 import {
-  getElectricalPanelsFromProject,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 
 function circuitFeedsSubPanel(project: ProjectWithOptionalV2Electrical, circuitId: string): boolean {
-  const stack: Panel[] = [...getElectricalPanelsFromProject(project)]
+  const stack: Panel[] = [...getProjectElectricalPanels(project)]
   while (stack.length) {
     const panel = stack.pop()!
     for (const link of resolvePanelSupplyLinksForSourcePanel(project, panel)) {
@@ -103,10 +103,13 @@ export function resolveDefaultEndpointDuplicatePlacement(
   return { mode: 'new_branch', order: 'append' }
 }
 
-export function endpointSymbolCanBeDuplicated(endpoint: Endpoint | undefined): boolean {
+export function endpointSymbolCanBeDuplicated(
+  endpoint: Endpoint | undefined,
+  options?: { allowDomoticaChild?: boolean },
+): boolean {
   if (!endpoint) return false
   if (endpoint.symbol === 'panel_distribution') return false
-  if (endpoint.domoticaChildProps) return false
+  if (endpoint.domoticaChildProps && !options?.allowDomoticaChild) return false
   return true
 }
 
@@ -139,7 +142,8 @@ function repairNewBranch(
   circuitId: string,
   newEndpointId: string,
   insertIndex: number,
-  deps: DuplicateEndpointDeps
+  deps: DuplicateEndpointDeps,
+  dcBusId?: string,
 ): void {
   const circuit = deps.getCircuitById(circuitId)
   if (!circuit) return
@@ -153,6 +157,7 @@ function repairNewBranch(
     id: generateId(),
     label: '',
     endpointIds: [newEndpointId],
+    ...(dcBusId ? { dcBusId } : {}),
   }
   next.splice(clamped, 0, newBranch)
   deps.updateCircuit(circuitId, { branches: next })
@@ -192,6 +197,7 @@ export function duplicateBranchAboveOnCircuit(
   const branchesBefore = copyBranches(circuit)
   const sourceBranchIdx = branchIndexContaining(branchesBefore, orderedIds[0]!)
   if (sourceBranchIdx < 0) return { ok: false, reason: 'source_not_in_branch' }
+  const sourceBranch = branchesBefore[sourceBranchIdx]
 
   const clones: Endpoint[] = []
   for (const eid of orderedIds) {
@@ -209,6 +215,7 @@ export function duplicateBranchAboveOnCircuit(
     id: generateId(),
     label: '',
     endpointIds: newEndpointIds,
+    ...(sourceBranch?.dcBusId ? { dcBusId: sourceBranch.dcBusId } : {}),
   }
   nextBranches.splice(branchInsertIndexAboveSource(sourceBranchIdx), 0, newBranch)
 
@@ -272,13 +279,21 @@ export function duplicateEndpointOnCircuit(
     const lastBranch = branchesBefore[branchesBefore.length - 1]
     const lastId = lastBranch?.endpointIds[lastBranch?.endpointIds.length - 1]
     deps.addEndpoint(circuitId, clone, lastId)
-    repairNewBranch(circuitId, clone.id, branchesBefore.length, deps)
+    repairNewBranch(
+      circuitId,
+      clone.id,
+      branchesBefore.length,
+      deps,
+      branchesBefore[sourceBranchIdx]?.dcBusId,
+    )
   } else if (order === 'before_source_branch') {
     const nextBranches = copyBranches(circuit)
+    const sourceBranch = nextBranches[sourceBranchIdx]
     const newBranch: Branch = {
       id: generateId(),
       label: '',
       endpointIds: [clone.id],
+      ...(sourceBranch?.dcBusId ? { dcBusId: sourceBranch.dcBusId } : {}),
     }
     nextBranches.splice(branchInsertIndexAboveSource(sourceBranchIdx), 0, newBranch)
     deps.updateCircuit(circuitId, {
@@ -287,7 +302,13 @@ export function duplicateEndpointOnCircuit(
     })
   } else {
     deps.addEndpoint(circuitId, clone, undefined)
-    repairNewBranch(circuitId, clone.id, branchInsertIndexAboveSource(sourceBranchIdx), deps)
+    repairNewBranch(
+      circuitId,
+      clone.id,
+      branchInsertIndexAboveSource(sourceBranchIdx),
+      deps,
+      branchesBefore[sourceBranchIdx]?.dcBusId,
+    )
   }
 
   if (selectNew) deps.setSelection?.({ type: 'endpoint', ids: [clone.id] })

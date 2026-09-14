@@ -11,7 +11,7 @@ import type { OneWireLayoutBlockKind } from '@/lib/layout/oneWireBlockLayout'
 import { getBusFeedMarkerPaintBounds } from '@/lib/layout/busFeedMarkerGeometry'
 import {
   getCircuitConverterDcConnectionCount,
-  getCircuitConverterOutputRowY,
+  getOrdinaryCircuitConverterOutputRowY,
   supportsCircuitConverterDcConnections,
 } from '@/lib/layout/circuitConverterGeometry'
 import type { WireSegment } from '@/types/schema'
@@ -100,7 +100,7 @@ function buildDebugBox(
         minY = Math.min(
           minY,
           ...Array.from({ length: count }, (_, connectionIndex) =>
-            getCircuitConverterOutputRowY(device!, element.position.y, connectionIndex) -
+            getOrdinaryCircuitConverterOutputRowY(device!, element.position.y, connectionIndex) -
             LAYOUT_CONSTANTS.SYMBOL_SIZE
           )
         )
@@ -111,6 +111,49 @@ function buildDebugBox(
     if (!circuitIds.has(note.circuitId) || note.notesVisible === false) continue
     const noteBounds = getCircuitNotesPaintBounds(note.label, note.notesOrientation)
     minY = Math.min(minY, note.y + noteBounds.top)
+  }
+
+  // Ordinary DC-bus endpoints are layout-tree children of the rail rather than
+  // top-level BottomUp elements. Mirror the frame envelope here so the cyan
+  // division box explains the same complete subtree as the rendered frame.
+  const circuit = panelLayout.circuits.find(
+    (candidate) => candidate.circuit.id === circuitLayout.circuit.id
+  )?.circuit
+  const dcBusBranchStep = LAYOUT_CONSTANTS.SYMBOL_SIZE + LAYOUT_CONSTANTS.TRUNK_DEVICE_SPACING
+  for (const bus of (circuit?.trunkDevices ?? []).filter((device) => device.type === 'dc_bus')) {
+    const busElement = panelLayout.elements.find(
+      (element) => element.type === 'trunkDevice' && element.trunkDeviceId === bus.id
+    )
+    let busY = busElement?.position.y
+    if (busY == null && bus.converterDcConnection) {
+      const converterElement = panelLayout.elements.find(
+        (element) =>
+          element.type === 'trunkDevice' &&
+          element.trunkDeviceId === bus.converterDcConnection?.converterId
+      )
+      const converter = circuit?.trunkDevices?.find(
+        (device) => device.id === bus.converterDcConnection?.converterId
+      )
+      if (converterElement && converter) {
+        busY = getOrdinaryCircuitConverterOutputRowY(
+          converter,
+          converterElement.position.y,
+          bus.converterDcConnection.connectionIndex
+        )
+      }
+    }
+    if (busY == null) continue
+
+    minY = Math.min(minY, busY - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2)
+    for (const branch of (circuit?.branches ?? []).filter(
+      (candidate) => candidate.dcBusId === bus.id
+    )) {
+      if (branch.endpointIds.length === 0) continue
+      minY = Math.min(
+        minY,
+        busY - branch.endpointIds.length * dcBusBranchStep - 4
+      )
+    }
   }
 
   const anchorX =

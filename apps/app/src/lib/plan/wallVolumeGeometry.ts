@@ -26,6 +26,8 @@ const JUNCTION_MITER_LIMIT = 6
 const WIDTH_TAPER_LENGTH_CM = 5
 const WIDTH_TAPER_MAX_ANGLE_RADIANS = (10 * Math.PI) / 180
 const WALL_PATH_POINT_TOLERANCE = 0.75
+const SIMPLE_WALL_COLLINEAR_EPSILON = 1e-8
+const SIMPLE_WALL_ENDPOINT_EPSILON = 1e-6
 
 export interface WallVolumeComponent {
   id: string
@@ -33,6 +35,274 @@ export interface WallVolumeComponent {
   fillPaths: Point2[][]
   /** Solid exterior contours only; cutout/hole boundaries must not receive a wall stroke. */
   outlinePaths: Point2[][]
+}
+
+/** Collapse redundant points without turning a real corner into a straight segment. */
+export function mergeCollinearWallPoints(points: Point2[]): Point2[] {
+  if (points.length <= 2) return points.map((point) => ({ ...point }))
+
+  const merged: Point2[] = []
+  for (const point of points) {
+    const previous = merged[merged.length - 1]
+    if (
+      previous &&
+      Math.hypot(point.x - previous.x, point.y - previous.y) <= SIMPLE_WALL_COLLINEAR_EPSILON
+    ) {
+      continue
+    }
+    merged.push({ ...point })
+
+    while (merged.length >= 3) {
+      const a = merged[merged.length - 3]!
+      const b = merged[merged.length - 2]!
+      const c = merged[merged.length - 1]!
+      const abx = b.x - a.x
+      const aby = b.y - a.y
+      const bcx = c.x - b.x
+      const bcy = c.y - b.y
+      const cross = abx * bcy - aby * bcx
+      const dot = abx * bcx + aby * bcy
+      const scale = Math.max(1, Math.hypot(abx, aby) * Math.hypot(bcx, bcy))
+      if (Math.abs(cross) > SIMPLE_WALL_COLLINEAR_EPSILON * scale || dot <= 0) break
+      merged.splice(merged.length - 2, 1)
+    }
+  }
+
+  return merged
+}
+
+export interface SimpleWallFallbackPath {
+  id: string
+  wallIds: string[]
+  points: Point2[]
+  thickness: number
+  closed: boolean
+}
+
+/** Extend only the two open ends of a fallback centerline by a small cap amount. */
+export function extendSimpleWallPathEnds(points: Point2[], extension: number): Point2[] {
+  if (points.length < 2 || !Number.isFinite(extension) || extension <= 0) {
+    return points.map((point) => ({ ...point }))
+  }
+
+  const extended = points.map((point) => ({ ...point }))
+  const first = points[0]!
+  const second = points[1]!
+  const last = points[points.length - 1]!
+  const previous = points[points.length - 2]!
+  const startLength = Math.hypot(second.x - first.x, second.y - first.y)
+  const endLength = Math.hypot(last.x - previous.x, last.y - previous.y)
+  if (startLength > SIMPLE_WALL_ENDPOINT_EPSILON) {
+    extended[0] = {
+      x: first.x - ((second.x - first.x) / startLength) * extension,
+      y: first.y - ((second.y - first.y) / startLength) * extension,
+    }
+  }
+  if (endLength > SIMPLE_WALL_ENDPOINT_EPSILON) {
+    extended[extended.length - 1] = {
+      x: last.x + ((last.x - previous.x) / endLength) * extension,
+      y: last.y + ((last.y - previous.y) / endLength) * extension,
+    }
+  }
+  return extended
+}
+
+type SimpleWallFallbackCandidate = {
+  wallId: string
+  points: Point2[]
+  thickness: number
+  thicknessKey: string
+  startNode: string
+  endNode: string
+}
+
+function simpleWallEndpointKey(point: Point2): string {
+  return `${Math.round(point.x / SIMPLE_WALL_ENDPOINT_EPSILON)}:${Math.round(point.y / SIMPLE_WALL_ENDPOINT_EPSILON)}`
+}
+
+function orientSimpleWallPoints(candidate: SimpleWallFallbackCandidate, node: string): Point2[] {
+  if (candidate.startNode === node) return candidate.points
+  if (candidate.endNode === node) return [...candidate.points].reverse()
+  return []
+}
+
+/**
+ * Build simple centerline paths for the no-Clipper fallback.
+ *
+ * Only endpoint-connected walls with the same thickness are joined. A branch or duplicate
+ * segment is deliberately left as separate input so this helper never tries to solve the
+ * topology that Clipper handles in the normal path.
+ */
+export function buildSimpleWallFallbackPaths(
+  sourceWalls: Wall[],
+  doors: Door[],
+  windows: Window[],
+  masterWallThickness: number,
+  pxPerMeter: number | null | undefined
+): SimpleWallFallbackPath[] {
+  const wallsWithOpenings = new Set([
+    ...doors.map((opening) => opening.wallId),
+    ...windows.map((opening) => opening.wallId),
+  ])
+  const candidates: SimpleWallFallbackCandidate[] = []
+  const paths: SimpleWallFallbackPath[] = []
+
+  for (const wall of sourceWalls) {
+    if (isCurvedWall(wall) || wallsWithOpenings.has(wall.id)) continue
+    const points = mergeCollinearWallPoints(wall.points)
+    if (points.length < 2) continue
+    const start = points[0]!
+    const end = points[points.length - 1]!
+    const startNode = simpleWallEndpointKey(start)
+    const endNode = simpleWallEndpointKey(end)
+    const thickness = resolveWallThicknessPx(wall, masterWallThickness, pxPerMeter)
+    if (!Number.isFinite(thickness) || thickness <= 0) continue
+    if (startNode === endNode) {
+      if (points.length >= 3) {
+        paths.push({
+          id: wall.id,
+          wallIds: [wall.id],
+          points: points.slice(0, -1),
+          thickness,
+          closed: true,
+        })
+      }
+      continue
+    }
+    candidates.push({
+      wallId: wall.id,
+      points,
+      thickness,
+      thicknessKey: thickness.toFixed(6),
+      startNode,
+      endNode,
+    })
+  }
+
+  const nodeEdges = new Map<string, string[]>()
+  const candidateById = new Map(candidates.map((candidate) => [candidate.wallId, candidate]))
+  const duplicateEdgeIds = new Set<string>()
+  const edgeOwners = new Map<string, string>()
+  for (const candidate of candidates) {
+    const nodes = [candidate.startNode, candidate.endNode].sort()
+    const edgeKey = `${candidate.thicknessKey}|${nodes.join('|')}`
+    const existingOwner = edgeOwners.get(edgeKey)
+    if (existingOwner) {
+      duplicateEdgeIds.add(existingOwner)
+      duplicateEdgeIds.add(candidate.wallId)
+    } else {
+      edgeOwners.set(edgeKey, candidate.wallId)
+    }
+    for (const node of [candidate.startNode, candidate.endNode]) {
+      const edgeIds = nodeEdges.get(`${candidate.thicknessKey}|${node}`) ?? []
+      edgeIds.push(candidate.wallId)
+      nodeEdges.set(`${candidate.thicknessKey}|${node}`, edgeIds)
+    }
+  }
+
+  const visited = new Set<string>()
+  for (const candidate of candidates) {
+    if (visited.has(candidate.wallId)) continue
+
+    const componentIds: string[] = []
+    const componentNodes = new Set<string>()
+    const queue = [candidate.wallId]
+    while (queue.length > 0) {
+      const candidateId = queue.shift()!
+      if (visited.has(candidateId)) continue
+      visited.add(candidateId)
+      const current = candidateById.get(candidateId)
+      if (!current) continue
+      componentIds.push(candidateId)
+      for (const node of [current.startNode, current.endNode]) {
+        const nodeKey = `${current.thicknessKey}|${node}`
+        componentNodes.add(nodeKey)
+        for (const connectedId of nodeEdges.get(nodeKey) ?? []) {
+          if (!visited.has(connectedId)) queue.push(connectedId)
+        }
+      }
+    }
+
+    const hasBranch = [...componentNodes].some(
+      (nodeKey) => (nodeEdges.get(nodeKey)?.length ?? 0) > 2
+    )
+    const hasDuplicate = componentIds.some((wallId) => duplicateEdgeIds.has(wallId))
+    if (hasBranch || hasDuplicate) {
+      for (const wallId of componentIds) {
+        const separate = candidateById.get(wallId)!
+        paths.push({
+          id: separate.wallId,
+          wallIds: [separate.wallId],
+          points: separate.points,
+          thickness: separate.thickness,
+          closed: false,
+        })
+      }
+      continue
+    }
+
+    const componentCandidates = componentIds.map((wallId) => candidateById.get(wallId)!)
+    const startNode =
+      [...componentNodes]
+        .map((nodeKey) => nodeKey.slice(nodeKey.indexOf('|') + 1))
+        .find((node) => (nodeEdges.get(`${candidate.thicknessKey}|${node}`)?.length ?? 0) === 1) ??
+      componentCandidates[0]!.startNode
+    const first = componentCandidates.find(
+      (item) => item.startNode === startNode || item.endNode === startNode
+    )!
+    const orderedPoints: Point2[] = []
+    const orderedWallIds: string[] = []
+    let current = first
+    let currentNode = startNode
+    let closed = false
+
+    while (orderedWallIds.length < componentCandidates.length) {
+      const oriented = orientSimpleWallPoints(current, currentNode)
+      if (oriented.length === 0) break
+      orderedWallIds.push(current.wallId)
+      for (const point of oriented) {
+        const previous = orderedPoints[orderedPoints.length - 1]
+        if (
+          !previous ||
+          Math.hypot(point.x - previous.x, point.y - previous.y) > SIMPLE_WALL_ENDPOINT_EPSILON
+        ) {
+          orderedPoints.push(point)
+        }
+      }
+
+      const nextNode = current.startNode === currentNode ? current.endNode : current.startNode
+      if (nextNode === startNode) {
+        const firstPoint = orderedPoints[0]
+        const lastPoint = orderedPoints[orderedPoints.length - 1]
+        if (
+          firstPoint &&
+          lastPoint &&
+          Math.hypot(lastPoint.x - firstPoint.x, lastPoint.y - firstPoint.y) <=
+            SIMPLE_WALL_ENDPOINT_EPSILON
+        ) {
+          orderedPoints.pop()
+        }
+        closed = true
+        break
+      }
+      const nextId = (nodeEdges.get(`${current.thicknessKey}|${nextNode}`) ?? []).find(
+        (wallId) => !orderedWallIds.includes(wallId)
+      )
+      if (!nextId) break
+      current = candidateById.get(nextId)!
+      currentNode = nextNode
+    }
+
+    paths.push({
+      id: orderedWallIds.join('|'),
+      wallIds: orderedWallIds,
+      points: orderedPoints,
+      thickness: candidate.thickness,
+      closed,
+    })
+  }
+
+  return paths
 }
 
 export function selectWallVolumeOutlinePaths(

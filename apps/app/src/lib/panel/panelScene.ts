@@ -1,14 +1,15 @@
+import { getAllCircuits, isTerminalStripDevice } from '@/lib/eendraad/projectElectricalDomain'
 /**
  * Pure construction of the panel hierarchy scene (surfaces + connectors).
  * Used by PanelCanvas / HierarchyPanelCanvas for both full-tree and filtered views.
  */
 import { getAllSupplyTrunkDevices, getPanelFeedProjection } from '@/lib/feedTopology'
 import { getPanelDisplayName } from '@/utils/panelNames'
-import type { Panel, PanelGridModuleRef } from '@/types/schema'
+import type { Circuit, Panel, PanelGridModuleRef, PanelGridSlot, TrunkDevice } from '@/types/schema'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
-  getAuxiliaryElectricalEnclosuresFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
+  selectProjectAuxiliaryElectricalEnclosures,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import {
@@ -17,17 +18,26 @@ import {
   resolveSupplyDeviceMounting,
 } from '@/lib/panel/auxiliarySupplyEnclosures'
 import type { AuxiliaryElectricalEnclosure } from '@/types/supplyAssembly'
+import { assemblyOwnsPanelInput, buildSupplyElectricalTopology, type SupplyPhysicalTarget } from '@/lib/supplyAssembly/electricalTopology'
+import { selectProjectSupplyAssemblies } from '@/lib/projectV2/electrical'
+import { getPanelBusSections } from '@/lib/panel/panelBusSections'
+import { isSupplyDeviceVisibleInPanel } from '@/lib/panel/supplyPanelVisibility'
+import { getSharedSupplyFrameDevices, SHARED_SUPPLY_FRAME_ID } from './sharedSupplyFrame'
 import {
   CELL_H,
   CELL_W,
   ROW_GAP,
+  TERMINAL_STRIP_RAIL_H,
   getPanelGridPlacements,
+  getTerminalStripBottomExtent,
+  getTerminalStripTopOffset,
   getSupplyPanelColumns,
   getSupplyPanelRows,
   getSupplyPanelPlacements,
   panelGridModuleRefKey,
   type ModulePlacement,
 } from '@/components/canvas/panel/panelGridLayout'
+import { getJunctionPanelGridView, getJunctionPanelTerminal } from '@/lib/junctionPanel/grid'
 import { DEFAULT_PANEL_GRID_COLUMNS, DEFAULT_PANEL_GRID_ROWS } from '@/lib/panel/panelGridDefaults'
 import {
   findConverterBackupPanelFeed,
@@ -38,7 +48,7 @@ import {
 export const PANEL_SCENE_FRAME_MARGIN = 40
 /** Vertical gap between main and supply regions on one panel surface (matches legacy PanelCanvas). */
 export const PANEL_SCENE_SUPPLY_GAP = 20
-export const PANEL_SCENE_SHARED_SUPPLY_ID = 'shared-supply'
+export const PANEL_SCENE_SHARED_SUPPLY_ID = SHARED_SUPPLY_FRAME_ID
 
 export type PanelScenePanelOption = {
   id: string
@@ -46,12 +56,15 @@ export type PanelScenePanelOption = {
   isRoot: boolean
 }
 
-export type PanelSceneSurfaceKind = 'shared_supply' | 'auxiliary' | 'panel'
+export type PanelSceneSurfaceKind = 'shared_supply' | 'auxiliary' | 'junction_panel' | 'panel'
 
 export interface PanelSceneSurface {
   id: string
   panel: Panel | null
   enclosure?: AuxiliaryElectricalEnclosure
+  /** Panels containing occurrences of this shared junction-panel identity. */
+  junctionPanelOwnerIds?: string[]
+  junctionPanelGridView?: Panel['gridView']
   kind: PanelSceneSurfaceKind
   x: number
   y: number
@@ -75,8 +88,57 @@ export interface PanelSceneSurface {
   converterBackupSourceFeed?: ConverterBackupPanelFeed | null
 }
 
+interface JunctionPanelOccurrence {
+  device: TrunkDevice
+  ref: PanelGridModuleRef
+  ownerPanelId?: string
+}
+
+function collectJunctionPanelOccurrences(
+  project: ProjectWithOptionalV2Electrical
+): Map<string, JunctionPanelOccurrence[]> {
+  const groups = new Map<string, JunctionPanelOccurrence[]>()
+  const add = (device: TrunkDevice, ref: PanelGridModuleRef, ownerPanelId?: string) => {
+    if (device.type !== 'junction_panel' && device.symbol !== 'junction_panel') return
+    const identity = (device.junctionIdentity ?? device.label ?? '').trim().toUpperCase()
+    if (!identity) return
+    const entries = groups.get(identity) ?? []
+    entries.push({ device, ref, ownerPanelId })
+    groups.set(identity, entries)
+  }
+  const visitCircuit = (circuit: Circuit, ownerPanelId: string) => {
+    for (const device of circuit.trunkDevices ?? []) {
+      add(
+        device,
+        { kind: 'trunkDevice', id: device.id, scope: 'circuit', circuitId: circuit.id },
+        ownerPanelId
+      )
+    }
+  }
+  for (const panel of getProjectElectricalPanels(project)) {
+    const visitPanel = (candidate: Panel) => {
+      for (const circuit of candidate.circuits ?? []) visitCircuit(circuit, candidate.id)
+      for (const protection of candidate.protections ?? []) {
+        for (const circuit of protection.circuits ?? []) visitCircuit(circuit, candidate.id)
+      }
+      for (const child of candidate.subPanels ?? []) visitPanel(child)
+    }
+    visitPanel(panel)
+  }
+  const installation = getProjectElectricalInstallation(project)
+  for (const device of getAllSupplyTrunkDevices(project)) {
+    add(device, { kind: 'trunkDevice', id: device.id, scope: 'supply' })
+  }
+  for (const device of installation?.groundTrunkDevices ?? []) {
+    add(device, { kind: 'trunkDevice', id: device.id, scope: 'ground' })
+  }
+  return groups
+}
+
 export interface PanelSceneConnector {
   points: number[]
+  sourceSurfaceId?: string
+  targetSurfaceId?: string
 }
 
 export interface ConverterBackupFeedMarkerGeometry {
@@ -144,8 +206,8 @@ export function routePanelSceneConnector(
 }
 
 export function routePanelSceneSurfaceTransition(
-  source: Pick<PanelSceneSurface, 'x' | 'y' | 'width' | 'height'>,
-  target: Pick<PanelSceneSurface, 'x' | 'y' | 'width' | 'height'>
+  source: Pick<PanelSceneSurface, 'x' | 'y' | 'width' | 'height'> & Partial<Pick<PanelSceneSurface, 'kind'>>,
+  target: Pick<PanelSceneSurface, 'x' | 'y' | 'width' | 'height'> & Partial<Pick<PanelSceneSurface, 'kind'>>
 ): number[] {
   const sourceCenterX = source.x + source.width / 2
   const sourceCenterY = source.y + source.height / 2
@@ -153,7 +215,10 @@ export function routePanelSceneSurfaceTransition(
   const targetCenterY = target.y + target.height / 2
   const dx = targetCenterX - sourceCenterX
   const dy = targetCenterY - sourceCenterY
-  if (Math.abs(dx) > Math.abs(dy)) {
+  // Separated rows use the hierarchy feed direction even when far apart horizontally.
+  // A side portal would make the wire circle the enclosure to reach its incoming lane.
+  if (source.kind !== 'panel' && target.kind !== 'panel' &&
+    source.y < target.y + target.height && target.y < source.y + source.height) {
     const sourceX = dx >= 0 ? source.x + source.width : source.x
     const targetX = dx >= 0 ? target.x : target.x + target.width
     const corridorX = (sourceX + targetX) / 2
@@ -240,14 +305,18 @@ export function buildDirectPanelFeederConnectors(
     for (const subPanel of panel.subPanels ?? []) visit(subPanel)
   }
 
-  for (const panel of getElectricalPanelsFromProject(project)) visit(panel)
+  for (const panel of getProjectElectricalPanels(project)) visit(panel)
   return connectors
 }
 
 export type GetPanelGridModulesFn = (panelId: string) => Array<{
   ref: PanelGridModuleRef
+  terminalStripMemberRefs?: PanelGridModuleRef[]
   inSupplyPanel?: boolean
-  slot?: { row: number; col: number; moduleWidth?: number; moduleWidthManual?: boolean }
+  slot?: Pick<
+    PanelGridSlot,
+    'row' | 'col' | 'moduleWidth' | 'moduleWidthManual' | 'terminalStripRail'
+  >
 }>
 
 export interface BuildPanelSceneParams {
@@ -290,11 +359,9 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
   const levelGap = 72
   const siblingGap = 48
 
-  const installation = getElectricalInstallationFromProject(currentProject)
-  const rootPanels = getElectricalPanelsFromProject(currentProject)
-  const sharedRefs: PanelGridModuleRef[] = getAllSupplyTrunkDevices(currentProject)
-    .filter((device) => device.type !== 'junction_box' && device.type !== 'junction_panel')
-    .filter((device) => resolveSupplyDeviceMounting(currentProject, device.id)?.kind === 'grid')
+  const installation = getProjectElectricalInstallation(currentProject)
+  const rootPanels = getProjectElectricalPanels(currentProject)
+  const sharedRefs: PanelGridModuleRef[] = getSharedSupplyFrameDevices(currentProject)
     .map((device) => ({ kind: 'trunkDevice' as const, id: device.id, scope: 'supply' as const }))
   const sharedRefKeys = new Set(sharedRefs.map((ref) => panelGridModuleRefKey(ref)))
   const baseRootCols = firstRootOption.panel.gridView?.columns ?? DEFAULT_PANEL_GRID_COLUMNS
@@ -321,7 +388,10 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
   const baseRootContentWidth = baseRootCols * CELL_W
   const sharedContentWidth = baseRootContentWidth
   const sharedWidth = sharedContentWidth + PANEL_SCENE_FRAME_MARGIN * 2
-  const sharedHeight = CELL_H + PANEL_SCENE_FRAME_MARGIN * 2
+  const sharedVisible = sharedRefs.length > 0 ||
+    rootPanels.find((panel) => panel.isMain)?.gridView?.supplyPanelVisible !== false
+  const sharedHeight = sharedVisible ? CELL_H + PANEL_SCENE_FRAME_MARGIN * 2 : 0
+  const sharedBandHeight = sharedVisible ? sharedHeight + rootGap : 0
 
   const M = PANEL_SCENE_FRAME_MARGIN
   const GAP = PANEL_SCENE_SUPPLY_GAP
@@ -331,7 +401,9 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
     const cols = panel.gridView?.columns ?? DEFAULT_PANEL_GRID_COLUMNS
     const supplyLayout = getSupplyPanelLayout(panel)
     const feedFromTop = panel.gridView?.feedFromTop ?? false
-    const contentHeight = rows * CELL_H + Math.max(0, rows - 1) * ROW_GAP
+    const mainContentHeight = rows * CELL_H + Math.max(0, rows - 1) * ROW_GAP
+    const contentHeight =
+      getTerminalStripTopOffset(panel) + mainContentHeight + getTerminalStripBottomExtent(panel)
     const contentWidth = cols * CELL_W
     const panelFrameHeight = contentHeight + M * 2
     const supplyFrameHeight = supplyLayout.contentHeight + M * 2
@@ -396,12 +468,21 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
     const rows = Math.max(1, enclosure.gridView.rows)
     const cols = Math.max(MIN_AUXILIARY_COLUMNS, enclosure.gridView.columns)
     const contentWidth = cols * CELL_W
-    const contentHeight = rows * CELL_H + Math.max(0, rows - 1) * ROW_GAP
+    const layoutPanel: Panel = {
+      ...firstRootOption.panel,
+      gridView: { ...enclosure.gridView, rows, columns: cols },
+    }
+    const contentHeight =
+      getTerminalStripTopOffset(layoutPanel) +
+      rows * CELL_H +
+      Math.max(0, rows - 1) * ROW_GAP +
+      getTerminalStripBottomExtent(layoutPanel)
     const slotByKey = new Map(
       enclosure.gridView.slots.map((slot) => [panelGridModuleRefKey(slot.module), slot] as const)
     )
     const auxiliaryRefs = getAuxiliaryEnclosureSupplyDeviceIds(currentProject, enclosure.id)
       .filter((deviceId) => supplyDeviceIds.has(deviceId))
+      .filter((deviceId) => isSupplyDeviceVisibleInPanel(currentProject, deviceId))
       .map(
         (deviceId): PanelGridModuleRef => ({
           kind: 'trunkDevice',
@@ -409,14 +490,14 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
           scope: 'supply',
         })
       )
-    const layoutPanel: Panel = {
-      ...firstRootOption.panel,
-      gridView: { ...enclosure.gridView, rows, columns: cols },
-    }
+    const terminalRefs: PanelGridModuleRef[] = panelOptions.flatMap(({ panel }) =>
+      getAllCircuits(panel).flatMap((circuit) => (circuit.trunkDevices ?? [])
+        .filter((device) => isTerminalStripDevice(device) && device.panelMounting?.kind === 'auxiliary' && device.panelMounting.enclosureId === enclosure.id)
+        .map((device): PanelGridModuleRef => ({ kind: 'trunkDevice', id: device.id, scope: 'circuit', circuitId: circuit.id }))))
     const placements = getPanelGridPlacements(
       layoutPanel,
       currentProject,
-      auxiliaryRefs.map((ref) => ({
+      [...auxiliaryRefs, ...terminalRefs].map((ref) => ({
         ref,
         slot: slotByKey.get(panelGridModuleRefKey(ref)),
       }))
@@ -424,7 +505,7 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
       ...placement,
       x: placement.x + M,
       y: placement.y + M,
-      inSupplyPanel: true as const,
+      inSupplyPanel: placement.ref.kind === 'trunkDevice' && placement.ref.scope === 'supply',
     }))
     return {
       id: enclosure.id,
@@ -432,7 +513,7 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
       enclosure,
       kind: 'auxiliary',
       x: enclosure.panelViewPosition?.x ?? 0,
-      y: sharedHeight + rootGap,
+      y: sharedBandHeight,
       width: contentWidth + M * 2,
       height: contentHeight + M * 2,
       mainPanelY: 0,
@@ -499,7 +580,7 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
     }
   }
 
-  const auxiliaryEnclosures = getAuxiliaryElectricalEnclosuresFromProject(currentProject).filter(
+  const auxiliaryEnclosures = selectProjectAuxiliaryElectricalEnclosures(currentProject).filter(
     (enclosure) => enclosure.hidden !== true
   )
   const auxiliarySurfaces = auxiliaryEnclosures
@@ -509,38 +590,146 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
       const rightX = right.enclosure?.panelViewPosition?.x ?? 0
       return leftX - rightX || left.id.localeCompare(right.id)
     })
+  const auxiliaryGap = 56
+  const junctionPanelSurfaces: PanelSceneSurface[] = [
+    ...collectJunctionPanelOccurrences(currentProject).entries(),
+  ].map(([identity, occurrences], surfaceIndex) => {
+    const configuredOccurrence =
+      occurrences.find((occurrence) => occurrence.device.junctionPanelGridView) ?? occurrences[0]!
+    const gridView = {
+      ...getJunctionPanelGridView(configuredOccurrence.device),
+      feedFromTop: hierarchyFeedFromTop,
+    }
+    const cols = Math.max(1, gridView.columns)
+    const rows = Math.max(1, gridView.rows)
+    const layoutPanel = { ...firstRootOption.panel, gridView }
+    const contentWidth = cols * CELL_W
+    const mainContentHeight = rows * CELL_H + Math.max(0, rows - 1) * ROW_GAP
+    const contentHeight =
+      getTerminalStripTopOffset(layoutPanel) +
+      mainContentHeight +
+      getTerminalStripBottomExtent(layoutPanel)
+    const terminalWidth = CELL_W / 3
+    const preferredRail = gridView.terminalStripTopRail
+      ? ('top' as const)
+      : gridView.terminalStripBottomRail
+        ? ('bottom' as const)
+        : undefined
+    const terminalY =
+      preferredRail === 'top'
+        ? M
+        : preferredRail === 'bottom'
+          ? M + getTerminalStripTopOffset(layoutPanel) + mainContentHeight + ROW_GAP
+          : M + getTerminalStripTopOffset(layoutPanel)
+    const placements: PanelSceneSurface['placements'] = occurrences.map((occurrence, index) => {
+      const terminal = getJunctionPanelTerminal(occurrence.device, index)
+      return {
+        ref: occurrence.ref,
+        junctionPanelTerminal: {
+          panelId: identity,
+          terminalId: terminal.id,
+          label: terminal.label,
+          pinCount: terminal.pinCount,
+          feedFromTop: hierarchyFeedFromTop,
+        },
+        x: M + index * terminalWidth,
+        y: terminalY,
+        width: terminalWidth,
+        height: preferredRail ? TERMINAL_STRIP_RAIL_H : CELL_H,
+        row: 0,
+        col: index / 3,
+        terminalStripRail: preferredRail,
+      }
+    })
+    return {
+      id: `junction-panel:${identity}`,
+      panel: null,
+      junctionPanelGridView: gridView,
+      junctionPanelOwnerIds: [
+        ...new Set(
+          occurrences
+            .map((occurrence) => occurrence.ownerPanelId)
+            .filter((panelId): panelId is string => Boolean(panelId))
+        ),
+      ],
+      kind: 'junction_panel',
+      x: surfaceIndex * (contentWidth + auxiliaryGap),
+      y: sharedHeight + rootGap,
+      width: contentWidth + M * 2,
+      height: contentHeight + M * 2,
+      mainPanelY: 0,
+      supplyPanelY: 0,
+      panelFrameHeight: contentHeight + M * 2,
+      supplyFrameHeight: contentHeight + M * 2,
+      contentWidth,
+      supplyContentWidth: contentWidth,
+      supplyRows: rows,
+      supplyCols: cols,
+      rows,
+      cols,
+      feedFromTop: true,
+      placements,
+      supplyPanelVisible: false,
+      label: identity,
+      converterBackupFeed: null,
+      converterBackupSourceFeed: null,
+    }
+  })
   const auxiliaryBandHeight = auxiliarySurfaces.reduce(
     (height, surface) => Math.max(height, surface.height),
     0
   )
-  const auxiliaryGap = 56
   const minimumPreferredX =
     auxiliarySurfaces.length > 0
       ? Math.min(
-          ...auxiliarySurfaces.map((surface) => surface.enclosure?.panelViewPosition?.x ?? 0)
+          ...auxiliarySurfaces.map(
+            (surface) => surface.enclosure?.panelViewPosition?.x ?? surface.x
+          )
         )
       : 0
   let auxiliaryCursorX = 0
   for (const surface of auxiliarySurfaces) {
-    const preferredX = (surface.enclosure?.panelViewPosition?.x ?? 0) - minimumPreferredX
+    const preferredX = (surface.enclosure?.panelViewPosition?.x ?? surface.x) - minimumPreferredX
     surface.x = Math.max(preferredX, auxiliaryCursorX)
     auxiliaryCursorX = surface.x + surface.width + auxiliaryGap
   }
   const auxiliaryWidth = Math.max(0, auxiliaryCursorX - auxiliaryGap)
+  const junctionWidth =
+    junctionPanelSurfaces.length > 0
+      ? junctionPanelSurfaces.at(-1)!.x + junctionPanelSurfaces.at(-1)!.width
+      : 0
   const rootNodes = rootOptions.map((option) => measureNode(option.panel))
   const rootsWidth =
     rootNodes.reduce((sum, node) => sum + node.subtreeWidth, 0) +
     rootGap * Math.max(0, rootNodes.length - 1)
-  const totalSceneWidth = Math.max(sharedWidth, rootsWidth, auxiliaryWidth)
+  const totalSceneWidth = Math.max(sharedWidth, rootsWidth, auxiliaryWidth, junctionWidth)
   const sharedX = (totalSceneWidth - sharedWidth) / 2
   const auxiliaryOffsetX = (totalSceneWidth - auxiliaryWidth) / 2
   for (const surface of auxiliarySurfaces) surface.x += auxiliaryOffsetX
   let rootCursorX = (totalSceneWidth - rootsWidth) / 2
   const rootY =
-    sharedHeight + rootGap + (auxiliaryBandHeight > 0 ? auxiliaryBandHeight + rootGap : 0)
+    sharedBandHeight + (auxiliaryBandHeight > 0 ? auxiliaryBandHeight + rootGap : 0)
   for (const node of rootNodes) {
     layoutNode(node, rootCursorX, rootY)
     rootCursorX += node.subtreeWidth + rootGap
+  }
+  const deepestRootBottom = (node: TreeNode): number =>
+    Math.max(node.y + node.surface.height, ...node.children.map(deepestRootBottom))
+  const rootBottom = Math.max(...rootNodes.map(deepestRootBottom))
+  const panelNodeById = new Map<string, TreeNode>()
+  const indexPanelNodes = (node: TreeNode) => {
+    panelNodeById.set(node.panel.id, node)
+    for (const child of node.children) indexPanelNodes(child)
+  }
+  for (const node of rootNodes) indexPanelNodes(node)
+  const junctionOffsetX = (totalSceneWidth - junctionWidth) / 2
+  for (const surface of junctionPanelSurfaces) {
+    surface.x += junctionOffsetX
+    const lastOwnerBottom = (surface.junctionPanelOwnerIds ?? [])
+      .map((panelId) => panelNodeById.get(panelId))
+      .filter((node): node is TreeNode => node != null)
+      .reduce((bottom, node) => Math.max(bottom, node.y + node.surface.height), 0)
+    surface.y = (lastOwnerBottom || rootBottom) + rootGap
   }
 
   const surfaces: PanelSceneSurface[] = [
@@ -575,9 +764,14 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
       converterBackupSourceFeed: null,
     },
     ...auxiliarySurfaces,
+    ...junctionPanelSurfaces,
   ]
   const connectors: PanelSceneConnector[] = []
 
+  const supplyGraph = selectProjectSupplyAssemblies(currentProject).length
+    ? buildSupplyElectricalTopology(currentProject) : undefined
+  const ownsPanelInput = (panel: Panel) => getPanelBusSections(panel)
+    .some((section) => assemblyOwnsPanelInput(currentProject, panel, section.id))
   const collect = (node: TreeNode, parent: TreeNode | null) => {
     surfaces.push({
       ...node.surface,
@@ -586,7 +780,7 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
     })
     const targetCenterX = node.x + node.surface.width / 2
     const targetTopY = node.y
-    if (parent != null) {
+    if (parent != null && !assemblyOwnsPanelInput(currentProject, node.panel)) {
       const busY = parent.y + parent.surface.height + levelGap / 2
       connectors.push({
         points: routePanelSceneConnector(
@@ -602,27 +796,53 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
   }
   for (const node of rootNodes) collect(node, null)
 
-  const sharedSurface = surfaces.find((surface) => surface.kind === 'shared_supply')!
+  if (!sharedVisible) surfaces.splice(0, 1)
+  const sharedSurface = surfaces.find((surface) => surface.kind === 'shared_supply')
+  const surfaceForDevice = (deviceId: string): PanelSceneSurface | undefined => {
+    const mounting = resolveSupplyDeviceMounting(currentProject, deviceId)
+    if (!mounting || mounting.kind === 'grid') return sharedSurface
+    if (mounting.kind === 'auxiliary') {
+      return surfaces.find((surface) => surface.kind === 'auxiliary' && surface.id === mounting.enclosureId)
+    }
+    return surfaces.find((surface) => surface.kind === 'panel' && surface.panel?.id === mounting.panelId)
+  }
+  const surfaceForTarget = (target: SupplyPhysicalTarget): PanelSceneSurface | undefined => {
+    if (target.kind === 'device') return surfaceForDevice(target.deviceId)
+    if (target.kind === 'bus') {
+      return surfaces.find((surface) => surface.kind === 'panel' && surface.panel?.id === target.panelId)
+    }
+    return surfaces.find((surface) => surface.kind === 'panel' &&
+      (surface.panel?.circuits.some((circuit) => circuit.id === target.circuitId) ||
+        surface.panel?.protections.some((protection) => protection.circuits?.some((circuit) => circuit.id === target.circuitId))))
+  }
+  const emittedTransitions = new Set<string>()
+  const addSurfaceTransition = (from: PanelSceneSurface | undefined, to: PanelSceneSurface | undefined) => {
+    if (!from || !to || from.id === to.id) return
+    const key = JSON.stringify([from.id, to.id])
+    if (emittedTransitions.has(key)) return
+    emittedTransitions.add(key)
+    connectors.push({
+      points: routePanelSceneSurfaceTransition(from, to),
+      sourceSurfaceId: from.id, targetSurfaceId: to.id,
+    })
+  }
+  if (supplyGraph) {
+    for (const target of supplyGraph.gridChildren()) addSurfaceTransition(sharedSurface, surfaceForTarget(target))
+    for (const deviceId of supplyGraph.handledDeviceIds()) {
+      for (const target of supplyGraph.deviceAdjacent(deviceId, 'children')) {
+        addSurfaceTransition(surfaceForDevice(deviceId), surfaceForTarget(target))
+      }
+    }
+  }
   for (const rootNode of rootNodes) {
     if (rootNode.surface.converterBackupFeed) continue
     const rootSurface = surfaces.find(
       (surface) => surface.kind === 'panel' && surface.panel?.id === rootNode.panel.id
     )!
-    const rootSupplyDevices = installation
-      ? (getPanelFeedProjection(installation, rootPanels, rootNode.panel)?.devices ?? [])
-      : []
-    const surfaceForDevice = (deviceId: string): PanelSceneSurface | undefined => {
-      const mounting = resolveSupplyDeviceMounting(currentProject, deviceId)
-      if (!mounting || mounting.kind === 'grid') return sharedSurface
-      if (mounting.kind === 'auxiliary') {
-        return surfaces.find(
-          (surface) => surface.kind === 'auxiliary' && surface.id === mounting.enclosureId
-        )
-      }
-      return surfaces.find(
-        (surface) => surface.kind === 'panel' && surface.panel?.id === mounting.panelId
-      )
-    }
+    const projection = installation ? getPanelFeedProjection(installation, rootPanels, rootNode.panel) : undefined
+    if (supplyGraph && (ownsPanelInput(rootNode.panel) ||
+      projection?.rootFeed?.trunkDevices?.some((device) => supplyGraph.handlesDevice(device.id)))) continue
+    const rootSupplyDevices = projection?.devices ?? []
     const transitionChain = [
       sharedSurface,
       ...rootSupplyDevices.map((device) => surfaceForDevice(device.id)),
@@ -632,12 +852,7 @@ export function buildFullPanelScene(params: BuildPanelSceneParams): BuiltPanelSc
       (surface, index) => index === 0 || transitionChain[index - 1]?.id !== surface.id
     )
     for (let index = 0; index < collapsedTransitionChain.length - 1; index++) {
-      connectors.push({
-        points: routePanelSceneSurfaceTransition(
-          collapsedTransitionChain[index]!,
-          collapsedTransitionChain[index + 1]!
-        ),
-      })
+      addSurfaceTransition(collapsedTransitionChain[index], collapsedTransitionChain[index + 1])
     }
   }
 

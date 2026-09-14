@@ -33,7 +33,7 @@ import {
   resolvePanelSupplyLinksForSourcePanel,
 } from '@/lib/eendraad/panelSupplyLink'
 import {
-  getElectricalPanelsFromProject,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 
@@ -510,7 +510,7 @@ function findPanelInProject(
     }
     return undefined
   }
-  return visit(getElectricalPanelsFromProject(project))
+  return visit(getProjectElectricalPanels(project))
 }
 
 function findPanelByNameInProject(
@@ -526,7 +526,7 @@ function findPanelByNameInProject(
     }
     return undefined
   }
-  return visit(getElectricalPanelsFromProject(project))
+  return visit(getProjectElectricalPanels(project))
 }
 
 export function buildDateFramesForPanel(
@@ -540,6 +540,21 @@ export function buildDateFramesForPanel(
   const blockers: DateBlocker[] = []
   const directPanelYears: number[] = []
   const getEndpoint = (id: string) => findEndpointInPanel(panelLayout.panel, id)
+  const getCanonicalFrameItem = (item: ResolvedFrameItem): ResolvedFrameItem => {
+    if (item.kind !== 'endpoint') return item
+
+    // A linked panel endpoint is retained in the circuit graph for topology,
+    // while layout adds a dedicated subpanel-symbol element for the same
+    // painted symbol. Date candidates must use that one visual identity or
+    // the endpoint and panel-symbol passes create two identical year labels.
+    const panelSymbol = panelLayout.elements.find(
+      (element) =>
+        element.type === 'endpoint' &&
+        element.id?.startsWith('subpanel-symbol-') &&
+        element.endpointId === item.id
+    )
+    return panelSymbol ? { id: panelSymbol.id, kind: 'panelSymbol' } : item
+  }
   const panelInheritedYear = getInstallDateTargetInheritedYear(project, {
     id: panelLayout.panel.id,
     type: 'panel',
@@ -555,28 +570,31 @@ export function buildDateFramesForPanel(
       expandedFromParent?: boolean
     }
   ) => {
+    const canonicalItem = getCanonicalFrameItem(item)
     const frameYear = getInstallYearFrameYear(year)
     const existingCandidate = candidates.find(
       (candidate) =>
-        candidate.item.id === item.id &&
-        candidate.item.kind === item.kind &&
+        candidate.item.id === canonicalItem.id &&
+        candidate.item.kind === canonicalItem.kind &&
         getInstallYearFrameYear(candidate.year) === frameYear
     )
     if (existingCandidate) {
+      if (options?.targets) existingCandidate.targets = options.targets
+      if (options?.forceSingle) existingCandidate.forceSingle = true
+      if (options?.labelPlacement) existingCandidate.labelPlacement = options.labelPlacement
       if (existingCandidate.expandedFromParent && !options?.expandedFromParent) {
-        existingCandidate.targets = options?.targets
         existingCandidate.expandedFromParent = false
       }
       return
     }
     const bounds = computeEendraadFrameBounds({
-      items: [item],
+      items: [canonicalItem],
       panelLayout,
       getEndpointById: getEndpoint,
       includeEndpointLabels: false,
     })
     const relationBounds = computeEendraadFrameBounds({
-      items: [item],
+      items: [canonicalItem],
       panelLayout,
       getEndpointById: getEndpoint,
       padding: 0,
@@ -585,7 +603,7 @@ export function buildDateFramesForPanel(
     if (!bounds || !relationBounds) return
     candidates.push({
       year,
-      item,
+      item: canonicalItem,
       bounds,
       relationBounds,
       forceSingle: options?.forceSingle,
@@ -743,7 +761,7 @@ export function buildDateFramesForPanel(
       addLinkedPanelSymbolMarkers(panel.subPanels)
     }
   }
-  addLinkedPanelSymbolMarkers(getElectricalPanelsFromProject(project))
+  addLinkedPanelSymbolMarkers(getProjectElectricalPanels(project))
 
   for (const link of resolvePanelSupplyLinksForSourcePanel(project, panelLayout.panel)) {
     const targetYear = getExplicitInstallYear(link.targetPanel)

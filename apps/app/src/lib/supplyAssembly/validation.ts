@@ -8,6 +8,11 @@ import type {
   SupplyPort,
 } from './types'
 import { SUPPLY_ASSEMBLY_GRAPH_VERSION } from './types'
+import {
+  isGeneratedCommonPanelHandoff,
+  reachableSupplyNodes,
+  resolveCommonLoadTail,
+} from './electricalTopology'
 
 export type SupplyAssemblyValidationSeverity = 'error' | 'warning' | 'unsupported'
 
@@ -40,6 +45,9 @@ export type SupplyAssemblyValidationCode =
   | 'dangling-handoff-node'
   | 'invalid-handoff-node-kind'
   | 'invalid-handoff-conductors'
+  | 'unconnected-handoff'
+  | 'invalid-handoff-source'
+  | 'unresolved-common-output'
 
 export interface SupplyAssemblyValidationIssue {
   code: SupplyAssemblyValidationCode
@@ -481,6 +489,8 @@ function validateHandoffs(
   issues: SupplyAssemblyValidationIssue[]
 ): void {
   const handoffIds = new Set<string>()
+  const reachable = reachableSupplyNodes(assembly)
+  const commonOutput = resolveCommonLoadTail(assembly)
   for (const handoff of assembly.loadHandoffs) {
     if (handoffIds.has(handoff.id)) {
       pushIssue(
@@ -492,6 +502,30 @@ function validateHandoffs(
       )
     }
     handoffIds.add(handoff.id)
+    if (!reachable.has(handoff.handoffNodeId)) {
+      pushIssue(issues, 'unconnected-handoff', 'error',
+        `Handoff ${handoff.id} has no connected path from an AC source.`, handoff.id)
+    }
+
+    // Generated parallel panel feeds must leave the complete common supply
+    // chain. Reachability alone also accepts a premature upstream takeoff.
+    // Explicit circuit and private handoffs retain their own graph semantics.
+    if (isGeneratedCommonPanelHandoff(assembly, handoff)) {
+      const incoming = assembly.connections.filter((connection) =>
+        connection.domain === 'AC' && connection.endpoints[1].nodeId === handoff.handoffNodeId)
+      if (commonOutput && incoming.some((connection) => {
+        const source = connection.endpoints[0]
+        return source.nodeId !== commonOutput.nodeId || source.portId !== commonOutput.portId
+      })) {
+        pushIssue(issues, 'invalid-handoff-source', 'error',
+          `Handoff ${handoff.id} must be fed from the final common supply output.`, handoff.id)
+      } else if (!commonOutput && incoming.length > 0 &&
+        (assembly.nodes.some((node) => node.kind === 'changeover-switch') ||
+          assembly.presetIntent === 'grid_connected_storage_branch')) {
+        pushIssue(issues, 'unresolved-common-output', 'error',
+          `Handoff ${handoff.id} has no unambiguous common supply output.`, handoff.id)
+      }
+    }
 
     const node = nodes.get(handoff.handoffNodeId)
     if (!node) {

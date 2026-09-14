@@ -30,15 +30,11 @@ import {
   getConverterDomainCorner,
   isDirectionalConverterSymbol,
 } from '@/lib/converterArtwork'
+import { showLightPointDecentralOverlay, showLightPointSafetyOverlay } from '@/lib/lightPointProps'
 import {
-  showLightPointDecentralOverlay,
-  showLightPointSafetyOverlay,
-} from '@/lib/lightPointProps'
-import { endpointSupportsMultiplier } from '@/utils/endpointMultipliers'
-import { endpointSymbolCanBeDuplicated } from '@/lib/eendraad/duplicateEndpoint'
-import {
-  createPlanMultiplierAltDuplicatePlacement,
-  createPlanPropertyAltDuplicatePlacement,
+  canPlanAltDuplicate,
+  createPlanAltDuplicatePlacement,
+  type PlanAltDuplicateSource,
 } from '@/lib/plan/planAltDragDuplicate'
 import {
   SYMBOL_SIZE,
@@ -85,11 +81,12 @@ import {
   useIsPreviewSelected,
 } from '@/contexts/SelectionPreviewContext'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  selectProjectElectricalInstallation,
+  selectProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { getPlanPanelBodyGeometry } from './panelPlanSymbolGeometry'
+import { INTERACTIVE_OVERLAY_EXPORT_NAME } from '@/lib/export/interactiveOverlayExport'
 
 /** Avoid flooding the console when many placements fail the same asset fetch (e.g. bad imports). */
 const loggedSitplanSymbolFailures = new Set<string>()
@@ -102,7 +99,7 @@ function collectJunctionPanelTrunkDevicesByLabel(
 ): TrunkDevice[] {
   if (!project || !label) return []
   const devices: TrunkDevice[] = []
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = selectProjectElectricalInstallation(project)
   const addIfMatching = (device: TrunkDevice) => {
     if (device.type === 'junction_panel' && device.label === label) {
       devices.push(device)
@@ -123,7 +120,7 @@ function collectJunctionPanelTrunkDevicesByLabel(
     panel.subPanels.forEach(visitPanel)
   }
 
-  getElectricalPanelsFromProject(project).forEach(visitPanel)
+  selectProjectElectricalPanels(project).forEach(visitPanel)
   return devices
 }
 
@@ -135,7 +132,7 @@ function isPlanPlacementSymbolSelected(
   isJunctionPanel: boolean,
   junctionPanelLabel: string | undefined,
   panelId: string | null | undefined,
-  trunkDeviceId?: string,
+  trunkDeviceId?: string
 ): boolean {
   if (
     (isEarthing && selection.type === 'placement' && selection.ids.includes(placementId)) ||
@@ -188,9 +185,10 @@ function isPlanPlacementBreadcrumbHovered(
   endpoint: Endpoint | null | undefined,
   isJunctionPanel: boolean,
   panelId: string | null | undefined,
-  trunkDeviceId?: string,
+  trunkDeviceId?: string
 ): boolean {
-  if (trunkDeviceId && hover.type === 'trunkDevice' && hover.ids.includes(trunkDeviceId)) return true
+  if (trunkDeviceId && hover.type === 'trunkDevice' && hover.ids.includes(trunkDeviceId))
+    return true
   if (isJunctionPanel || !endpoint) return false
   if (hover.type === 'endpoint' && hover.ids.includes(endpoint.id)) return true
   return (
@@ -203,6 +201,8 @@ function isPlanPlacementBreadcrumbHovered(
 
 interface PlacementSymbolProps {
   placement: Placement
+  sourceEndpoint?: Endpoint | null
+  sourceTrunkDevice?: TrunkDevice | null
   /** Optional position override (e.g. local drag positions during multi-select drag). */
   positionOverride?: Point
   /** Optional rotation override used for live preview while dragging. */
@@ -226,12 +226,7 @@ const SOCKET_VECTOR_VIEWBOX_SIZE = 48
 const INTERACTIVE_HIT_FILL = 'rgba(0,0,0,0.001)'
 type WindowWithEendraTapSuppression = Window & { __eendraSuppressNextElementTap?: boolean }
 
-function renderSocketVectorSymbol(
-  symbolId: string,
-  width: number,
-  height: number,
-  color: string,
-) {
+function renderSocketVectorSymbol(symbolId: string, width: number, height: number, color: string) {
   const scaleX = width / SOCKET_VECTOR_VIEWBOX_SIZE
   const scaleY = height / SOCKET_VECTOR_VIEWBOX_SIZE
   const strokeWidth = 2
@@ -239,13 +234,7 @@ function renderSocketVectorSymbol(
   const showChildProtection = symbolId === 'socket_child' || symbolId === 'socket_gnd_child'
 
   return (
-    <Group
-      x={-width / 2}
-      y={-height / 2}
-      scaleX={scaleX}
-      scaleY={scaleY}
-      listening={false}
-    >
+    <Group x={-width / 2} y={-height / 2} scaleX={scaleX} scaleY={scaleY} listening={false}>
       <Line
         points={[0.3, 24, 18.8, 24]}
         stroke={color}
@@ -296,6 +285,8 @@ function renderSocketVectorSymbol(
  */
 function PlacementSymbolInner({
   placement,
+  sourceEndpoint: sourceEndpointProp,
+  sourceTrunkDevice: sourceTrunkDeviceProp,
   positionOverride,
   rotationOverrideDeg,
   baseSymbolSizePx,
@@ -311,15 +302,10 @@ function PlacementSymbolInner({
   snapPosition,
   isQuickPlacerCurrent = false,
 }: PlacementSymbolProps) {
-  const snapPos = useCallback(
-    (p: Point) => (snapPosition ? snapPosition(p) : p),
-    [snapPosition],
-  )
+  const snapPos = useCallback((p: Point) => (snapPosition ? snapPosition(p) : p), [snapPosition])
   const dragPos = usePlanDragPosition(placement.id)
   const dragRotation = usePlanDragRotation(placement.id)
   const pos = positionOverride ?? dragPos ?? placement.pos
-  const { getEndpointById, getTrunkDeviceById } = useProjectStore()
-  const currentProject = useProjectStore((s: ProjectState) => s.currentProject)
   const setSelection = useSetSelectionStore()
   const clearSelection = useClearSelectionStore()
   const theme = useSettingsStore((state) => state.theme)
@@ -327,26 +313,37 @@ function PlacementSymbolInner({
   const colors = useThemeColors()
   const fontFamily = useCanvasFontFamily()
   const [processedImage, setProcessedImage] = useState<HTMLImageElement | null>(null)
-  const [converterDiagonalImage, setConverterDiagonalImage] = useState<HTMLImageElement | null>(null)
+  const [converterDiagonalImage, setConverterDiagonalImage] = useState<HTMLImageElement | null>(
+    null
+  )
   const [converterAcImage, setConverterAcImage] = useState<HTMLImageElement | null>(null)
   const [converterDcImage, setConverterDcImage] = useState<HTMLImageElement | null>(null)
   const [overlaySwitchImage, setOverlaySwitchImage] = useState<HTMLImageElement | null>(null)
-  const [overlaySwitchLockImage, setOverlaySwitchLockImage] = useState<HTMLImageElement | null>(null)
+  const [overlaySwitchLockImage, setOverlaySwitchLockImage] = useState<HTMLImageElement | null>(
+    null
+  )
   const [switchOverlayImage, setSwitchOverlayImage] = useState<HTMLImageElement | null>(null)
   const [lightPointSafetyImage, setLightPointSafetyImage] = useState<HTMLImageElement | null>(null)
-  const [lightPointDecentralImage, setLightPointDecentralImage] = useState<HTMLImageElement | null>(null)
+  const [lightPointDecentralImage, setLightPointDecentralImage] = useState<HTMLImageElement | null>(
+    null
+  )
   const [lightPointSwitchImage, setLightPointSwitchImage] = useState<HTMLImageElement | null>(null)
   const [lightSpotBeamImage, setLightSpotBeamImage] = useState<HTMLImageElement | null>(null)
-  const [transformerSafetyImage, setTransformerSafetyImage] = useState<HTMLImageElement | null>(null)
-  const [transformerShortcircuitImage, setTransformerShortcircuitImage] = useState<HTMLImageElement | null>(null)
-  const [transformerProtectionImage, setTransformerProtectionImage] = useState<HTMLImageElement | null>(null)
+  const [transformerSafetyImage, setTransformerSafetyImage] = useState<HTMLImageElement | null>(
+    null
+  )
+  const [transformerShortcircuitImage, setTransformerShortcircuitImage] =
+    useState<HTMLImageElement | null>(null)
+  const [transformerProtectionImage, setTransformerProtectionImage] =
+    useState<HTMLImageElement | null>(null)
   const [isHovered, setIsHovered] = useState(false)
   const [hvacEnergyImage, setHvacEnergyImage] = useState<HTMLImageElement | null>(null)
   const [hvacTypeImage, setHvacTypeImage] = useState<HTMLImageElement | null>(null)
   const [relayOverlayImage, setRelayOverlayImage] = useState<HTMLImageElement | null>(null)
-  const [smokeDetectorOverlayImage, setSmokeDetectorOverlayImage] = useState<HTMLImageElement | null>(null)
+  const [smokeDetectorOverlayImage, setSmokeDetectorOverlayImage] =
+    useState<HTMLImageElement | null>(null)
   const groupRef = useRef<Konva.Group | null>(null)
-  const planAltDuplicatePlacementIdRef = useRef<string | null>(null)
+  const planAltDuplicateGhostRef = useRef<Konva.Group | null>(null)
   const planAltDuplicatePointerCleanupRef = useRef<(() => void) | null>(null)
   const suppressKonvaDragEndRef = useRef(false)
   /** Fresh multi-drag flag for this gesture (avoids stale isMultiSelect after select-on-drag-start). */
@@ -359,23 +356,34 @@ function PlacementSymbolInner({
     junctionPanelLabel?: string
     isEarthing?: boolean
   }
-  const sourceEndpoint = placementRow.endpointId != null ? getEndpointById(placementRow.endpointId) : null
-  const trunkDevice = placementRow.trunkDeviceId
-    ? getTrunkDeviceById(placementRow.trunkDeviceId)?.device ?? null
-    : null
+  const projectState = useProjectStore.getState()
+  const sourceEndpoint =
+    sourceEndpointProp !== undefined
+      ? sourceEndpointProp
+      : placementRow.endpointId != null
+        ? (projectState.getEndpointById(placementRow.endpointId) ?? null)
+        : null
+  const trunkDevice =
+    sourceTrunkDeviceProp !== undefined
+      ? sourceTrunkDeviceProp
+      : placementRow.trunkDeviceId
+        ? (projectState.getTrunkDeviceById(placementRow.trunkDeviceId)?.device ?? null)
+        : null
   const endpoint = useMemo<Endpoint | null>(
-    () => sourceEndpoint ?? (trunkDevice
-      ? {
-          id: trunkDevice.id,
-          type: 'fixed_appliance',
-          label: trunkDevice.label,
-          symbol: trunkDevice.symbol,
-          placements: trunkDevice.placements ?? [],
-          energyConversionProps: trunkDevice.conversionProps,
-          batteryProps: trunkDevice.batteryProps,
-          solarPanelProps: trunkDevice.solarPanelProps,
-        }
-      : null),
+    () =>
+      sourceEndpoint ??
+      (trunkDevice
+        ? {
+            id: trunkDevice.id,
+            type: 'fixed_appliance',
+            label: trunkDevice.label,
+            symbol: trunkDevice.symbol,
+            placements: trunkDevice.placements ?? [],
+            energyConversionProps: trunkDevice.conversionProps,
+            batteryProps: trunkDevice.batteryProps,
+            solarPanelProps: trunkDevice.solarPanelProps,
+          }
+        : null),
     [sourceEndpoint, trunkDevice]
   )
   const isEarthing = placementRow.isEarthing === true
@@ -398,14 +406,18 @@ function PlacementSymbolInner({
   const switchProps = endpoint?.switchProps
   const showSwitchOverlay = isSocket && socketProps?.switchOverlay
   const showSwitchOverlayLock = isSocket && socketProps?.switchOverlayLock
-  const socketCount = isSocket ? (socketProps?.socketCount || 1) : 1
+  const socketCount = isSocket ? socketProps?.socketCount || 1 : 1
   const lightPointProps = endpoint?.lightPointProps
   const lightSpotProps = endpoint?.lightSpotProps
   const lightFluorescentProps = endpoint?.lightFluorescentProps
   const isLightPoint = endpoint?.type === 'light_point' && endpoint?.symbol === 'light_point'
   const isLightSpot = endpoint?.type === 'light_point' && endpoint?.symbol === 'light_spot'
-  const isLightFluorescent = endpoint?.type === 'light_point' && endpoint?.symbol === 'light_fluorescent'
+  const isLightFluorescent =
+    endpoint?.type === 'light_point' && endpoint?.symbol === 'light_fluorescent'
   const tubeCount = isLightFluorescent ? (lightFluorescentProps?.tubeCount ?? 1) : 1
+  const currentProject = useProjectStore((state: ProjectState) =>
+    isJunctionPanel || endpoint?.symbol === 'panel_distribution' ? state.currentProject : null
+  )
 
   const resolvedPanelForSymbol = useMemo(() => {
     if (!currentProject || !endpoint || endpoint.symbol !== 'panel_distribution') return null
@@ -417,18 +429,15 @@ function PlacementSymbolInner({
       isJunctionPanel && placementRow.junctionPanelLabel
         ? collectJunctionPanelTrunkDevicesByLabel(
             currentProject,
-            placementRow.junctionPanelLabel,
+            placementRow.junctionPanelLabel
           ).map((device) => device.id)
         : [],
-    [currentProject, isJunctionPanel, placementRow.junctionPanelLabel],
+    [currentProject, isJunctionPanel, placementRow.junctionPanelLabel]
   )
   const isMarqueeSelecting = useIsMarqueeSelecting()
   const isPlacementPreviewSelected = useIsPreviewSelected('placement', placement.id)
   const isPanelPreviewSelected = useIsPreviewSelected('panel', resolvedPanelId ?? '')
-  const isTrunkPreviewSelected = useAreAnyPreviewSelected(
-    'trunkDevice',
-    junctionPanelDeviceIds,
-  )
+  const isTrunkPreviewSelected = useAreAnyPreviewSelected('trunkDevice', junctionPanelDeviceIds)
   const isPreviewSelected =
     isPlacementPreviewSelected || isPanelPreviewSelected || isTrunkPreviewSelected
   const isSelected = useStoreWithEqualityFn(
@@ -442,9 +451,9 @@ function PlacementSymbolInner({
         isJunctionPanel,
         placementRow.junctionPanelLabel,
         resolvedPanelId,
-        placementRow.trunkDeviceId,
+        placementRow.trunkDeviceId
       ),
-    selectionBoolEqual,
+    selectionBoolEqual
   )
   const isHoveredFromBreadcrumb = useStoreWithEqualityFn(
     useUIStore,
@@ -454,9 +463,9 @@ function PlacementSymbolInner({
         endpoint,
         isJunctionPanel,
         resolvedPanelId,
-        placementRow.trunkDeviceId,
+        placementRow.trunkDeviceId
       ),
-    selectionBoolEqual,
+    selectionBoolEqual
   )
   const isHvac = endpoint?.symbol === 'furnace'
   const hvacProps = endpoint?.hvacProps
@@ -464,12 +473,12 @@ function PlacementSymbolInner({
   const smokeDetectorProps = endpoint?.smokeDetectorProps
   const motionDetectorType = endpoint?.motionDetectorProps?.type ?? 'spread'
   const switchSymbolPathProps =
-    endpoint?.symbol === 'motion_detector'
-      ? { ...switchProps, motionDetectorType }
-      : switchProps
+    endpoint?.symbol === 'motion_detector' ? { ...switchProps, motionDetectorType } : switchProps
   const isTransformer = endpoint?.symbol === 'transformer'
   const conversionProps = trunkDevice?.conversionProps ?? endpoint?.energyConversionProps
-  const transformerLabel = isTransformer ? (conversionProps?.transformerOverlayLabel || '').trim() : ''
+  const transformerLabel = isTransformer
+    ? (conversionProps?.transformerOverlayLabel || '').trim()
+    : ''
   const isDirectionalConverter = isDirectionalConverterSymbol(endpoint?.symbol)
   const converterInputDomain = endpoint?.symbol === 'inverter' ? 'DC' : 'AC'
   const converterOutputDomain = endpoint?.symbol === 'inverter' ? 'AC' : 'DC'
@@ -482,16 +491,19 @@ function PlacementSymbolInner({
     ? symbol?.svgPath
     : isDirectionalConverter
       ? CONVERTER_ARTWORK_PATHS.base
-    : isSwitch && endpoint?.symbol
-      ? getSwitchSymbolPaths(endpoint.symbol, switchSymbolPathProps).basePath
-      : endpoint?.symbol === 'boiler'
-        ? (getFixedApplianceSymbolPath('boiler', endpoint?.fixedApplianceProps) ?? symbol?.svgPath)
-        : endpoint?.symbol === 'heating'
-          ? (getFixedApplianceSymbolPath('heating', endpoint?.fixedApplianceProps) ?? symbol?.svgPath)
-          : symbol?.svgPath
-  const switchOverlayPath = isSwitch && endpoint?.symbol
-    ? getSwitchSymbolPaths(endpoint.symbol, switchSymbolPathProps).overlayPath
-    : undefined
+      : isSwitch && endpoint?.symbol
+        ? getSwitchSymbolPaths(endpoint.symbol, switchSymbolPathProps).basePath
+        : endpoint?.symbol === 'boiler'
+          ? (getFixedApplianceSymbolPath('boiler', endpoint?.fixedApplianceProps) ??
+            symbol?.svgPath)
+          : endpoint?.symbol === 'heating'
+            ? (getFixedApplianceSymbolPath('heating', endpoint?.fixedApplianceProps) ??
+              symbol?.svgPath)
+            : symbol?.svgPath
+  const switchOverlayPath =
+    isSwitch && endpoint?.symbol
+      ? getSwitchSymbolPaths(endpoint.symbol, switchSymbolPathProps).overlayPath
+      : undefined
 
   const hvacEnergyKey = hvacProps?.energySource ?? 'none'
   const hvacTypeKey = hvacProps?.hvacType ?? 'none'
@@ -504,13 +516,15 @@ function PlacementSymbolInner({
       return
     }
     const isDark = theme.mode === 'dark'
-    loadProcessedSymbol(baseSvgPath, isDark).then(setProcessedImage).catch(() => {
-      if (!loggedSitplanSymbolFailures.has(baseSvgPath)) {
-        loggedSitplanSymbolFailures.add(baseSvgPath)
-        logger.warn('Failed to load sitplan symbol (shown once per path):', baseSvgPath)
-      }
-      setProcessedImage(null)
-    })
+    loadProcessedSymbol(baseSvgPath, isDark)
+      .then(setProcessedImage)
+      .catch(() => {
+        if (!loggedSitplanSymbolFailures.has(baseSvgPath)) {
+          loggedSitplanSymbolFailures.add(baseSvgPath)
+          logger.warn('Failed to load sitplan symbol (shown once per path):', baseSvgPath)
+        }
+        setProcessedImage(null)
+      })
   }, [baseSvgPath, theme.mode])
 
   // Directional converters are composed from the shared base, diagonal, and
@@ -544,12 +558,16 @@ function PlacementSymbolInner({
     }
     const isDark = theme.mode === 'dark'
     if (showSwitchOverlay) {
-      loadProcessedSymbol(SOCKET_OVERLAY_PATHS.switchOverlay, isDark).then(setOverlaySwitchImage).catch(() => setOverlaySwitchImage(null))
+      loadProcessedSymbol(SOCKET_OVERLAY_PATHS.switchOverlay, isDark)
+        .then(setOverlaySwitchImage)
+        .catch(() => setOverlaySwitchImage(null))
     } else {
       setOverlaySwitchImage(null)
     }
     if (showSwitchOverlayLock) {
-      loadProcessedSymbol(SOCKET_OVERLAY_PATHS.switchOverlayLock, isDark).then(setOverlaySwitchLockImage).catch(() => setOverlaySwitchLockImage(null))
+      loadProcessedSymbol(SOCKET_OVERLAY_PATHS.switchOverlayLock, isDark)
+        .then(setOverlaySwitchLockImage)
+        .catch(() => setOverlaySwitchLockImage(null))
     } else {
       setOverlaySwitchLockImage(null)
     }
@@ -562,7 +580,9 @@ function PlacementSymbolInner({
       return
     }
     const isDark = theme.mode === 'dark'
-    loadProcessedSymbol(switchOverlayPath, isDark).then(setSwitchOverlayImage).catch(() => setSwitchOverlayImage(null))
+    loadProcessedSymbol(switchOverlayPath, isDark)
+      .then(setSwitchOverlayImage)
+      .catch(() => setSwitchOverlayImage(null))
   }, [switchOverlayPath, theme.mode])
 
   // Load light point overlays (safety, decentral, switch 1p) – sitplan: no onWall line
@@ -575,17 +595,23 @@ function PlacementSymbolInner({
     }
     const isDark = theme.mode === 'dark'
     if (showLightPointSafetyOverlay(lightPointProps)) {
-      loadProcessedSymbol(LIGHT_POINT_OVERLAY_PATHS.safety, isDark).then(setLightPointSafetyImage).catch(() => setLightPointSafetyImage(null))
+      loadProcessedSymbol(LIGHT_POINT_OVERLAY_PATHS.safety, isDark)
+        .then(setLightPointSafetyImage)
+        .catch(() => setLightPointSafetyImage(null))
     } else {
       setLightPointSafetyImage(null)
     }
     if (showLightPointDecentralOverlay(lightPointProps)) {
-      loadProcessedSymbol(LIGHT_POINT_OVERLAY_PATHS.decentral, isDark).then(setLightPointDecentralImage).catch(() => setLightPointDecentralImage(null))
+      loadProcessedSymbol(LIGHT_POINT_OVERLAY_PATHS.decentral, isDark)
+        .then(setLightPointDecentralImage)
+        .catch(() => setLightPointDecentralImage(null))
     } else {
       setLightPointDecentralImage(null)
     }
     if (lightPointProps.switch1p) {
-      loadProcessedSymbol(LIGHT_POINT_OVERLAY_PATHS.switch1p, isDark).then(setLightPointSwitchImage).catch(() => setLightPointSwitchImage(null))
+      loadProcessedSymbol(LIGHT_POINT_OVERLAY_PATHS.switch1p, isDark)
+        .then(setLightPointSwitchImage)
+        .catch(() => setLightPointSwitchImage(null))
     } else {
       setLightPointSwitchImage(null)
     }
@@ -651,9 +677,14 @@ function PlacementSymbolInner({
       setLightSpotBeamImage(null)
       return
     }
-    const path = lightSpotProps.beamType === 'straight' ? LIGHT_SPOT_OVERLAY_PATHS.straight : LIGHT_SPOT_OVERLAY_PATHS.diverging
+    const path =
+      lightSpotProps.beamType === 'straight'
+        ? LIGHT_SPOT_OVERLAY_PATHS.straight
+        : LIGHT_SPOT_OVERLAY_PATHS.diverging
     const isDark = theme.mode === 'dark'
-    loadProcessedSymbol(path, isDark).then(setLightSpotBeamImage).catch(() => setLightSpotBeamImage(null))
+    loadProcessedSymbol(path, isDark)
+      .then(setLightSpotBeamImage)
+      .catch(() => setLightSpotBeamImage(null))
   }, [isLightSpot, lightSpotProps?.beamType, theme.mode])
 
   // Load HVAC energy source overlays (sitplan)
@@ -703,7 +734,9 @@ function PlacementSymbolInner({
       return
     }
     const isDark = theme.mode === 'dark'
-    loadProcessedSymbol(path, isDark).then(setRelayOverlayImage).catch(() => setRelayOverlayImage(null))
+    loadProcessedSymbol(path, isDark)
+      .then(setRelayOverlayImage)
+      .catch(() => setRelayOverlayImage(null))
   }, [endpoint?.symbol, relayProps?.control, theme.mode])
 
   // Load smoke / fire detector overlay (sitplan)
@@ -787,7 +820,9 @@ function PlacementSymbolInner({
       const isPanel = endpoint.symbol === 'panel_distribution'
       if (isPanel) {
         const panel =
-          currentProject != null ? resolvePanelForDistributionEndpoint(currentProject, endpoint) : null
+          currentProject != null
+            ? resolvePanelForDistributionEndpoint(currentProject, endpoint)
+            : null
         if (panel) {
           if (evt.shiftKey) {
             const { selection } = useUIStore.getState()
@@ -846,7 +881,7 @@ function PlacementSymbolInner({
       placement.id,
       placementRow.junctionPanelLabel,
       setSelection,
-    ],
+    ]
   )
 
   /** Mouse/pen only: briefly allow Konva drag while unselected so one gesture can select + move (touch keeps select-then-drag). */
@@ -863,7 +898,7 @@ function PlacementSymbolInner({
       e.cancelBubble = true
       applyPlanSymbolPointerSelection(e.evt)
     },
-    [applyPlanSymbolPointerSelection],
+    [applyPlanSymbolPointerSelection]
   )
 
   // Sync hover to eendraad: when hovering panel_distribution on sitplan, set global panel hover so frame highlights
@@ -885,10 +920,21 @@ function PlacementSymbolInner({
     if (!endpoint) return
     if (endpoint.symbol === 'panel_distribution') {
       const panel =
-        currentProject != null ? resolvePanelForDistributionEndpoint(currentProject, endpoint) : null
+        currentProject != null
+          ? resolvePanelForDistributionEndpoint(currentProject, endpoint)
+          : null
       if (panel) useUIStore.getState().setHover({ type: 'panel', ids: [panel.id] })
     }
-  }, [currentProject, endpoint, placement.id, placement.rotationDeg, placementRow.trunkDeviceId, planPlacementDebug, pos, rotationOverrideDeg])
+  }, [
+    currentProject,
+    endpoint,
+    placement.id,
+    placement.rotationDeg,
+    placementRow.trunkDeviceId,
+    planPlacementDebug,
+    pos,
+    rotationOverrideDeg,
+  ])
 
   const handlePlacementMouseLeave = useCallback(() => {
     setIsHovered(false)
@@ -901,7 +947,14 @@ function PlacementSymbolInner({
     if (placementRow.trunkDeviceId || endpoint?.symbol === 'panel_distribution') {
       useUIStore.getState().clearHover()
     }
-  }, [endpoint?.id, endpoint?.symbol, endpoint?.type, placement.id, placementRow.trunkDeviceId, planPlacementDebug])
+  }, [
+    endpoint?.id,
+    endpoint?.symbol,
+    endpoint?.type,
+    placement.id,
+    placementRow.trunkDeviceId,
+    planPlacementDebug,
+  ])
 
   // Outline/hit dimensions and selection — before early returns so hook count stays stable
   const symbolSize = baseSymbolSizePx * placement.scale
@@ -931,15 +984,21 @@ function PlacementSymbolInner({
         },
         currentZoom,
         isSelected,
-        touchPrimary,
+        touchPrimary
       ),
-    [outlineWidth, outlineHeight, finalOutlineWidth, currentZoom, isSelected, touchPrimary],
+    [outlineWidth, outlineHeight, finalOutlineWidth, currentZoom, isSelected, touchPrimary]
   )
 
   const endPlanAltDuplicatePointerDrag = useCallback(() => {
     planAltDuplicatePointerCleanupRef.current?.()
     planAltDuplicatePointerCleanupRef.current = null
-    planAltDuplicatePlacementIdRef.current = null
+    const ghost = planAltDuplicateGhostRef.current
+    planAltDuplicateGhostRef.current = null
+    if (ghost) {
+      const layer = ghost.getLayer()
+      ghost.destroy()
+      layer?.batchDraw()
+    }
     suppressKonvaDragEndRef.current = false
   }, [])
 
@@ -958,16 +1017,50 @@ function PlacementSymbolInner({
   }, [])
 
   const beginPlanAltDuplicatePointerDrag = useCallback(
-    (targetPlacementId: string, nativeEvt: MouseEvent) => {
+    (duplicateSource: PlanAltDuplicateSource, refPlacement: Placement) => {
       endPlanAltDuplicatePointerDrag()
       suppressKonvaDragEndRef.current = true
-      planAltDuplicatePlacementIdRef.current = targetPlacementId
+
+      let latestPosition: Point | null = null
+      const previewPosition = (position: Point) => {
+        latestPosition = position
+        let ghost = planAltDuplicateGhostRef.current
+        if (!ghost) {
+          const sourceGroup = groupRef.current
+          const layer = sourceGroup?.getLayer()
+          if (!sourceGroup || !layer) return
+          ghost = sourceGroup.clone({
+            x: position.x,
+            y: position.y,
+            draggable: false,
+            listening: false,
+            opacity: 0.72,
+          })
+          planAltDuplicateGhostRef.current = ghost
+          layer.add(ghost)
+          ghost.moveToTop()
+        } else {
+          ghost.position(position)
+        }
+        ghost.getLayer()?.batchDraw()
+      }
 
       const onMove = (ev: MouseEvent) => {
         const p = pointerClientToPlanPoint(ev.clientX, ev.clientY)
-        if (p) useProjectStore.getState().updatePlacement(targetPlacementId, { pos: snapPos(p) })
+        if (!p) return
+        // This is deliberately imperative: creating a project object here wakes
+        // the one-wire canvas and makes the preview latency depend on its size.
+        previewPosition(snapPos(p))
       }
-      const onUp = () => {
+      const onUp = (ev: MouseEvent) => {
+        const final = pointerClientToPlanPoint(ev.clientX, ev.clientY)
+        if (final) previewPosition(snapPos(final))
+        if (latestPosition) {
+          const targetPlacementId = createPlanAltDuplicatePlacement(duplicateSource, refPlacement)
+          if (targetPlacementId) {
+            useProjectStore.getState().updatePlacement(targetPlacementId, { pos: latestPosition })
+          }
+        }
         endPlanAltDuplicatePointerDrag()
       }
 
@@ -977,11 +1070,8 @@ function PlacementSymbolInner({
         window.removeEventListener('mousemove', onMove)
         window.removeEventListener('mouseup', onUp, true)
       }
-
-      const initial = pointerClientToPlanPoint(nativeEvt.clientX, nativeEvt.clientY)
-      if (initial) useProjectStore.getState().updatePlacement(targetPlacementId, { pos: snapPos(initial) })
     },
-    [endPlanAltDuplicatePointerDrag, pointerClientToPlanPoint, snapPos],
+    [endPlanAltDuplicatePointerDrag, pointerClientToPlanPoint, snapPos]
   )
 
   // Early returns only after all hooks have run
@@ -1046,7 +1136,9 @@ function PlacementSymbolInner({
       x={pos.x}
       y={pos.y}
       rotation={rotationOverrideDeg ?? dragRotation ?? placement.rotationDeg}
-      draggable={canDrag && !isLocked && !isDrawingToolActive && (!!isSelected || allowUnselectedMouseDrag)}
+      draggable={
+        canDrag && !isLocked && !isDrawingToolActive && (!!isSelected || allowUnselectedMouseDrag)
+      }
       listening={!isDrawingToolActive}
       onMouseEnter={handlePlacementMouseEnter}
       onMouseLeave={handlePlacementMouseLeave}
@@ -1054,6 +1146,13 @@ function PlacementSymbolInner({
         if (!canDrag || isLocked || isDrawingToolActive) return
         if (e.evt.pointerType === 'touch') return
         if (e.evt.button !== 0) return
+        const duplicateSource = { endpoint: sourceEndpoint, trunkDevice }
+        if (e.evt.altKey && canPlanAltDuplicate(duplicateSource)) {
+          // Begin listening now; the first move, rather than Konva's delayed
+          // drag-start, creates and displays the copy.
+          beginPlanAltDuplicatePointerDrag(duplicateSource, placement)
+          return
+        }
         if (!isSelected) {
           flushSync(() => setAllowUnselectedMouseDrag(true))
         }
@@ -1062,12 +1161,22 @@ function PlacementSymbolInner({
         if (e.evt.pointerType !== 'touch') setAllowUnselectedMouseDrag(false)
       }}
       onPointerCancel={(e) => {
-        if (e.evt.pointerType !== 'touch') setAllowUnselectedMouseDrag(false)
+        if (e.evt.pointerType !== 'touch') {
+          setAllowUnselectedMouseDrag(false)
+          endPlanAltDuplicatePointerDrag()
+        }
       }}
       onDragStart={(e) => {
         // Prevent drag if locked
         if (!canDrag || isLocked || isDrawingToolActive) {
           e.cancelBubble = true
+          return
+        }
+        // An Alt gesture is managed from pointer-down so the preview starts on
+        // its first movement. Keep Konva from starting a competing source drag.
+        if (planAltDuplicatePointerCleanupRef.current) {
+          e.target.stopDrag()
+          e.target.position({ x: pos.x, y: pos.y })
           return
         }
         const nativeEvt = e.evt as unknown as { pointerType?: string }
@@ -1101,24 +1210,6 @@ function PlacementSymbolInner({
         if (useMulti) {
           onMultiSelectDragStart!(placement.id)
         } else {
-          const altKey = !!e.evt.altKey
-          const canAltDuplicate =
-            !isJunctionPanel &&
-            !isEarthing &&
-            altKey &&
-            endpoint &&
-            (endpointSupportsMultiplier(endpoint) || endpointSymbolCanBeDuplicated(endpoint))
-
-          if (canAltDuplicate) {
-            const newPlacementId = endpointSupportsMultiplier(endpoint)
-              ? createPlanMultiplierAltDuplicatePlacement(endpoint, placement)
-              : createPlanPropertyAltDuplicatePlacement(endpoint.id, placement)
-            if (newPlacementId) {
-              e.target.stopDrag()
-              e.target.position({ x: pos.x, y: pos.y })
-              beginPlanAltDuplicatePointerDrag(newPlacementId, e.evt as MouseEvent)
-            }
-          }
           onDragStart?.()
         }
       }}
@@ -1211,12 +1302,7 @@ function PlacementSymbolInner({
                 fill={INTERACTIVE_HIT_FILL}
                 listening={i === 0 && !touchPrimary}
               />
-              {renderSocketVectorSymbol(
-                endpoint.symbol,
-                outlineWidth,
-                outlineHeight,
-                symbolColor,
-              )}
+              {renderSocketVectorSymbol(endpoint.symbol, outlineWidth, outlineHeight, symbolColor)}
             </>
           ) : isDirectionalConverter && converterDiagonalImage && converterArtworkLayout ? (
             <>
@@ -1253,7 +1339,7 @@ function PlacementSymbolInner({
                   symbolExtent * 0.12,
                   iconSize,
                   iconSize,
-                  false,
+                  false
                 )
                 return (
                   <Image
@@ -1362,44 +1448,45 @@ function PlacementSymbolInner({
             />
           )}
           {/* Light fluorescent: tube lines — match 1draad spacing exactly, scaled to sitplan size */}
-          {isLightFluorescent && (() => {
-            // Match EndpointSymbol logic:
-            // - SYMBOL_SIZE space, tubeMarginX = 0.5
-            // - 1 tube: y = 0
-            // - 2 tubes: bandHeight = SYMBOL_SIZE * 0.2, y = ±bandHeight/2
-            // - 3 tubes: step = SYMBOL_SIZE / 8, y = [-step, 0, step]
-            const scaleX = outlineWidth / SYMBOL_SIZE
-            const scaleY = outlineHeight / SYMBOL_SIZE
+          {isLightFluorescent &&
+            (() => {
+              // Match EndpointSymbol logic:
+              // - SYMBOL_SIZE space, tubeMarginX = 0.5
+              // - 1 tube: y = 0
+              // - 2 tubes: bandHeight = SYMBOL_SIZE * 0.2, y = ±bandHeight/2
+              // - 3 tubes: step = SYMBOL_SIZE / 8, y = [-step, 0, step]
+              const scaleX = outlineWidth / SYMBOL_SIZE
+              const scaleY = outlineHeight / SYMBOL_SIZE
 
-            const baseTubeMarginX = 0.5
-            const halfSpanBase = SYMBOL_SIZE / 2 - baseTubeMarginX
-            const halfSpan = halfSpanBase * scaleX
+              const baseTubeMarginX = 0.5
+              const halfSpanBase = SYMBOL_SIZE / 2 - baseTubeMarginX
+              const halfSpan = halfSpanBase * scaleX
 
-            let baseYPositions: number[]
-            if (tubeCount === 1) {
-              baseYPositions = [0]
-            } else if (tubeCount === 2) {
-              const bandHeightBase = SYMBOL_SIZE * 0.2
-              baseYPositions = [-bandHeightBase / 2, bandHeightBase / 2]
-            } else {
-              const stepBase = SYMBOL_SIZE / 8
-              baseYPositions = [-stepBase, 0, stepBase]
-            }
+              let baseYPositions: number[]
+              if (tubeCount === 1) {
+                baseYPositions = [0]
+              } else if (tubeCount === 2) {
+                const bandHeightBase = SYMBOL_SIZE * 0.2
+                baseYPositions = [-bandHeightBase / 2, bandHeightBase / 2]
+              } else {
+                const stepBase = SYMBOL_SIZE / 8
+                baseYPositions = [-stepBase, 0, stepBase]
+              }
 
-            const yPositions = baseYPositions.map((y) => y * scaleY)
+              const yPositions = baseYPositions.map((y) => y * scaleY)
 
-            const strokeWidth = Math.max(0.8, 1 * scaleX)
+              const strokeWidth = Math.max(0.8, 1 * scaleX)
 
-            return yPositions.map((y, idx) => (
-              <Line
-                key={idx}
-                points={[-halfSpan, y, halfSpan, y]}
-                stroke={symbolColor}
-                strokeWidth={strokeWidth}
-                listening={false}
-              />
-            ))
-          })()}
+              return yPositions.map((y, idx) => (
+                <Line
+                  key={idx}
+                  points={[-halfSpan, y, halfSpan, y]}
+                  stroke={symbolColor}
+                  strokeWidth={strokeWidth}
+                  listening={false}
+                />
+              ))
+            })()}
           {/* Light spot: beam overlay */}
           {isLightSpot && lightSpotBeamImage && (
             <Image
@@ -1424,7 +1511,11 @@ function PlacementSymbolInner({
                   offsetX={outlineWidth / 2}
                   offsetY={outlineHeight / 2}
                   // Scale the 1draad offset into sitplan coordinates
-                  y={hvacTypeKey === 'heat_exchange' ? (HVAC_HEAT_EXCHANGE_TYPE_OFFSET_Y * (outlineHeight / SYMBOL_SIZE)) : 0}
+                  y={
+                    hvacTypeKey === 'heat_exchange'
+                      ? HVAC_HEAT_EXCHANGE_TYPE_OFFSET_Y * (outlineHeight / SYMBOL_SIZE)
+                      : 0
+                  }
                   listening={false}
                 />
               )}
@@ -1528,7 +1619,7 @@ function PlacementSymbolInner({
           {isTransformer && transformerLabel && (
             <Text
               x={0}
-              y={-outlineHeight / 2 - (4 * (outlineHeight / SYMBOL_SIZE))}
+              y={-outlineHeight / 2 - 4 * (outlineHeight / SYMBOL_SIZE)}
               text={transformerLabel}
               fontSize={(8 * outlineHeight) / SYMBOL_SIZE}
               fontFamily={fontFamily}
@@ -1539,80 +1630,82 @@ function PlacementSymbolInner({
           )}
         </Group>
       ))}
-      
+
       {/* Circuit indicator lines for panel symbols */}
-      {isPanelSymbol && lineCount > 0 && Array.from({ length: lineCount }).map((_, i) => {
-        // Calculate X position for each line, spread equally across lineSpacing
-        const xOffset = lineCount === 1 
-          ? 0 
-          : (i / (lineCount - 1) - 0.5) * lineSpacing
-        
-        // In eendraad, the symbol uses offsetY = PANEL_SYMBOL_HEIGHT/4, which shifts it down
-        // In sitplan, the symbol is centered (offsetY = height/2), so we need to adjust
-        // the line positions to match eendraad's visual appearance
-        const yAdjustment = -(PANEL_SYMBOL_HEIGHT / 3) * sitplanScale 
-        
-        return (
-          <Line
-            key={`circuit-line-${i}`}
-            points={[xOffset, lineStartY + yAdjustment, xOffset, lineEndY + yAdjustment]}
-            stroke={symbolColor}
-            strokeWidth={lineStrokeWidth}
-            listening={false}
-          />
-        )
-      })}
-      
+      {isPanelSymbol &&
+        lineCount > 0 &&
+        Array.from({ length: lineCount }).map((_, i) => {
+          // Calculate X position for each line, spread equally across lineSpacing
+          const xOffset = lineCount === 1 ? 0 : (i / (lineCount - 1) - 0.5) * lineSpacing
+
+          // In eendraad, the symbol uses offsetY = PANEL_SYMBOL_HEIGHT/4, which shifts it down
+          // In sitplan, the symbol is centered (offsetY = height/2), so we need to adjust
+          // the line positions to match eendraad's visual appearance
+          const yAdjustment = -(PANEL_SYMBOL_HEIGHT / 3) * sitplanScale
+
+          return (
+            <Line
+              key={`circuit-line-${i}`}
+              points={[xOffset, lineStartY + yAdjustment, xOffset, lineEndY + yAdjustment]}
+              stroke={symbolColor}
+              strokeWidth={lineStrokeWidth}
+              listening={false}
+            />
+          )
+        })}
+
       {/* Supply feed line for panel symbols (sitplan only) — single central line on opposite side of circuit lines */}
-      {isPanelSymbol && (() => {
-        const yAdj = (PANEL_SYMBOL_HEIGHT / 3) * sitplanScale
-        // Circuit lines go from START_Y to END_Y (upward). Supply line goes the other way (downward).
-        const supplyStartY = (-PANEL_CIRCUIT_LINE_START_Y) * sitplanScale + yAdj
-        const supplyEndY = (-PANEL_CIRCUIT_LINE_END_Y) * sitplanScale + yAdj
-        return (
-          <Line
-            points={[0, supplyStartY, 0, supplyEndY]}
-            stroke={symbolColor}
-            strokeWidth={lineStrokeWidth}
-            listening={false}
-          />
-        )
-      })()}
+      {isPanelSymbol &&
+        (() => {
+          const yAdj = (PANEL_SYMBOL_HEIGHT / 3) * sitplanScale
+          // Circuit lines go from START_Y to END_Y (upward). Supply line goes the other way (downward).
+          const supplyStartY = -PANEL_CIRCUIT_LINE_START_Y * sitplanScale + yAdj
+          const supplyEndY = -PANEL_CIRCUIT_LINE_END_Y * sitplanScale + yAdj
+          return (
+            <Line
+              points={[0, supplyStartY, 0, supplyEndY]}
+              stroke={symbolColor}
+              strokeWidth={lineStrokeWidth}
+              listening={false}
+            />
+          )
+        })()}
 
       {/* Junction panel tick wires above and below symbol (mirrors panel spacing, capped at 8) */}
-      {isJunctionPanel && junctionPanelInstanceCount > 0 && (() => {
-        const yAdj = (PANEL_SYMBOL_HEIGHT / 2) * sitplanScale -0.5
-        const topStartY = lineStartY + yAdj
-        const topEndY = lineEndY + yAdj
-        const bottomStartY = (-PANEL_CIRCUIT_LINE_START_Y) * sitplanScale - yAdj
-        const bottomEndY = (-PANEL_CIRCUIT_LINE_END_Y) * sitplanScale - yAdj
-        const count = Math.min(junctionPanelInstanceCount, PANEL_MAX_CIRCUIT_LINES)
-        return Array.from({ length: count }).map((_, i) => {
-          const xOffset = count === 1
-            ? 0
-            : (i / (count - 1) - 0.5) * lineSpacing
-          return (
-            <React.Fragment key={`jp-lines-${i}`}>
-              <Line
-                points={[xOffset, topStartY, xOffset, topEndY]}
-                stroke={symbolColor}
-                strokeWidth={lineStrokeWidth}
-                listening={false}
-              />
-              <Line
-                points={[xOffset, bottomStartY, xOffset, bottomEndY]}
-                stroke={symbolColor}
-                strokeWidth={lineStrokeWidth}
-                listening={false}
-              />
-            </React.Fragment>
-          )
-        })
-      })()}
-      
+      {isJunctionPanel &&
+        junctionPanelInstanceCount > 0 &&
+        (() => {
+          const yAdj = (PANEL_SYMBOL_HEIGHT / 2) * sitplanScale - 0.5
+          const topStartY = lineStartY + yAdj
+          const topEndY = lineEndY + yAdj
+          const bottomStartY = -PANEL_CIRCUIT_LINE_START_Y * sitplanScale - yAdj
+          const bottomEndY = -PANEL_CIRCUIT_LINE_END_Y * sitplanScale - yAdj
+          const count = Math.min(junctionPanelInstanceCount, PANEL_MAX_CIRCUIT_LINES)
+          return Array.from({ length: count }).map((_, i) => {
+            const xOffset = count === 1 ? 0 : (i / (count - 1) - 0.5) * lineSpacing
+            return (
+              <React.Fragment key={`jp-lines-${i}`}>
+                <Line
+                  points={[xOffset, topStartY, xOffset, topEndY]}
+                  stroke={symbolColor}
+                  strokeWidth={lineStrokeWidth}
+                  listening={false}
+                />
+                <Line
+                  points={[xOffset, bottomStartY, xOffset, bottomEndY]}
+                  stroke={symbolColor}
+                  strokeWidth={lineStrokeWidth}
+                  listening={false}
+                />
+              </React.Fragment>
+            )
+          })
+        })()}
+
       {/* Hover highlight (from breadcrumb or mouse) — outer symbol bounds */}
       {isHoveredAny && !isSelected && !isPreviewSelected && (
         <Rect
+          name={INTERACTIVE_OVERLAY_EXPORT_NAME}
           x={-selectionOutlineWidth / 2}
           y={-selectionOutlineHeight / 2}
           width={selectionOutlineWidth}
@@ -1631,6 +1724,7 @@ function PlacementSymbolInner({
       {/* Selection outline — outer symbol bounds */}
       {(isSelected || isPreviewSelected) && (
         <Rect
+          name={INTERACTIVE_OVERLAY_EXPORT_NAME}
           x={-selectionOutlineWidth / 2}
           y={-selectionOutlineHeight / 2}
           width={selectionOutlineWidth}
@@ -1644,6 +1738,7 @@ function PlacementSymbolInner({
       )}
       {isQuickPlacerCurrent && (
         <Rect
+          name={INTERACTIVE_OVERLAY_EXPORT_NAME}
           x={-outlineWidth / 2 - 6 / currentZoom}
           y={-outlineHeight / 2 - 6 / currentZoom}
           width={finalOutlineWidth + 12 / currentZoom}
@@ -1651,7 +1746,10 @@ function PlacementSymbolInner({
           fill="transparent"
           stroke="#0ea5e9"
           strokeWidth={selectionOutlineStrokeCanvas}
-          dash={[screenPxToCanvasUnits(currentZoom, 6, 3, 10), screenPxToCanvasUnits(currentZoom, 4, 2, 8)]}
+          dash={[
+            screenPxToCanvasUnits(currentZoom, 6, 3, 10),
+            screenPxToCanvasUnits(currentZoom, 4, 2, 8),
+          ]}
           cornerRadius={selectionOutlineCornerCanvas + 4 / currentZoom}
           listening={false}
         />

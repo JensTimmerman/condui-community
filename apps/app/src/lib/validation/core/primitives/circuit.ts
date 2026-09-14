@@ -20,12 +20,16 @@ import {
   projectPanels,
   projectInstallation,
   validationCircuitCode,
-  ENERGY_CONVERSION_SYMBOLS,
   HEAVY_APPLIANCE_SYMBOLS,
   FIXED_APPLIANCE_DEDICATED_HINT_EXCLUDED_SYMBOLS,
 } from './common'
 import { isHouseholdInstallation } from '@/lib/installationProfile'
-import { getSupplyAssembliesFromProject } from '@/lib/projectV2/electrical'
+import { selectProjectSupplyAssemblies } from '@/lib/projectV2/electrical'
+
+// Push/impulse buttons are control-only devices. They commonly operate a
+// remote teleruptor or relay, so they may legitimately have no load on their
+// own branch.
+const CONTROL_ONLY_SWITCH_SYMBOLS = new Set<SymbolKey>(['switch_impulse'])
 
 /** Circuit that owns `endpointId`, including nested panel circuits. */
 function findCircuitContainingEndpoint(
@@ -57,7 +61,12 @@ function findCircuitContainingEndpoint(
  */
 function isElectricalLoadForSwitchRule(ep: Endpoint): boolean {
   if (ep.type === 'switch') return false
-  if (ep.symbol === 'junction_box' || ep.symbol === 'junction_panel') return false
+  if (
+    ep.symbol === 'junction_box' ||
+    ep.symbol === 'junction_panel' ||
+    ep.symbol === 'terminal_strip'
+  )
+    return false
   if (ep.type === 'light_point' || ep.type === 'socket' || ep.type === 'fixed_appliance')
     return true
   if (ep.type === 'domotica' && ep.domoticaChildProps?.outputGroup === 'endpoint') return true
@@ -96,6 +105,10 @@ function switchHasControlledLoads(
   const endpoint = query.getEndpointById(scope.id)
   if (!endpoint || endpoint.type !== 'switch') {
     return { passed: true } // Not a switch, skip
+  }
+
+  if (endpoint.symbol && CONTROL_ONLY_SWITCH_SYMBOLS.has(endpoint.symbol)) {
+    return { passed: true }
   }
 
   // Domotica parent: by metadata (symbol/domoticaProps) or by being the parent of any domotica child
@@ -388,7 +401,12 @@ function heavyApplianceRequiresDedicatedCircuit(
     if (heavyEndpoints.some((h: Endpoint) => h.id === ep.id)) return false
     if (ep.type === 'switch') return false
     if (ep.symbol === 'domotica' || ep.domoticaChildProps) return false
-    if (ep.symbol === 'junction_box' || ep.symbol === 'junction_panel') return false
+    if (
+      ep.symbol === 'junction_box' ||
+      ep.symbol === 'junction_panel' ||
+      ep.symbol === 'terminal_strip'
+    )
+      return false
     // Sockets that are on the same branch as a heavy appliance are treated
     // as part of that appliance group and do not break "dedicated" status.
     if (ep.type === 'socket' && socketsOnHeavyBranches.has(ep.id)) return false
@@ -440,11 +458,15 @@ function fixedApplianceDedicatedCircuitHint(
   if (!circuit) return { passed: true }
 
   const endpoints = circuit.endpoints ?? []
-  const fixedAppliances = endpoints.filter(
-    (ep: Endpoint) =>
-      ep.type === 'fixed_appliance' &&
-      !(ep.symbol && ENERGY_CONVERSION_SYMBOLS.has(ep.symbol as SymbolKey)) &&
-      !(ep.symbol && FIXED_APPLIANCE_DEDICATED_HINT_EXCLUDED_SYMBOLS.has(ep.symbol as SymbolKey))
+  // Conversion endpoints are static devices when they are placed on a final
+  // branch (for example socket → rectifier). Include them in the same
+  // dedicated-circuit hint as ordinary fixed appliances. Solar/battery
+  // endpoints remain source/storage devices and are intentionally excluded.
+  const fixedAppliances = endpoints.filter((ep: Endpoint) =>
+    ep.type === 'fixed_appliance' &&
+    ep.symbol !== 'solar_panel' &&
+    ep.symbol !== 'battery' &&
+    !(ep.symbol && FIXED_APPLIANCE_DEDICATED_HINT_EXCLUDED_SYMBOLS.has(ep.symbol as SymbolKey))
   )
   if (fixedAppliances.length === 0) {
     return { passed: true }
@@ -457,13 +479,52 @@ function fixedApplianceDedicatedCircuitHint(
     return { passed: true }
   }
 
+  const endpointsById = new Map(endpoints.map((endpoint) => [endpoint.id, endpoint]))
+  const fixedApplianceIds = new Set(fixedAppliances.map((endpoint) => endpoint.id))
+  const socketsOnFixedApplianceBranches = new Set<string>()
+  for (const branch of circuit.branches ?? []) {
+    const branchEndpoints = (branch.endpointIds ?? [])
+      .map((id) => endpointsById.get(id))
+      .filter((endpoint): endpoint is Endpoint => endpoint != null)
+    if (!branchEndpoints.some((endpoint) => fixedApplianceIds.has(endpoint.id))) continue
+    for (const endpoint of branchEndpoints) {
+      if (endpoint.type === 'socket') socketsOnFixedApplianceBranches.add(endpoint.id)
+    }
+  }
+
+  // Older projects may not have persisted branch membership. A single socket
+  // followed by one fixed appliance is still one dedicated appliance branch;
+  // do not turn that representation into a false "not dedicated" hint.
+  const hasCompleteBranchTopology =
+    (circuit.branches?.length ?? 0) > 0 &&
+    endpoints.every((endpoint) =>
+      circuit.branches?.some((branch) => branch.endpointIds.includes(endpoint.id)),
+    )
+  const socketCount = endpoints.filter((endpoint) => endpoint.type === 'socket').length
+  const kind = query.getCircuitKind(scope.id)
+  const fixedLoadOnlyWithoutBranches =
+    !hasCompleteBranchTopology &&
+    fixedAppliances.length === 1 &&
+    socketCount === 1 &&
+    ['fixed_appliance', 'boiler', 'heating', 'stove', 'hvac'].includes(kind)
+
   const isLeaf = !circuit.subCircuitIds || circuit.subCircuitIds.length === 0
 
   const otherLoadEndpoints = endpoints.filter((ep: Endpoint) => {
     if (fixedAppliances.some((f: Endpoint) => f.id === ep.id)) return false
     if (ep.type === 'switch') return false
     if (ep.symbol === 'domotica' || ep.domoticaChildProps) return false
-    if (ep.symbol === 'junction_box' || ep.symbol === 'junction_panel') return false
+    if (
+      ep.symbol === 'junction_box' ||
+      ep.symbol === 'junction_panel' ||
+      ep.symbol === 'terminal_strip'
+    )
+      return false
+    if (
+      ep.type === 'socket' &&
+      (socketsOnFixedApplianceBranches.has(ep.id) || fixedLoadOnlyWithoutBranches)
+    )
+      return false
     return true
   })
 
@@ -679,11 +740,13 @@ function installationHasMinimumLightingCircuits(
     'ev',
     'doorbell',
   ])
-  const hasModeledHouseholdLoad = query.getCircuits().some(
-    (circuit) =>
-      circuit.endpoints.length > 0 && householdEndUseKinds.has(query.getCircuitKind(circuit.id))
-  )
-  if (getSupplyAssembliesFromProject(project).length > 0 && !hasModeledHouseholdLoad) {
+  const hasModeledHouseholdLoad = query
+    .getCircuits()
+    .some(
+      (circuit) =>
+        circuit.endpoints.length > 0 && householdEndUseKinds.has(query.getCircuitKind(circuit.id))
+    )
+  if (selectProjectSupplyAssemblies(project).length > 0 && !hasModeledHouseholdLoad) {
     return { passed: true }
   }
 

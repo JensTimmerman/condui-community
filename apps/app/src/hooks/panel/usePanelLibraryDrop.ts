@@ -35,12 +35,8 @@ import {
   snapToGrid,
   type ModulePlacement,
 } from '@/components/canvas/panel/panelGridLayout'
-import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
-import {
-  collectCircuits,
-  findPanelById,
-  getLastAssignableCircuit,
-} from '@/lib/panel/panelTree'
+import { getProjectElectricalPanels } from '@/lib/projectV2/electrical'
+import { collectCircuits, findPanelById, getLastAssignableCircuit } from '@/lib/panel/panelTree'
 import {
   executeDropBehavior,
   type DropBehaviorCallbacks,
@@ -48,10 +44,7 @@ import {
 } from '@/handlers/eendraad/dropBehaviors'
 import type { DropTarget } from '@/lib/layout/findDropTarget'
 import { trackSymbolPlace } from '@/lib/analytics/editorEventAnalytics'
-import {
-  DEFAULT_PANEL_GRID_COLUMNS,
-  DEFAULT_PANEL_GRID_ROWS,
-} from '@/lib/panel/panelGridDefaults'
+import { DEFAULT_PANEL_GRID_COLUMNS, DEFAULT_PANEL_GRID_ROWS } from '@/lib/panel/panelGridDefaults'
 
 type Project = NonNullable<ProjectState['currentProject']>
 
@@ -110,11 +103,16 @@ function createPanelDropBehaviorCallbacks(
     addCircuitToProtection: store.addCircuitToProtection,
     addEndpoint: store.addEndpoint,
     addPlacement: store.addPlacement,
+    updateEndpoint: store.updateEndpoint,
     setSelection: useUIStore.getState().setSelection,
     getFloorById: (floorId) => {
       const floor = store.getFloorById(floorId)
       return floor
-        ? { id: floor.id, layers: floor.layers, hiddenSitplanPlacementIds: floor.hiddenSitplanPlacementIds }
+        ? {
+            id: floor.id,
+            layers: floor.layers,
+            hiddenSitplanPlacementIds: floor.hiddenSitplanPlacementIds,
+          }
         : null
     },
     updateFloor: store.updateFloor,
@@ -348,7 +346,7 @@ export function usePanelLibraryDrop({
       }
 
       if (symbol.id === 'panel_distribution') {
-        const totalPanelCount = countPanels(getElectricalPanelsFromProject(currentProject))
+        const totalPanelCount = countPanels(getProjectElectricalPanels(currentProject))
         const panelNumber = totalPanelCount + 1
         const newPanelId = generateId()
         const newPanel: Panel = {
@@ -554,7 +552,7 @@ export function usePanelLibraryDrop({
         const nextProject = useProjectStore.getState().currentProject
         const nextPanel =
           nextProject != null
-            ? findPanelById(getElectricalPanelsFromProject(nextProject), panel.id)
+            ? findPanelById(getProjectElectricalPanels(nextProject), panel.id)
             : undefined
         if (nextProject && nextPanel) {
           const { mainSlots, supplySlots } = placeSupplyModuleAfterInsert(
@@ -709,7 +707,7 @@ export function usePanelLibraryDrop({
 
         const projectAfterMeter = useProjectStore.getState().currentProject
         const persistedPanel = projectAfterMeter
-          ? findPanelById(getElectricalPanelsFromProject(projectAfterMeter), panel.id)
+          ? findPanelById(getProjectElectricalPanels(projectAfterMeter), panel.id)
           : undefined
         const persistedCircuit = persistedPanel
           ? collectCircuits(persistedPanel).find((circuit) => circuit.id === targetCircuit.id)
@@ -718,11 +716,14 @@ export function usePanelLibraryDrop({
           !persistedPanel ||
           !persistedCircuit?.trunkDevices?.some((device) => device.id === deviceId)
         ) {
-          logger.error('PanelCanvas: Energy meter could not be assigned to the target panel circuit', {
-            panelId: panel.id,
-            circuitId: targetCircuit.id,
-            deviceId,
-          })
+          logger.error(
+            'PanelCanvas: Energy meter could not be assigned to the target panel circuit',
+            {
+              panelId: panel.id,
+              circuitId: targetCircuit.id,
+              deviceId,
+            }
+          )
           return
         }
 
@@ -743,9 +744,7 @@ export function usePanelLibraryDrop({
             Math.round(localX / CELL_W) - Math.floor(moduleWidthCols / 2)
           )
         )
-        useProjectStore
-          .getState()
-          .unhideModuleFromPanel(panel.id, panelGridModuleRefKey(moduleRef))
+        useProjectStore.getState().unhideModuleFromPanel(panel.id, panelGridModuleRefKey(moduleRef))
         const newSlots = [...existingSlots, { row, col, module: moduleRef }]
         updatePanelGridSlots(panel.id, newSlots)
 

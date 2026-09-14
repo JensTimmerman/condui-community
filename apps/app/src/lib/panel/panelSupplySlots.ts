@@ -1,8 +1,8 @@
 import { getPanelFeedProjection } from '@/lib/feedTopology'
 import { getSubPanelMainBusFeedDevice } from '@/lib/panel/subPanelFeed'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import type { Panel, PanelGridModuleRef, PanelGridSlot, ProtectionDevice } from '@/types/schema'
@@ -24,17 +24,21 @@ import {
   panelGridModuleRefKey,
   resolveModuleWidthCols,
 } from '@/components/canvas/panel/panelGridLayout'
-import {
-  DEFAULT_PANEL_GRID_COLUMNS,
-  DEFAULT_PANEL_GRID_ROWS,
-} from '@/lib/panel/panelGridDefaults'
+import { DEFAULT_PANEL_GRID_COLUMNS, DEFAULT_PANEL_GRID_ROWS } from '@/lib/panel/panelGridDefaults'
+import { MIN_PANEL_GRID_MODULE_WIDTH, panelModulesToGridUnits } from '@/lib/panel/panelGridUnits'
 
 export type PanelSupplySlotProject = ProjectWithOptionalV2Electrical
 
 export type PanelGridModuleItem = {
   ref: PanelGridModuleRef
   inSupplyPanel?: boolean
-  slot?: { row: number; col: number; moduleWidth?: number; moduleWidthManual?: boolean }
+  slot?: {
+    row: number
+    col: number
+    moduleWidth?: number
+    moduleWidthManual?: boolean
+    terminalStripRail?: 'top' | 'bottom'
+  }
 }
 
 export type GetPanelGridModulesFn = (panelId: string) => PanelGridModuleItem[]
@@ -52,16 +56,20 @@ export function upsertPanelGridSlotPosition(
   slots: PanelGridSlot[],
   module: PanelGridModuleRef,
   row: number,
-  col: number
+  col: number,
+  terminalStripRail?: 'top' | 'bottom'
 ): PanelGridSlot[] {
   const key = panelGridModuleRefKey(module)
   let found = false
   const nextSlots = slots.map((slot) => {
     if (panelGridModuleRefKey(slot.module) !== key) return slot
     found = true
-    return { ...slot, row, col }
+    const { terminalStripRail: _previousRail, ...rest } = slot
+    return { ...rest, row, col, ...(terminalStripRail ? { terminalStripRail } : {}) }
   })
-  return found ? nextSlots : [...nextSlots, { row, col, module }]
+  return found
+    ? nextSlots
+    : [...nextSlots, { row, col, module, ...(terminalStripRail ? { terminalStripRail } : {}) }]
 }
 
 export function arePanelGridSlotArraysEqual(a: PanelGridSlot[], b: PanelGridSlot[]): boolean {
@@ -73,6 +81,7 @@ export function arePanelGridSlotArraysEqual(a: PanelGridSlot[], b: PanelGridSlot
     if (left.row !== right.row || left.col !== right.col) return false
     if (left.moduleWidth !== right.moduleWidth) return false
     if (left.moduleWidthManual !== right.moduleWidthManual) return false
+    if (left.terminalStripRail !== right.terminalStripRail) return false
     if (panelGridModuleRefKey(left.module) !== panelGridModuleRefKey(right.module)) return false
   }
   return true
@@ -95,7 +104,10 @@ export function canPlaceSupplyModuleAt(
     .filter((slot) => panelGridModuleRefKey(slot.module) !== moduleKey)
     .every((slot) => {
       if (slot.row !== preferredRow) return true
-      const existingWidth = Math.max(1, resolveModuleWidthCols(slot.module, project, slot))
+      const existingWidth = Math.max(
+        MIN_PANEL_GRID_MODULE_WIDTH,
+        resolveModuleWidthCols(slot.module, project, slot)
+      )
       const existingStart = slot.col
       const existingEnd = slot.col + existingWidth
       return !(preferredCol < existingEnd && existingStart < end)
@@ -166,7 +178,10 @@ export function rebalanceSupplyOverflowIntoMain(
   const occupied = mainSlots.map((slot) => ({
     row: slot.row,
     col: slot.col,
-    width: Math.max(1, resolveModuleWidthCols(slot.module, targetProject, slot)),
+    width: Math.max(
+      MIN_PANEL_GRID_MODULE_WIDTH,
+      resolveModuleWidthCols(slot.module, targetProject, slot)
+    ),
   }))
 
   for (const ref of packedSupply.overflow) {
@@ -174,7 +189,10 @@ export function rebalanceSupplyOverflowIntoMain(
     const existing = mainSlots.find((slot) => panelGridModuleRefKey(slot.module) === key)
     if (existing) continue
     const prev = prevMainByKey.get(key) ?? prevSupplyByKey.get(key)
-    const width = Math.max(1, resolveModuleWidthCols(ref, targetProject, prev))
+    const width = Math.max(
+      MIN_PANEL_GRID_MODULE_WIDTH,
+      resolveModuleWidthCols(ref, targetProject, prev)
+    )
     const spot = findFirstFreeMainOrOverflowSlot(occupied, width, rows, cols, feedFromTop)
     const nextSlot = {
       row: spot.row,
@@ -206,7 +224,7 @@ export function placeSupplyModuleAfterInsert(
     (slot) => panelGridModuleRefKey(slot.module) === key
   )
   const width = Math.max(
-    1,
+    MIN_PANEL_GRID_MODULE_WIDTH,
     resolveModuleWidthCols(moduleRef, targetProject, existingSupplySlot ?? existingMainSlot)
   )
 
@@ -322,7 +340,7 @@ export function buildPanelAutoArrangeSlots({
 
   const widthFor = (ref: PanelGridModuleRef) =>
     Math.max(
-      1,
+      MIN_PANEL_GRID_MODULE_WIDTH,
       resolveModuleWidthCols(
         ref,
         targetProject,
@@ -424,8 +442,8 @@ export function buildPanelAutoArrangeSlots({
   const panelFeedPrefixRefs: PanelGridModuleRef[] = []
   const panelFeedSuffixRefs: PanelGridModuleRef[] = []
   let panelFeedAnchorRef: PanelGridModuleRef | null = null
-  const installation = getElectricalInstallationFromProject(targetProject)
-  const panels = getElectricalPanelsFromProject(targetProject)
+  const installation = getProjectElectricalInstallation(targetProject)
+  const panels = getProjectElectricalPanels(targetProject)
   if (targetPanel.isMain && installation) {
     const projection = getPanelFeedProjection(installation, panels, targetPanel)
     if (projection) {
@@ -529,7 +547,30 @@ export function buildPanelAutoArrangeSlots({
           feedSideDirection
         )
       : packAutoArrangeMainSlots([], panelRows, cols, feedFromTop, widthFor, feedSideDirection)
-  const mainSlots = packed.map((slot) => {
+  // Hierarchy groups normally get dedicated row blocks so parent/child
+  // relationships remain legible. If that policy creates overflow, retry with
+  // a compact linear pack and keep whichever plan fits more physical modules.
+  // This matters when the panel is genuinely too small: a large hierarchy
+  // group must not eject its siblings as a single all-or-nothing block.
+  const panelColUnits = panelModulesToGridUnits(cols)
+  const fitsInPanel = (slot: PanelGridSlot) =>
+    slot.row >= 0 &&
+    slot.row < panelRows &&
+    panelModulesToGridUnits(slot.col) + panelModulesToGridUnits(widthFor(slot.module)) <=
+      panelColUnits
+  const inGridCount = (slots: PanelGridSlot[]) => slots.filter(fitsInPanel).length
+  const compactPacked = packed.some((slot) => !fitsInPanel(slot))
+    ? packAutoArrangeMainSlots(
+        moduleOrder,
+        panelRows,
+        cols,
+        feedFromTop,
+        widthFor,
+        feedSideDirection
+      )
+    : packed
+  const effectivePacked = inGridCount(compactPacked) > inGridCount(packed) ? compactPacked : packed
+  const mainSlots = effectivePacked.map((slot) => {
     const prev =
       prevMainByKey.get(panelGridModuleRefKey(slot.module)) ??
       prevSupplyByKey.get(panelGridModuleRefKey(slot.module))
@@ -544,11 +585,11 @@ function getSharedSupplyRefsForPanel(
   panel: Panel | null
 ): PanelGridModuleRef[] {
   if (!panel?.isMain) return []
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
   if (!installation) return []
   const projection = getPanelFeedProjection(
     installation,
-    getElectricalPanelsFromProject(project),
+    getProjectElectricalPanels(project),
     panel
   )
   return (projection?.sharedFeed.trunkDevices ?? []).map(

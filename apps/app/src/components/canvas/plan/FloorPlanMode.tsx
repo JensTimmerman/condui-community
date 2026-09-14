@@ -34,7 +34,7 @@ import {
   isCurvedWall,
 } from '@/lib/plan/wallCurve'
 import type { PlanView } from '@/stores/uiStore'
-import { getCompatibilityFloorsFromProject } from '@/lib/projectV2/buildingFloors'
+import { readLegacyCompatibilityFloors } from '@/lib/projectV2/buildingFloors'
 import { resolvePlanCanvasPxPerMeter } from '@/hooks/plan'
 import { useCanvasFontFamily, useSetSelectionStore } from '@/editions/community/communityHooks'
 import {
@@ -70,7 +70,6 @@ import { getStairRenderMetrics } from '@/lib/plan/stairPlanScale'
 import { PlanGraphicElementShape } from '@/components/canvas/plan/PlanGraphicElementRenderer'
 import { planFloorDrawingConsumesTabRef } from '@/lib/plan/planFloorDrawingKeyboardGate'
 import { resolveFloorPlanToolContextMenuAction } from '@/lib/plan/floorPlanToolContextMenu'
-import { resolvePenEnterCommitPoints } from '@/lib/plan/planKeyboardDecisions'
 import {
   snapNearbyLineToGrid,
   snapPointToNearbyLine,
@@ -93,8 +92,9 @@ import {
   type FloorPlanDrawDimensionEditor,
 } from './floorPlanDrawDimensionEditorStore'
 
-/** Second pointer-down / click inside this window is treated as double-click (no extra vertex). */
+/** Second pointer-down / click inside this window and distance is treated as double-click. */
 const FLOOR_PLAN_DRAW_DOUBLE_CLICK_MS = 400
+const FLOOR_PLAN_DRAW_DOUBLE_CLICK_DISTANCE_PX = 8
 
 type FloorPlanInputEvent = KonvaEventObject<MouseEvent | TouchEvent | PointerEvent | DragEvent>
 
@@ -219,6 +219,8 @@ export function FloorPlanMode({
   const penDidDragRef = useRef(false)
   const penCurveGestureRef = useRef(false)
   const penLastPointerDownTimeRef = useRef(0)
+  const penLastPointerDownPointRef = useRef<Point2 | null>(null)
+  const penDoubleClickDetectedRef = useRef(false)
   const stairLastClickTimeRef = useRef(0)
   const rectPointerDownRef = useRef<Point2 | null>(null)
   const rectDidDragRef = useRef(false)
@@ -331,6 +333,9 @@ export function FloorPlanMode({
     draftPointDragRef.current = null
     draftPointDidDragRef.current = false
     suppressDraftPointTapUntilRef.current = 0
+    penLastPointerDownTimeRef.current = 0
+    penLastPointerDownPointRef.current = null
+    penDoubleClickDetectedRef.current = false
     lastStagePointerRef.current = null
     clearDrawingUndoStacks()
   }, [clearDrawingUndoStacks])
@@ -802,7 +807,7 @@ export function FloorPlanMode({
     ) => {
       if (!activeFloorId) return
       const floorPlan = (
-        currentProject ? getCompatibilityFloorsFromProject(currentProject) : []
+        currentProject ? readLegacyCompatibilityFloors(currentProject) : []
       ).find((f: { id: string }) => f.id === activeFloorId)?.floorPlan
       const doors = floorPlan?.doors ?? []
       const windows = floorPlan?.windows ?? []
@@ -1078,7 +1083,11 @@ export function FloorPlanMode({
   const appendPenPoint = useCallback(
     (
       rawPoint: Point2,
-      options?: { snapTo45Degrees?: boolean; lockedLengthMeters?: number | null }
+      options?: {
+        snapTo45Degrees?: boolean
+        lockedLengthMeters?: number | null
+        commitSegment?: boolean
+      }
     ) => {
       if (!activeFloorId) return
       pushDrawingUndoBeforeMutation()
@@ -1188,8 +1197,16 @@ export function FloorPlanMode({
             rectStartPoint: null,
             pendingCurve: false,
           })
+          setActiveTool('drawWall')
           return
         }
+      }
+
+      if (options?.commitSegment && nextState.currentPoints.length >= 2) {
+        commitWallWithUndo(activeFloorId, nextState.currentPoints)
+        resetDrawingState()
+        setActiveTool('drawWall')
+        return
       }
 
       // After committing this vertex (i.e. after finishing the current segment),
@@ -1213,6 +1230,7 @@ export function FloorPlanMode({
       commitWallWithUndo,
       pushDrawingUndoBeforeMutation,
       resetDrawingState,
+      setActiveTool,
       snapPointToPenAngle,
       resolveProjectedPenSnap,
       resolveNearbyLineSnap,
@@ -1445,15 +1463,24 @@ export function FloorPlanMode({
   const commitPenDimensionInput = useCallback(() => {
     if (activeTool !== 'drawWall' || !wallDrawingState.isDrawing) return
     const previewPoint = mousePreviewPositionRef.current
-    if (!previewPoint) return
 
-    const commitPoints = resolvePenEnterCommitPoints(wallDrawingState.currentPoints, previewPoint)
-    if (commitPoints && activeFloorId) {
-      commitWallWithUndo(activeFloorId, commitPoints)
-      resetDrawingState()
-      setActiveTool('select')
+    // A curved gesture needs its third point to be added first; the existing
+    // pending-curve effect then commits the curve. Straight pen input should
+    // finish the current segment immediately instead of adding another point.
+    if (wallDrawingState.pendingCurve) {
+      if (!previewPoint) return
+      appendPenPoint(previewPoint)
       return
     }
+
+    if (wallDrawingState.currentPoints.length >= 2 && activeFloorId) {
+      commitWallWithUndo(activeFloorId, wallDrawingState.currentPoints)
+      resetDrawingState()
+      setActiveTool('drawWall')
+      return
+    }
+
+    if (!previewPoint) return
 
     const typedCentimeters = Number.parseFloat(penDimensionText.trim().replace(',', '.'))
     appendPenPoint(previewPoint, {
@@ -1461,10 +1488,12 @@ export function FloorPlanMode({
         Number.isFinite(typedCentimeters) && typedCentimeters > 0
           ? typedCentimeters / 100
           : penLockedLengthMeters,
+      commitSegment: true,
     })
   }, [
     activeTool,
     wallDrawingState.isDrawing,
+    wallDrawingState.pendingCurve,
     wallDrawingState.currentPoints,
     activeFloorId,
     commitWallWithUndo,
@@ -1831,9 +1860,7 @@ export function FloorPlanMode({
             const closedPoints = [...wallDrawingState.currentPoints, first]
             commitWallWithUndo(activeFloorId, closedPoints)
             resetDrawingState()
-            // Exit pen tool; centralized tool-change effect is only for
-            // implicit commits, so we switch explicitly here.
-            setActiveTool('select')
+            setActiveTool('drawWall')
             return
           }
         }
@@ -2045,12 +2072,16 @@ export function FloorPlanMode({
       e.cancelBubble = true
 
       if (activeTool === 'drawWall') {
-        setActiveTool('select')
+        const isDoubleClick = penDoubleClickDetectedRef.current
+        penDoubleClickDetectedRef.current = false
+        if (!isDoubleClick) return
+        commitCurrentPenDrawing()
+        setActiveTool('drawWall')
         return
       }
       commitCurrentStairDrawing()
     },
-    [activeTool, setActiveTool, commitCurrentStairDrawing]
+    [activeTool, commitCurrentPenDrawing, commitCurrentStairDrawing, setActiveTool]
   )
 
   const syncDrawToolPreviewFromCanvasPoint = useCallback(
@@ -2416,9 +2447,25 @@ export function FloorPlanMode({
         e.cancelBubble = true
         capturePenPointer(e)
         const now = Date.now()
+        const previousPointerDown = penLastPointerDownPointRef.current
+        const doubleClickDistance = screenPxToCanvasUnits(
+          planView.zoom,
+          FLOOR_PLAN_DRAW_DOUBLE_CLICK_DISTANCE_PX,
+          4,
+          12
+        )
+        const distanceFromPrevious = previousPointerDown
+          ? Math.hypot(
+              canvasPoint.x - previousPointerDown.x,
+              canvasPoint.y - previousPointerDown.y
+            )
+          : Number.POSITIVE_INFINITY
         const isDoubleDown =
-          now - penLastPointerDownTimeRef.current < FLOOR_PLAN_DRAW_DOUBLE_CLICK_MS
+          now - penLastPointerDownTimeRef.current < FLOOR_PLAN_DRAW_DOUBLE_CLICK_MS &&
+          distanceFromPrevious <= doubleClickDistance
         penLastPointerDownTimeRef.current = now
+        penLastPointerDownPointRef.current = canvasPoint
+        penDoubleClickDetectedRef.current = isDoubleDown
         penPointerDownRef.current = canvasPoint
         penDidDragRef.current = false
         penCurveGestureRef.current = !wallDrawingState.isDrawing
@@ -2475,6 +2522,7 @@ export function FloorPlanMode({
       getWallsByFloor,
       gridSize,
       planView.snapToGrid,
+      planView.zoom,
       rememberStageContainer,
       resolveStairDrawingSnap,
       resolveNearbyLineSnap,
@@ -3099,8 +3147,7 @@ export function FloorPlanMode({
                     const closedPoints = [...wallDrawingState.currentPoints, first]
                     commitWallWithUndo(activeFloorId, closedPoints)
                     resetDrawingState()
-                    // Match double-click behavior: exit pen tool after commit.
-                    setActiveTool('select')
+                    setActiveTool('drawWall')
                     return
                   }
                 }}
@@ -3117,7 +3164,7 @@ export function FloorPlanMode({
                     const closedPoints = [...wallDrawingState.currentPoints, first]
                     commitWallWithUndo(activeFloorId, closedPoints)
                     resetDrawingState()
-                    setActiveTool('select')
+                    setActiveTool('drawWall')
                     return
                   }
                 }}

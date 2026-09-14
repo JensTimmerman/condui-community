@@ -65,9 +65,9 @@ import { getPanelDiagramTitleLine } from '@/lib/panel/panelDiagramLabels'
 import { buildSitplanExportTargets } from './sitplanExportPlan'
 import { exportLog } from './exportLogger'
 import { normalizeExportOptions } from './types'
-import { getEendraadNotesFromProject } from '@/lib/projectV2/annotations'
-import { getBuildingFloorsFromProject } from '@/lib/projectV2/buildingFloors'
-import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
+import { queryOneWireNotes } from '@/lib/projectV2/annotations'
+import { selectProjectBuildingFloors } from '@/lib/projectV2/buildingFloors'
+import { getProjectElectricalPanels } from '@/lib/projectV2/electrical'
 import { shouldRasterizePdf } from '@/lib/editionPdfRenderingPolicy'
 import { getPanelDiagramId } from '@/lib/layout/bottomUpLayout'
 import { buildPanelExportTargets, orderEendraadLayoutsForExport } from './exportPlan'
@@ -350,8 +350,8 @@ export async function exportToPDF(
       exportLog(`[Export] Options:`, { ...options, theme: exportTheme })
       exportLog(`[Export] Context:`, {
         projectId: context.project.project.id,
-        panels: getElectricalPanelsFromProject(context.project).length,
-        floors: getBuildingFloorsFromProject(context.project).length,
+        panels: getProjectElectricalPanels(context.project).length,
+        floors: selectProjectBuildingFloors(context.project).length,
         eendraadLayoutPanels: context.eendraadLayout?.panels.length ?? 0,
       })
 
@@ -386,7 +386,7 @@ export async function exportToPDF(
             panelLayout.frameRole === 'supply'
               ? []
               : collectEendraadFreeNoteOverlays(
-                  getEendraadNotesFromProject(context.project),
+                  queryOneWireNotes(context.project),
                   panelLayout.panel.id,
                   exportTheme
                 )

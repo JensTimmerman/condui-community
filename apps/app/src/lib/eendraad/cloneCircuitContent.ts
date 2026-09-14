@@ -30,6 +30,28 @@ function cloneEndpointContent(source: Endpoint, newId: string): Endpoint {
   return clone
 }
 
+function cloneTrunkDeviceContent(source: TrunkDevice, newId: string): TrunkDevice {
+  return {
+    ...JSON.parse(JSON.stringify(source)),
+    id: newId,
+    placements: source.placements?.length
+      ? clonePlacementsForDuplicate(source.placements, { symbolType: source.symbol })
+      : source.placements,
+  }
+}
+
+function remapDeviceConverterConnections(
+  devices: TrunkDevice[],
+  maps: CircuitCloneIdMaps,
+): void {
+  for (const device of devices) {
+    if (!device.converterDcConnection) continue
+    const converterId = maps.trunkDevice.get(device.converterDcConnection.converterId)
+    if (converterId) device.converterDcConnection.converterId = converterId
+    else delete device.converterDcConnection
+  }
+}
+
 /**
  * Deep-clone a circuit's consumers (endpoints, branches, trunk devices).
  * `subCircuitIds` are cleared; wire them after all circuits in a subtree are mapped.
@@ -53,14 +75,8 @@ export function cloneCircuitContent(
   const newTrunkDevices: TrunkDevice[] | undefined = source.trunkDevices?.map((td) => {
     const newTdId = generateId()
     maps.trunkDevice.set(td.id, newTdId)
-    return { ...JSON.parse(JSON.stringify(td)), id: newTdId }
+    return cloneTrunkDeviceContent(td, newTdId)
   })
-  for (const device of newTrunkDevices ?? []) {
-    if (!device.converterDcConnection) continue
-    const converterId = maps.trunkDevice.get(device.converterDcConnection.converterId)
-    if (converterId) device.converterDcConnection.converterId = converterId
-    else delete device.converterDcConnection
-  }
   for (const endpoint of newEndpoints) {
     if (!endpoint.converterDcConnection) continue
     const converterId = maps.trunkDevice.get(endpoint.converterDcConnection.converterId)
@@ -68,15 +84,35 @@ export function cloneCircuitContent(
     else delete endpoint.converterDcConnection
   }
 
+  const branchDeviceLists = new Map<string, TrunkDevice[]>()
+  for (const branch of source.branches ?? []) {
+    const clonedDevices = (branch.branchDevices ?? []).map((device) => {
+      const newDeviceId = generateId()
+      maps.trunkDevice.set(device.id, newDeviceId)
+      return cloneTrunkDeviceContent(device, newDeviceId)
+    })
+    branchDeviceLists.set(branch.id, clonedDevices)
+  }
+  remapDeviceConverterConnections(
+    [...(newTrunkDevices ?? []), ...Array.from(branchDeviceLists.values()).flat()],
+    maps,
+  )
+
   let newBranches: Branch[] | undefined
   if (source.branches?.length) {
-    newBranches = source.branches.map((branch) => ({
-      id: generateId(),
-      label: branch.label,
-      endpointIds: branch.endpointIds
-        .map((eid) => endpointIdMap.get(eid))
-        .filter((id): id is string => !!id),
-    }))
+    newBranches = source.branches.map((branch) => {
+      const dcBusId = branch.dcBusId ? maps.trunkDevice.get(branch.dcBusId) : undefined
+      const branchDevices = branchDeviceLists.get(branch.id)
+      return {
+        id: generateId(),
+        label: branch.label,
+        endpointIds: branch.endpointIds
+          .map((eid) => endpointIdMap.get(eid))
+          .filter((id): id is string => !!id),
+        ...(dcBusId ? { dcBusId } : {}),
+        ...(branchDevices?.length ? { branchDevices } : {}),
+      }
+    })
   }
 
   const clone: Circuit = {

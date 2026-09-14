@@ -4,7 +4,7 @@ import type { LayoutPreset } from '@/types/ui'
 interface PresetDef {
   preset: LayoutPreset
   title: string
-  icon: JSX.Element
+  icon: React.JSX.Element
 }
 
 function LayoutIcon({ children }: { children: React.ReactNode }) {

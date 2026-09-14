@@ -16,24 +16,21 @@ import type { Endpoint } from '@/types/schema'
 
 export function PlanPlacementLabelEntry({
   placementId,
-  endpoint,
-  junctionPanelLabel,
+  labelText,
   staticLabelPosition,
   labelFontSize,
 }: {
   placementId: string
-  endpoint: Endpoint | null
-  junctionPanelLabel?: string
+  labelText?: string
   staticLabelPosition?: { x: number; y: number }
   labelFontSize: number
 }) {
   const dragLabel = usePlanDragLabel(placementId)
   const labelPosition = dragLabel ?? staticLabelPosition
-  const labelText = endpoint?.label ?? junctionPanelLabel
   if (!labelText || !labelPosition) return null
   return (
     <PlacementLabel
-      endpoint={endpoint ?? { label: junctionPanelLabel }}
+      endpoint={{ label: labelText }}
       labelPosition={labelPosition}
       labelFontSize={labelFontSize}
     />

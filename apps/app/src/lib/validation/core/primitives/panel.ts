@@ -16,7 +16,7 @@ import {
   findDuplicateProtectionLabelGroupsOnPanel,
   getPanelFeedProjection,
   trunkDeviceCountsAsProtection,
-  resolvePanelSupplyLinkForPanel,
+  resolvePanelSupplyLinkForPanelInPanels,
   i18n,
   projectPanels,
   projectInstallation,
@@ -308,7 +308,7 @@ function findUpstreamFeederProtectionForPanel(
   rootPanels: Panel[],
   panelId: string
 ): ProtectionDevice | undefined {
-  const protection = resolvePanelSupplyLinkForPanel({ panels: rootPanels }, panelId)?.protection
+  const protection = resolvePanelSupplyLinkForPanelInPanels(rootPanels, panelId)?.protection
   return protection?.directPanelFeeder || protection?.directDcBusFeeder
     ? undefined
     : protection
@@ -562,7 +562,6 @@ function checkDuplicatePanelProtectionLabels(
 ): Issue[] {
   const { scope, project } = context
   if (scope.type !== 'board') return []
-  if (projectInstallation(project)?.eendraadAutomaticNaming) return []
 
   let panel: Panel | undefined
   const visit = (panels: Panel[]) => {
@@ -776,6 +775,12 @@ function checkEendraadOrphans(context: CheckContext, _params?: Record<string, un
               ? `Endpoint "{{endpointLabel}}" has placement "{{placementId}}" on missing floor "{{floorId}}".`
               : `Endpoint "{{endpointLabel}}" has duplicate placement id "{{placementId}}".`,
         }),
+      planPlacementIdentityConflict: (opts) =>
+        i18n.t('validation.orphanDetection.planPlacementIdentityConflict', {
+          placementId: opts.placementId,
+          ownerLabels: opts.ownerLabels,
+          defaultValue: `Situation-plan placement "{{placementId}}" is shared by {{ownerLabels}}. Symbols may overlap, disappear, or select together; recreate the affected duplicates with unique placements.`,
+        }),
       domoticaChildLinkMismatch: (opts) =>
         i18n.t('validation.orphanDetection.domoticaChildLinkMismatch', {
           endpointLabel: opts.endpointLabel,
@@ -817,6 +822,11 @@ function checkEendraadOrphans(context: CheckContext, _params?: Record<string, un
           row: opts.row,
           col: opts.col,
           defaultValue: `Supply device "{{label}}" is on the main panel grid (row {{row}}, column {{col}}) but must be in the supply strip only.`,
+        }),
+      supplyTrunkVisualPlacementMissing: (opts) =>
+        i18n.t('validation.orphanDetection.supplyTrunkVisualPlacementMissing', {
+          label: opts.label,
+          defaultValue: `Supply device "{{label}}" exists in the supply topology but has no reachable panel-canvas placement.`,
         }),
       splitBusWithoutBackupSupply: (opts) =>
         i18n.t('validation.orphanDetection.splitBusWithoutBackupSupply', {

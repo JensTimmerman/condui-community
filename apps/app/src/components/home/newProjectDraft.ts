@@ -16,7 +16,7 @@ export type NewProjectDraft = {
     street: string
     postalCode: string
     city: string
-    country: 'BE'
+    country: 'BE' | 'FR' | 'NL'
   }
   voltageSystem: SupplyVoltageSystem
   installationProfile: InstallationProfile
@@ -67,7 +67,7 @@ export function readNewProjectDraft(): NewProjectDraft {
         street: stringValue(address.street),
         postalCode: stringValue(address.postalCode),
         city: stringValue(address.city),
-        country: 'BE',
+        country: address.country === 'FR' || address.country === 'NL' ? address.country : 'BE',
       },
       voltageSystem: isSupplyVoltageSystem(parsed.voltageSystem)
         ? parsed.voltageSystem

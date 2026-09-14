@@ -119,7 +119,7 @@ export const NoteSymbol = memo(function NoteSymbol({ note, onDragEnd, onDragMove
   
   // Render parsed text segments
   let yOffset = 0
-  const textElements: JSX.Element[] = []
+  const textElements: React.JSX.Element[] = []
   
   parsedLines.forEach((line, lineIndex) => {
     let xOffset = 0

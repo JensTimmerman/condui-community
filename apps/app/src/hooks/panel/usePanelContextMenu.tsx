@@ -5,7 +5,7 @@ import { getContextMenuIcon } from '@/components/common/ContextMenuIcons'
 import type { DialogConfig } from '@/stores/dialogStore'
 import { useProjectStore, type ProjectState } from '@/stores/projectStore'
 import { useUIStore } from '@/stores/uiStore'
-import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
+import { collectPanelHiddenModuleEntries, getGlobalPanelHiddenDialogTargets } from '@/lib/panel/panelHiddenModules'
 import { linkedSubPanelDisplayNamesForProtectionIds } from '@/lib/panel/linkedSubPanelDeleteWarning'
 import { createLinkedProtectionDeleteDialog } from '@/lib/panel/linkedProtectionDeleteDialog'
 import { confirmDeleteSupplyTrunkDevice } from '@/lib/supplyAssembly/deleteSupplyTrunkDevice'
@@ -13,6 +13,7 @@ import { isEendraadDeleteKey } from '@/lib/eendraad/deleteKeyboardKey'
 import { isKeyboardTypingTarget } from '@/lib/ui/keyboardTypingTarget'
 import { panelGridModuleRefKey } from '@/components/canvas/panel/panelGridLayout'
 import { openPanelHiddenModulesDialog } from '@/components/canvas/panel/openPanelHiddenModulesDialog'
+import { getSharedSupplyFrameDevices, SHARED_SUPPLY_FRAME_ID } from '@/lib/panel/sharedSupplyFrame'
 import type { Panel, PanelGridModuleRef } from '@/types/schema'
 import type { Point, Selection as CanvasSelection } from '@/types/ui'
 
@@ -88,8 +89,36 @@ export function usePanelContextMenu({
 
   const handleGetContextMenuItems = useCallback(
     (position: Point, elementId: string | null): ContextMenuItem[] => {
+      const project = useProjectStore.getState().currentProject
+      const globalTargets = project ? getGlobalPanelHiddenDialogTargets(project) : []
+      const hasHiddenModules = project ? collectPanelHiddenModuleEntries(project, globalTargets, getPanelHiddenModuleRefs).length > 0 : false
+      const showHiddenItem: ContextMenuItem = {
+        label: t('contextMenu.showHidden', 'Show hidden…'),
+        icon: getContextMenuIcon('showHidden'),
+        onClick: () => {
+          const current = useProjectStore.getState().currentProject
+          if (current) openPanelHiddenModulesDialog(getGlobalPanelHiddenDialogTargets(current), t, {
+            showPanelName: true,
+            title: t('contextMenu.showHidden', 'Show hidden…'),
+          })
+        },
+      }
+      if (selection.type === 'supplyPanel' && selection.ids.includes(SHARED_SUPPLY_FRAME_ID)) {
+        const items: ContextMenuItem[] = [{
+          label: t('contextMenu.delete'),
+          icon: getContextMenuIcon('delete'),
+          variant: 'danger',
+          disabled: !canDeleteItems || !project || getSharedSupplyFrameDevices(project).length > 0,
+          onClick: () => {
+            useProjectStore.getState().dismissEmptySharedSupplyFrame()
+            clearSelection()
+          },
+        }]
+        appendPanelShowHiddenMenuEntry(items, hasHiddenModules, showHiddenItem)
+        return items
+      }
       if (selection.type === 'auxiliaryEnclosure' && selection.ids.length > 0) {
-        return [
+        const items: ContextMenuItem[] = [
           {
             label: t('contextMenu.delete'),
             icon: getContextMenuIcon('delete'),
@@ -97,13 +126,19 @@ export function usePanelContextMenu({
             onClick: () => deleteAuxiliaryEnclosures(selection.ids),
           },
         ]
+        appendPanelShowHiddenMenuEntry(items, hasHiddenModules, showHiddenItem)
+        return items
       }
       const resolvedContext = resolvePanelContext?.(position, elementId)
       const contextPanel = resolvedContext?.panel ?? panel
       const contextPanelId = resolvedContext?.panelId ?? effectiveActivePanelId
       const contextModules = resolvedContext?.modules ?? modules
       const contextSharedSupplyRefKeys = resolvedContext?.sharedSupplyRefKeys ?? sharedSupplyRefKeys
-      if (!contextPanel || !contextPanelId) return []
+      if (!contextPanel || !contextPanelId) {
+        const items: ContextMenuItem[] = []
+        appendPanelShowHiddenMenuEntry(items, hasHiddenModules, showHiddenItem)
+        return items
+      }
 
       const items: ContextMenuItem[] = []
 
@@ -135,20 +170,8 @@ export function usePanelContextMenu({
         if (selType !== 'trunkDevice') return undefined
         const trunkInfo = getTrunkDeviceById(entityId)
         if (!trunkInfo?.isSupplyDevice) return undefined
-        const project = useProjectStore.getState().currentProject
-        if (!project) return undefined
-        const mainPanelId =
-          (trunkInfo as { supplyPanelId?: string }).supplyPanelId ??
-          getElectricalPanelsFromProject(project).find((p: Panel) => p.isMain)?.id ??
-          null
-        if (!mainPanelId) return undefined
-        const list = useProjectStore
-          .getState()
-          .getPanelGridModules(mainPanelId)
-          .filter(
-            (x) => !(x.ref.kind === 'trunkDevice' && x.ref.scope === 'ground')
-          ) as ModuleItem[]
-        return findModuleItemInList(list, selType, entityId)
+        // Auxiliary modules are rendered by the hierarchy scene, outside panel selectors.
+        return { ref: { kind: 'trunkDevice', id: entityId, scope: 'supply' }, inSupplyPanel: true }
       }
 
       // Multi-selection hide support (protections / trunk devices / domotica endpoints)
@@ -395,29 +418,12 @@ export function usePanelContextMenu({
 
       // Keep the panel menu discoverable on empty space. When there is nothing to restore,
       // show the action disabled instead of returning an empty menu.
-      const hiddenRefs = getPanelHiddenModuleRefs(contextPanelId)
-      appendPanelShowHiddenMenuEntry(items, hiddenRefs.length > 0, {
-        label: t('contextMenu.showHidden', 'Show hidden…'),
-        icon: getContextMenuIcon('showHidden'),
-        onClick: () => {
-          const store = useProjectStore.getState()
-          const panelForDialog = store.getPanelById(contextPanelId)
-          if (!panelForDialog || !store.currentProject) return
-          const currentHidden = getPanelHiddenModuleRefs(contextPanelId)
-          if (currentHidden.length === 0) return
-          openPanelHiddenModulesDialog(
-            [{ panelId: contextPanelId, panelName: panelForDialog.name }],
-            t,
-            {
-              title: t('contextMenu.showHidden', 'Show hidden…'),
-            }
-          )
-        },
-      })
+      appendPanelShowHiddenMenuEntry(items, hasHiddenModules, showHiddenItem)
 
       return items
     },
     [
+      canDeleteItems,
       panel,
       effectiveActivePanelId,
       modules,
@@ -470,7 +476,7 @@ export function usePanelContextMenu({
       if (!deleteItem && itemsForElement.length > 0) {
         deleteItem = pickDeleteItem(itemsForSelection)
       }
-      if (!deleteItem) return
+      if (!deleteItem || deleteItem.disabled) return
 
       e.preventDefault()
       e.stopPropagation()

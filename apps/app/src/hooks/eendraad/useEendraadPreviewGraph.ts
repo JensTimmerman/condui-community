@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useRef } from 'react'
 import { useProjectStore, type ProjectState } from '@/stores/projectStore'
 import { useUIStore, type UIState } from '@/stores/uiStore'
 import { calculateBottomUpLayout, type BottomUpLayoutResult } from '@/lib/layout/bottomUpLayout'
@@ -18,9 +18,9 @@ import type { WireSegment, Endpoint, ProtectionDevice, TrunkDevice, Panel } from
 import { buildStablePreviewCircuitOverrides } from '@/lib/layout/previewCircuitAnchorOverrides'
 import type { DragPreviewState } from './useEendraadDragPreview'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
-  getSupplyAssembliesFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
+  selectProjectSupplyAssemblies,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 
@@ -47,6 +47,37 @@ export interface EendraadPreviewGraph {
 }
 
 /**
+ * The simulated graph depends on where a drop would commit, not on the exact
+ * pointer coordinate. Keeping this key stable while the pointer remains in the
+ * same slot prevents a full project clone and layout pass for every drag event.
+ */
+export function getEendraadPreviewIntentKey(
+  dragPreview: DragPreviewState | null
+): string | null {
+  if (!dragPreview) return null
+  return JSON.stringify({
+    symbolId: dragPreview.symbolData?.id ?? null,
+    // Main-bus protection moves use a lightweight overlay, so keeping the
+    // resolved insertion slot in the intent key does not trigger an expensive
+    // simulated layout. It does ensure the live preview follows the slot when
+    // the pointer crosses a split bus segment.
+    dropTarget: dragPreview.dropTarget,
+    relocatingTrunkDevice: dragPreview.relocatingTrunkDevice,
+    relocatingSupplyTrunkDevice: dragPreview.relocatingSupplyTrunkDevice,
+    movingEndpointSelection: dragPreview.movingEndpointSelection,
+    movingPanelAttachment: dragPreview.movingPanelAttachment,
+    movingProtection: dragPreview.movingProtection,
+    sameSymbolAddMoreNodeId: dragPreview.sameSymbolAddMore?.nodeId,
+  })
+}
+
+export function usesLightweightProtectionMovePreview(
+  dragPreview: DragPreviewState | null
+): boolean {
+  return !!dragPreview?.movingProtection && dragPreview.dropTarget?.type !== 'circuit'
+}
+
+/**
  * Compute a full layout+wire preview graph for the current drag preview,
  * using a simulated project that includes the hypothetical drop.
  */
@@ -56,50 +87,62 @@ export function useEendraadPreviewGraph(
 ): EendraadPreviewGraph | null {
   const currentProject = useProjectStore((s: ProjectState) => s.currentProject)
   const eendraadLayoutOverrides = useUIStore((s: UIState) => s.eendraadLayoutOverrides)
+  const intentKey = getEendraadPreviewIntentKey(dragPreview)
+  const stableIntentRef = useRef<{
+    key: string | null
+    preview: DragPreviewState | null
+  }>({ key: intentKey, preview: dragPreview })
+  if (stableIntentRef.current.key !== intentKey) {
+    stableIntentRef.current = { key: intentKey, preview: dragPreview }
+  }
+  const previewIntent = stableIntentRef.current.preview
 
   return useMemo(() => {
-    if (!currentProject || !dragPreview || !dragPreview.symbolData) return null
+    if (!currentProject || !previewIntent || !previewIntent.symbolData) return null
 
     let sim: EendraadPreviewChangeSet | null = null
-    if (dragPreview.movingPanelAttachment) {
+    if (previewIntent.movingPanelAttachment) {
       sim = simulatePanelAttachmentMoveOnProject(
         currentProject,
-        dragPreview.movingPanelAttachment,
-        dragPreview.dropTarget ?? { type: null },
+        previewIntent.movingPanelAttachment,
+        previewIntent.dropTarget ?? { type: null },
       )
-    } else if (dragPreview.movingEndpointSelection) {
+    } else if (previewIntent.movingEndpointSelection) {
       sim = simulateEndpointSelectionMoveOnProject(
         currentProject,
-        dragPreview.movingEndpointSelection,
-        dragPreview.dropTarget ?? { type: null },
+        previewIntent.movingEndpointSelection,
+        previewIntent.dropTarget ?? { type: null },
       )
-    } else if (
-      dragPreview.movingProtection &&
-      dragPreview.dropTarget?.type === 'circuit'
-    ) {
+    } else if (previewIntent.movingProtection) {
+      // Reordering an existing protection on a main bus needs only the cheap
+      // legacy bus/slot overlay. Simulating a normal drop here used to clone the
+      // project and lay out a newly-created protection on every pointer move.
+      if (usesLightweightProtectionMovePreview(previewIntent)) return null
+      const protectionDropTarget = previewIntent.dropTarget
+      if (!protectionDropTarget || protectionDropTarget.type !== 'circuit') return null
       sim = simulateProtectionRelocationOnProject(
         currentProject,
-        dragPreview.movingProtection,
-        dragPreview.dropTarget
+        previewIntent.movingProtection,
+        protectionDropTarget
       )
-    } else if (dragPreview.relocatingSupplyTrunkDevice) {
+    } else if (previewIntent.relocatingSupplyTrunkDevice) {
       sim = simulateSupplyTrunkDeviceRelocationOnProject(
         currentProject,
-        dragPreview.relocatingSupplyTrunkDevice,
-        dragPreview.dropTarget ?? { type: null },
+        previewIntent.relocatingSupplyTrunkDevice,
+        previewIntent.dropTarget ?? { type: null },
       )
-    } else if (dragPreview.relocatingTrunkDevice) {
+    } else if (previewIntent.relocatingTrunkDevice) {
       sim = simulateTrunkDeviceRelocationOnProject(
         currentProject,
-        dragPreview.relocatingTrunkDevice,
-        dragPreview.symbolData,
-        dragPreview.dropTarget ?? { type: null },
+        previewIntent.relocatingTrunkDevice,
+        previewIntent.symbolData,
+        previewIntent.dropTarget ?? { type: null },
       )
     } else {
       sim = simulateDropOnProject(
         currentProject,
-        dragPreview.symbolData,
-        dragPreview.dropTarget ?? { type: null },
+        previewIntent.symbolData,
+        previewIntent.dropTarget ?? { type: null },
       )
     }
     if (!sim) return null
@@ -127,9 +170,9 @@ export function useEendraadPreviewGraph(
     const layoutTree = buildLayoutTree(layout)
     const wireSegments = deriveWires(
       layoutTree,
-      getElectricalPanelsFromProject(sim.project),
-      getElectricalInstallationFromProject(sim.project),
-      getSupplyAssembliesFromProject(sim.project),
+      getProjectElectricalPanels(sim.project),
+      getProjectElectricalInstallation(sim.project),
+      selectProjectSupplyAssemblies(sim.project),
       (deviceId) => resolveSupplyDeviceMounting(sim.project, deviceId),
     )
 
@@ -138,13 +181,16 @@ export function useEendraadPreviewGraph(
     const protectionsById = new Map<string, ProtectionDevice>()
     const trunkDevicesById = new Map<string, TrunkDevice>()
 
-    const panelStack: Panel[] = [...getElectricalPanelsFromProject(sim.project)]
+    const panelStack: Panel[] = [...getProjectElectricalPanels(sim.project)]
     while (panelStack.length) {
       const panel = panelStack.pop()!
 
       panel.circuits.forEach((circuit) => {
         circuit.endpoints.forEach((ep) => endpointsById.set(ep.id, ep))
         circuit.trunkDevices?.forEach((td) => trunkDevicesById.set(td.id, td))
+        circuit.branches?.forEach((branch) =>
+          branch.branchDevices?.forEach((td) => trunkDevicesById.set(td.id, td))
+        )
       })
 
       panel.protections?.forEach((prot) => {
@@ -152,6 +198,9 @@ export function useEendraadPreviewGraph(
         prot.circuits?.forEach((circuit) => {
           circuit.endpoints.forEach((ep) => endpointsById.set(ep.id, ep))
           circuit.trunkDevices?.forEach((td) => trunkDevicesById.set(td.id, td))
+          circuit.branches?.forEach((branch) =>
+            branch.branchDevices?.forEach((td) => trunkDevicesById.set(td.id, td))
+          )
         })
       })
 
@@ -162,7 +211,7 @@ export function useEendraadPreviewGraph(
 
     // Include supply and ground trunk devices in lookup so preview can
     // highlight them when added on supply/ground wires.
-    const installation = getElectricalInstallationFromProject(sim.project)
+    const installation = getProjectElectricalInstallation(sim.project)
     if (installation?.mainSupply?.supplyTrunkDevices) {
       installation.mainSupply.supplyTrunkDevices.forEach((d) => {
         trunkDevicesById.set(d.id, d)
@@ -190,5 +239,5 @@ export function useEendraadPreviewGraph(
         new Set([...sim.createdTrunkDeviceIds, ...sim.movedTrunkDeviceIds]),
       ),
     }
-  }, [currentProject, currentLayout, dragPreview, eendraadLayoutOverrides])
+  }, [currentProject, currentLayout, previewIntent, eendraadLayoutOverrides])
 }

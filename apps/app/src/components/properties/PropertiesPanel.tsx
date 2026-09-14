@@ -32,13 +32,15 @@ import { CircuitProperties } from './editors/CircuitProperties'
 import { EndpointProperties } from './editors/EndpointProperties'
 import { WirePropertiesWithLayout } from './editors/WireProperties'
 import { AuxiliaryEnclosureProperties } from './editors/AuxiliaryEnclosureProperties'
-import { getAuxiliaryElectricalEnclosuresFromProject } from '@/lib/projectV2/electrical'
+import { JunctionPanelTerminalProperties } from './editors/JunctionPanelTerminalProperties'
+import { selectProjectAuxiliaryElectricalEnclosures } from '@/lib/projectV2/electrical'
 import {
   GroundProperties,
   SupplyPanelProperties,
   SupplyProperties,
   TrunkDeviceProperties,
 } from './editors/TrunkSupplyGroundProperties'
+import { StructuralReadOnlyProperties } from './StructuralReadOnlyProperties'
 export default function PropertiesPanel({
   readOnly = false,
   showSensitiveInfoNotice = false,
@@ -137,7 +139,7 @@ export default function PropertiesPanel({
         sameJunctionPanelId: hasSameJunctionPanel ? selectedId : null,
         auxiliaryEnclosure:
           selection.type === 'auxiliaryEnclosure' && state.currentProject
-            ? getAuxiliaryElectricalEnclosuresFromProject(state.currentProject).find(
+            ? selectProjectAuxiliaryElectricalEnclosures(state.currentProject).find(
                 (enclosure) => enclosure.id === selectedId
               )
             : undefined,
@@ -180,7 +182,9 @@ export default function PropertiesPanel({
   const isDrawingWall = activePlanTool === 'drawWall' || activePlanTool === 'drawWallRect'
   const panelTitle = React.useMemo(
     () =>
-      isDrawingWall
+      selection.type === 'junctionPanelTerminal'
+        ? t('terminalStrip.component', 'Terminal strip')
+        : isDrawingWall
         ? t('wallProperties.drawingTitle', 'New wall')
         : getPropertiesPanelTitle({
             selection,
@@ -312,6 +316,11 @@ export default function PropertiesPanel({
           <WirePropertiesWithLayout key={id} wireSegmentId={id} onUpdate={updateCircuit} />
         )}
         {selection.type === 'trunkDevice' && <TrunkDeviceProperties key={id} deviceId={id} />}
+        {selection.type === 'junctionPanelTerminal' && selection.junctionPanelTerminalOwnerId ? (
+          <JunctionPanelTerminalProperties
+            ownerDeviceId={selection.junctionPanelTerminalOwnerId}
+          />
+        ) : null}
         {selection.type === 'ground' && <GroundProperties />}
         {selection.type === 'supply' && (
           <SupplyProperties readOnly={readOnly} panelId={selection.supplyPanelId} />
@@ -406,6 +415,10 @@ export default function PropertiesPanel({
             enclosure={auxiliaryEnclosure}
             onUpdate={updateAuxiliaryElectricalEnclosure}
           />
+        ) : null}
+        {(selection.type === 'structuralNode' || selection.type === 'structuralConnection') &&
+        selection.structuralMetadata ? (
+          <StructuralReadOnlyProperties metadata={selection.structuralMetadata} />
         ) : null}
       </>
     )

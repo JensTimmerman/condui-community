@@ -28,8 +28,8 @@ import type {
 import { getAllSupplyTrunkDevices } from '@/lib/feedTopology'
 import { trunkDeviceCountsAsProtection } from '@/lib/protectionKind'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import type { Selection } from '@/types/ui'
@@ -81,8 +81,8 @@ type TallyProject = ProjectWithOptionalV2Electrical
 
 function deriveProjectWireSegments(project: TallyProject): WireSegment[] {
   try {
-    const panels = getElectricalPanelsFromProject(project)
-    const installation = getElectricalInstallationFromProject(project)
+    const panels = getProjectElectricalPanels(project)
+    const installation = getProjectElectricalInstallation(project)
     if (!installation) return []
     const layout = calculateBottomUpLayout(project, new Map())
     const tree = buildLayoutTree(layout)
@@ -512,7 +512,7 @@ function energyConversionEndpointSummaryParts(ep: Endpoint, t: (key: string) => 
   const parts: string[] = []
   if (sym === 'solar_panel') {
     const sp = ep.solarPanelProps
-    if (sp?.wattageW != null) parts.push(`${sp.wattageW} W`)
+    if (sp?.wattageW != null) parts.push(`${sp.wattageW} Wp`)
     if (sp?.voltageV != null) parts.push(`${sp.voltageV} V`)
     return parts
   }
@@ -639,10 +639,10 @@ export function buildHardwareTally(
 ): TallyData {
   if (!project) return []
 
-  const rootPanels = getElectricalPanelsFromProject(project)
+  const rootPanels = getProjectElectricalPanels(project)
   const panels = getAllPanelsRecursive(rootPanels)
   const mainPanelName = getMainPanelName(rootPanels)
-  const installation = getElectricalInstallationFromProject(project)
+  const installation = getProjectElectricalInstallation(project)
 
   const categories: TallyCategory[] = []
 

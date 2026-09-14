@@ -7,11 +7,14 @@ import type {
   PanelGridModuleRef,
   ProtectionDevice,
 } from '@/types/schema'
-import i18n from '@/i18n'
-import { findTrunkDeviceInProject } from '@/utils/project'
+// This module is also used by background validation. Keep its translations on the
+// worker-safe i18n instance so importing display metadata never pulls React/browser
+// bootstrap code into the validation worker.
+import i18n from '@/lib/i18n/domainI18n'
+import { findTrunkDeviceInProject } from '@/lib/eendraad/findTrunkDeviceInProject'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { findPanelById, walkPanels } from '@/lib/panel/panelTree'
@@ -23,6 +26,12 @@ import {
   getPhaseAssignmentLabel,
   phaseAssignmentDiffersFromInstallation,
 } from '@/lib/wires/phaseAssignment'
+import {
+  collectTerminalStripOccurrences,
+  getEffectiveTerminalStripOutgoingPin,
+  getTerminalStripId,
+  getTerminalStripPin,
+} from '@/lib/terminalStrip/labels'
 
 function findProtectionRecursive(panels: Panel[], id: string): ProtectionDevice | null {
   for (const p of panels) {
@@ -205,6 +214,13 @@ export interface ModuleDisplayInfo {
     controlOverlayPath: string
     polesLabel: string
   }
+  terminalStrip?: {
+    stripId: string
+    incomingPin: number
+    outgoingPin: number
+    maxPin: number
+    connectedPins: number[]
+  }
   /** Optional non-standard phase annotation shown in the module's bottom band. */
   phaseLabel?: string
   tooltipText: string
@@ -218,7 +234,8 @@ function getLocalizedPanelDeviceName(symbolId: string | undefined): string | nul
     symbol?.category !== 'energyConversion' &&
     symbol?.id !== 'rotating_switch' &&
     symbol?.id !== 'source_changeover'
-  ) return null
+  )
+    return null
   return i18n.t(`symbols.${symbol.id}`, { defaultValue: symbol.name })
 }
 
@@ -249,7 +266,7 @@ function buildProtectionTooltip(
   }
 
   // Sub-panel connection
-  const panels = getElectricalPanelsFromProject(project)
+  const panels = getProjectElectricalPanels(project)
   if (pr.subPanelId) {
     const subPanel = findPanelById(panels, pr.subPanelId)
     if (subPanel) lines.push(`→ ${subPanel.name}`)
@@ -266,13 +283,13 @@ function buildProtectionTooltip(
 
 export function getModuleDisplayInfo(
   ref: PanelGridModuleRef,
-  project: ProjectWithOptionalV2Electrical | null,
+  project: ProjectWithOptionalV2Electrical | null
 ): ModuleDisplayInfo {
   const empty: ModuleDisplayInfo = { label: '', specLines: [], tooltipText: '', kind: ref.kind }
   if (!project) return empty
 
-  const panels = getElectricalPanelsFromProject(project)
-  const installation = getElectricalInstallationFromProject(project)
+  const panels = getProjectElectricalPanels(project)
+  const installation = getProjectElectricalInstallation(project)
   const system = installation?.nominalVoltage?.system
 
   if (ref.kind === 'protection') {
@@ -326,9 +343,10 @@ export function getModuleDisplayInfo(
     return {
       // A rotating switch needs a useful module title even without a custom label.
       // Other protection labels retain their existing circuit-driven behaviour.
-      label: pr.type === 'ROTATING_SWITCH'
-        ? pr.label.trim() || getLocalizedPanelDeviceName('rotating_switch') || pr.type
-        : pr.label,
+      label:
+        pr.type === 'ROTATING_SWITCH'
+          ? pr.label.trim() || getLocalizedPanelDeviceName('rotating_switch') || pr.type
+          : pr.label,
       specLines,
       phaseLabel: getProtectionModulePhaseLabel(pr, panels, system, installation),
       tooltipText: buildProtectionTooltip(pr, project, ref.id),
@@ -343,6 +361,27 @@ export function getModuleDisplayInfo(
     const specLines: string[] = []
     const tooltipParts: string[] = []
     const localizedPanelDeviceName = getLocalizedPanelDeviceName(d.symbol)
+
+    if (d.symbol === 'terminal_strip' || d.type === 'terminal_strip') {
+      const stripId = getTerminalStripId(d) || '1'
+      const pin = getTerminalStripPin(d) ?? 1
+      const outgoingPin = getEffectiveTerminalStripOutgoingPin(project, d)
+      const connectedPins = [
+        ...new Set(
+          collectTerminalStripOccurrences(project)
+            .filter((occurrence) => occurrence.stripId.toUpperCase() === stripId.toUpperCase())
+            .map((occurrence) => occurrence.pin)
+        ),
+      ].sort((left, right) => left - right)
+      const maxPin = Math.max(2, ...connectedPins)
+      return {
+        label: `X${stripId}`,
+        specLines: [],
+        terminalStrip: { stripId, incomingPin: pin, outgoingPin, maxPin, connectedPins },
+        tooltipText: `X${stripId}-${pin}/${outgoingPin}`,
+        kind: 'trunkDevice',
+      }
+    }
 
     if (d.type === 'protection' && d.protectionType) {
       switch (d.protectionType) {
@@ -374,7 +413,8 @@ export function getModuleDisplayInfo(
         }
       }
       const polesDisplay = d.polesConfig ? polesConfigToDisplay(d.polesConfig) : ''
-      const typeLabel = localizedPanelDeviceName ??
+      const typeLabel =
+        localizedPanelDeviceName ??
         i18n.t(`protections.type_${d.protectionType}`, { defaultValue: d.protectionType })
       const specStr = [
         typeLabel,
@@ -401,12 +441,14 @@ export function getModuleDisplayInfo(
     if (d.notes) tooltipParts.push(d.notes)
 
     const rotatingSwitchLabel = d.symbol === 'rotating_switch' ? d.label.trim() : ''
-    const visibleLabel = (rotatingSwitchLabel || localizedPanelDeviceName) ??
+    const visibleLabel =
+      (rotatingSwitchLabel || localizedPanelDeviceName) ??
       ((d.label && d.label.trim().length > 0
         ? d.label
         : d.type === 'protection' && d.protectionType
           ? i18n.t(`protections.type_${d.protectionType}`, { defaultValue: d.protectionType })
-          : d.type.replace(/_/g, ' ')) || '')
+          : d.type.replace(/_/g, ' ')) ||
+        '')
 
     return {
       label: visibleLabel,

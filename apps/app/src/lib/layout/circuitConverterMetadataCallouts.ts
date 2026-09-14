@@ -20,13 +20,19 @@ import {
   CIRCUIT_CONVERTER_OUTPUT_BRANCH_LEAD,
   getCircuitConverterBodyGeometry,
   getCircuitConverterDcConnectionCount,
-  getCircuitConverterOutputRowY,
+  getOrdinaryCircuitConverterOutputRowY,
   getCircuitConverterPrimaryBranch,
   supportsCircuitConverterDcConnections,
 } from './circuitConverterGeometry'
 
 const LEADER_SYMBOL_CLEARANCE = 0.5
 const CONVERTER_METADATA_CARD_GAP = 3
+const BRANCH_CONVERSION_SYMBOLS = new Set([
+  'transformer',
+  'rectifier',
+  'inverter',
+  'dc_dc_converter',
+])
 
 export interface CircuitConverterMetadataCallout {
   targetId: string
@@ -45,6 +51,21 @@ interface MetadataTarget {
   id: string
   x: number
   y: number
+}
+
+/**
+ * Return the painted height required by a branch-local conversion card.
+ * Keeping this measurement beside the placement code lets the branch-row
+ * layout reserve exactly the same card height that the renderer will paint.
+ */
+export function getBranchConverterMetadataCalloutHeight(endpoint: Endpoint): number {
+  if (!BRANCH_CONVERSION_SYMBOLS.has(endpoint.symbol ?? '')) return 0
+  const metadataItems = getMetadataItems(endpoint)
+  if (metadataItems.length === 0) return 0
+  const multiplier = getEndpointMultiplier(endpoint)
+  return getCardSize(
+    applyMetadataCalloutMultiplier(metadataItems, multiplier).map((item) => item.text)
+  ).height
 }
 
 function getSymbolAnchors(
@@ -76,18 +97,20 @@ function getSharedCardAnchor(
     { x: rect.right, y: (rect.top + rect.bottom) / 2 },
     { x: rect.right, y: rect.bottom },
   ]
-  return cardAnchors.reduce((best, anchor) => {
-    const score = targets.reduce((total, target) => {
-      const nearestDistance = Math.min(
-        ...getSymbolAnchors(target, targetWidth, targetHeight).map(
-          (symbolAnchor) =>
-            (anchor.x - symbolAnchor.x) ** 2 + (anchor.y - symbolAnchor.y) ** 2
+  return cardAnchors.reduce(
+    (best, anchor) => {
+      const score = targets.reduce((total, target) => {
+        const nearestDistance = Math.min(
+          ...getSymbolAnchors(target, targetWidth, targetHeight).map(
+            (symbolAnchor) => (anchor.x - symbolAnchor.x) ** 2 + (anchor.y - symbolAnchor.y) ** 2
+          )
         )
-      )
-      return total + nearestDistance
-    }, 0)
-    return score < best.score ? { anchor, score } : best
-  }, { anchor: cardAnchors[0]!, score: Number.POSITIVE_INFINITY }).anchor
+        return total + nearestDistance
+      }, 0)
+      return score < best.score ? { anchor, score } : best
+    },
+    { anchor: cardAnchors[0]!, score: Number.POSITIVE_INFINITY }
+  ).anchor
 }
 
 function getMetadataItems(endpoint: Endpoint): Array<{ key: string; text: string }> {
@@ -98,6 +121,100 @@ function getMetadataItems(endpoint: Endpoint): Array<{ key: string; text: string
       ? [{ key: 'endpointNotes', text: getVisibleEndpointNoteText(endpoint) }]
       : []),
   ]
+}
+
+export interface BranchConverterMetadataTarget {
+  endpoint: Endpoint
+  position: { x: number; y: number }
+}
+
+/**
+ * Branch-local conversion endpoints use the same detached-card treatment as
+ * supply converters. Their card prefers a centered position directly above
+ * the symbol; right-side nudges are only used when that space is occupied.
+ */
+export function getBranchConverterMetadataCallouts({
+  targets,
+  symbolSize,
+  segments = [],
+}: {
+  targets: BranchConverterMetadataTarget[]
+  symbolSize: number
+  segments?: SupplyMetadataCalloutSegment[]
+}): Map<string, CircuitConverterMetadataCallout> {
+  const candidates = targets.flatMap(({ endpoint, position }) => {
+    if (!BRANCH_CONVERSION_SYMBOLS.has(endpoint.symbol ?? '')) return []
+    const metadataItems = getMetadataItems(endpoint)
+    if (metadataItems.length === 0) return []
+    const multiplier = getEndpointMultiplier(endpoint)
+    const { width, height } = getCardSize(
+      applyMetadataCalloutMultiplier(metadataItems, multiplier).map((item) => item.text)
+    )
+    return [
+      {
+        endpoint,
+        position,
+        metadataItems,
+        width,
+        height,
+        multiplier,
+      },
+    ]
+  })
+  if (candidates.length === 0) return new Map()
+
+  const symbolRects = targets.map(({ position }) => ({
+    left: position.x - symbolSize / 2 - 4,
+    top: position.y - symbolSize / 2 - 4,
+    right: position.x + symbolSize / 2 + 4,
+    bottom: position.y + symbolSize / 2 + 4,
+  }))
+  const placements = getSupplyMetadataCalloutGroupPlacements({
+    items: candidates.map(({ endpoint, position, width, height }) => ({
+      id: endpoint.id,
+      symbolPosition: position,
+      width,
+      height,
+      placement: 'top' as const,
+    })),
+    segments,
+    symbolRects,
+    packRows: false,
+    preferRightNudges: true,
+  })
+
+  return new Map(
+    candidates.flatMap(({ endpoint, width, height, multiplier }) => {
+      const placement = placements.get(endpoint.id)
+      if (!placement) return []
+      const leaderPoints = getSupplyMetadataCalloutLeaderPoints({
+        placement: { x: placement.x, y: placement.y },
+        width,
+        height,
+        symbolWidth: symbolSize,
+        symbolHeight: symbolSize,
+        placementKind: 'top',
+        adaptiveAnchors: true,
+      })
+      return [
+        [
+          endpoint.id,
+          {
+            targetId: endpoint.id,
+            sharedTargetIds: [endpoint.id],
+            totalMultiplier: multiplier,
+            x: placement.x,
+            y: placement.y,
+            width,
+            height,
+            rect: placement.rect,
+            leaderPoints,
+            leaderSegments: [leaderPoints],
+          },
+        ] as const,
+      ]
+    })
+  )
 }
 
 function getDeviceMetadataLines(device: TrunkDevice): string[] {
@@ -230,7 +347,12 @@ export function getCircuitConverterMetadataCallouts({
   if (!supportsCircuitConverterDcConnections(device) || count <= 1) return new Map()
 
   const geometry = getCircuitConverterBodyGeometry(device, anchor)
-  const primaryIds = new Set(getCircuitConverterPrimaryBranch(circuit, device)?.endpointIds ?? [])
+  const owningConverterBranch = (circuit.branches ?? []).find((branch) =>
+    branch.branchDevices?.some((candidate) => candidate.id === device.id)
+  )
+  const primaryIds = new Set(
+    (owningConverterBranch ?? getCircuitConverterPrimaryBranch(circuit, device))?.endpointIds ?? []
+  )
   const branchOrder = new Map<string, number>()
   let endpointOrder = 0
   for (const branch of circuit.branches ?? []) {
@@ -242,13 +364,13 @@ export function getCircuitConverterMetadataCallouts({
   const leaderClipRectByTargetId = new Map<string, SupplyMetadataCalloutRect>()
   const endpointCandidates = Array.from({ length: count }).flatMap((_, outputIndex) => {
     const port = geometry.dcPorts[outputIndex]!
-    const rowY = getCircuitConverterOutputRowY(device, anchor.y, outputIndex)
+    const rowY = getOrdinaryCircuitConverterOutputRowY(device, anchor.y, outputIndex)
     const endpoints = circuit.endpoints
-      .filter((endpoint) =>
-        outputIndex === 0
-          ? primaryIds.has(endpoint.id)
-          : endpoint.converterDcConnection?.converterId === device.id &&
-            endpoint.converterDcConnection.connectionIndex === outputIndex
+      .filter(
+        (endpoint) =>
+          (endpoint.converterDcConnection?.converterId === device.id &&
+            endpoint.converterDcConnection.connectionIndex === outputIndex) ||
+          (outputIndex === 0 && primaryIds.has(endpoint.id) && !endpoint.converterDcConnection)
       )
       .sort(
         (left, right) =>
@@ -341,18 +463,6 @@ export function getCircuitConverterMetadataCallouts({
     })
   })
 
-  const overlaps = endpointCandidates.some((candidate, index) =>
-    endpointCandidates.slice(index + 1).some(
-      (peer) =>
-        candidate.outputIndex !== peer.outputIndex &&
-        !(
-          candidate.defaultRect.right < peer.defaultRect.left ||
-          candidate.defaultRect.left > peer.defaultRect.right ||
-          candidate.defaultRect.bottom < peer.defaultRect.top ||
-          candidate.defaultRect.top > peer.defaultRect.bottom
-        )
-    )
-  )
   const metadataGroups = getMetadataCalloutGroups(
     endpointCandidates.map((candidate) => ({
       id: candidate.targetId,
@@ -368,9 +478,6 @@ export function getCircuitConverterMetadataCallouts({
       return candidate ? [candidate] : []
     })
   )
-  const hasSharedMetadata = groupedCandidates.some((group) => group.length > 1)
-  if (!overlaps && !hasSharedMetadata) return new Map()
-
   const deviceLines = getDeviceMetadataLines(device)
   const candidates = groupedCandidates.map((group) => {
     const metadataGroup = metadataGroups.get(group[0]!.targetId)!
@@ -531,12 +638,7 @@ export function getCircuitConverterMetadataCallouts({
               (sharedCardAnchor.x - closest.x) ** 2 + (sharedCardAnchor.y - closest.y) ** 2
             return distance < closestDistance ? anchor : closest
           })
-          absoluteLeader = [
-            sharedCardAnchor.x,
-            sharedCardAnchor.y,
-            symbolAnchor.x,
-            symbolAnchor.y,
-          ]
+          absoluteLeader = [sharedCardAnchor.x, sharedCardAnchor.y, symbolAnchor.x, symbolAnchor.y]
         } else {
           const targetRelativePlacement = {
             x: placement.rect.left - target.x,

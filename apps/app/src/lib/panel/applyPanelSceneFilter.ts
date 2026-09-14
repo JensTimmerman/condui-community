@@ -4,7 +4,7 @@
 import type { Panel } from '@/types/schema'
 import { panelGridModuleRefKey } from '@/components/canvas/panel/panelGridLayout'
 import {
-  getElectricalPanelsFromProject,
+  getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import {
@@ -211,7 +211,7 @@ export function applyPanelSceneFilter(
 ): BuiltPanelScene {
   if (filter.mode === 'full') return full
 
-  const rootPanels = getElectricalPanelsFromProject(project)
+  const rootPanels = getProjectElectricalPanels(project)
   const visiblePanelIds = resolveVisiblePanelIds(rootPanels, filter)
   const includeShared =
     filter.linkPolicy.includeSharedSupply && visibleHasMainPanel(rootPanels, visiblePanelIds)

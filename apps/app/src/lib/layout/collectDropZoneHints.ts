@@ -3,19 +3,28 @@
  * Uses layout-tree hit zones filtered by per-symbol validTargets from dropBehaviors.
  */
 
-import { dropBehaviors } from '@/handlers/eendraad/dropBehaviors'
+import {
+  canDropSymbolOnSupplyConverterDcWire,
+  dropBehaviors,
+  isEmptyProtectionCircuitForDcDrop,
+} from '@/handlers/eendraad/dropBehaviors'
 import { PROTECTION_SYMBOL_IDS } from '@/lib/protectionKind'
 import { getCircuitBranches } from '@/lib/layout/endpointChains'
 import { getEndpointTypeFromSymbol } from '@/utils'
-import { symbolSupportsWireDomain, type SymbolMetadata } from '@/lib/symbols'
+import {
+  resolveSymbolPortsForWire,
+  symbolSupportsWireDomain,
+  type SymbolMetadata,
+} from '@/lib/symbols'
 import type { DropTarget } from '@/lib/layout/findDropTarget'
 import { getHitZoneBounds } from '@/lib/layout/findDropTarget'
 import type { LayoutNode, LayoutTree } from '@/lib/layout/layoutTree'
 import type { Circuit, Endpoint, Panel, ProtectionDevice, TrunkDevice } from '@/types/schema'
 import type { Point } from '@/types/ui'
 import {
-  getElectricalInstallationFromProject,
-  getElectricalPanelsFromProject,
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
+  selectProjectSupplyAssemblies,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { getSupplyFeedDevicesForPanel } from '@/lib/feedTopology'
@@ -27,21 +36,33 @@ import {
 import { getPanelFeedOrganization } from '@/lib/panel/panelFeedOrganization'
 import { canCreateSupplyTopologyFromDrop } from '@/lib/supplyTopologyFeature'
 import { findSameSymbolAddMoreLayoutTargets } from '@/lib/eendraad/sameSymbolAddMore'
+import { isPanelAttachmentDropTargetTerminal } from '@/lib/eendraad/panelAttachmentMove'
+import {
+  findOrdinaryCircuitDcBusForOutput,
+  getCircuitConverterDcConnectionCount,
+  supportsCircuitConverterDcConnections,
+} from '@/lib/layout/circuitConverterGeometry'
 
 export interface DropZoneHintMatch {
   panelId?: string
+  endpointId?: string
   supplyFeedScope?: 'shared' | 'root'
   supplyDeviceInsertIndex?: number
   supplyConverterDcBranch?: 'right' | 'top'
   supplyConverterDcConnectionIndex?: number
   converterGridPlacement?: 'inline' | 'input-leg'
+  changeoverGridPlacement?: 'inline' | 'input-leg'
   circuitId?: string
+  protectionId?: string
+  /** Marks the terminal continuation above an empty circuit nest. */
+  insertAfterCircuitContent?: boolean
   mainBusInsertIndex?: number
   secondaryBusInsertIndex?: number
   /** Vertical trunk insertion slot (aligns with DropTarget.circuitTrunkSegmentIndex). */
   circuitTrunkSegmentIndex?: number
   converterDcConnection?: { converterId: string; connectionIndex: number }
   dcBusId?: string
+  branchDeviceInsertIndex?: number
   supplyDcBusId?: string
   supplyDcBusBranchId?: string
 }
@@ -74,6 +95,7 @@ export interface DropZoneHintRelocation {
     supplyPath?: TrunkDevice['supplyPath']
     supplyConverterDcConnectionIndex?: number
     converterGridPlacement?: TrunkDevice['converterGridPlacement']
+    changeoverGridPlacement?: TrunkDevice['changeoverGridPlacement']
     /** The dragged device owns a DC distribution subtree, rather than belonging to one. */
     dcBusRoot?: boolean
   }
@@ -99,6 +121,8 @@ export function isRelocationDropZoneHintCompatible(
     return (
       hint.targetType === 'supplyConverterDcWire' &&
       !hint.match?.supplyDcBusId &&
+      (hint.match?.supplyConverterDcConnectionIndex ??
+        (hint.match?.supplyConverterDcBranch === 'top' ? 1 : 0)) === 0 &&
       (!relocation.supply.panelId || hint.match?.panelId === relocation.supply.panelId)
     )
   }
@@ -137,7 +161,13 @@ function supplyHintMatchesSourceLane(
   if (path === 'backup-output') {
     return hint.targetType === 'supplyBackupWire' || hint.targetType === 'supplyBackupOutputWire'
   }
-  if (path === 'changeover-grid') return hint.targetType === 'supplyChangeoverGridWire'
+  if (path === 'changeover-grid') {
+    return (
+      hint.targetType === 'supplyChangeoverGridWire' &&
+      (hint.match?.changeoverGridPlacement ?? 'inline') ===
+        (supply.changeoverGridPlacement ?? 'inline')
+    )
+  }
   return hint.targetType === 'supplyWire'
 }
 
@@ -205,15 +235,28 @@ interface HintWalkContext {
 
 const PROTECTION_DRAG_SYMBOL_IDS = new Set<string>(PROTECTION_SYMBOL_IDS)
 
-const TRUNK_ONLY_ON_CIRCUIT_SYMBOLS = new Set([
+// These symbols can be inserted into a circuit trunk. Conversion symbols are
+// also valid endpoint drops: on a branch they are static devices, so do not
+// classify them as trunk-only.
+const CIRCUIT_TRUNK_INSERTABLE_SYMBOLS = new Set([
   'energy_meter',
   'transformer',
   'rectifier',
   'inverter',
   'dc_dc_converter',
 ])
+const ENERGY_CONVERSION_SYMBOLS = new Set([
+  'transformer',
+  'rectifier',
+  'inverter',
+  'dc_dc_converter',
+])
 
-const TRUNK_CAPABLE_ENDPOINT_SYMBOLS = new Set(['junction_box', 'junction_panel'])
+// Energy meters remain in-between branch devices. Conversion devices have a
+// branch-local domain boundary and therefore need the static endpoint path.
+const TRUNK_ONLY_ON_CIRCUIT_SYMBOLS = new Set(['energy_meter'])
+
+const TRUNK_CAPABLE_ENDPOINT_SYMBOLS = new Set(['junction_box', 'junction_panel', 'terminal_strip'])
 
 function isProtectionDragSymbol(symbol: SymbolMetadata): boolean {
   return PROTECTION_DRAG_SYMBOL_IDS.has(symbol.id)
@@ -223,11 +266,15 @@ function isEndpointDragSymbol(symbol: SymbolMetadata): boolean {
   return !!getEndpointTypeFromSymbol(symbol)
 }
 
+function isDcBusEndpointSymbol(symbol: SymbolMetadata): boolean {
+  return symbol.id === 'solar_panel' || symbol.id === 'battery' || symbol.id === 'domotica'
+}
+
 function findCircuitInProject(
   project: ProjectWithOptionalV2Electrical,
   circuitId: string
 ): Circuit | undefined {
-  const stack: Panel[] = [...getElectricalPanelsFromProject(project)]
+  const stack: Panel[] = [...getProjectElectricalPanels(project)]
   while (stack.length) {
     const panel = stack.pop()!
     const direct = panel.circuits?.find((c) => c.id === circuitId)
@@ -254,7 +301,7 @@ function circuitFeedsSubPanel(
   project: ProjectWithOptionalV2Electrical,
   circuitId: string
 ): boolean {
-  const stack: Panel[] = [...getElectricalPanelsFromProject(project)]
+  const stack: Panel[] = [...getProjectElectricalPanels(project)]
   while (stack.length) {
     const panel = stack.pop()!
     for (const protection of panel.protections ?? []) {
@@ -267,6 +314,120 @@ function circuitFeedsSubPanel(
     }
   }
   return false
+}
+
+function isDcOnlyEndpointDragSymbol(symbol: SymbolMetadata): boolean {
+  return symbol.id === 'solar_panel' || symbol.id === 'battery'
+}
+
+function findProtectionForCircuit(
+  project: ProjectWithOptionalV2Electrical,
+  circuitId: string
+): ProtectionDevice | undefined {
+  const stack = [...getProjectElectricalPanels(project)]
+  while (stack.length > 0) {
+    const panel = stack.pop()!
+    const protection = panel.protections?.find((candidate) =>
+      candidate.circuits?.some((circuit) => circuit.id === circuitId)
+    )
+    if (protection) return protection
+    stack.push(...(panel.subPanels ?? []))
+  }
+  return undefined
+}
+
+function isEmptyProtectionCircuitHintForDcDrop(
+  node: LayoutNode,
+  ctx: HintWalkContext,
+  hitType: NonNullable<DropTarget['type']>,
+  symbol: SymbolMetadata,
+  project: ProjectWithOptionalV2Electrical
+): boolean {
+  if (!isDcOnlyEndpointDragSymbol(symbol) || hitType !== 'circuit' || !ctx.circuitId) {
+    return false
+  }
+  const parsed = node.id ? parseCircuitTrunkSegmentId(node.id) : null
+  const isFirstTrunkSegment = parsed?.circuitId === ctx.circuitId && parsed.segmentIndex === 0
+  const isEmptyCircuitNest = node.id === `circuit-nest-${ctx.circuitId}`
+  if (!isFirstTrunkSegment && !isEmptyCircuitNest) return false
+
+  const protection = findProtectionForCircuit(project, ctx.circuitId)
+  return protection != null && isEmptyProtectionCircuitForDcDrop(protection)
+}
+
+/** Resolve the domain represented by a visual endpoint/branch drop zone. */
+function getHintWireDomain(
+  node: LayoutNode,
+  ctx: HintWalkContext,
+  project: ProjectWithOptionalV2Electrical
+): 'AC' | 'DC' {
+  if (node.hitZone?.wireDomain) return node.hitZone.wireDomain
+  if (
+    node.hitZone?.converterDcConnection ||
+    node.hitZone?.dcBusId ||
+    node.hitZone?.supplyDcBusId ||
+    node.hitZone?.type === 'supplyConverterDcWire'
+  ) {
+    return 'DC'
+  }
+  if (!ctx.circuitId) return 'AC'
+
+  const circuit = findCircuitInProject(project, ctx.circuitId)
+  if (!circuit) return 'AC'
+
+  let domain: 'AC' | 'DC' = circuit.dcBusSource ? 'DC' : 'AC'
+  const trunkDevices = [...(circuit.trunkDevices ?? [])].sort(
+    (left, right) => (left.trunkPosition ?? 0) - (right.trunkPosition ?? 0)
+  )
+  for (const device of trunkDevices) {
+    // Multi-port converters expose dedicated DC lanes; the ordinary trunk remains
+    // the converter's AC input side and must not be treated as DC.
+    if (
+      supportsCircuitConverterDcConnections(device) &&
+      getCircuitConverterDcConnectionCount(device) > 1
+    ) {
+      continue
+    }
+    const resolved = resolveSymbolPortsForWire(device.symbol, domain)
+    if (resolved.matched && resolved.oppositePortDomain) {
+      domain = resolved.oppositePortDomain
+    }
+  }
+
+  // Endpoint hit zones are placed on the branch itself, so include the endpoint
+  // symbols upstream of the hovered endpoint (for an inline rectifier/converter).
+  // A branch-level hit zone represents the end of that branch; include all of
+  // its endpoint symbols so a DC-only drop remains available after an inline
+  // inverter/rectifier instead of being hidden as an AC target.
+  const branchEndpointIds =
+    node.type === 'branch'
+      ? new Set(
+          node.children
+            .filter((child) => child.type === 'endpoint' && child.domainId)
+            .map((child) => child.domainId as string)
+        )
+      : null
+  const targetEndpointId = node.type === 'endpoint' ? node.domainId : undefined
+  if (targetEndpointId || branchEndpointIds?.size) {
+    const branch = getCircuitBranches(circuit).find((candidate) =>
+      targetEndpointId
+        ? candidate.some((endpoint) => endpoint.id === targetEndpointId)
+        : candidate.some((endpoint) => branchEndpointIds?.has(endpoint.id))
+    )
+    for (const endpoint of branch ?? []) {
+      if (!endpoint.symbol) {
+        if (endpoint.id === targetEndpointId) break
+        continue
+      }
+      const resolved = resolveSymbolPortsForWire(endpoint.symbol, domain)
+      if (resolved.matched && resolved.oppositePortDomain) {
+        domain = resolved.oppositePortDomain
+      }
+      if (endpoint.id === targetEndpointId) break
+    }
+  }
+
+  return domain
 }
 
 function hintCenter(node: LayoutNode): { x: number; y: number } {
@@ -371,7 +532,7 @@ function appendTrunkTopSlotHints(
   hints: HintWithSpan[]
 ): void {
   if (
-    !TRUNK_ONLY_ON_CIRCUIT_SYMBOLS.has(symbol.id) &&
+    !CIRCUIT_TRUNK_INSERTABLE_SYMBOLS.has(symbol.id) &&
     !TRUNK_CAPABLE_ENDPOINT_SYMBOLS.has(symbol.id)
   )
     return
@@ -516,9 +677,18 @@ function buildHintMatch(
       supplyDeviceInsertIndex: node.hitZone?.supplyInsertIndex,
       supplyConverterDcBranch: node.hitZone?.supplyConverterDcBranch,
       supplyConverterDcConnectionIndex: node.hitZone?.supplyConverterDcConnectionIndex,
+      converterDcConnection: node.hitZone?.converterDcConnection,
       converterGridPlacement: node.hitZone?.converterGridPlacement,
+      changeoverGridPlacement: node.hitZone?.changeoverGridPlacement,
       supplyDcBusId: node.hitZone?.supplyDcBusId,
       supplyDcBusBranchId: node.hitZone?.supplyDcBusBranchId,
+    }
+  }
+  if (hitType === 'endpoint') {
+    return {
+      panelId: ctx.panelId,
+      circuitId: ctx.circuitId,
+      endpointId: node.domainId,
     }
   }
   if (hitType === 'mainBus' || hitType === 'circuit' || hitType === 'rcd') {
@@ -527,9 +697,17 @@ function buildHintMatch(
     return {
       panelId: ctx.panelId,
       circuitId: ctx.circuitId,
+      ...(hitType === 'rcd' && node.domainId ? { protectionId: node.domainId } : {}),
       converterDcConnection: node.hitZone?.converterDcConnection,
       dcBusId: node.hitZone?.dcBusId,
-      ...(mainBusMatch ? { mainBusInsertIndex: Number.parseInt(mainBusMatch[1]!, 10) } : {}),
+      ...(typeof node.hitZone?.branchDeviceInsertIndex === 'number'
+        ? { branchDeviceInsertIndex: node.hitZone.branchDeviceInsertIndex }
+        : {}),
+      ...(typeof node.hitZone?.mainBusInsertIndex === 'number'
+        ? { mainBusInsertIndex: node.hitZone.mainBusInsertIndex }
+        : mainBusMatch
+          ? { mainBusInsertIndex: Number.parseInt(mainBusMatch[1]!, 10) }
+          : {}),
       ...(secondaryBusMatch
         ? { secondaryBusInsertIndex: Number.parseInt(secondaryBusMatch[1]!, 10) }
         : {}),
@@ -539,6 +717,51 @@ function buildHintMatch(
 }
 
 type HintWithSpan = DropZoneHint & { span: number }
+
+/**
+ * The centered split-feed geometry can expose two visual halves for one
+ * insertion slot: the right half after one protection and the left half before
+ * the next. Keep both hit zones for precise drop resolution, but show one
+ * invitation marker for that shared main-bus slot.
+ *
+ * Empty split-feed rails are deliberately excluded. Both rails use index 0,
+ * but their bus sections are different and each remains its own invitation.
+ */
+function dedupeMainBusHints(hints: DropZoneHint[]): DropZoneHint[] {
+  const result: DropZoneHint[] = []
+  const bySlot = new Map<string, { hint: DropZoneHint; count: number; resultIndex: number }>()
+
+  for (const hint of hints) {
+    const insertIndex = hint.match?.mainBusInsertIndex
+    const canMerge =
+      hint.targetType === 'mainBus' &&
+      typeof insertIndex === 'number' &&
+      !hint.nodeId.endsWith('-empty')
+
+    if (!canMerge) {
+      result.push(hint)
+      continue
+    }
+
+    const key = `${hint.match?.panelId ?? ''}|${insertIndex}`
+    const existing = bySlot.get(key)
+    if (!existing) {
+      bySlot.set(key, { hint, count: 1, resultIndex: result.length })
+      result.push(hint)
+      continue
+    }
+
+    existing.hint = {
+      ...existing.hint,
+      x: (existing.hint.x * existing.count + hint.x) / (existing.count + 1),
+      y: (existing.hint.y * existing.count + hint.y) / (existing.count + 1),
+    }
+    existing.count += 1
+    result[existing.resultIndex] = existing.hint
+  }
+
+  return result
+}
 
 function dedupeSupplyWireHints(hints: HintWithSpan[]): DropZoneHint[] {
   const supplyHints: HintWithSpan[] = []
@@ -557,7 +780,8 @@ function dedupeSupplyWireHints(hints: HintWithSpan[]): DropZoneHint[] {
     const panelId = hint.match?.panelId ?? ''
     const scope = hint.match?.supplyFeedScope ?? 'shared'
     const index = hint.match?.supplyDeviceInsertIndex ?? 0
-    const key = `${panelId}|${scope}|${index}`
+    const nestedConnection = hint.match?.converterDcConnection
+    const key = `${panelId}|${scope}|${index}|${hint.match?.supplyDcBusBranchId ?? ''}|${nestedConnection?.converterId ?? ''}|${nestedConnection?.connectionIndex ?? ''}`
     const existing = bestBySlot.get(key)
     if (!existing || hint.span > existing.span) {
       bestBySlot.set(key, hint)
@@ -587,7 +811,104 @@ function shouldIncludeHintNode(
 ): boolean {
   if (shouldSkipContainerNode(node)) return false
   if (node.hitZone?.type !== hitType) return false
-  if (node.hitZone.converterDcConnection && !symbolSupportsWireDomain(symbol.id, 'DC')) {
+  if (symbol.id === 'panel_distribution') {
+    if (hitType === 'mainBus' || hitType === 'rcd') return true
+    if (hitType !== 'circuit') return false
+    if (node.id?.startsWith('secondary-bus-segment-')) return true
+    if (node.id !== `circuit-nest-${ctx.circuitId}` || !ctx.circuitId) return false
+    return (findCircuitInProject(project, ctx.circuitId)?.subCircuitIds?.length ?? 0) === 0
+  }
+  const isEmptyProtectionDrop = isEmptyProtectionCircuitHintForDcDrop(
+    node,
+    ctx,
+    hitType,
+    symbol,
+    project
+  )
+  if (
+    node.hitZone.converterDcConnection &&
+    !node.hitZone.dcBusId &&
+    !symbolSupportsWireDomain(symbol.id, 'DC')
+  ) {
+    return false
+  }
+  if (
+    isDcOnlyEndpointDragSymbol(symbol) &&
+    hitType !== 'supplyConverterDcWire' &&
+    !isEmptyProtectionDrop &&
+    !node.hitZone?.dcBusId &&
+    getHintWireDomain(node, ctx, project) !== 'DC'
+  ) {
+    return false
+  }
+  if (
+    ENERGY_CONVERSION_SYMBOLS.has(symbol.id) &&
+    !resolveSymbolPortsForWire(symbol.id, getHintWireDomain(node, ctx, project)).matched
+  ) {
+    return false
+  }
+  const isDcBusBranchSlot =
+    !!node.hitZone?.dcBusId && typeof node.hitZone.branchDeviceInsertIndex === 'number'
+  const isDcBusBranchProtection = isProtectionDragSymbol(symbol) && isDcBusBranchSlot
+  if (node.hitZone.dcBusId) {
+    const isDcBusConversionEndpoint = symbol.id === 'dc_dc_converter' || symbol.id === 'inverter'
+    if (
+      (!getEndpointTypeFromSymbol(symbol) &&
+        !isDcBusConversionEndpoint &&
+        !isDcBusBranchProtection) ||
+      (!symbolSupportsWireDomain(symbol.id, 'DC') &&
+        !isDcBusConversionEndpoint &&
+        !isDcBusBranchProtection)
+    ) {
+      return false
+    }
+    if (isDcBusConversionEndpoint) {
+      // Conversion devices are valid outgoing devices once a real supply DC
+      // bus branch exists. They are still restricted to the ordinary circuit
+      // trunk when the target is an inverter's unoccupied circuit output.
+      return (
+        hitType === 'circuit' ||
+        (hitType === 'supplyConverterDcWire' && !!node.hitZone.supplyDcBusId)
+      )
+    }
+    if (isDcBusBranchProtection) return hitType === 'circuit'
+  }
+  if (
+    !node.hitZone.dcBusId &&
+    (isDcBusEndpointSymbol(symbol) ||
+      symbol.id === 'dc_dc_converter' ||
+      symbol.id === 'inverter') &&
+    ctx.circuitId
+  ) {
+    const circuit = findCircuitInProject(project, ctx.circuitId)
+    if (circuit && findOrdinaryCircuitDcBusForOutput(circuit, node.hitZone.converterDcConnection)) {
+      return false
+    }
+  }
+
+  if (symbol.id === 'dc_bus') {
+    if (hitType === 'supplyWire') {
+      // A rail dropped on an ordinary root supply wire creates the first direct
+      // inverter assembly. Once any supply assembly exists, the only valid rail
+      // target is an unoccupied DC connection on that assembly.
+      return (
+        node.hitZone?.supplyFeedScope === 'root' &&
+        selectProjectSupplyAssemblies(project).length === 0 &&
+        !hasSupplyDcBusOnHintFeed(node, ctx, project)
+      )
+    }
+    if (hitType === 'supplyConverterDcWire') {
+      return (
+        node.hitZone?.supplyFeedScope === 'root' &&
+        (node.hitZone?.supplyConverterDcConnectionIndex ??
+          (node.hitZone?.supplyConverterDcBranch === 'top' ? 1 : 0)) === 0 &&
+        !node.hitZone.supplyDcBusId &&
+        !hasSupplyDcBusOnHintFeed(node, ctx, project)
+      )
+    }
+    if (hitType === 'circuit') {
+      return isBareInverterCircuitDcConnection(node, ctx, project)
+    }
     return false
   }
 
@@ -603,8 +924,8 @@ function shouldIncludeHintNode(
     }
     if (symbol.id === 'source_changeover') {
       const panelId = node.hitZone?.supplyPanelId ?? ctx.panelId
-      const installation = getElectricalInstallationFromProject(project)
-      const panel = findPanelById(getElectricalPanelsFromProject(project), panelId)
+      const installation = getProjectElectricalInstallation(project)
+      const panel = findPanelById(getProjectElectricalPanels(project), panelId)
       const acceptsAnyGridFeedSegment = Boolean(
         panel && getPanelFeedOrganization(project, panel) === 'split-backup'
       )
@@ -612,7 +933,7 @@ function shouldIncludeHintNode(
         ? getDirectConverterChangeoverInsertIndex(
             getSupplyFeedDevicesForPanel(
               installation,
-              getElectricalPanelsFromProject(project),
+              getProjectElectricalPanels(project),
               panelId,
               'root'
             )
@@ -630,7 +951,7 @@ function shouldIncludeHintNode(
     if (!isSupplyWireSlotSegment(node, panelNode)) return false
   }
 
-  if (TRUNK_ONLY_ON_CIRCUIT_SYMBOLS.has(symbol.id)) {
+  if (CIRCUIT_TRUNK_INSERTABLE_SYMBOLS.has(symbol.id)) {
     if (hitType === 'supplyWire') {
       return (
         (symbol.id === 'inverter' || symbol.id === 'rectifier') &&
@@ -642,12 +963,14 @@ function shouldIncludeHintNode(
   }
 
   if (isProtectionDragSymbol(symbol)) {
-    // Converter DC outputs are intentionally endpoint/device lanes, not protected
-    // circuit trunks. A protection becomes valid only after an explicit DC bus
-    // creates an outgoing branch for it.
+    // A protection may be inserted inline on the converter-to-bus lead. Circuit
+    // converter connection targets still require a real bus branch below.
     if (
-      (hitType === 'supplyConverterDcWire' && !node.hitZone?.supplyDcBusId) ||
-      (node.hitZone?.converterDcConnection && !node.hitZone?.dcBusId)
+      (hitType === 'supplyConverterDcWire' &&
+        !canDropSymbolOnSupplyConverterDcWire(symbol.id, !!node.hitZone?.supplyDcBusId)) ||
+      (hitType !== 'supplyConverterDcWire' &&
+        node.hitZone?.converterDcConnection &&
+        !node.hitZone?.dcBusId)
     ) {
       return false
     }
@@ -655,11 +978,34 @@ function shouldIncludeHintNode(
     if (node.type === 'mcb' || node.type === 'rcd') return false
     if (hitType === 'circuit') {
       const circuit = ctx.circuitId ? findCircuitInProject(project, ctx.circuitId) : undefined
+      if (node.hitZone.dcBusId && typeof node.hitZone.branchDeviceInsertIndex === 'number') {
+        return true
+      }
       if (circuit?.supplySource?.kind === 'converter-backup') return false
       if (ctx.circuitId && circuitFeedsSubPanel(project, ctx.circuitId)) return false
+      const hasJunctionPanelBoundary = (circuit?.trunkDevices ?? []).some(
+        (device) => device.type === 'junction_panel' || device.symbol === 'junction_panel'
+      )
+      if (hasJunctionPanelBoundary && symbol.id === 'rotating_switch' && node.type === 'branch') {
+        return true
+      }
+      if (hasJunctionPanelBoundary && !node.id?.startsWith('circuit-trunk-')) return false
       if (node.type === 'branch' || node.type === 'trunkDevice') return false
       if (node.id?.startsWith('circuit-trunk-')) {
         const parsed = node.id ? parseCircuitTrunkSegmentId(node.id) : null
+        const orderedDevices = [...(circuit?.trunkDevices ?? [])].sort(
+          (left, right) => (left.trunkPosition ?? 0) - (right.trunkPosition ?? 0)
+        )
+        if (
+          parsed &&
+          orderedDevices
+            .slice(0, parsed.segmentIndex)
+            .some(
+              (device) => device.type === 'junction_panel' || device.symbol === 'junction_panel'
+            )
+        ) {
+          return false
+        }
         return (circuit?.endpoints.length ?? 0) > 0 && parsed?.segmentIndex === 0
       }
       if (node.id?.startsWith('circuit-nest-')) return true
@@ -675,12 +1021,25 @@ function shouldIncludeHintNode(
     if (hitType === 'protection') return false
     if (node.type === 'mcb' || node.type === 'rcd') return false
     if (node.id?.startsWith('secondary-bus-segment-') && !node.hitZone?.dcBusId) return false
-    if (node.id?.startsWith('circuit-nest-')) return false
+    if (node.id?.startsWith('circuit-nest-')) return isEmptyProtectionDrop
     if (node.type === 'trunkDevice') return false
 
     if (node.id?.startsWith('circuit-trunk-')) {
+      if (isEmptyProtectionDrop) return true
       if (TRUNK_CAPABLE_ENDPOINT_SYMBOLS.has(symbol.id)) return true
       const circuit = ctx.circuitId ? findCircuitInProject(project, ctx.circuitId) : undefined
+      if (
+        isDcBusEndpointSymbol(symbol) &&
+        node.hitZone?.wireDomain === 'AC' &&
+        circuit?.trunkDevices?.some((device) => device.type === 'conversion')
+      ) {
+        // An explicit converter already owns the DC transition. Do not offer
+        // the opposite-side AC trunk as a second auto-conversion drop lane.
+        return false
+      }
+      if (isDcBusEndpointSymbol(symbol) && node.hitZone?.wireDomain === 'DC') {
+        return isLastCircuitTrunkSegment(node.id, trunkSegmentCounts)
+      }
       // Show the topmost trunk segment (index 0, just below the MCB) as an
       // "add new branch here" hint for endpoints on circuits that already have branches.
       if ((circuit?.subCircuitIds?.length ?? 0) === 0) {
@@ -712,10 +1071,10 @@ function shouldIncludeHintNode(
 
   if (ctx.circuitId && circuitFeedsSubPanel(project, ctx.circuitId)) {
     const isEndpointSymbol = !!getEndpointTypeFromSymbol(symbol)
-    const isTrunkOnlySymbol = TRUNK_ONLY_ON_CIRCUIT_SYMBOLS.has(symbol.id)
+    const isTrunkInsertableSymbol = CIRCUIT_TRUNK_INSERTABLE_SYMBOLS.has(symbol.id)
     if (
       isEndpointSymbol ||
-      isTrunkOnlySymbol ||
+      isTrunkInsertableSymbol ||
       (hitType === 'circuit' && node.type === 'branch')
     ) {
       return false
@@ -760,6 +1119,67 @@ function shouldIncludeHintNode(
   return true
 }
 
+function isBareInverterCircuitDcConnection(
+  node: LayoutNode,
+  ctx: HintWalkContext,
+  project: ProjectWithOptionalV2Electrical
+): boolean {
+  const connection = node.hitZone?.converterDcConnection
+  if (node.hitZone?.dcBusId || !ctx.circuitId) return false
+
+  const circuit = findCircuitInProject(project, ctx.circuitId)
+  if (!circuit) return false
+  const segment = node.id ? parseCircuitTrunkSegmentId(node.id) : null
+  const inverter = connection
+    ? circuit.trunkDevices?.find((device) => device.id === connection.converterId)
+    : [...(circuit.trunkDevices ?? [])]
+        .sort((left, right) => (left.trunkPosition ?? 0) - (right.trunkPosition ?? 0))
+        .at((segment?.segmentIndex ?? 0) - 1)
+  if (!inverter || inverter.symbol !== 'inverter') return false
+
+  if (!connection) {
+    return (
+      node.hitZone?.wireDomain === 'DC' &&
+      getCircuitConverterDcConnectionCount(inverter) <= 1 &&
+      !(circuit.trunkDevices ?? []).some((device) => device.type === 'dc_bus')
+    )
+  }
+
+  if (connection.connectionIndex !== getCircuitConverterDcConnectionCount(inverter) - 1) {
+    return false
+  }
+
+  return !(circuit.trunkDevices ?? []).some(
+    (device) =>
+      device.type === 'dc_bus' &&
+      device.converterDcConnection?.converterId === connection.converterId
+  )
+}
+
+function hasSupplyDcBusOnHintFeed(
+  node: LayoutNode,
+  ctx: HintWalkContext,
+  project: ProjectWithOptionalV2Electrical
+): boolean {
+  const installation = getProjectElectricalInstallation(project)
+  if (!installation) return false
+  const panels = getProjectElectricalPanels(project)
+  const panelId = node.hitZone?.supplyPanelId ?? ctx.panelId
+  const panel = findPanelById(panels, panelId)
+  const panelSupplyCircuit = panel?.circuits?.find((circuit) => circuit.code === 'PANEL')
+  const panelDevices = panelSupplyCircuit?.trunkDevices ?? []
+  const devices =
+    panelDevices.length > 0 || panel?.isMain === false
+      ? panelDevices
+      : getSupplyFeedDevicesForPanel(
+          installation,
+          panels,
+          panelId,
+          node.hitZone?.supplyFeedScope ?? 'shared'
+        )
+  return devices.some((device) => device.type === 'dc_bus' || device.symbol === 'dc_bus')
+}
+
 function accumulateHintContext(node: LayoutNode, ctx: HintWalkContext): HintWalkContext {
   if (node.type === 'mcb' && node.domainRef) {
     const protection = node.domainRef as ProtectionDevice
@@ -788,7 +1208,10 @@ function visitForHints(
   const nextCtx = accumulateHintContext(node, ctx)
 
   if (node.hitZone?.type && !node.hitZone.suppressDropHint && validTargets.has(node.hitZone.type)) {
+    const isDcBusRotatingSwitchSlot =
+      symbol.id === 'rotating_switch' && node.type === 'wire' && node.hitZone.dcBusId != null
     if (
+      isDcBusRotatingSwitchSlot ||
       shouldIncludeHintNode(
         node,
         node.hitZone.type,
@@ -801,7 +1224,11 @@ function visitForHints(
     ) {
       let { x, y } = hintAnchor(node)
       const trunkParsed = node.id ? parseCircuitTrunkSegmentId(node.id) : null
-      if (isProtectionDragSymbol(symbol) && trunkParsed?.segmentIndex === 0 && nextCtx.circuitId) {
+      if (
+        (isProtectionDragSymbol(symbol) || symbol.id === 'terminal_strip') &&
+        trunkParsed?.segmentIndex === 0 &&
+        nextCtx.circuitId
+      ) {
         // The lower protection ball sits just above the owning protection, well
         // below the endpoint branches. The upper circuit-nest ball remains above
         // the branches, making the two insertion directions explicit.
@@ -811,6 +1238,15 @@ function visitForHints(
         y = bounds.bottom - Math.min(28, height / 2)
       }
       const baseMatch = buildHintMatch(node, node.hitZone.type, nextCtx)
+      const isTerminalCircuitNestHint =
+        node.hitZone.type === 'circuit' &&
+        node.id === `circuit-nest-${nextCtx.circuitId}` &&
+        !!nextCtx.circuitId &&
+        (findCircuitInProject(project, nextCtx.circuitId)?.subCircuitIds?.length ?? 0) === 0
+      const hintMatch =
+        isTerminalCircuitNestHint && baseMatch
+          ? { ...baseMatch, insertAfterCircuitContent: true }
+          : baseMatch
       const previewsSecondaryBus =
         isProtectionDragSymbol(symbol) &&
         node.id?.startsWith('circuit-nest-') === true &&
@@ -827,8 +1263,8 @@ function visitForHints(
           : {}),
         match:
           trunkParsed != null
-            ? { ...baseMatch, circuitTrunkSegmentIndex: trunkParsed.segmentIndex }
-            : baseMatch,
+            ? { ...hintMatch, circuitTrunkSegmentIndex: trunkParsed.segmentIndex }
+            : hintMatch,
         span: hintSpan(node),
       })
     }
@@ -1057,7 +1493,8 @@ export function resolveActiveDropZoneHintNodeId(
 export function collectDropZoneHints(
   symbol: SymbolMetadata,
   layoutTree: LayoutTree,
-  project: ProjectWithOptionalV2Electrical
+  project: ProjectWithOptionalV2Electrical,
+  options?: { movingPanelAttachmentId?: string | null }
 ): DropZoneHint[] {
   const sameSymbolHints = findSameSymbolAddMoreLayoutTargets(symbol.id, layoutTree).map(
     (target) => ({
@@ -1076,9 +1513,7 @@ export function collectDropZoneHints(
       ...layoutTree.panels.flatMap((panelNode) => {
         const panel = panelNode.domainRef as Panel | undefined
         if (!panel || panel.isMain === false) return []
-        const bus = panelNode.children.find(
-          (node) => node.type === 'busBar' && node.hitZone?.type === 'mainBus'
-        )
+        const bus = panelNode.children.find((node) => node.type === 'busBar')
         if (!bus) return []
         const horizontalPadding = 12
         const verticalPadding = 14
@@ -1130,11 +1565,20 @@ export function collectDropZoneHints(
 
   const hints = [
     ...sameSymbolHints,
-    ...dedupeSupplyWireHints(rawHints).filter((hint) =>
+    ...dedupeMainBusHints(dedupeSupplyWireHints(rawHints)).filter((hint) =>
       canCreateSupplyTopologyFromDrop(symbol, hint.targetType)
     ),
   ]
-  return symbol.id === 'source_changeover'
-    ? appendDirectChangeoverAreaHints(layoutTree, hints)
-    : hints
+  const completedHints: DropZoneHint[] =
+    symbol.id === 'source_changeover' ? appendDirectChangeoverAreaHints(layoutTree, hints) : hints
+  const movingPanelId = options?.movingPanelAttachmentId
+  if (symbol.id !== 'panel_distribution' || !movingPanelId) return completedHints
+
+  const panels = getProjectElectricalPanels(project)
+  return completedHints.filter((hint) =>
+    isPanelAttachmentDropTargetTerminal(panels, movingPanelId, {
+      type: hint.targetType,
+      ...(hint.match ?? {}),
+    })
+  )
 }

@@ -1,4 +1,4 @@
-import { getCompatibilityFloorsFromProject } from '@/lib/projectV2/buildingFloors'
+import { readLegacyCompatibilityFloors } from '@/lib/projectV2/buildingFloors'
 import { useProjectStore } from '@/stores/projectStore'
 import { useUIStore } from '@/stores/uiStore'
 import type { Point } from '@/types/ui'
@@ -45,7 +45,7 @@ export function restoreHiddenSituationPlanPlacementsToActiveView(
   const activeFloorId = ui.activeFloorId
   if (!project || !activeFloorId) return false
 
-  const floors = getCompatibilityFloorsFromProject(project)
+  const floors = readLegacyCompatibilityFloors(project)
   const activeFloor = floors.find((floor) => floor.id === activeFloorId)
   if (!activeFloor) return false
 

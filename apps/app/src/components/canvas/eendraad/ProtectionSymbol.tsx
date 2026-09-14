@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { ZOOM_100 } from '@/constants/canvasConstants'
 import { Group, Image, Rect, Text } from 'react-konva'
+import type Konva from 'konva'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useProjectStore } from '@/stores/projectStore'
 import { getSymbolById } from '@/lib/symbols'
@@ -37,7 +38,7 @@ import {
 } from './canvasSymbols'
 import { useTouchPrimaryDevice } from '@/editions/community/communityHooks'
 import { ProtectionOneWireLabels } from './ProtectionOneWireLabels'
-import { getElectricalPanelsFromProject } from '@/lib/projectV2/electrical'
+import { getProjectElectricalPanels } from '@/lib/projectV2/electrical'
 import { getSecondaryBusOrderForCircuit } from '@/lib/eendraad/protectionDragEligibility'
 import type { Circuit, ProtectionDevice } from '@/types/schema'
 import type { Point } from '@/types/ui'
@@ -89,20 +90,61 @@ export function ProtectionSymbol({
   const fontFamily = useCanvasFontFamily()
   const isPreviewSelected = useIsPreviewSelected('protection', protection.id)
   const [processedImage, setProcessedImage] = useState<HTMLImageElement | null>(null)
+  const dragOriginParentRef = useRef<Konva.Container | null>(null)
+  const dragOriginLayerListeningRef = useRef<{ layer: Konva.Layer; listening: boolean } | null>(null)
+  const isolateDragNode = useCallback((target: Konva.Node) => {
+    const dragLayer = target.getStage()?.findOne('.canvas-drag-layer')
+    const originParent = target.getParent()
+    if (!dragLayer || !originParent || dragLayer === originParent) return
+    const absolutePosition = target.getAbsolutePosition()
+    const originLayer = target.getLayer()
+    if (originLayer) {
+      dragOriginLayerListeningRef.current = {
+        layer: originLayer,
+        listening: originLayer.listening(),
+      }
+      originLayer.listening(false)
+    }
+    dragOriginParentRef.current = originParent
+    target.moveTo(dragLayer)
+    target.setAbsolutePosition(absolutePosition)
+  }, [])
+  const restoreDragNode = useCallback((target: Konva.Node) => {
+    const originParent = dragOriginParentRef.current
+    if (!originParent) return
+    const absolutePosition = target.getAbsolutePosition()
+    target.moveTo(originParent)
+    target.setAbsolutePosition(absolutePosition)
+    dragOriginParentRef.current = null
+    const originLayerListening = dragOriginLayerListeningRef.current
+    if (originLayerListening) {
+      originLayerListening.layer.listening(originLayerListening.listening)
+      dragOriginLayerListeningRef.current = null
+    }
+  }, [])
+  useEffect(
+    () => () => {
+      const originLayerListening = dragOriginLayerListeningRef.current
+      if (originLayerListening) {
+        originLayerListening.layer.listening(originLayerListening.listening)
+      }
+    },
+    []
+  )
   type ProjectStoreState = ReturnType<typeof useProjectStore.getState>
   // Subscribe to actual data to make moveInfo reactive
   const circuit = protection.circuits?.[0]
   const isHorizontalConverterBackup = circuit?.supplySource?.kind === 'converter-backup'
   const secondaryBusOrder = useProjectStore((state: ProjectStoreState) => {
-    if (!circuit || !state.currentProject) return null
+    if (!isSelected || !circuit || !state.currentProject) return null
     return getSecondaryBusOrderForCircuit(
-      getElectricalPanelsFromProject(state.currentProject),
+      getProjectElectricalPanels(state.currentProject),
       circuit.id
     )
   })
 
   const mainBusOrder = useProjectStore((state: ProjectStoreState) => {
-    if (!circuit || !state.currentProject) {
+    if (!isSelected || !circuit || !state.currentProject) {
       return null
     }
     const panel = state.findPanelForCircuit(circuit.id)
@@ -287,14 +329,18 @@ export function ProtectionSymbol({
                 if (onDragStart(!!evt.altKey, evt)) {
                   e.target.stopDrag()
                   e.target.position({ x: position.x, y: position.y })
+                  return
                 }
+                isolateDragNode(e.target)
               }
             : undefined
         }
         onDragMove={
           moveInfo && isSelected && onDragMove
             ? (e) => {
-                onDragMove({ x: e.target.x(), y: e.target.y() })
+                onDragMove(
+                  getCanvasPositionFromEvent?.(e) ?? { x: e.target.x(), y: e.target.y() }
+                )
               }
             : undefined
         }
@@ -302,11 +348,13 @@ export function ProtectionSymbol({
           moveInfo && isSelected
             ? (e) => {
                 if (shouldSuppressKonvaDragEnd?.()) {
+                  restoreDragNode(e.target)
                   e.target.position({ x: position.x, y: position.y })
                   return
                 }
                 const pos = getCanvasPositionFromEvent?.(e) ?? { x: e.target.x(), y: e.target.y() }
                 onDragEnd(pos)
+                restoreDragNode(e.target)
                 e.target.position({ x: position.x, y: position.y })
               }
             : undefined
@@ -363,14 +411,18 @@ export function ProtectionSymbol({
               if (onDragStart(!!evt.altKey, evt)) {
                 e.target.stopDrag()
                 e.target.position({ x: position.x, y: position.y })
+                return
               }
+              isolateDragNode(e.target)
             }
           : undefined
       }
       onDragMove={
         moveInfo && isSelected && onDragMove
           ? (e) => {
-              onDragMove({ x: e.target.x(), y: e.target.y() })
+              onDragMove(
+                getCanvasPositionFromEvent?.(e) ?? { x: e.target.x(), y: e.target.y() }
+              )
             }
           : undefined
       }
@@ -378,11 +430,13 @@ export function ProtectionSymbol({
         moveInfo && isSelected
           ? (e) => {
               if (shouldSuppressKonvaDragEnd?.()) {
+                restoreDragNode(e.target)
                 e.target.position({ x: position.x, y: position.y })
                 return
               }
               const pos = getCanvasPositionFromEvent?.(e) ?? { x: e.target.x(), y: e.target.y() }
               onDragEnd(pos)
+              restoreDragNode(e.target)
               e.target.position({ x: position.x, y: position.y })
             }
           : undefined

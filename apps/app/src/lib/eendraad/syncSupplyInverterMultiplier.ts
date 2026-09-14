@@ -1,4 +1,4 @@
-import { getCompatibilityFloorsFromProject } from '@/lib/projectV2/buildingFloors'
+import { readLegacyCompatibilityFloors } from '@/lib/projectV2/buildingFloors'
 import { useProjectStore } from '@/stores/projectStore'
 import { useUIStore } from '@/stores/uiStore'
 import type { Placement, TrunkDevice } from '@/types/schema'
@@ -11,7 +11,7 @@ import {
   getDefaultSupplyConverterAcPhaseAssignment,
   getSupplyInverterUnitPhaseAssignments,
 } from '@/lib/supplyAssembly/supplyConverterPhases'
-import { getElectricalInstallationFromProject } from '@/lib/projectV2/electrical'
+import { getProjectElectricalInstallation } from '@/lib/projectV2/electrical'
 
 export interface SyncSupplyInverterMultiplierDeps {
   getDevice: (deviceId: string) => TrunkDevice | undefined
@@ -19,16 +19,26 @@ export interface SyncSupplyInverterMultiplierDeps {
   getActiveFloorId: () => string | null
   getFallbackFloorId: () => string | undefined
   getInstallationSystem: () => NonNullable<
-    ReturnType<typeof getElectricalInstallationFromProject>
+    ReturnType<typeof getProjectElectricalInstallation>
   >['nominalVoltage']['system']
 }
 
 export type SyncSupplyDeviceMultiplierDeps = SyncSupplyInverterMultiplierDeps
 
+/**
+ * Optional source for the next physical instance.  A multiplier normally grows
+ * from its first placement, while an Alt-duplicate must inherit the placement
+ * the user actually started dragging.
+ */
+export interface SupplyDeviceMultiplierPlacementSource {
+  placement?: Placement
+}
+
 export function syncSupplyDeviceMultiplierCount(
   deps: SyncSupplyDeviceMultiplierDeps,
   deviceId: string,
-  target: number
+  target: number,
+  source?: SupplyDeviceMultiplierPlacementSource
 ): boolean {
   const device = deps.getDevice(deviceId)
   const max = device?.symbol === 'inverter' ? 3 : 99
@@ -37,18 +47,20 @@ export function syncSupplyDeviceMultiplierCount(
 
   const placements = [...(device.placements ?? [])]
   const basePlacement = placements[0]
-  const floorId = deps.getActiveFloorId() ?? basePlacement?.floorId ?? deps.getFallbackFloorId()
-  if (!basePlacement || !floorId) return false
+  const sourcePlacement = source?.placement ?? basePlacement
+  const floorId = sourcePlacement?.floorId ?? deps.getActiveFloorId() ?? deps.getFallbackFloorId()
+  if (!sourcePlacement || !floorId) return false
 
   const nextPlacements: Placement[] = placements.slice(0, target)
+  const createdFrom = Math.min(placements.length, target)
   for (let index = nextPlacements.length; index < target; index++) {
     nextPlacements.push({
-      ...basePlacement,
+      ...sourcePlacement,
       id: generateId(),
       floorId,
       pos: {
-        x: basePlacement.pos.x + 24 * index,
-        y: basePlacement.pos.y + 24 * index,
+        x: sourcePlacement.pos.x + 24 * (index - createdFrom + 1),
+        y: sourcePlacement.pos.y + 24 * (index - createdFrom + 1),
       },
     })
   }
@@ -118,11 +130,11 @@ export function createSyncSupplyInverterMultiplierDeps(): SyncSupplyInverterMult
     getActiveFloorId: () => useUIStore.getState().activeFloorId,
     getFallbackFloorId: () => {
       const project = useProjectStore.getState().currentProject
-      return project ? getCompatibilityFloorsFromProject(project)[0]?.id : undefined
+      return project ? readLegacyCompatibilityFloors(project)[0]?.id : undefined
     },
     getInstallationSystem: () => {
       const project = useProjectStore.getState().currentProject
-      return getElectricalInstallationFromProject(project ?? {})?.nominalVoltage.system ?? '1N~'
+      return getProjectElectricalInstallation(project ?? {})?.nominalVoltage.system ?? '1N~'
     },
   }
 }

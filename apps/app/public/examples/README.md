@@ -2,6 +2,7 @@ Bundled example ZIPs live in this folder:
 
 - `starter-project.zip`
 - `demo_backup.zip`
+- `demo_offgrid.zip`
 
 How to create it:
 
@@ -13,5 +14,5 @@ How to create it:
 Runtime behavior:
 
 - The example card imports `starter-project.zip` when the user opens it.
-- The hosted `/demo` and `/demo_backup` routes import their corresponding ZIP directly in disposable demo mode.
+- The hosted `/demo`, `/demo_backup`, and `/demo_offgrid` routes import their corresponding ZIP directly in disposable demo mode.
 - If a user never opens a demo, nothing is imported.
