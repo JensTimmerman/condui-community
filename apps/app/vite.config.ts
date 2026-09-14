@@ -99,6 +99,7 @@ const aliases = {
     './src/editions/community/communityInstallationProfileCapabilities.ts',
   '@/lib/installerProfile': './src/editions/community/communityInstallerProfile.ts',
   '@/lib/analytics/googleAnalytics': './src/editions/community/communityAnalytics.ts',
+  '@eendra/analytics': './src/editions/community/communityAnalytics.ts',
   '@/lib/analytics/validationPanelAnalytics': './src/editions/community/communityAnalytics.ts',
   '@/lib/analytics/editorEventAnalytics': './src/editions/community/communityAnalytics.ts',
   '@/lib/analytics/supplyAssemblyAnalytics': './src/editions/community/communityAnalytics.ts',
