@@ -53,7 +53,7 @@ export interface ProjectStoreActions {
     target?: { panelId?: string; feedScope?: 'shared' | 'root' },
   ) => void
   syncSupplyDeviceMultiplierCount?: (deviceId: string, count: number) => boolean
-  addGroundTrunkDevice: (device: TrunkDevice, insertIndex?: number) => void
+  addGroundTrunkDevice: (device: TrunkDevice, insertIndex?: number, panelId?: string) => void
   insertProtectionAfter: (panelId: string, protection: ProtectionDevice, afterProtectionId: string) => void
   updateCircuit: (circuitId: string, updates: Partial<Circuit>) => void
   setSelection: (selection: { type: 'endpoint' | 'trunkDevice' | 'protection'; ids: string[] }) => void
@@ -137,7 +137,7 @@ export function doEendraadPaste(
             ? clonePlacementsForDuplicate(r.device.placements, { symbolType: r.device.symbol })
             : r.device.placements,
         }
-        actions.addGroundTrunkDevice(clone, insertIndex + i)
+        actions.addGroundTrunkDevice(clone, insertIndex + i, target.panelId)
       })
       return true
     }

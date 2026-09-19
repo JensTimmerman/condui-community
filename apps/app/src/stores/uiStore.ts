@@ -40,6 +40,7 @@ export type LeftDockPanel =
   | 'validation'
   | 'quickPlacer'
   
+export type ProjectVersionsWindowTab = 'timeline' | 'qr' | 'sharing'
 export interface FloatingPanelDragSeed {
   panel: LeftDockPanel
   pointerId: number

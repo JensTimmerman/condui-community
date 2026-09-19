@@ -19,7 +19,13 @@ import {
   getProjectElectricalInstallation,
   getProjectElectricalPanels,
 } from '@/lib/projectV2/electrical'
-import { TRANSFORMER_OVERLAY_PATHS, SWITCH_SYMBOLS_WITH_VERKLIKKERLAMP } from '@/lib/symbols'
+import {
+  TRANSFORMER_OVERLAY_PATHS,
+  SWITCH_SYMBOLS_WITH_VERKLIKKERLAMP,
+  HVAC_ENERGY_SOURCE_PATHS,
+  HVAC_TYPE_OVERLAY_PATHS,
+  isHvacDeviceSymbol,
+} from '@/lib/symbols'
 import {
   findMatchingSynergridEntry,
   formatSynergridPower,
@@ -32,7 +38,8 @@ import {
 } from '@/lib/synergridCatalog'
 import { getInstallDateTargetInheritedYear } from '@/lib/installDatePropagation'
 import { useEditionFeatureAvailability } from '@/hooks/useEditionFeatureAvailability'
-import { getEndpointMultiplier } from '@/utils/endpointMultipliers'
+import { endpointSupportsMultiplier, getEndpointMultiplier } from '@/utils/endpointMultipliers'
+import { allowedSocketCountsForEndpoint, isModularSocket } from '@/lib/socket/modularSocket'
 import { collectCircuits, deduplicateCircuitsById } from '@/utils/eendraad/panelHelpers'
 import { isInBetweenEndpoint } from '@/utils/symbolMapping'
 import {
@@ -72,12 +79,17 @@ import {
   RelayEndpointFields,
   SmokeDetectorEndpointFields,
   MotionDetectorEndpointFields,
+  OptionToggleGrid,
   SocketTypeGrid,
   SwitchPolesGrid,
   SwitchTypeDropdown,
   TwoWayPolesGrid,
 } from './EndpointControls'
-import { normalizeSocketSymbol, normalizeSwitchSymbol } from './endpointControlsUtils'
+import {
+  HVAC_TYPE_SYMBOLS,
+  normalizeSocketSymbol,
+  normalizeSwitchSymbol,
+} from './endpointControlsUtils'
 
 const SYNERGRID_AUTO_MATCH_DEBOUNCE_MS = 450
 type Project = NonNullable<ProjectState['currentProject']>
@@ -1057,7 +1069,7 @@ export function EndpointProperties({
             currentSymbol={normalizeSocketSymbol(endpoint.symbol)}
             onChangeSymbol={(sym) => onUpdate(endpointId, { symbol: sym })}
           />
-          {/* Socket count (1-4) */}
+          {/* Socket count (1-4, or 1-2 for modular DIN sockets) */}
           <div>
             <label className={labelClass}>{t('endpoints.socketCount', 'Number of sockets')}</label>
             <CustomDropdown
@@ -1071,70 +1083,72 @@ export function EndpointProperties({
                   },
                 })
               }}
-              options={[1, 2, 3, 4].map((count) => ({
+              options={allowedSocketCountsForEndpoint(endpoint).map((count) => ({
                 value: String(count),
                 label: String(count),
               }))}
               className={selectClass}
             />
           </div>
-          <div className="space-y-2">
-            <label className={labelClass}>{t('endpoints.socketOptions', 'Socket options')}</label>
-            <div>
-              <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                {t('endpoints.socketSwitchOption', 'Switch')}
-              </label>
-              <CustomDropdown
-                value={
-                  endpoint.socketProps?.switchOverlayLock
-                    ? 'switch_lock'
-                    : endpoint.socketProps?.switchOverlay
-                      ? 'switch'
-                      : 'none'
-                }
-                onChange={(nextValue) => {
-                  const v = nextValue as 'none' | 'switch' | 'switch_lock'
-                  onUpdate(endpointId, {
-                    socketProps: {
-                      ...endpoint.socketProps,
-                      switchOverlay: v === 'switch',
-                      switchOverlayLock: v === 'switch_lock',
+          {!isModularSocket(endpoint) && (
+            <div className="space-y-2">
+              <label className={labelClass}>{t('endpoints.socketOptions', 'Socket options')}</label>
+              <div>
+                <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                  {t('endpoints.socketSwitchOption', 'Switch')}
+                </label>
+                <CustomDropdown
+                  value={
+                    endpoint.socketProps?.switchOverlayLock
+                      ? 'switch_lock'
+                      : endpoint.socketProps?.switchOverlay
+                        ? 'switch'
+                        : 'none'
+                  }
+                  onChange={(nextValue) => {
+                    const v = nextValue as 'none' | 'switch' | 'switch_lock'
+                    onUpdate(endpointId, {
+                      socketProps: {
+                        ...endpoint.socketProps,
+                        switchOverlay: v === 'switch',
+                        switchOverlayLock: v === 'switch_lock',
+                      },
+                    })
+                  }}
+                  options={[
+                    { value: 'none', label: t('endpoints.socketSwitchNone', 'None') },
+                    {
+                      value: 'switch',
+                      label: t('endpoints.socketSwitchOverlay', 'Socket with two-pole switch'),
                     },
-                  })
-                }}
-                options={[
-                  { value: 'none', label: t('endpoints.socketSwitchNone', 'None') },
-                  {
-                    value: 'switch',
-                    label: t('endpoints.socketSwitchOverlay', 'Socket with two-pole switch'),
-                  },
-                  {
-                    value: 'switch_lock',
-                    label: t(
-                      'endpoints.socketSwitchOverlayLock',
-                      'Socket with two-pole lockable switch'
-                    ),
-                  },
-                ]}
-                className={selectClass}
-              />
+                    {
+                      value: 'switch_lock',
+                      label: t(
+                        'endpoints.socketSwitchOverlayLock',
+                        'Socket with two-pole lockable switch'
+                      ),
+                    },
+                  ]}
+                  className={selectClass}
+                />
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={endpoint.socketProps?.waterproof ?? false}
+                  onChange={(e) =>
+                    onUpdate(endpointId, {
+                      socketProps: { ...endpoint.socketProps, waterproof: e.target.checked },
+                    })
+                  }
+                  className="w-4 h-4 text-sky-600 border-gray-300 rounded focus:ring-sky-500 dark:bg-gray-700 dark:border-gray-600"
+                />
+                <span className="text-sm text-gray-700 dark:text-gray-300">
+                  {t('endpoints.socketWaterproof', 'Waterproof')}
+                </span>
+              </label>
             </div>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={endpoint.socketProps?.waterproof ?? false}
-                onChange={(e) =>
-                  onUpdate(endpointId, {
-                    socketProps: { ...endpoint.socketProps, waterproof: e.target.checked },
-                  })
-                }
-                className="w-4 h-4 text-sky-600 border-gray-300 rounded focus:ring-sky-500 dark:bg-gray-700 dark:border-gray-600"
-              />
-              <span className="text-sm text-gray-700 dark:text-gray-300">
-                {t('endpoints.socketWaterproof', 'Waterproof')}
-              </span>
-            </label>
-          </div>
+          )}
         </>
       )}
 
@@ -1157,100 +1171,179 @@ export function EndpointProperties({
               <ApplianceTypeDropdown
                 value={endpoint.symbol ?? 'oven'}
                 onChangeSymbol={(sym) => onUpdate(endpointId, { symbol: sym })}
+                // A unit chained after an HVAC source can only become another HVAC type; other
+                // appliances cannot be multiplied and would orphan the extra placements.
+                symbols={
+                  isHvacDeviceSymbol(symbol) && endpointSupportsMultiplier(endpoint)
+                    ? HVAC_TYPE_SYMBOLS
+                    : undefined
+                }
               />
             </div>
             {/* HVAC options for furnace: energy source, type, function */}
             {symbol === 'furnace' && (
               <div className="space-y-2">
-                <div>
-                  <label className={labelClass}>
-                    {t('endpoints.hvac.energySource', 'Energy source')}
-                  </label>
-                  <CustomDropdown
-                    value={endpoint.hvacProps?.energySource ?? 'none'}
-                    onChange={(nextValue) =>
-                      onUpdate(endpointId, {
-                        hvacProps: {
-                          ...(endpoint.hvacProps ?? {}),
-                          energySource: nextValue as HvacEnergySource,
-                        },
-                      })
-                    }
-                    options={[
-                      { value: 'none', label: t('endpoints.hvac.energy_none', 'None') },
-                      {
-                        value: 'electricity',
-                        label: t('endpoints.hvac.energy_electricity', 'Electricity'),
+                <OptionToggleGrid<HvacEnergySource>
+                  label={t('endpoints.hvac.energySource', 'Energy source')}
+                  value={endpoint.hvacProps?.energySource ?? 'none'}
+                  onChange={(nextValue) =>
+                    onUpdate(endpointId, {
+                      hvacProps: {
+                        ...(endpoint.hvacProps ?? {}),
+                        energySource: nextValue,
                       },
-                      {
-                        value: 'gas_fan',
-                        label: t('endpoints.hvac.energy_gas_fan', 'Gas (fan flue)'),
+                    })
+                  }
+                  options={[
+                    {
+                      value: 'none',
+                      label: t('endpoints.hvac.energy_none', 'None'),
+                      shortLabel: t('endpoints.hvac.energy_none_short', 'None'),
+                    },
+                    {
+                      value: 'electricity',
+                      label: t('endpoints.hvac.energy_electricity', 'Electricity'),
+                      shortLabel: t('endpoints.hvac.energy_electricity_short', 'Elec.'),
+                      icon: HVAC_ENERGY_SOURCE_PATHS.electricity,
+                      baseIcon: '/symbols/hvac/furnace_base.svg',
+                    },
+                    {
+                      value: 'gas_fan',
+                      label: t('endpoints.hvac.energy_gas_fan', 'Gas (fan flue)'),
+                      shortLabel: t('endpoints.hvac.energy_gas_fan_short', 'Gas (fan)'),
+                      icon: HVAC_ENERGY_SOURCE_PATHS.gas_fan,
+                      baseIcon: '/symbols/hvac/furnace_base.svg',
+                    },
+                    {
+                      value: 'gas_atmospheric',
+                      label: t('endpoints.hvac.energy_gas_atmospheric', 'Gas (atmospheric)'),
+                      shortLabel: t('endpoints.hvac.energy_gas_atmospheric_short', 'Gas (atm)'),
+                      icon: HVAC_ENERGY_SOURCE_PATHS.gas_atmospheric,
+                      baseIcon: '/symbols/hvac/furnace_base.svg',
+                    },
+                    {
+                      value: 'liquid',
+                      label: t('endpoints.hvac.energy_liquid', 'Liquid fuel'),
+                      shortLabel: t('endpoints.hvac.energy_liquid_short', 'Liquid'),
+                      icon: HVAC_ENERGY_SOURCE_PATHS.liquid,
+                      baseIcon: '/symbols/hvac/furnace_base.svg',
+                    },
+                    {
+                      value: 'solid',
+                      label: t('endpoints.hvac.energy_solid', 'Solid fuel'),
+                      shortLabel: t('endpoints.hvac.energy_solid_short', 'Solid'),
+                      icon: HVAC_ENERGY_SOURCE_PATHS.solid,
+                      baseIcon: '/symbols/hvac/furnace_base.svg',
+                    },
+                  ]}
+                />
+                <OptionToggleGrid<HvacType>
+                  label={t('endpoints.hvac.type', 'Type')}
+                  value={endpoint.hvacProps?.hvacType ?? 'none'}
+                  onChange={(nextValue) =>
+                    onUpdate(endpointId, {
+                      hvacProps: {
+                        ...(endpoint.hvacProps ?? {}),
+                        hvacType: nextValue,
                       },
-                      {
-                        value: 'gas_atmospheric',
-                        label: t('endpoints.hvac.energy_gas_atmospheric', 'Gas (atmospheric)'),
+                    })
+                  }
+                  options={[
+                    {
+                      value: 'none',
+                      label: t('endpoints.hvac.type_none', 'None'),
+                      shortLabel: t('endpoints.hvac.type_none_short', 'None'),
+                    },
+                    {
+                      value: 'heat_exchange',
+                      label: t('endpoints.hvac.type_heat_exchange', 'Heat exchange'),
+                      shortLabel: t('endpoints.hvac.type_heat_exchange_short', 'Exch.'),
+                      icon: HVAC_TYPE_OVERLAY_PATHS.heat_exchange,
+                      baseIcon: '/symbols/hvac/furnace_base.svg',
+                    },
+                    {
+                      value: 'cogeneration',
+                      label: t('endpoints.hvac.type_cogeneration', 'Cogeneration'),
+                      shortLabel: t('endpoints.hvac.type_cogeneration_short', 'Cogen'),
+                      icon: HVAC_TYPE_OVERLAY_PATHS.cogeneration,
+                      baseIcon: '/symbols/hvac/furnace_base.svg',
+                    },
+                    {
+                      value: 'tap_spiral',
+                      label: t('endpoints.hvac.type_tap_spiral', 'Tap spiral'),
+                      shortLabel: t('endpoints.hvac.type_tap_spiral_short', 'Spiral'),
+                      icon: HVAC_TYPE_OVERLAY_PATHS.tap_spiral,
+                      baseIcon: '/symbols/hvac/furnace_base.svg',
+                    },
+                    {
+                      value: 'boiler',
+                      label: t('endpoints.hvac.type_boiler', 'Boiler'),
+                      shortLabel: t('endpoints.hvac.type_boiler_short', 'Boiler'),
+                      icon: HVAC_TYPE_OVERLAY_PATHS.boiler,
+                      baseIcon: '/symbols/hvac/furnace_base.svg',
+                    },
+                  ]}
+                />
+                <OptionToggleGrid<HvacFunction>
+                  label={t('endpoints.hvac.function', 'Function')}
+                  value={endpoint.hvacProps?.hvacFunction ?? 'none'}
+                  onChange={(nextValue) =>
+                    onUpdate(endpointId, {
+                      hvacProps: {
+                        ...(endpoint.hvacProps ?? {}),
+                        hvacFunction: nextValue,
                       },
-                      { value: 'liquid', label: t('endpoints.hvac.energy_liquid', 'Liquid fuel') },
-                      { value: 'solid', label: t('endpoints.hvac.energy_solid', 'Solid fuel') },
-                    ]}
-                    className={selectClass}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass}>{t('endpoints.hvac.type', 'Type')}</label>
-                  <CustomDropdown
-                    value={endpoint.hvacProps?.hvacType ?? 'none'}
-                    onChange={(nextValue) =>
-                      onUpdate(endpointId, {
-                        hvacProps: {
-                          ...(endpoint.hvacProps ?? {}),
-                          hvacType: nextValue as HvacType,
-                        },
-                      })
-                    }
-                    options={[
-                      { value: 'none', label: t('endpoints.hvac.type_none', 'None') },
-                      {
-                        value: 'heat_exchange',
-                        label: t('endpoints.hvac.type_heat_exchange', 'Heat exchange'),
-                      },
-                      {
-                        value: 'cogeneration',
-                        label: t('endpoints.hvac.type_cogeneration', 'Cogeneration'),
-                      },
-                      {
-                        value: 'tap_spiral',
-                        label: t('endpoints.hvac.type_tap_spiral', 'Tap spiral'),
-                      },
-                      { value: 'boiler', label: t('endpoints.hvac.type_boiler', 'Boiler') },
-                    ]}
-                    className={selectClass}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass}>{t('endpoints.hvac.function', 'Function')}</label>
-                  <CustomDropdown
-                    value={endpoint.hvacProps?.hvacFunction ?? 'none'}
-                    onChange={(nextValue) =>
-                      onUpdate(endpointId, {
-                        hvacProps: {
-                          ...(endpoint.hvacProps ?? {}),
-                          hvacFunction: nextValue as HvacFunction,
-                        },
-                      })
-                    }
-                    options={[
-                      { value: 'none', label: t('endpoints.hvac.function_none', 'None') },
-                      {
-                        value: 'heat_cool',
-                        label: t('endpoints.hvac.function_heat_cool', 'Heat / Cool'),
-                      },
-                      { value: 'heat', label: t('endpoints.hvac.function_heat', 'Heat') },
-                      { value: 'cool', label: t('endpoints.hvac.function_cool', 'Cool') },
-                    ]}
-                    className={selectClass}
-                  />
-                </div>
+                    })
+                  }
+                  options={[
+                    {
+                      value: 'none',
+                      label: t('endpoints.hvac.function_none', 'None'),
+                      shortLabel: t('endpoints.hvac.function_none_short', 'None'),
+                    },
+                    {
+                      value: 'heat_cool',
+                      label: t('endpoints.hvac.function_heat_cool', 'Heat / Cool'),
+                      shortLabel: t('endpoints.hvac.function_heat_cool_short', 'Heat/Cool'),
+                      glyph: '+/-',
+                    },
+                    {
+                      value: 'heat',
+                      label: t('endpoints.hvac.function_heat', 'Heat'),
+                      shortLabel: t('endpoints.hvac.function_heat_short', 'Heat'),
+                      glyph: '+',
+                    },
+                    {
+                      value: 'cool',
+                      label: t('endpoints.hvac.function_cool', 'Cool'),
+                      shortLabel: t('endpoints.hvac.function_cool_short', 'Cool'),
+                      glyph: '-',
+                    },
+                  ]}
+                />
+              </div>
+            )}
+            {/* HVAC "add more": available for any HVAC device chained after an HVAC source (furnace/heat pump) */}
+            {isHvacDeviceSymbol(symbol) && endpointSupportsMultiplier(endpoint) && (
+              <div>
+                <label className={labelClass}>
+                  {symbol === 'ventilation'
+                    ? t('endpoints.ventilationCount', 'Number of ventilators')
+                    : t('endpoints.hvacDeviceCount', 'Number of units')}
+                </label>
+                <input
+                  key={`hvac-count-${endpointId}-${getEndpointMultiplier(endpoint)}`}
+                  type="number"
+                  min={1}
+                  defaultValue={getEndpointMultiplier(endpoint)}
+                  onBlur={(e) => {
+                    const target = Math.floor(Number(e.target.value || 1))
+                    if (!Number.isFinite(target) || target < 1) return
+                    if (target === getEndpointMultiplier(endpoint)) return
+                    syncEndpointMultiplierCount(createSyncEndpointMultiplierDeps(), endpointId, target)
+                  }}
+                  className={selectClass}
+                />
               </div>
             )}
             {/* Boiler option: accumulating variant (under type) */}

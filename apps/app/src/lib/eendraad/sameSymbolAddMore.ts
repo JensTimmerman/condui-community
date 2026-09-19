@@ -7,6 +7,7 @@ import {
   getSupplyDeviceMultiplier,
   supportsSupplyDeviceMultiplier,
 } from '@/lib/supplyAssembly/inverterMultipliers'
+import { isModularSocket, isModularSocketLibraryId } from '@/lib/socket/modularSocket'
 import {
   getMultiplierBadgePosition,
   getMultiplierBadgeWidth,
@@ -18,7 +19,6 @@ export type SameSymbolAddMoreTarget =
   | { endpoint?: never; trunkDevice: TrunkDevice }
 
 export interface SameSymbolAddMoreDeps {
-  updateSocketCount: (endpointId: string, count: number) => void
   syncEndpointCount: (endpointId: string, count: number) => boolean
   syncSupplyDeviceCount: (deviceId: string, count: number) => boolean
 }
@@ -29,14 +29,22 @@ export interface SameSymbolAddMoreUndoDeps extends SameSymbolAddMoreDeps {
 
 export type SameSymbolAddMoreResult = 'not-applicable' | 'incremented' | 'blocked'
 
+function droppedSymbolMatchesEndpoint(droppedSymbolId: string, endpoint: Endpoint): boolean {
+  // Sockets use a count in properties, never the drop-to-multiply badge.
+  // Modular sockets share socket_gnd_child with wall sockets and must not match them.
+  if (endpoint.type === 'socket') return false
+  if (isModularSocket(endpoint) || isModularSocketLibraryId(droppedSymbolId)) return false
+  return endpoint.symbol === droppedSymbolId
+}
+
 export function canIncrementSameSymbolAddMoreTarget(
   droppedSymbolId: string,
   target: SameSymbolAddMoreTarget
 ): boolean {
   if (target.endpoint) {
     return (
-      target.endpoint.symbol === droppedSymbolId &&
-      (target.endpoint.type === 'socket' || endpointSupportsMultiplier(target.endpoint))
+      droppedSymbolMatchesEndpoint(droppedSymbolId, target.endpoint) &&
+      endpointSupportsMultiplier(target.endpoint)
     )
   }
   return (
@@ -55,10 +63,7 @@ export interface SameSymbolAddMoreLayoutTarget {
 
 const SAME_SYMBOL_PREVIEW_SIZE = 24
 function getTargetMultiplier(target: SameSymbolAddMoreTarget): number {
-  if (target.endpoint) {
-    if (target.endpoint.type === 'socket') return target.endpoint.socketProps?.socketCount ?? 1
-    return getEndpointMultiplier(target.endpoint)
-  }
+  if (target.endpoint) return getEndpointMultiplier(target.endpoint)
   return getSupplyDeviceMultiplier(target.trunkDevice)
 }
 
@@ -77,8 +82,9 @@ function supportsSameSymbolTarget(
 ): SameSymbolAddMoreTarget | null {
   if (node.type === 'endpoint') {
     const endpoint = node.domainRef as Endpoint | undefined
-    if (!endpoint || endpoint.symbol !== symbolId) return null
-    if (endpoint.type !== 'socket' && !endpointSupportsMultiplier(endpoint)) return null
+    if (!endpoint) return null
+    if (!droppedSymbolMatchesEndpoint(symbolId, endpoint)) return null
+    if (!endpointSupportsMultiplier(endpoint)) return null
     return { endpoint }
   }
   if (node.type === 'trunkDevice') {
@@ -180,10 +186,6 @@ export function incrementSameSymbolAddMoreTarget(
   if (!canIncrementSameSymbolAddMoreTarget(droppedSymbolId, target)) return 'not-applicable'
   if (target.endpoint) {
     const endpoint = target.endpoint
-    if (endpoint.type === 'socket') {
-      deps.updateSocketCount(endpoint.id, (endpoint.socketProps?.socketCount ?? 1) + 1)
-      return 'incremented'
-    }
     return deps.syncEndpointCount(endpoint.id, getEndpointMultiplier(endpoint) + 1)
       ? 'incremented'
       : 'blocked'

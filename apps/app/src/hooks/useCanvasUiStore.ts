@@ -30,6 +30,18 @@ function scheduleInputCommit(callback: () => void): void {
  * Zustand is an external store, so startTransition alone still notifies subscribers during the
  * input event. setTimeout(0) exits Konva's mouseup/tap handler before React reconciles.
  */
+/**
+ * Drop any stale breadcrumb/callout hover on a selection change. Global hover is
+ * set by hover-highlight sources (metadata callouts, breadcrumbs) whose pointer
+ * `mouseleave` can be missed; without this, a dashed hover outline would linger on
+ * an element after (de)selecting it (notably HVAC/ventilation endpoints, the only
+ * eendraad endpoints that render a hover-emitting callout).
+ */
+function clearStaleHoverOnSelectionChange(): void {
+  const { hover, clearHover } = useUIStore.getState()
+  if (hover.type !== null) clearHover()
+}
+
 export function useCommitSelection() {
   const setSelection = useUIStore((s) => s.setSelection)
   const pendingSelectionRef = useRef<Selection | null>(null)
@@ -49,7 +61,10 @@ export function useCommitSelection() {
         flushScheduledRef.current = false
         const pending = pendingSelectionRef.current
         pendingSelectionRef.current = null
-        if (pending) setSelection(pending)
+        if (pending) {
+          setSelection(pending)
+          clearStaleHoverOnSelectionChange()
+        }
       })
     },
     [setSelection],
@@ -65,12 +80,14 @@ export function useCommitClearSelection() {
       scheduleInputCommit(() => {
         startTransition(() => {
           clearSelection()
+          clearStaleHoverOnSelectionChange()
         })
       })
       return
     }
     scheduleInputCommit(() => {
       clearSelection()
+      clearStaleHoverOnSelectionChange()
     })
   }, [clearSelection])
 }

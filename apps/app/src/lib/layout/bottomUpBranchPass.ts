@@ -370,9 +370,63 @@ function createEndpointBranchRows(
   return result
 }
 
-function getTopmostBranchY(branches: BranchLayout[], circuitId: string, fallbackY: number): number {
-  const circuitBranches = branches.filter((b) => b.circuitId === circuitId)
+/** Topmost branch anchor among an already-collected set of a circuit's branches. */
+function topmostBranchYOf(circuitBranches: BranchLayout[], fallbackY: number): number {
   return circuitBranches.length > 0 ? Math.min(...circuitBranches.map((b) => b.branchY)) : fallbackY
+}
+
+/**
+ * A domotica box grows upward from its branch anchor. When a protection is
+ * placed above the branch (a nested sub-circuit MCB on the circuit's secondary
+ * bus), the gap above the branch must clear that upward growth — otherwise the
+ * box overlaps the protection once the module grows past ~3 endpoints. Returns
+ * how far a branch's tallest domotica box rises above its branch anchor row.
+ */
+function getBranchDomoticaUpwardExtent(
+  branchEndpoints: BranchLayout['endpoints'],
+  constants: Pick<
+    BranchPassConstants,
+    'DOMOTICA_MIN_ENDPOINT_OUTPUTS' | 'DOMOTICA_MAX_ENDPOINT_OUTPUTS' | 'DOMOTICA_OUTPUT_SPACING'
+  >
+): number {
+  return getDomoticaExtraRows(branchEndpoints, constants) * constants.DOMOTICA_OUTPUT_SPACING
+}
+
+/**
+ * Topmost visual extent of a circuit's endpoint branches — the highest branch
+ * anchor, raised further by any domotica box on it that grows upward. Used to
+ * position the secondary bus (and the protection above) with a constant gap
+ * regardless of domotica endpoint count, so the module keeps looking the same
+ * whether or not a protection sits above it.
+ */
+function topmostBranchExtentYOf(
+  circuitBranches: BranchLayout[],
+  fallbackY: number,
+  constants: Pick<
+    BranchPassConstants,
+    'DOMOTICA_MIN_ENDPOINT_OUTPUTS' | 'DOMOTICA_MAX_ENDPOINT_OUTPUTS' | 'DOMOTICA_OUTPUT_SPACING'
+  >
+): number {
+  if (circuitBranches.length === 0) return fallbackY
+  return Math.min(
+    ...circuitBranches.map((b) => b.branchY - getBranchDomoticaUpwardExtent(b.endpoints, constants))
+  )
+}
+
+function getTopmostBranchExtentY(
+  branches: BranchLayout[],
+  circuitId: string,
+  fallbackY: number,
+  constants: Pick<
+    BranchPassConstants,
+    'DOMOTICA_MIN_ENDPOINT_OUTPUTS' | 'DOMOTICA_MAX_ENDPOINT_OUTPUTS' | 'DOMOTICA_OUTPUT_SPACING'
+  >
+): number {
+  return topmostBranchExtentYOf(
+    branches.filter((b) => b.circuitId === circuitId),
+    fallbackY,
+    constants
+  )
 }
 
 function processNestedCircuitBranches(
@@ -432,11 +486,16 @@ function processNestedCircuitBranches(
 
     const deeperNestedCircuits = resolveBranchSubCircuits(nestedCircuit, circuitMap)
     if (deeperNestedCircuits.length > 0) {
-      const topmostNestedBranchY = getTopmostBranchY(branches, nestedCircuit.id, nestedMcbY)
+      const topmostNestedExtentY = getTopmostBranchExtentY(
+        branches,
+        nestedCircuit.id,
+        nestedMcbY,
+        constants
+      )
       const nestedSecondaryBusY =
         getCircuitBranches(nestedCircuit).length > 0
-          ? topmostNestedBranchY - constants.SECONDARY_BUS_ABOVE_ENDPOINTS_GAP
-          : topmostNestedBranchY
+          ? topmostNestedExtentY - constants.SECONDARY_BUS_ABOVE_ENDPOINTS_GAP
+          : topmostNestedExtentY
       secondaryBusYByCircuitId.set(nestedCircuit.id, nestedSecondaryBusY)
       processNestedCircuitBranches(
         nestedCircuit,
@@ -474,29 +533,33 @@ export function calculateBranchLayoutPass(
       : mainBusY - constants.MCB_Y_OFFSET
     const firstBranchY = calculateFirstBranchY(circuitLayout, startY, constants)
 
-    if (getNonPanelEndpoints(circuit).length === 0) {
-      branches.push(createEmptyBranch(circuit, startX, startY, firstBranchY))
-    } else {
-      branches.push(
-        ...createEndpointBranchRows(circuit, startX, startY, firstBranchY, constants, 0)
-      )
-    }
+    // This circuit's own branch rows, kept locally so the topmost-extent lookups
+    // below don't re-scan the whole (growing) branches array per circuit — that
+    // made the pass O(circuits × totalBranches). Nested circuits are pushed later
+    // by processNestedCircuitBranches, so these rows are exactly circuit.id's set.
+    const circuitBranchRows =
+      getNonPanelEndpoints(circuit).length === 0
+        ? [createEmptyBranch(circuit, startX, startY, firstBranchY)]
+        : createEndpointBranchRows(circuit, startX, startY, firstBranchY, constants, 0)
+    branches.push(...circuitBranchRows)
 
     if (nestedCircuits.length === 0) continue
 
     const hasParentEndpointBranches = endpointBranches.length > 0
     if (hasParentEndpointBranches) {
-      const lastBranchY =
-        firstBranchY - (endpointBranches.length - 1) * constants.ENDPOINT_BRANCH_SPACING
+      // Measure the actual topmost branch (incl. domotica/label/metadata
+      // reserves and any upward-growing domotica box) rather than re-deriving it
+      // from firstBranchY, so the protection above clears the content.
+      const topmostExtentY = topmostBranchExtentYOf(circuitBranchRows, firstBranchY, constants)
       secondaryBusYByCircuitId.set(
         circuit.id,
-        lastBranchY - constants.SECONDARY_BUS_ABOVE_ENDPOINTS_GAP
+        topmostExtentY - constants.SECONDARY_BUS_ABOVE_ENDPOINTS_GAP
       )
     } else if (nestedCircuits.some((sc) => getNonPanelEndpoints(sc).length > 0)) {
       secondaryBusYByCircuitId.set(circuit.id, startY)
     }
 
-    const topmostBranchY = getTopmostBranchY(branches, circuit.id, startY)
+    const topmostBranchY = topmostBranchYOf(circuitBranchRows, startY)
     const secondaryBusY = secondaryBusYByCircuitId.get(circuit.id)
     const parentWireEndY =
       hasParentEndpointBranches && secondaryBusY != null ? secondaryBusY : topmostBranchY

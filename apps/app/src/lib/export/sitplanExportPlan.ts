@@ -7,7 +7,7 @@ import {
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import type { Endpoint, Panel } from '@/types/schema'
-import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
+import { endpointSymbolVisibleOnSitplan } from '@/lib/plan/planSymbolVisibility'
 
 type SitplanExportProject = ProjectWithOptionalV2Building & ProjectWithOptionalV2Electrical
 
@@ -70,11 +70,11 @@ function shouldCountEndpointForDuplicateLabels(endpoint: Endpoint): boolean {
   if (endpoint.symbol === 'panel_distribution') {
     return false
   }
-  return canSymbolAppearOnSituationPlan(endpoint.symbol)
+  return endpointSymbolVisibleOnSitplan(endpoint)
 }
 
 function shouldCountEndpointForPanelContent(endpoint: Endpoint): boolean {
-  return canSymbolAppearOnSituationPlan(endpoint.symbol)
+  return endpointSymbolVisibleOnSitplan(endpoint)
 }
 
 function collectSitplanPlacements(project: SitplanExportProject): SitplanPlacementRecord[] {

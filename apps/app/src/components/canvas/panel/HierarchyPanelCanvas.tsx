@@ -61,6 +61,11 @@ import {
 } from '@/lib/panel/panelScene'
 import { applyPanelSceneFilter, type PanelSceneFilter } from '@/lib/panel/applyPanelSceneFilter'
 import { generateId } from '@/utils'
+import {
+  applyLibraryPresetToEndpoint,
+  getEndpointTypeFromSymbol,
+  getSymbolKeyFromSymbol,
+} from '@/utils/symbolMapping'
 import { findTrunkDeviceInProject, getNextAvailableCircuitCode } from '@/utils/project'
 import { addToSelection } from '@/utils/selection'
 import {
@@ -89,6 +94,7 @@ import type {
   PanelGridModuleRef,
   ProtectionDevice,
   Circuit,
+  Endpoint,
   TrunkDevice,
   Panel,
 } from '@/types/schema'
@@ -121,6 +127,18 @@ import {
 } from '@/lib/panel/auxiliarySupplyEnclosures'
 import { resolvePanelWireSelectionFocus } from '@/lib/panel/panelWireSelection'
 import { duplicateEndpointOnCircuit } from '@/lib/eendraad/duplicateEndpoint'
+import {
+  canDropModularSocketOnPanel,
+  findPreferredModularSocketCircuit,
+  findPreferredModularSocketProtection,
+  getModularSocketCount,
+  isModularSocket,
+  isModularSocketLibraryId,
+  MODULAR_SOCKET_SINGLE_MODULE_WIDTH,
+  snapModularSocketModuleWidthWithin,
+  socketCountForModularWidth,
+  withModularSocketProps,
+} from '@/lib/socket/modularSocket'
 
 type Project = NonNullable<ProjectState['currentProject']>
 
@@ -508,6 +526,7 @@ function applyPanelRewireOperation({
 }
 
 function getLibraryDropWidthCols(symbol: SymbolMetadata, project: Project | null): number {
+  if (isModularSocketLibraryId(symbol.id)) return MODULAR_SOCKET_SINGLE_MODULE_WIDTH
   if (symbol.id === 'energy_meter')
     return Math.max(1, polesFromConfig(getVoltagePolesConfig(project)))
   if (symbol.id === ROTATING_SWITCH_SYMBOL_ID) return 1
@@ -762,7 +781,8 @@ function buildPanelWirePathLinks(connectors: BuiltPanelScene['connectors']): Wir
 }
 
 interface HierarchyDragPreview {
-  panelId: string
+  surfaceId: string
+  panelId?: string
   x: number
   y: number
   width: number
@@ -1772,6 +1792,27 @@ export function HierarchyPanelCanvas({
     [scene]
   )
 
+  const detectHierarchyLibraryDropHover = useCallback(
+    (position: Point) => {
+      if (!scene) return null
+      const panelTarget = detectHierarchyPanelTarget(position)
+      if (panelTarget) return panelTarget
+      for (const surface of scene.surfaces) {
+        if (surface.kind === 'panel') continue
+        if (
+          position.x >= surface.x - 10 &&
+          position.x <= surface.x + surface.width + 10 &&
+          position.y >= surface.y - 10 &&
+          position.y <= surface.y + surface.height + 10
+        ) {
+          return surface
+        }
+      }
+      return null
+    },
+    [detectHierarchyPanelTarget, scene]
+  )
+
   const detectHierarchyModuleDropTarget = useCallback(
     (position: Point, ref: PanelGridModuleRef) => {
       if (!scene || !currentProject) return null
@@ -1857,44 +1898,55 @@ export function HierarchyPanelCanvas({
         return
       }
       const symbol = symbolData as SymbolMetadata
-      const targetSurface = detectHierarchyPanelTarget(position)
-      if (!targetSurface?.panel) {
+      const isModularSocketDrop = isModularSocketLibraryId(symbol.id)
+      const hoverSurface = isModularSocketDrop
+        ? detectHierarchyLibraryDropHover(position)
+        : detectHierarchyPanelTarget(position)
+      if (!hoverSurface) {
         setDragPreview(null)
         return
       }
 
-      const localX = position.x - targetSurface.x - PANEL_FRAME_MARGIN
+      const localX = position.x - hoverSurface.x - PANEL_FRAME_MARGIN
       const localY =
         position.y -
-        targetSurface.y -
-        targetSurface.mainPanelY -
+        hoverSurface.y -
+        (hoverSurface.kind === 'panel' ? hoverSurface.mainPanelY : 0) -
         PANEL_FRAME_MARGIN -
-        getTerminalStripTopOffset(targetSurface.panel)
+        getTerminalStripTopOffset(hoverSurface.panel)
       const widthCols = getLibraryDropWidthCols(symbol, currentProject)
       const col = Math.max(
         0,
         Math.min(
-          targetSurface.cols - widthCols,
+          hoverSurface.cols - widthCols,
           Math.round(localX / CELL_W) - Math.floor(widthCols / 2)
         )
       )
       const snapped = snapToGrid(localX, localY + CELL_H / 2)
-      const row = clamp(snapped.row, 0, targetSurface.rows - 1)
+      const row = clamp(snapped.row, 0, hoverSurface.rows - 1)
+      const invalid =
+        isModularSocketDrop &&
+        (hoverSurface.kind !== 'panel' || !canDropModularSocketOnPanel(hoverSurface.panel))
 
       setDragPreview({
-        panelId: targetSurface.panel.id,
-        x: targetSurface.x + PANEL_FRAME_MARGIN + col * CELL_W,
-        y:
-          targetSurface.y +
-          targetSurface.mainPanelY +
+        surfaceId: hoverSurface.id,
+        panelId: hoverSurface.panel?.id,
+        x:
+          hoverSurface.x +
           PANEL_FRAME_MARGIN +
-          getTerminalStripTopOffset(targetSurface.panel) +
+          col * CELL_W,
+        y:
+          hoverSurface.y +
+          (hoverSurface.kind === 'panel' ? hoverSurface.mainPanelY : 0) +
+          PANEL_FRAME_MARGIN +
+          getTerminalStripTopOffset(hoverSurface.panel) +
           row * ROW_STRIDE,
         width: widthCols * CELL_W,
         height: CELL_H,
+        invalid,
       })
     },
-    [currentProject, detectHierarchyPanelTarget, scene]
+    [currentProject, detectHierarchyLibraryDropHover, detectHierarchyPanelTarget, scene]
   )
 
   const handleHierarchyDrop = useCallback(
@@ -1902,9 +1954,15 @@ export function HierarchyPanelCanvas({
       setDragPreview(null)
       if (!currentProject || !symbolData || typeof symbolData !== 'object') return
       const symbol = symbolData as SymbolMetadata
-      const targetSurface = detectHierarchyPanelTarget(position)
+      const isModularSocketDrop = isModularSocketLibraryId(symbol.id)
+      const targetSurface = isModularSocketDrop
+        ? detectHierarchyLibraryDropHover(position)
+        : detectHierarchyPanelTarget(position)
       const targetPanel = targetSurface?.panel
       if (!targetSurface || !targetPanel) return
+      if (isModularSocketDrop && (targetSurface.kind !== 'panel' || !canDropModularSocketOnPanel(targetPanel))) {
+        return
+      }
 
       setSelection({ type: 'panel', ids: [targetPanel.id] })
 
@@ -1928,6 +1986,84 @@ export function HierarchyPanelCanvas({
           Math.round(localX / CELL_W) - Math.floor(droppedModuleWidthCols / 2)
         )
       )
+
+      if (isModularSocketDrop) {
+        const hitPlacement = targetSurface.placements.find(
+          (placement) =>
+            placement.ref.kind === 'protection' &&
+            position.x >= targetSurface.x + placement.x &&
+            position.x <= targetSurface.x + placement.x + placement.width &&
+            position.y >= targetSurface.y + placement.y &&
+            position.y <= targetSurface.y + placement.y + placement.height
+        )
+        const hitProtectionId = hitPlacement?.ref.kind === 'protection' ? hitPlacement.ref.id : undefined
+        const hitProtection = hitProtectionId
+          ? targetPanel.protections.find((protection) => protection.id === hitProtectionId)
+          : undefined
+        const protection = findPreferredModularSocketProtection(targetPanel, hitProtection)
+        if (!protection) return
+        let targetCircuit = findPreferredModularSocketCircuit(targetPanel, protection)
+        if (!targetCircuit) {
+          const circuitId = generateId()
+          const autoCircuitCode = resolveInitialProtectionBusLabel(
+            protection.type,
+            getNextAvailableCircuitCode(currentProject, targetPanel.id)
+          )
+          targetCircuit = {
+            id: circuitId,
+            code: autoCircuitCode,
+            kind: 'other',
+            cable: createDefaultAcCircuitCable(),
+            endpoints: [],
+            ...DEFAULT_AC_CIRCUIT_WIRE_LABEL_FLAGS,
+          }
+          useProjectStore.getState().addCircuit(targetPanel.id, targetCircuit, protection.id)
+        }
+
+        const endpoint: Endpoint = {
+          id: generateId(),
+          type: getEndpointTypeFromSymbol(symbol) ?? 'socket',
+          symbol: getSymbolKeyFromSymbol(symbol) ?? 'socket_gnd_child',
+          label: '',
+          placements: [],
+        }
+        applyLibraryPresetToEndpoint(symbol, endpoint)
+        useProjectStore.getState().addEndpoint(targetCircuit.id, endpoint)
+
+        const projectAfterDrop = useProjectStore.getState().currentProject
+        const persistedPanel = projectAfterDrop
+          ? findPanelRecursive(getProjectElectricalPanels(projectAfterDrop), targetPanel.id)
+          : undefined
+        const persistedCircuit = persistedPanel
+          ? collectCircuits(persistedPanel).find((circuit) => circuit.id === targetCircuit.id)
+          : undefined
+        if (
+          !persistedPanel ||
+          !persistedCircuit?.endpoints.some((item) => item.id === endpoint.id)
+        ) {
+          logger.error('PanelCanvas hierarchy: Modular socket could not be assigned to the circuit', {
+            panelId: targetPanel.id,
+            circuitId: targetCircuit.id,
+            endpointId: endpoint.id,
+          })
+          return
+        }
+
+        const moduleRef: PanelGridModuleRef = {
+          kind: 'domotica',
+          endpointId: endpoint.id,
+          circuitId: targetCircuit.id,
+        }
+        const existingSlots = persistedPanel.gridView?.slots ?? []
+        useProjectStore
+          .getState()
+          .unhideModuleFromPanel(targetPanel.id, panelGridModuleRefKey(moduleRef))
+        useProjectStore
+          .getState()
+          .updatePanelGridSlots(targetPanel.id, [...existingSlots, { row, col, module: moduleRef }])
+        setSelection({ type: 'endpoint', ids: [endpoint.id] })
+        return
+      }
 
       if (isProtectionDevice) {
         const protectionType = protectionTypeFromSymbolId(symbol.id) || 'MCB'
@@ -2013,7 +2149,7 @@ export function HierarchyPanelCanvas({
         setSelection({ type: 'trunkDevice', ids: [deviceId] })
       }
     },
-    [currentProject, detectHierarchyPanelTarget, setSelection]
+    [currentProject, detectHierarchyLibraryDropHover, detectHierarchyPanelTarget, setSelection]
   )
 
   const selectedRef = useMemo((): PanelGridModuleRef | null => {
@@ -2265,7 +2401,7 @@ export function HierarchyPanelCanvas({
             return col < other.col + otherCols && other.col < col + moduleCols
           })
           setModuleDragLive({
-            panelId: targetSurfaceId ?? currentSurfaceId,
+            surfaceId: targetSurfaceId ?? currentSurfaceId,
             x: canvasPos.x,
             y: canvasPos.y,
             width: placement.width,
@@ -2273,7 +2409,7 @@ export function HierarchyPanelCanvas({
             ref: placement.ref,
           })
           setModuleDragPreview({
-            panelId: targetSurfaceId ?? currentSurfaceId,
+            surfaceId: targetSurfaceId ?? currentSurfaceId,
             x: target.surface.x + PANEL_FRAME_MARGIN + col * CELL_W,
             y: targetY,
             width: placement.width,
@@ -2348,7 +2484,7 @@ export function HierarchyPanelCanvas({
                 ? ownerSurface.y + ownerSurface.height
                 : Math.max(0, canvasPos.y - PANEL_FRAME_MARGIN - CELL_H / 2)
           setModuleDragLive({
-            panelId: surfaceTargetId,
+            surfaceId: surfaceTargetId,
             x: canvasPos.x,
             y: canvasPos.y,
             width: placement.width,
@@ -2363,7 +2499,7 @@ export function HierarchyPanelCanvas({
             })),
           })
           setModuleDragPreview({
-            panelId: '__new_auxiliary__',
+            surfaceId: '__new_auxiliary__',
             x: Math.max(0, canvasPos.x - PANEL_FRAME_MARGIN - placement.width / 2),
             y: Math.max(0, transitionY),
             width: previewWidth,
@@ -2455,7 +2591,7 @@ export function HierarchyPanelCanvas({
                   getTerminalStripTopOffset(targetPanel) +
                   row * ROW_STRIDE
           setModuleDragLive({
-            panelId: targetSurfaceId ?? currentSurfaceId,
+            surfaceId: targetSurfaceId ?? currentSurfaceId,
             x: canvasPos.x,
             y: canvasPos.y,
             width: placement.width,
@@ -2463,7 +2599,7 @@ export function HierarchyPanelCanvas({
             ref: placement.ref,
           })
           setModuleDragPreview({
-            panelId: targetSurfaceId ?? currentSurfaceId,
+            surfaceId: targetSurfaceId ?? currentSurfaceId,
             x: target.surface.x + PANEL_FRAME_MARGIN + col * CELL_W,
             y: previewY,
             width: placement.width,
@@ -2480,7 +2616,7 @@ export function HierarchyPanelCanvas({
         const dy = rawY - placement.y
         if (selectedPlacements.length >= 2) {
           setModuleDragLive({
-            panelId: surfaceTargetId,
+            surfaceId: surfaceTargetId,
             x: surface.x + rawX,
             y: surface.y + rawY,
             width: placement.width,
@@ -2496,7 +2632,7 @@ export function HierarchyPanelCanvas({
           })
         } else {
           setModuleDragLive({
-            panelId: surfaceTargetId,
+            surfaceId: surfaceTargetId,
             x: surface.x + rawX,
             y: surface.y + rawY,
             width: placement.width,
@@ -2546,7 +2682,7 @@ export function HierarchyPanelCanvas({
               })
             })
           setModuleDragPreview({
-            panelId: surfaceTargetId,
+            surfaceId: surfaceTargetId,
             x: surface.x + PANEL_FRAME_MARGIN + col * CELL_W,
             y: surface.y + surface.supplyPanelY + PANEL_FRAME_MARGIN,
             width: placement.width,
@@ -2573,7 +2709,7 @@ export function HierarchyPanelCanvas({
           return col < other.col + otherCols && other.col < col + moduleCols
         })
         setModuleDragPreview({
-          panelId: surfaceTargetId,
+          surfaceId: surfaceTargetId,
           x: surface.x + PANEL_FRAME_MARGIN + col * CELL_W,
           y: surface.y + surface.supplyPanelY + PANEL_FRAME_MARGIN,
           width: placement.width,
@@ -2627,7 +2763,7 @@ export function HierarchyPanelCanvas({
       const dy = rawY - placement.y
       if (selectedPlacements.length >= 2) {
         setModuleDragLive({
-          panelId: surfaceTargetId,
+          surfaceId: surfaceTargetId,
           x: surface.x + rawX,
           y: surface.y + rawY,
           width: placement.width,
@@ -2644,7 +2780,7 @@ export function HierarchyPanelCanvas({
       } else {
         setModuleDragLive({
           isAltDuplicate,
-          panelId: surfaceTargetId,
+          surfaceId: surfaceTargetId,
           x: surface.x + rawX,
           y: surface.y + rawY,
           width: placement.width,
@@ -2706,7 +2842,7 @@ export function HierarchyPanelCanvas({
             })
           })
         setModuleDragPreview({
-          panelId: surfaceTargetId,
+          surfaceId: surfaceTargetId,
           x: surface.x + PANEL_FRAME_MARGIN + col * CELL_W,
           y:
             surface.y +
@@ -2734,7 +2870,7 @@ export function HierarchyPanelCanvas({
         return col < other.col + otherCols && other.col < col + moduleCols
       })
       setModuleDragPreview({
-        panelId: surfaceTargetId,
+        surfaceId: surfaceTargetId,
         x: surface.x + PANEL_FRAME_MARGIN + col * CELL_W,
         y:
           surface.y +
@@ -2785,7 +2921,7 @@ export function HierarchyPanelCanvas({
       const surfaceTargetId = panel?.id ?? surface.id
       if (
         preview &&
-        preview.panelId === surfaceTargetId &&
+        preview.surfaceId === surfaceTargetId &&
         preview.ref &&
         panelGridModuleRefKey(preview.ref) === panelGridModuleRefKey(placement.ref) &&
         preview.invalid
@@ -3269,7 +3405,7 @@ export function HierarchyPanelCanvas({
         !sourcePanel ||
         placement.inSupplyPanel ||
         preview?.invalid ||
-        preview?.panelId !== sourcePanel.id
+        preview?.surfaceId !== sourcePanel.id
       ) {
         return
       }
@@ -3354,6 +3490,21 @@ export function HierarchyPanelCanvas({
       const panel = surface.panel
       const key = panelGridModuleRefKey(placement.ref)
 
+      if (placement.ref.kind === 'domotica') {
+        const endpoint = useProjectStore.getState().getEndpointById(placement.ref.endpointId)
+        if (endpoint && isModularSocket(endpoint)) {
+          const maxWidthCols = Math.max(2, (placement.inSupplyPanel ? surface.supplyCols : surface.cols) - placement.col)
+          const snappedWidth = snapModularSocketModuleWidthWithin(newWidthCols, maxWidthCols)
+          const nextCount = socketCountForModularWidth(snappedWidth)
+          if (getModularSocketCount(endpoint) !== nextCount) {
+            updateEndpoint(placement.ref.endpointId, {
+              socketProps: withModularSocketProps(endpoint.socketProps, nextCount),
+            })
+          }
+          return
+        }
+      }
+
       if (surface.kind === 'auxiliary' && surface.enclosure) {
         updateAuxiliaryElectricalEnclosure(surface.id, {
           gridView: {
@@ -3400,13 +3551,20 @@ export function HierarchyPanelCanvas({
       }
       updatePanelGridSlots(panel.id, nextMainSlots)
     },
-    [updateAuxiliaryElectricalEnclosure, updatePanelGridSlots, updateSupplyPanelSlots]
+    [updateAuxiliaryElectricalEnclosure, updateEndpoint, updatePanelGridSlots, updateSupplyPanelSlots]
   )
 
   const getHierarchyMaxWidth = useCallback(
     (surface: HierarchySurface, placement: ModulePlacement & { inSupplyPanel?: boolean }) => {
       const totalCols = placement.inSupplyPanel ? surface.supplyCols : surface.cols
-      return Math.max(1, totalCols - placement.col)
+      const remaining = Math.max(1, totalCols - placement.col)
+      if (placement.ref.kind === 'domotica') {
+        const endpoint = useProjectStore.getState().getEndpointById(placement.ref.endpointId)
+        if (isModularSocket(endpoint)) {
+          return Math.min(4, remaining)
+        }
+      }
+      return remaining
     },
     []
   )
@@ -4323,7 +4481,7 @@ export function HierarchyPanelCanvas({
               {surface.placements.map((placement) => {
                 const surfaceTargetId = surface.panel?.id ?? surface.id
                 const previewItem =
-                  moduleDragLive?.panelId === surfaceTargetId
+                  moduleDragLive?.surfaceId === surfaceTargetId
                     ? (moduleDragLive?.items?.find(
                         (item) =>
                           panelGridModuleRefKey(item.ref) === panelGridModuleRefKey(placement.ref)
@@ -4532,7 +4690,7 @@ export function HierarchyPanelCanvas({
                 )
               })}
               {moduleDragPreview &&
-                moduleDragPreview.panelId === (surface.panel?.id ?? surface.id) &&
+                moduleDragPreview.surfaceId === (surface.panel?.id ?? surface.id) &&
                 (moduleDragPreview.items && moduleDragPreview.items.length > 0
                   ? moduleDragPreview.items.map((item) => (
                       <Rect
@@ -4562,13 +4720,13 @@ export function HierarchyPanelCanvas({
                         listening={false}
                       />,
                     ])}
-              {dragPreview && dragPreview.panelId === surface.panel?.id && (
+              {dragPreview && dragPreview.surfaceId === surface.id && (
                 <Rect
                   x={dragPreview.x - surface.x}
                   y={dragPreview.y - surface.y}
                   width={dragPreview.width}
                   height={dragPreview.height}
-                  stroke={colors.hoverColor}
+                  stroke={dragPreview.invalid ? '#ef4444' : colors.hoverColor}
                   strokeWidth={2}
                   dash={[8, 4]}
                   fill="transparent"

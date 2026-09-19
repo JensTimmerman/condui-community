@@ -8,6 +8,7 @@ import { findCircuitForEndpointInProject } from '@/utils/project'
 import { generateId } from '@/utils'
 import { ensureElectricalLayerOnFloor } from '@/lib/plan/floorLayers'
 import { getPlacementWorldBounds } from '@/utils/plan/placementBounds'
+import { isModularSocket } from '@/lib/socket/modularSocket'
 import {
   selectProjectBuildingFloors,
   type ProjectWithOptionalV2Building,
@@ -111,7 +112,7 @@ export function clonePlacementsForDuplicate(
  * otherwise {@link ensureSitplanPlacementsForEndpoints} adds one on the resolved target floor.
  */
 export function sitplanPlacementsForDuplicateClone(source: Endpoint): Placement[] {
-  if (!source.placements?.length) return []
+  if (isModularSocket(source) || !source.placements?.length) return []
   const options = clonePlacementsOptionsForEndpoint(source)
   const toCopy = endpointSupportsMultiplier(source)
     ? source.placements
@@ -195,7 +196,7 @@ export function ensureSitplanPlacementsForEndpoints(
   for (const endpointId of endpointIds) {
     const ep = getEndpointById(endpointId)
     if (!ep || (ep.placements?.length ?? 0) > 0) continue
-    if (!ep.symbol) continue
+    if (!ep.symbol || isModularSocket(ep)) continue
     const symMeta = getSymbolById(ep.symbol)
     if (symMeta?.scope === 'eendraad' || ep.symbol === 'domotica') continue
     const circuitInfo = findCircuitForEndpointInProject(project, endpointId)

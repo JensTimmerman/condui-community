@@ -1,9 +1,13 @@
 import { useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useValidationStore, type ValidationState } from '@/stores/validationStore'
+import {
+  getValidationDisplayKind,
+  useValidationStore,
+  type ValidationState,
+} from '@/stores/validationStore'
 import { useProjectStore, type ProjectState } from '@/stores/projectStore'
 import { useUIStore } from '@/stores/uiStore'
-import { AlertCircle, AlertTriangle, CheckCircle2, RotateCcw, CircleHelp } from 'lucide-react'
+import { AlertCircle, AlertTriangle, CheckCircle2, RotateCcw, RotateCw, CircleHelp } from 'lucide-react'
 import { focusIssue } from '@/lib/validation/core/api'
 import type { Issue, ScopeType } from '@/lib/validation/core/types'
 import type { Selection } from '@/types/ui'
@@ -152,6 +156,12 @@ function ValidationIssuesDialog({
   const language = useSettingsStore((state) => state.language)
   const issues = useValidationStore((state: ValidationState) => state.issues)
   const status = useValidationStore((state: ValidationState) => state.status)
+  const isLoading = useValidationStore((state: ValidationState) => state.isLoading)
+  const isDirty = useValidationStore((state: ValidationState) => state.isDirty)
+  const lastValidatedSignature = useValidationStore(
+    (state: ValidationState) => state.lastValidatedSignature
+  )
+  const currentSignature = useValidationStore((state: ValidationState) => state.currentSignature)
   const errorCount = useValidationStore((state: ValidationState) => state.getErrorCount())
   const warningCount = useValidationStore((state: ValidationState) => state.getWarningCount())
   const setSelection = useUIStore((s) => s.setSelection)
@@ -159,7 +169,15 @@ function ValidationIssuesDialog({
   const storedWireSegments = currentProject ? queryOneWireSegments(currentProject) : []
   const validationDisabledOutsideBelgium =
     currentProject != null && getProjectElectricalInstallation(currentProject)?.address.country !== 'BE'
-  const displayStatus = validationDisabledOutsideBelgium ? 'warning' : status
+  const displayKind = validationDisabledOutsideBelgium
+    ? 'warning'
+    : getValidationDisplayKind({
+        status,
+        isLoading,
+        isDirty,
+        lastValidatedSignature,
+        currentSignature,
+      })
 
   const [severityFilter, setSeverityFilter] = useState<Record<string, boolean>>({
     error: true,
@@ -921,19 +939,24 @@ function ValidationIssuesDialog({
             className={`flex min-w-0 items-center gap-3 ${onHeaderPointerDown ? 'cursor-grab active:cursor-grabbing select-none' : ''}`}
             onPointerDown={onHeaderPointerDown}
           >
-            {displayStatus === 'error' && (
+            {displayKind === 'error' && (
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/30">
                 <AlertCircle className="w-5 h-5 text-red-500" />
               </div>
             )}
-            {displayStatus === 'warning' && (
+            {displayKind === 'warning' && (
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-yellow-100 dark:bg-yellow-900/30">
                 <AlertTriangle className="w-5 h-5 text-yellow-500" />
               </div>
             )}
-            {displayStatus === 'ok' && (
+            {displayKind === 'ok' && (
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
                 <CheckCircle2 className="w-5 h-5 text-green-500" />
+              </div>
+            )}
+            {displayKind === 'pending' && (
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-800">
+                <RotateCw className="w-5 h-5 animate-spin text-gray-500 dark:text-gray-400" />
               </div>
             )}
             <h2 className="text-xl font-bold text-gray-900 dark:text-white">
@@ -958,7 +981,14 @@ function ValidationIssuesDialog({
               {t('validation.belgianRulesOnly', { defaultValue: 'The app currently only checks AREI rules for Belgium.' })}
             </p>
           </div>
-        ) : status === 'ok' && issues.length === 0 ? (
+        ) : displayKind === 'pending' && issues.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-10 text-center">
+            <RotateCw className="mb-3 h-14 w-14 animate-spin text-gray-400 dark:text-gray-500" />
+            <h3 className="mb-1.5 text-lg font-semibold text-gray-900 dark:text-white">
+              {t('validation.checking', { defaultValue: 'Checking...' })}
+            </h3>
+          </div>
+        ) : displayKind === 'ok' && issues.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">
             <CheckCircle2 className="mb-3 h-14 w-14 text-green-500" />
             <h3 className="mb-1.5 text-lg font-semibold text-gray-900 dark:text-white">

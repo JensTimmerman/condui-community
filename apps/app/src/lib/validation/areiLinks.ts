@@ -48,6 +48,14 @@ const VALIDATION_AREI_LINKS: Record<string, ValidationAreiLink> = {
     path: '/issues/protection',
     hash: 'earthing',
   },
+  'be.areibook1.2025.installation-earthing': {
+    path: '/issues/protection',
+    hash: 'earthing',
+  },
+  'be.areibook1.2025.multiple-earthing-locations': {
+    path: '/issues/protection',
+    hash: 'earthing',
+  },
   'be.areibook1.2025.nonhousehold-board-numbering': {
     path: '/issues/documentation-inspection-responsibility',
     hash: 'schema_eigenschappen',

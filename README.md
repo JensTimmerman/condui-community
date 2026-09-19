@@ -65,6 +65,9 @@ podman run --rm -p 8080:8080 ghcr.io/xoliul/condui-community:latest
 The container serves the application and the local file-conversion endpoints it needs. It does not
 require a database or a separate backend service.
 
+If the browser shows a blank page, look at the browser developer console rather than Docker logs.
+The application runs in the browser; container logs only show whether the local web server started.
+
 To build the image from the checked-out source instead:
 
 ```bash

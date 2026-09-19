@@ -26,6 +26,7 @@ import type {
   WireSegment,
 } from '@/types/schema'
 import { getAllSupplyTrunkDevices } from '@/lib/feedTopology'
+import { collectAllGroundTrunkDevices } from '@/lib/eendraad/panelGround'
 import { trunkDeviceCountsAsProtection } from '@/lib/protectionKind'
 import {
   getProjectElectricalInstallation,
@@ -842,7 +843,7 @@ export function buildHardwareTally(
     pushEnergyConversion(key, detail, summaryLabel, specLines, true)
   }
 
-  for (const d of installation?.groundTrunkDevices ?? []) {
+  for (const d of collectAllGroundTrunkDevices(rootPanels, installation)) {
     if (d.type !== 'conversion') continue
     const key = energyConversionTrunkGroupKey(d)
     const summaryLabel = energyConversionTrunkSummaryLabel(d, t)

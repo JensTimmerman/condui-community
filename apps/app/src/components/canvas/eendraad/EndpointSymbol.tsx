@@ -359,6 +359,15 @@ export const EndpointSymbol = memo(function EndpointSymbol({
   const [transformerProtectionImage, setTransformerProtectionImage] =
     useState<HTMLImageElement | null>(null)
   const [isHovered, setIsHovered] = useState(false)
+  // Selecting an endpoint re-renders it (the selection outline mounts), which can make Konva miss
+  // the symbol's mouseleave — leaving isHovered stuck true so the dashed hover outline reappears
+  // after deselect. Clear both the local and any stale global hover once it becomes (preview-)selected.
+  useEffect(() => {
+    if (!isSelected && !isPreviewSelected) return
+    setIsHovered(false)
+    const { hover, clearHover } = useUIStore.getState()
+    if (hover.type === 'endpoint' && hover.ids.includes(endpoint.id)) clearHover()
+  }, [isSelected, isPreviewSelected, endpoint.id])
   const [hvacEnergyImage, setHvacEnergyImage] = useState<HTMLImageElement | null>(null)
   const [hvacTypeImage, setHvacTypeImage] = useState<HTMLImageElement | null>(null)
   const [relayOverlayImage, setRelayOverlayImage] = useState<HTMLImageElement | null>(null)

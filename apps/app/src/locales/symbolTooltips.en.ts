@@ -25,6 +25,7 @@ export const symbolTooltipsEn = {
   // Outlets
   socket_gnd_child: 'Socket with earth and child protection.',
   double_socket_gnd_child: 'Double socket with earth and child protection.',
+  modular_socket: 'Panel-mounted socket, not shown on the plan.',
   socket_child: 'Socket with child protection, without earth.',
   double_socket_child: 'Double socket with child protection, without earth.',
 

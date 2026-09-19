@@ -149,7 +149,7 @@ export type SupplyNode =
   | SupplyNodeBase<'utility-source', { origin: 'grid' }>
   | SupplyNodeBase<'ac-distribution', { ratedCurrentA?: number }>
   | SupplyNodeBase<'changeover-switch', ChangeoverSwitchProperties>
-  | SupplyNodeBase<'inverter-unit', { serialNumber?: string; gridInputConnected?: boolean }>
+  | SupplyNodeBase<'inverter-unit', { serialNumber?: string; gridInputConnected?: boolean; acConnection?: 'shared' | 'separate' }>
   | SupplyNodeBase<'battery', BatteryDeviceProps>
   | SupplyNodeBase<'solar-source', SolarPanelDeviceProps>
   | SupplyNodeBase<

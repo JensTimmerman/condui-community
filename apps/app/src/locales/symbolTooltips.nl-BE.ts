@@ -25,6 +25,7 @@ export const symbolTooltipsNlBE = {
   // Outlets
   socket_gnd_child: 'Stopcontact met aarding en kinderbeveiliging.',
   double_socket_gnd_child: 'Dubbel stopcontact met aarding en kinderbeveiliging.',
+  modular_socket: 'Stopcontact in het bord, niet op het plan.',
   socket_child: 'Stopcontact met kinderbeveiliging, zonder aarding.',
   double_socket_child: 'Dubbel stopcontact met kinderbeveiliging, zonder aarding.',
 

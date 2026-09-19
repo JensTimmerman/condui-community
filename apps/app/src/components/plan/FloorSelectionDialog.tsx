@@ -1,11 +1,13 @@
-import { useState, useEffect, useRef, type DragEvent } from 'react'
+import { useState, useEffect, useRef, type DragEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { GripVertical, Plus, Trash2, Pencil, Check, X, Eye, EyeOff } from 'lucide-react'
+import { GripVertical, Plus, Trash2, Pencil, Check, X, Eye, EyeOff, Copy } from 'lucide-react'
 import { useProjectStore, type ProjectState } from '@/stores/projectStore'
 import { useDialogStore } from '@/stores/dialogStore'
 import type { Floor } from '@/types/schema'
 import { generateId } from '@/utils'
 import { readLegacyCompatibilityFloors } from '@/lib/projectV2/buildingFloors'
+import { duplicateFloorPlan } from '@/lib/plan/duplicateFloorPlan'
+import ContextMenuPortal from '@/components/canvas/ContextMenuPortal'
 
 interface FloorSelectionDialogProps {
   currentFloorId: string | null
@@ -17,6 +19,8 @@ interface FloorSelectionDialogProps {
   listHighlightFloorId?: string | null
   /** When true, show eye toggles to underlay other floors while drawing (plan draw mode only). */
   showReferenceOverlayToggles?: boolean
+  /** When true, floor rows expose a context-menu action to duplicate their plan. */
+  allowFloorDuplication?: boolean
   readOnly?: boolean
   onSelect: (floorId: string, options?: { closeMenu?: boolean; fitToView?: boolean }) => void
   onCancel: () => void
@@ -26,6 +30,7 @@ function FloorSelectionDialog({
   currentFloorId,
   listHighlightFloorId,
   showReferenceOverlayToggles = false,
+  allowFloorDuplication = false,
   readOnly = false,
   onSelect,
   onCancel,
@@ -41,6 +46,11 @@ function FloorSelectionDialog({
   const [editingFloorId, setEditingFloorId] = useState<string | null>(null)
   const [editingFloorName, setEditingFloorName] = useState('')
   const [draggingFloorId, setDraggingFloorId] = useState<string | null>(null)
+  const [duplicateSourceFloorId, setDuplicateSourceFloorId] = useState<string | null>(null)
+  const [floorContextMenu, setFloorContextMenu] = useState<{
+    floorId: string
+    position: { x: number; y: number }
+  } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   // When there are no floors, show create form
@@ -60,13 +70,47 @@ function FloorSelectionDialog({
   const handleAddConfirm = () => {
     if (!newFloorName.trim()) return
     const newFloorId = generateId()
-    addFloor({
-      id: newFloorId,
-      name: newFloorName.trim(),
-    })
+    const sourceFloor = duplicateSourceFloorId
+      ? floors.find((floor) => floor.id === duplicateSourceFloorId)
+      : undefined
+    addFloor(
+      sourceFloor
+        ? duplicateFloorPlan(sourceFloor, newFloorId, newFloorName.trim())
+        : {
+            id: newFloorId,
+            name: newFloorName.trim(),
+          },
+    )
     onSelect(newFloorId)
     setIsCreatingNew(false)
     setNewFloorName('')
+    setDuplicateSourceFloorId(null)
+  }
+
+  const cancelCreate = () => {
+    setIsCreatingNew(false)
+    setNewFloorName('')
+    setDuplicateSourceFloorId(null)
+  }
+
+  const handleFloorContextMenu = (event: ReactMouseEvent<HTMLLIElement>, floorId: string) => {
+    if (!allowFloorDuplication || readOnly) return
+    event.preventDefault()
+    event.stopPropagation()
+    setFloorContextMenu({
+      floorId,
+      position: { x: event.clientX, y: event.clientY },
+    })
+  }
+
+  const startDuplicateFloor = () => {
+    if (!floorContextMenu) return
+    const sourceFloor = floors.find((floor) => floor.id === floorContextMenu.floorId)
+    setFloorContextMenu(null)
+    if (!sourceFloor) return
+    setDuplicateSourceFloorId(sourceFloor.id)
+    setNewFloorName('')
+    setIsCreatingNew(true)
   }
 
   const handleDragStart = (floorId: string, e: DragEvent<HTMLButtonElement>) => {
@@ -212,8 +256,7 @@ function FloorSelectionDialog({
             onKeyDown={(e) => {
               if (e.key === 'Enter' && newFloorName.trim()) handleAddConfirm()
               else if (e.key === 'Escape') {
-                setIsCreatingNew(false)
-                setNewFloorName('')
+                cancelCreate()
               }
             }}
             placeholder={t('floorSelection.floorNamePlaceholder')}
@@ -223,8 +266,7 @@ function FloorSelectionDialog({
         <div className="flex gap-3 justify-end">
           <button
             onClick={() => {
-              setIsCreatingNew(false)
-              setNewFloorName('')
+              cancelCreate()
             }}
             className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 font-medium rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
           >
@@ -261,12 +303,17 @@ function FloorSelectionDialog({
           return (
             <li
               key={floor.id}
+              data-floor-selection-row={allowFloorDuplication && !readOnly ? 'true' : undefined}
               className={`flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer transition-colors ${
                 isSelected
                   ? 'bg-sky-100 dark:bg-sky-900/40 border border-sky-300 dark:border-sky-700 ring-1 ring-sky-200 dark:ring-sky-800'
                   : 'hover:bg-gray-50 dark:hover:bg-gray-700/50 border border-transparent'
               } ${isDragging ? 'ring-2 ring-sky-400/70 dark:ring-sky-700/80' : ''}`}
-              onClick={() => onSelect(floor.id)}
+              onClick={() => {
+                setFloorContextMenu(null)
+                onSelect(floor.id)
+              }}
+              onContextMenu={(event) => handleFloorContextMenu(event, floor.id)}
               onDragOver={(e) => e.preventDefault()}
               onDragEnter={() => handleDragEnterRow(floor.id)}
               onDrop={(e) => {
@@ -412,6 +459,20 @@ function FloorSelectionDialog({
           {t('floorSelection.add')}
         </button>
       </div>}
+
+      {floorContextMenu && (
+        <ContextMenuPortal
+          position={floorContextMenu.position}
+          items={[
+            {
+              label: t('contextMenu.duplicate'),
+              icon: <Copy className="w-4 h-4" />,
+              onClick: startDuplicateFloor,
+            },
+          ]}
+          onClose={() => setFloorContextMenu(null)}
+        />
+      )}
     </div>
   )
 }

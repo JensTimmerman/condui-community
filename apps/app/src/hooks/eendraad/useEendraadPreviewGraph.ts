@@ -23,6 +23,7 @@ import {
   selectProjectSupplyAssemblies,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
+import { collectAllGroundTrunkDevices } from '@/lib/eendraad/panelGround'
 
 export interface EendraadPreviewGraph {
   layout: BottomUpLayoutResult
@@ -217,10 +218,11 @@ export function useEendraadPreviewGraph(
         trunkDevicesById.set(d.id, d)
       })
     }
-    if (installation?.groundTrunkDevices) {
-      installation.groundTrunkDevices.forEach((d) => {
-        trunkDevicesById.set(d.id, d)
-      })
+    for (const device of collectAllGroundTrunkDevices(
+      getProjectElectricalPanels(sim.project),
+      installation
+    )) {
+      trunkDevicesById.set(device.id, device)
     }
 
     return {

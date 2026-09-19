@@ -439,6 +439,31 @@ export const symbols: SymbolMetadata[] = [
     libraryPreset: true,
   },
   {
+    id: 'modular_socket',
+    name: 'Modular socket',
+    nameNL: 'Modulaire contactdoos',
+    nameFR: 'Prise modulaire',
+    category: 'outlets',
+    scope: 'eendraad',
+    svgPath: '/symbols/outlets/socket_gnd_child.svg',
+    tags: [
+      'socket',
+      'outlet',
+      'modular',
+      'din',
+      'panel',
+      'contactdoos',
+      'stopcontact',
+      'modulaire contactdoos',
+      'prise',
+      'prise modulaire',
+      'tableau',
+      'bord',
+      'rail',
+    ],
+    libraryPreset: true,
+  },
+  {
     id: 'socket_gnd',
     name: 'Socket with protective conductor contact',
     nameNL: 'Contactdoos met contact voor beschermingsgeleider',
@@ -1281,6 +1306,11 @@ const LEGACY_SYMBOL_IDS: Record<string, string> = {
 export function getSymbolById(id: string) {
   const resolvedId = LEGACY_SYMBOL_IDS[id] ?? id
   return symbols.find((s) => s.id === resolvedId) ?? null
+}
+
+/** True for any HVAC-category appliance symbol (furnace/HVAC source, ventilation, boiler, heating, …). */
+export function isHvacDeviceSymbol(symbol: string | undefined): boolean {
+  return !!symbol && getSymbolById(symbol)?.category === 'hvac'
 }
 
 /** Re-export default domain (single source: schema) */

@@ -1,8 +1,8 @@
 /**
  * Endpoint Chain Validation and Layout
- * 
+ *
  * Handles endpoint chain rules:
- * - Any number of switches, then any number of lights
+ * - Stored branch endpointIds order is authoritative (series mid-chain switches allowed)
  * - Max 2 sockets per chain (close socket group)
  * - Relays can branch off to top with push/regular switch
  * - Endpoint users follow relay to the right
@@ -10,7 +10,7 @@
  */
 
 import { isInBetweenEndpoint } from '@/utils/symbolMapping'
-import type { Endpoint, EndpointType } from '@/types/schema'
+import type { Endpoint } from '@/types/schema'
 
 export interface EndpointChain {
   endpoints: Endpoint[]
@@ -188,40 +188,19 @@ export function initializeBranchesIfNeeded(circuit: { endpoints: Endpoint[]; bra
 }
 
 /**
- * Sort endpoints within a branch so in-between devices (switch, relay, domotica, energy_meter)
- * always come before the actual endpoint (socket, light, appliance).
- * Layout and display should use this order so the branch visually shows trunk → in-between → endpoint.
- */
-export function sortBranchEndpoints(endpoints: Endpoint[]): Endpoint[] {
-  if (endpoints.length <= 1) return endpoints
-  const inBetween: Endpoint[] = []
-  const actual: Endpoint[] = []
-  for (const ep of endpoints) {
-    if (isInBetweenEndpoint(ep)) inBetween.push(ep)
-    else actual.push(ep)
-  }
-  return [...inBetween, ...actual]
-}
-
-/**
  * Get branches from circuit - uses stored branches if available, otherwise infers from endpoints.
- * Each branch's endpoints are returned in display order: in-between devices first, then actual endpoint.
+ * Preserves stored `endpointIds` order (including series switch-after-socket chains).
  */
 export function getCircuitBranches(circuit: { endpoints: Endpoint[]; branches?: Array<{ id: string; label: string; endpointIds: string[] }> }): Endpoint[][] {
-  let branches: Endpoint[][]
-
   if (circuit.branches && circuit.branches.length > 0) {
-    branches = circuit.branches.map(branch => {
+    return circuit.branches.map(branch => {
       return branch.endpointIds
         .map(id => circuit.endpoints.find(ep => ep.id === id))
         .filter((ep): ep is Endpoint => ep !== undefined)
     })
-  } else {
-    branches = groupEndpointsIntoBranches(circuit.endpoints)
   }
 
-  // Enforce display order: in-between first, then actual endpoint on each branch
-  return branches.map(sortBranchEndpoints)
+  return groupEndpointsIntoBranches(circuit.endpoints)
 }
 
 /**
@@ -293,45 +272,4 @@ export function getChainLayoutDirection(chain: EndpointChain): 'straight' | 'bra
     return 'straight'
   }
   return 'branch'
-}
-
-/**
- * Sort endpoints in a chain according to rules
- */
-export function sortEndpointsInChain(endpoints: Endpoint[]): Endpoint[] {
-  // Rule: Switches first, then lights, then sockets, then appliances
-  const sorted = [...endpoints].sort((a, b) => {
-    const typeOrder: Record<EndpointType, number> = {
-      switch: 0,
-      light_point: 1,
-      socket: 2,
-      fixed_appliance: 3,
-      domotica: 4,
-    }
-    return typeOrder[a.type] - typeOrder[b.type]
-  })
-
-  // Within sockets, keep original order (they should be grouped)
-  const socketIndices = endpoints
-    .map((ep, idx) => (ep.type === 'socket' ? idx : -1))
-    .filter(idx => idx >= 0)
-  
-  if (socketIndices.length > 0 && socketIndices.length <= 2) {
-    // Preserve socket grouping
-    const socketGroup = endpoints.filter(ep => ep.type === 'socket')
-    const nonSockets = sorted.filter(ep => ep.type !== 'socket')
-    
-    // Find where to insert socket group (after switches and lights, before appliances)
-    const insertIndex = nonSockets.findIndex(ep => ep.type === 'fixed_appliance')
-    if (insertIndex >= 0) {
-      return [
-        ...nonSockets.slice(0, insertIndex),
-        ...socketGroup,
-        ...nonSockets.slice(insertIndex),
-      ]
-    }
-    return [...nonSockets, ...socketGroup]
-  }
-
-  return sorted
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Group, Image, Text as KonvaText } from 'react-konva'
 import { useCanvasFontFamily } from '@/editions/community/communityHooks'
-import { loadProcessedSymbol } from '@/lib/symbolImage'
+import { SYMBOL_EXPORT_ATTR_SVG_PATH, loadProcessedSymbol } from '@/lib/symbolImage'
 import { useSettingsStore } from '@/stores/settingsStore'
 
 export const DOMAIN_MARKER_ICON_SIZE = 8.25
@@ -43,6 +43,7 @@ export function DomainMarker({ domain, x, y, color }: DomainMarkerProps) {
       />
       <Image
         image={symbolImage}
+        {...{ [SYMBOL_EXPORT_ATTR_SVG_PATH]: `/symbols/energy-conversion/symbol_${domain}.svg` }}
         width={DOMAIN_MARKER_ICON_SIZE}
         height={DOMAIN_MARKER_ICON_SIZE}
         offsetX={DOMAIN_MARKER_ICON_SIZE / 2}

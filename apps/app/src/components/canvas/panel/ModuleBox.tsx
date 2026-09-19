@@ -33,6 +33,12 @@ import { logger } from '@/lib/logger'
 import { useIsMarqueeSelecting, useIsPreviewSelected } from '@/contexts/SelectionPreviewContext'
 import { getSpdPanelModuleLayout } from './spdPanelModuleLayout'
 import { snapTerminalStripWidth } from '@/lib/panel/panelGridUnits'
+import {
+  isModularSocket,
+  snapModularSocketModuleWidthWithin,
+  socketCountForModularWidth,
+} from '@/lib/socket/modularSocket'
+import { ModularSocketModuleGraphic } from './ModularSocketModuleGraphic'
 
 const DRAG_THRESHOLD = 8
 const RESIZE_HANDLE_W = 10
@@ -691,6 +697,10 @@ function ModuleBox({
         ? trunkInfo.device
         : null
   const isSpdModule = spdDevice != null
+  const isModularSocketModule = isModularSocket(domoticaEndpoint)
+  const modularSocketCount = isModularSocketModule
+    ? socketCountForModularWidth(effectiveModuleWidth / CELL_W)
+    : 1
   const spdRawLabel = spdDevice?.label.trim() ?? ''
   const hasSpdLabel = spdRawLabel.length > 0 && spdRawLabel.toUpperCase() !== 'SPD'
   const spdSymbolPath = spdDevice
@@ -1350,6 +1360,17 @@ function ModuleBox({
             </Group>
           )
         })()}
+      {isModularSocketModule && (
+        <ModularSocketModuleGraphic
+          width={effectiveModuleWidth}
+          topBandHeight={topBandHeight}
+          centerBandHeight={centerBandHeight}
+          socketCount={modularSocketCount}
+          stroke={textColor}
+          faceFill={bg}
+          holeFill={textColor}
+        />
+      )}
       {/* Label - prominent, bold */}
       {!isTerminalStripModule && (
         <Text
@@ -1630,7 +1651,9 @@ function ModuleBox({
                 : handleCenter / CELL_W
               const newCols = isTerminalStripModule
                 ? snapTerminalStripWidth(rawCols, maxWidthCols ?? 999)
-                : Math.max(1, Math.min(maxWidthCols ?? 999, Math.round(rawCols)))
+                : isModularSocketModule
+                  ? snapModularSocketModuleWidthWithin(rawCols, maxWidthCols ?? 4)
+                  : Math.max(1, Math.min(maxWidthCols ?? 999, Math.round(rawCols)))
               const snapped = newCols * CELL_W
               const invalid = isResizeWidthValid ? !isResizeWidthValid(moduleRef, newCols) : false
               const nextTextPadding = Math.min(4, Math.max(2, snapped * 0.08))
@@ -1659,10 +1682,14 @@ function ModuleBox({
               const finalWidthPx = resizeWidthRef.current ?? width
               const finalCols = isTerminalStripModule
                 ? snapTerminalStripWidth(finalWidthPx / CELL_W, maxWidthCols ?? 999)
-                : Math.round(finalWidthPx / CELL_W)
+                : isModularSocketModule
+                  ? snapModularSocketModuleWidthWithin(finalWidthPx / CELL_W, maxWidthCols ?? 4)
+                  : Math.round(finalWidthPx / CELL_W)
               const originalCols = isTerminalStripModule
                 ? snapTerminalStripWidth(width / CELL_W, maxWidthCols ?? 999)
-                : Math.round(width / CELL_W)
+                : isModularSocketModule
+                  ? snapModularSocketModuleWidthWithin(width / CELL_W, maxWidthCols ?? 4)
+                  : Math.round(width / CELL_W)
               resizeWidthRef.current = null
               if (!resizeInvalidRef.current && finalCols !== originalCols && onResizeEnd) {
                 onResizeEnd(moduleRef, finalCols)

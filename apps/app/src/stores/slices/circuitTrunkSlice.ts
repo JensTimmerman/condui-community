@@ -11,6 +11,7 @@ import { resolveUniqueSupplyProtectionLabelOnPanel } from '@/lib/eendraad/automa
 import { migrateEndpointLabelsAfterCircuitCodeChange } from '@/lib/eendraad/circuitEndpointLabels'
 import { findParentCircuitInfo } from '@/lib/eendraad/findParentCircuitInfo'
 import { collectCircuitFrameRemovalIds, pruneEendraadFrames } from '@/lib/eendraad/frameContent'
+import { collectAllGroundTrunkDevices } from '@/lib/eendraad/panelGround'
 import { logger } from '@/lib/logger'
 import {
   cleanupPanelGridSlotsForDevice,
@@ -47,6 +48,8 @@ import { syncPanelAndSituationPlanDeviceVisibility } from '@/lib/plan/panelPlanP
 import { setSupplyDevicePanelVisibility } from '@/lib/panel/supplyPanelVisibility'
 import { mutateBuildingFloorViews } from '@/lib/projectV2/buildingFloors'
 import {
+  buildDirectConverterSupplyAssembly,
+  buildChangeoverSupplyAssembly,
   reconcileDirectConverterDcDevices,
   reconcileDirectConverterGridProtections,
   reconcileDirectConverterCommonLoadPath,
@@ -56,6 +59,7 @@ import {
   reconcileSupplyAssemblyAcConductorFlow,
   reconcileSupplyAssemblyBranchProtections,
 } from '@/lib/supplyAssembly/editorIntegration'
+import { getSupplyNodePhysicalDeviceId, getPanelInputDeviceStartIndex } from '@/lib/supplyAssembly/electricalTopology'
 import { summarizeConverterDcPersistence } from '@/lib/supplyAssembly/persistenceDiagnostics'
 import {
   getProjectElectricalInstallation,
@@ -63,10 +67,27 @@ import {
   getEditableProjectElectricalInstallation,
   getEditableProjectElectricalPanels,
   editProjectSupplyAssemblies,
+  selectProjectSupplyAssemblies,
 } from '@/lib/projectV2/electrical'
 import { getSymbolById } from '@/lib/symbols'
 import { supportsCircuitConverterDcConnections } from '@/lib/layout/circuitConverterGeometry'
-import type { Circuit, Panel, PanelGridModuleRef, ProtectionDevice } from '@/types/schema'
+import type { Circuit, Panel, PanelGridModuleRef, ProtectionDevice, TrunkDevice } from '@/types/schema'
+
+function assemblyOwnsSupplyDevice(
+  project: Parameters<typeof selectProjectSupplyAssemblies>[0],
+  deviceId: string
+): boolean {
+  return selectProjectSupplyAssemblies(project).some((assembly) =>
+    assembly.nodes.some((node) => getSupplyNodePhysicalDeviceId(node) === deviceId)
+  )
+}
+
+function firstPanelLocalRootSupplyInsertIndex(
+  project: Parameters<typeof selectProjectSupplyAssemblies>[0],
+  devices: TrunkDevice[]
+): number {
+  return getPanelInputDeviceStartIndex(project, devices)
+}
 
 function removeConverterBackupDependents(panels: Panel[], converterId: string): string[] {
   const removedIds: string[] = []
@@ -671,9 +692,9 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
           installation.mainSupply?.supplyTrunkDevices?.forEach((d) => {
             if (d.type === 'junction_panel') remainingDevices.push({ label: d.label })
           })
-          installation.groundTrunkDevices?.forEach((d) => {
-            if (d.type === 'junction_panel') remainingDevices.push({ label: d.label })
-          })
+          for (const device of collectAllGroundTrunkDevices(panels, installation)) {
+            if (device.type === 'junction_panel') remainingDevices.push({ label: device.label })
+          }
           for (const panel of panels) {
             const circuits = getAllCircuits(panel)
             circuits.forEach((c) =>
@@ -979,8 +1000,38 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
     set((state) => {
       if (state.currentProject) {
         const scope = target?.feedScope ?? 'shared'
-        const devices = getSupplyFeedListForTarget(state.currentProject, target?.panelId, scope)
-        const idx = clamp(insertIndex ?? devices.length, 0, devices.length)
+        // Hit zones carry electrical ownership explicitly. Retain diagram identity
+        // as a fallback for older callers that do not yet provide that contract.
+        const isContinuationDiagramDrop =
+          target?.supplyPanelInput ?? (!!target?.panelId &&
+          !!target.diagramId &&
+          target.diagramId === target.panelId)
+        const feedScope = isContinuationDiagramDrop ? 'root' : scope
+        const devices = getSupplyFeedListForTarget(
+          state.currentProject,
+          target?.panelId,
+          feedScope
+        )
+        if (isContinuationDiagramDrop && target?.panelId) {
+          const source = devices.find((item) => item.symbol === 'source_changeover') ??
+            devices.find((item) => item.supplyPath === 'converter-branch')
+          if (source && !assemblyOwnsSupplyDevice(state.currentProject, source.id)) {
+            editProjectSupplyAssemblies(state.currentProject).push(
+              source.symbol === 'source_changeover'
+                ? buildChangeoverSupplyAssembly(state.currentProject, target.panelId, source)
+                : buildDirectConverterSupplyAssembly(state.currentProject, target.panelId, source)
+            )
+            reconcileDirectConverterDcDevices(state.currentProject, target.panelId)
+          }
+        }
+        const insertFloor = isContinuationDiagramDrop
+          ? firstPanelLocalRootSupplyInsertIndex(state.currentProject, devices)
+          : 0
+        const firstPanelInput = devices.findIndex((item) => item.supplyPanelInput)
+        const insertCeiling = !isContinuationDiagramDrop && firstPanelInput !== -1
+          ? firstPanelInput : devices.length
+        const idx = clamp(insertIndex ?? insertCeiling, insertFloor, insertCeiling)
+        if (isContinuationDiagramDrop) device.supplyPanelInput = true
         devices.splice(idx, 0, device)
         devices.forEach((item, index) => {
           item.trunkPosition = index
@@ -1025,9 +1076,13 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
           }
         }
         const commonOutputOwner = findPanelOwningSupplyDevice(state.currentProject, device.id)
-        if (commonOutputOwner) {
-          reconcileSupplyAssemblyBranchProtections(state.currentProject, commonOutputOwner.id)
-          reconcileDirectConverterCommonLoadPath(state.currentProject, commonOutputOwner.id)
+        if (commonOutputOwner && !isContinuationDiagramDrop) {
+          reconcileSupplyAssemblyBranchProtections(state.currentProject, commonOutputOwner.id, {
+            absorbDeviceIds: [device.id],
+          })
+          reconcileDirectConverterCommonLoadPath(state.currentProject, commonOutputOwner.id, {
+            absorbDeviceIds: [device.id],
+          })
         }
         syncPanelAndSituationPlanDeviceVisibility(state.currentProject)
         state.isDirty = true
@@ -1066,6 +1121,19 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
                 }
               : updates
           Object.assign(device, nextUpdates)
+          // Legacy direct supply drawings may not have materialized their graph yet.
+          // Create it on an explicit AC-mode edit before reconciling its ports and loads.
+          if (
+            owningPanel && device.symbol === 'inverter' &&
+            device.supplyPath === 'converter-branch' &&
+            (updates.converterAcConnection === 'shared' || updates.converterAcConnection === 'separate') &&
+            !assemblyOwnsSupplyDevice(state.currentProject, deviceId)
+          ) {
+            editProjectSupplyAssemblies(state.currentProject).push(
+              buildDirectConverterSupplyAssembly(state.currentProject, owningPanel.id, device)
+            )
+            reconcileDirectConverterDcDevices(state.currentProject, owningPanel.id)
+          }
           if (
             owningPanel &&
             (device.supplyPath === 'backup-output' ||
@@ -1103,7 +1171,7 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
               syncPanelBackupBusPhaseOrderInProject(state.currentProject, owningPanel.id)
             }
           }
-          if (owningPanel) {
+          if (owningPanel && assemblyOwnsSupplyDevice(state.currentProject, deviceId)) {
             reconcileSupplyAssemblyBranchProtections(state.currentProject, owningPanel.id)
             reconcileDirectConverterCommonLoadPath(state.currentProject, owningPanel.id)
             reconcileSupplyAssemblyAcConductorFlow(
@@ -1327,9 +1395,9 @@ export const createCircuitTrunkSlice: ProjectSliceCreator = (set, get) => ({
               if (d.type === 'junction_panel') remainingDevices.push({ label: d.label })
             })
           )
-          installation.groundTrunkDevices?.forEach((d) => {
-            if (d.type === 'junction_panel') remainingDevices.push({ label: d.label })
-          })
+          for (const device of collectAllGroundTrunkDevices(panels, installation)) {
+            if (device.type === 'junction_panel') remainingDevices.push({ label: device.label })
+          }
           for (const panel of panels) {
             const circuits = getAllCircuits(panel)
             circuits.forEach((c) =>

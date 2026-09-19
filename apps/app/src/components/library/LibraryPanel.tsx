@@ -8,9 +8,17 @@ import SymbolItem from './SymbolItem'
 import type { SymbolMetadata } from '@/lib/symbols'
 import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
 import { getSymbolLibraryTooltip } from '@/lib/symbolTooltips'
+import { MODULAR_SOCKET_LIBRARY_ID } from '@/lib/socket/modularSocket'
 
 /** Categories shown in the library when panel canvas is maximized */
-const PANEL_VIEW_CATEGORIES = ['protection', 'domotica', 'metering', 'notes', 'grid'] as const
+const PANEL_VIEW_CATEGORIES = [
+  'protection',
+  'outlets',
+  'domotica',
+  'metering',
+  'notes',
+  'grid',
+] as const
 const SEARCH_COMMIT_DELAY_MS = 120
 
 interface LibrarySearchFieldProps {
@@ -150,7 +158,9 @@ function LibraryPanel({
     if (viewMode === 'panel') {
       return symbols.filter(
         (s) =>
+          s.id === MODULAR_SOCKET_LIBRARY_ID ||
           (PANEL_VIEW_CATEGORIES.includes(s.category as (typeof PANEL_VIEW_CATEGORIES)[number]) &&
+            s.category !== 'outlets' &&
             (s.category !== 'grid' || s.id === 'panel_distribution')) ||
           s.id === 'panel_distribution'
       )

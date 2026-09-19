@@ -37,7 +37,7 @@ import {
   selectProjectSupplyAssemblies,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
-import { findPanelById } from '@/lib/panel/panelTree'
+import { findPanelById, walkPanels } from '@/lib/panel/panelTree'
 import { DEFAULT_INSTALLATION_PROFILE } from '@/lib/installationProfile'
 import { DEFAULT_PANEL_GRID_COLUMNS, DEFAULT_PANEL_GRID_ROWS } from '@/lib/panel/panelGridDefaults'
 import { validatePanelBusSectionTopology } from '@/lib/panel/panelBusSectionValidation'
@@ -809,6 +809,15 @@ export function collectPlacementsOnFloor(
     for (const placement of device.placements ?? []) {
       if (placement.floorId === floorId) {
         result.push({ ...placement, trunkDeviceId: device.id })
+      }
+    }
+  }
+  for (const panel of walkPanels(getProjectElectricalPanels(project))) {
+    for (const device of panel.groundTrunkDevices ?? []) {
+      for (const placement of device.placements ?? []) {
+        if (placement.floorId === floorId) {
+          result.push({ ...placement, trunkDeviceId: device.id })
+        }
       }
     }
   }

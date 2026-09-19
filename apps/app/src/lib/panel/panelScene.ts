@@ -122,6 +122,9 @@ function collectJunctionPanelOccurrences(
         for (const circuit of protection.circuits ?? []) visitCircuit(circuit, candidate.id)
       }
       for (const child of candidate.subPanels ?? []) visitPanel(child)
+      for (const device of candidate.groundTrunkDevices ?? []) {
+        add(device, { kind: 'trunkDevice', id: device.id, scope: 'ground' }, candidate.id)
+      }
     }
     visitPanel(panel)
   }

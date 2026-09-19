@@ -1,4 +1,4 @@
-import { memo, useCallback, useRef, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useRef, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { Circle, Group, Line, Rect } from 'react-konva'
 import type Konva from 'konva'
 import { useTranslation } from 'react-i18next'
@@ -43,6 +43,7 @@ import InstallDateOverlay from './eendraad/InstallDateOverlay'
 import { NoteSymbol } from './eendraad/NoteSymbol'
 import { SYMBOL_SIZE } from './eendraad/canvasSymbols'
 import { CanvasPanOrClickProvider } from './eendraad/CanvasPanOrClickProvider'
+import { ConverterResizeViewportContext } from './eendraad/ConverterResizeViewportContext'
 import { linkedSubPanelDisplayNamesForProtectionIds } from '@/lib/panel/linkedSubPanelDeleteWarning'
 import { createLinkedProtectionDeleteDialog } from '@/lib/panel/linkedProtectionDeleteDialog'
 import { panelHasModularChangeover } from '@/lib/panel/panelFeedOrganization'
@@ -87,6 +88,11 @@ import {
 } from '@/hooks/eendraad/useEendraadPreviewGraph'
 import { resolveOffscreenSupplyPreviewDirection } from '@/lib/layout/offscreenSupplyPreviewIndicator'
 import type { LayoutNode, LayoutTree } from '@/lib/layout/layoutTree'
+import {
+  findClosestLayoutNodeAnchor,
+  getPanPreservingWorldAnchor,
+} from '@/lib/canvas/viewportAnchor'
+import { resizeConverterDcConnections } from '@/lib/eendraad/resizeConverterDcConnections'
 import { getEendraadRenderProjectRevision } from '@/lib/layout/eendraadDerivedLayout'
 import type { DropZoneHintRelocation } from '@/lib/layout/collectDropZoneHints'
 import {
@@ -128,7 +134,12 @@ import {
 } from '@/lib/plan/autoSitplanPlacement'
 import { resolveSitplanTargetFloorId } from '@/lib/plan/sitplanTargetFloor'
 import { ensureEarthingSitplanPlacement } from '@/lib/plan/earthingSitplanPlacement'
-import { confirmDeleteEarthing, performDeleteEarthing } from '@/lib/installation/deleteEarthing'
+import { confirmDeleteEarthing, performDeleteEarthingLocations } from '@/lib/installation/deleteEarthing'
+import {
+  findGroundTrunkDeviceOwner,
+  isGroundElementId,
+  parseGroundElementId,
+} from '@/lib/eendraad/panelGround'
 import {
   reconcileDirectConverterDcDevices,
   reconcileSupplyAssemblyBranchProtections,
@@ -445,6 +456,11 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   const getFramesByPanel = useProjectStore((s: ProjectState) => s.getFramesByPanel)
   const openDialog = useDialogStore((s) => s.openDialog)
   const canvasRef = useRef<BaseCanvasHandle>(null)
+  const pendingConverterResizeAnchorRef = useRef<{
+    deviceId: string
+    previousAnchor: Point
+    previousView: { pan: Point; zoom: number }
+  } | null>(null)
   const viewportHitRefreshTimerRef = useRef<number | null>(null)
   const viewportHitNeedsRemeasureRef = useRef(false)
   const viewportHitViewRef = useRef({
@@ -598,6 +614,42 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
   const layout = useEendraadLayout()
   const layoutTree = useLayoutTree() // Tree-based rendering and operations
   const wireSegments = useEendraadWireSegments() // Tree-based wire generation
+
+  const resizeConverterWithViewportAnchor = useCallback(
+    (deviceId: string, connectionCount: number, previousAnchor: Point): boolean => {
+      const previousView = useUIStore.getState().eendraadView
+      pendingConverterResizeAnchorRef.current = {
+        deviceId,
+        previousAnchor,
+        previousView: { pan: { ...previousView.pan }, zoom: previousView.zoom },
+      }
+      const resized = resizeConverterDcConnections(deviceId, connectionCount)
+      if (!resized) pendingConverterResizeAnchorRef.current = null
+      return resized
+    },
+    []
+  )
+
+  useLayoutEffect(() => {
+    const pending = pendingConverterResizeAnchorRef.current
+    if (!pending || !layoutTree) return
+    const nextAnchor = findClosestLayoutNodeAnchor(
+      layoutTree.panels,
+      pending.deviceId,
+      pending.previousAnchor
+    )
+    pendingConverterResizeAnchorRef.current = null
+    if (!nextAnchor) return
+    setEendraadView({
+      zoom: pending.previousView.zoom,
+      pan: getPanPreservingWorldAnchor(
+        pending.previousView.pan,
+        pending.previousView.zoom,
+        pending.previousAnchor,
+        nextAnchor
+      ),
+    })
+  }, [layoutTree, setEendraadView])
 
   const refreshViewportHitGraph = useCallback((remeasure: boolean) => {
     const stage = canvasRef.current?.getStage()
@@ -2029,16 +2081,6 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
         symbol.id,
         sameSymbolTarget,
         {
-          updateSocketCount: (endpointId, count) => {
-            const latest = useProjectStore.getState().getEndpointById(endpointId)
-            if (!latest) return
-            useProjectStore.getState().updateEndpoint(endpointId, {
-              socketProps: {
-                ...latest.socketProps,
-                socketCount: count <= 1 ? undefined : count,
-              },
-            })
-          },
           syncEndpointCount: (endpointId, count) =>
             syncEndpointMultiplierCount(createSyncEndpointMultiplierDeps(), endpointId, count),
           syncSupplyDeviceCount: (deviceId, count) =>
@@ -2247,6 +2289,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
             updateSupplyTrunkDevice,
             addGroundTrunkDevice,
             ensureJunctionPanelPlacementForLabel,
+            ensureSecondaryPanelEarthingStem: useProjectStore.getState().ensureSecondaryPanelEarthingStem,
             updateCircuit,
             updateProtection,
             updateInstallation,
@@ -2942,16 +2985,6 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                     : null
                 },
                 getProtectionById: (protectionId) => getProtectionById(protectionId) || null,
-                updateEndpointSocketCount: (endpointId, count) => {
-                  const latest = useProjectStore.getState().getEndpointById(endpointId)
-                  if (!latest) return
-                  useProjectStore.getState().updateEndpoint(endpointId, {
-                    socketProps: {
-                      ...latest.socketProps,
-                      socketCount: count <= 1 ? undefined : count,
-                    },
-                  })
-                },
                 syncEndpointMultiplierCount: (endpointId, count) =>
                   syncEndpointMultiplierCount(
                     createSyncEndpointMultiplierDeps(),
@@ -4372,14 +4405,13 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
         targetPanelLayout?.isSubPanel
       )
 
-      // Only add to main panels
-      if (
-        targetPanelLayout &&
-        !targetPanelLayout.isSubPanel &&
-        currentProject &&
-        currentInstallation
-      ) {
-        updateInstallation({ hasGround: true })
+      // Only add to main panels or create a local stem on a secondary board
+      if (targetPanelLayout && currentProject && currentInstallation) {
+        if (targetPanelLayout.isSubPanel) {
+          useProjectStore.getState().ensureSecondaryPanelEarthingStem(panelId)
+        } else if (!targetPanelLayout.isSubPanel) {
+          updateInstallation({ hasGround: true })
+        }
         const activeFloorId = resolveSitplanTargetFloorId(
           currentProject,
           useUIStore.getState().activeFloorId
@@ -4766,7 +4798,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
         let hasSupplySelected = false
         for (const id of selection.ids) {
           if (!id) continue
-          if (id === 'ground' && selection.type === 'ground') {
+          if (isGroundElementId(id) && selection.type === 'ground') {
             hasGroundSelected = true
           } else if (id === 'supply' && selection.type === 'supply') {
             hasSupplySelected = true
@@ -4883,9 +4915,13 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                   (d: { id: string }) => d.id === id
                 ) ?? -1,
               getGroundTrunkDeviceIndex: (id: string) =>
-                currentInstallation?.groundTrunkDevices?.findIndex(
-                  (d: { id: string }) => d.id === id
-                ) ?? -1,
+                currentProject
+                  ? findGroundTrunkDeviceOwner(
+                      getProjectElectricalPanels(currentProject),
+                      currentInstallation,
+                      id
+                    )?.index ?? -1
+                  : -1,
             }
             const multiDuplicateActions = {
               addEndpoint,
@@ -4975,7 +5011,15 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                   }
                 }
                 if (hasGroundSelected) {
-                  performDeleteEarthing(false)
+                  for (const id of selection.ids) {
+                    if (!isGroundElementId(id)) continue
+                    const parsed = parseGroundElementId(id)
+                    performDeleteEarthingLocations({
+                      mode: parsed?.kind === 'panel' ? 'panel' : parsed?.kind === 'installation' ? 'installation' : 'all',
+                      panelId: parsed?.kind === 'panel' ? parsed.panelId : undefined,
+                      clearSelection: false,
+                    })
+                  }
                 }
                 const doDeletePanels = () => {
                   panelIds.forEach((id) => deletePanel(id))
@@ -5286,9 +5330,13 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                 (d: { id: string }) => d.id === id
               ) ?? -1,
             getGroundTrunkDeviceIndex: (id: string) =>
-              currentInstallation?.groundTrunkDevices?.findIndex(
-                (d: { id: string }) => d.id === id
-              ) ?? -1,
+              currentProject
+                ? findGroundTrunkDeviceOwner(
+                    getProjectElectricalPanels(currentProject),
+                    currentInstallation,
+                    id
+                  )?.index ?? -1
+                : -1,
           }
           const actions = {
             addEndpoint,
@@ -5410,12 +5458,12 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
               variant: 'danger',
             }
           )
-        } else if (isGroundSelected || resolvedElementId === 'ground') {
+        } else if (isGroundSelected || isGroundElementId(resolvedElementId)) {
           // Ground symbol context menu
           items.push(...addElementAndNoteItems, {
             label: t('contextMenu.delete'),
             icon: getContextMenuIcon('delete'),
-            onClick: () => confirmDeleteEarthing(),
+            onClick: () => confirmDeleteEarthing({ groundElementId: resolvedElementId }),
             variant: 'danger',
           })
         } else if (selection.type === 'supply' && selection.ids.includes('supply')) {
@@ -5593,9 +5641,13 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                   (d: { id: string }) => d.id === id
                 ) ?? -1,
               getGroundTrunkDeviceIndex: (id: string) =>
-                currentInstallation?.groundTrunkDevices?.findIndex(
-                  (d: { id: string }) => d.id === id
-                ) ?? -1,
+                currentProject
+                  ? findGroundTrunkDeviceOwner(
+                      getProjectElectricalPanels(currentProject),
+                      currentInstallation,
+                      id
+                    )?.index ?? -1
+                  : -1,
             })
               ? [
                   {
@@ -5615,9 +5667,13 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
                               (d: { id: string }) => d.id === id
                             ) ?? -1,
                           getGroundTrunkDeviceIndex: (id: string) =>
-                            currentInstallation?.groundTrunkDevices?.findIndex(
-                              (d: { id: string }) => d.id === id
-                            ) ?? -1,
+                            currentProject
+                              ? findGroundTrunkDeviceOwner(
+                                  getProjectElectricalPanels(currentProject),
+                                  currentInstallation,
+                                  id
+                                )?.index ?? -1
+                              : -1,
                         },
                         {
                           addEndpoint,
@@ -5716,8 +5772,7 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
       setSelection,
       withSingleUndoEntry,
       ejectSecondaryBusProtectionsToNewPanel,
-      currentInstallation?.groundTrunkDevices,
-      currentInstallation?.mainSupply?.supplyTrunkDevices,
+      currentInstallation,
       updateCircuit,
       updateTrunkDevice,
     ]
@@ -6071,9 +6126,11 @@ function EendraadCanvasInner({ onMultiFingerSwipe, capabilities }: EendraadCanva
           enableIsolatedDragLayer
         >
           <Group name="canvas-content">
-            <CanvasPanOrClickProvider onBeginPan={beginInteractiveOverlayPan}>
-              {normalScene}
-            </CanvasPanOrClickProvider>
+            <ConverterResizeViewportContext.Provider value={resizeConverterWithViewportAnchor}>
+              <CanvasPanOrClickProvider onBeginPan={beginInteractiveOverlayPan}>
+                {normalScene}
+              </CanvasPanOrClickProvider>
+            </ConverterResizeViewportContext.Provider>
 
             {/* Preview overlay: show only the changed circuits and wires for the current drag preview. */}
             {showSimulatedDragPreview &&

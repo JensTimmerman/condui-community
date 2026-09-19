@@ -1,5 +1,6 @@
 import { groupEndpointsIntoBranches, initializeBranchesIfNeeded } from '@/lib/layout/endpointChains'
 import { getMainBusOrder } from '@/lib/eendraad/mainBusOrder'
+import { resolvePanelSupplyLinkForPanel } from '@/lib/eendraad/panelSupplyLink'
 import { hasCustomPlacement } from '@/lib/plan/customPlacement'
 import {
   selectProjectBuildingFloors,
@@ -55,7 +56,7 @@ function appendQuickPlacerCircuits(
   const expandedCircuitIds = new Set<string>()
 
   const addCircuit = (circuit: Circuit, protection?: ProtectionDevice) => {
-    if (circuit.code === 'PANEL' || seenCircuitIds.has(circuit.id)) return
+    if (seenCircuitIds.has(circuit.id)) return
     seenCircuitIds.add(circuit.id)
     into.push({ circuit, panel, panelPath: currentPanelPath, protection })
   }
@@ -124,7 +125,7 @@ function appendQuickPlacerCircuits(
 function buildQuickPlacerBranches(
   circuit: Circuit,
   itemsByEndpointId: Map<string, QuickPlacerItem[]>,
-  getCircuitIdentifier: (circuitId: string) => string
+  circuitIdentifier: string
 ): QuickPlacerBranch[] {
   const branches: QuickPlacerBranch[] = []
   const assignedEndpointIds = new Set<string>()
@@ -142,14 +143,18 @@ function buildQuickPlacerBranches(
 
     branches.push({
       id: branch.id,
-      label: branch.label || items[0]?.endpoint.label || getCircuitIdentifier(circuit.id),
+      label:
+        items[0]?.endpoint.symbol === 'panel_distribution'
+          ? circuitIdentifier
+          : branch.label || items[0]?.endpoint.label || circuitIdentifier,
       items,
     })
   }
 
-  const unassignedEndpoints = circuit.endpoints.filter(
-    (endpoint) => itemsByEndpointId.has(endpoint.id) && !assignedEndpointIds.has(endpoint.id)
-  )
+  const unassignedEndpoints = Array.from(itemsByEndpointId.entries())
+    .filter(([endpointId]) => !assignedEndpointIds.has(endpointId))
+    .map(([, items]) => items[0]?.endpoint)
+    .filter((endpoint): endpoint is Endpoint => endpoint !== undefined)
 
   let fallbackBranchIndex = 0
   for (const fallbackEndpoints of groupEndpointsIntoBranches(unassignedEndpoints)) {
@@ -159,7 +164,10 @@ function buildQuickPlacerBranches(
 
     branches.push({
       id: `quick-placer-fallback-${circuit.id}-${fallbackBranchIndex++}`,
-      label: items[0]?.endpoint.label || getCircuitIdentifier(circuit.id),
+      label:
+        items[0]?.endpoint.symbol === 'panel_distribution'
+          ? circuitIdentifier
+          : items[0]?.endpoint.label || circuitIdentifier,
       items,
     })
   }
@@ -187,12 +195,17 @@ export function buildQuickPlacerCircuits(
     appendQuickPlacerCircuits(rootPanel, orderedCircuits)
   }
 
-  const circuits: QuickPlacerCircuit[] = []
-
-  for (const { circuit, panel, panelPath, protection } of orderedCircuits) {
-    const itemsByEndpointId = new Map<string, QuickPlacerItem[]>()
-
+  const itemsByCircuitId = new Map<string, Map<string, QuickPlacerItem[]>>()
+  for (const { circuit, panel } of orderedCircuits) {
     for (const endpoint of circuit.endpoints) {
+      let ownerCircuitId = circuit.id
+      if (circuit.code === 'PANEL' && endpoint.symbol === 'panel_distribution') {
+        const representedPanelId = endpoint.panelId ?? panel.id
+        const supplyLink = resolvePanelSupplyLinkForPanel(project, representedPanelId)
+        if (!supplyLink?.feederCircuit) continue
+        ownerCircuitId = supplyLink.feederCircuit.id
+      }
+
       const items = endpoint.placements.map((placement) => ({
         endpoint,
         placement,
@@ -200,10 +213,24 @@ export function buildQuickPlacerCircuits(
         floorName: floorNameById.get(placement.floorId) ?? placement.floorId,
       }))
       if (items.length === 0) continue
+
+      let itemsByEndpointId = itemsByCircuitId.get(ownerCircuitId)
+      if (!itemsByEndpointId) {
+        itemsByEndpointId = new Map<string, QuickPlacerItem[]>()
+        itemsByCircuitId.set(ownerCircuitId, itemsByEndpointId)
+      }
       itemsByEndpointId.set(endpoint.id, items)
     }
+  }
 
-    const branches = buildQuickPlacerBranches(circuit, itemsByEndpointId, getCircuitIdentifier)
+  const circuits: QuickPlacerCircuit[] = []
+
+  for (const { circuit, panel, panelPath, protection } of orderedCircuits) {
+    const itemsByEndpointId =
+      itemsByCircuitId.get(circuit.id) ?? new Map<string, QuickPlacerItem[]>()
+    const circuitIdentifier = getCircuitIdentifier(circuit.id) || circuit.code
+
+    const branches = buildQuickPlacerBranches(circuit, itemsByEndpointId, circuitIdentifier)
 
     if (branches.length === 0) continue
 
@@ -212,7 +239,7 @@ export function buildQuickPlacerCircuits(
 
     circuits.push({
       id: circuit.id,
-      identifier: getCircuitIdentifier(circuit.id) || circuit.code,
+      identifier: circuitIdentifier,
       notes: protection?.notes?.trim() || circuit.notes?.trim() || '',
       panelId: panel.id,
       panelName: panel.name,
@@ -237,4 +264,24 @@ export function flattenQuickPlacerCircuit(
   return circuit.branches.flatMap((branch) =>
     branch.items.filter((item) => !autoSkipCustom || !item.isCustomPlacement)
   )
+}
+
+export function findNextQuickPlacerCircuit(
+  circuits: QuickPlacerCircuit[],
+  currentCircuitId: string,
+  options?: { autoSkipCustom?: boolean }
+): QuickPlacerCircuit | null {
+  if (circuits.length === 0) return null
+
+  const currentCircuitIndex = circuits.findIndex((circuit) => circuit.id === currentCircuitId)
+  if (currentCircuitIndex === -1) return null
+
+  for (let offset = 1; offset <= circuits.length; offset += 1) {
+    const nextCircuit = circuits[(currentCircuitIndex + offset) % circuits.length]
+    if (nextCircuit && flattenQuickPlacerCircuit(nextCircuit, options).length > 0) {
+      return nextCircuit
+    }
+  }
+
+  return null
 }

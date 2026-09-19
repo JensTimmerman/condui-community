@@ -1,4 +1,4 @@
-import type { Panel } from '@/types/schema'
+import type { Panel, TrunkDevice } from '@/types/schema'
 import type {
   OffGridSupplyAssembly,
   SupplyAttachmentRef,
@@ -75,9 +75,24 @@ export function assemblyOwnsPanelInput(
   )
 }
 
-/** A sibling panel-input enters its local feed before reaching the panel bus.
- * The assembly owner's feed is upstream; explicit bus inputs already target the bus.
+/** Resolve the electrical handoff independently of frame IDs and physical mounting.
+ * Existing unmarked owner chains retain their legacy supply ownership; new panel
+ * input devices explicitly delimit the downstream chain in root-feed storage.
  */
+export function getPanelInputDeviceStartIndex(
+  project: ProjectWithOptionalV2Electrical,
+  devices: readonly TrunkDevice[]
+): number {
+  const explicit = devices.findIndex((device) => device.supplyPanelInput)
+  if (explicit !== -1) return explicit
+  const owned = new Set(selectProjectSupplyAssemblies(project).flatMap((assembly) =>
+    assembly.nodes.map(getSupplyNodePhysicalDeviceId)))
+  return devices.some((device) => owned.has(device.id) ||
+    device.symbol === 'source_changeover' || device.supplyPath === 'converter-branch')
+    ? devices.length : 0
+}
+
+/** Panel-input handoffs enter the receiving chain before the panel bus. */
 export function getAssemblyReceivingPanelInputDevices(
   project: ProjectWithOptionalV2Electrical,
   assembly: OffGridSupplyAssembly,
@@ -85,11 +100,12 @@ export function getAssemblyReceivingPanelInputDevices(
 ) {
   if (target.kind !== 'panel-input' && target.kind !== 'root-feed') return []
   const input = resolveAssemblyPanelInput(project, target)
-  if (!input || resolveAssemblyPanelInput(project, assembly.incomingAttachment)?.panelId === input.panelId)
-    return []
+  if (!input) return []
   const feed = getProjectElectricalInstallation(project)?.feedTopology?.rootFeeds.find((feed) =>
     target.kind === 'root-feed' ? feed.id === target.rootFeedId : feed.panelId === input.panelId)
   const devices = feed?.trunkDevices ?? []
+  if (resolveAssemblyPanelInput(project, assembly.incomingAttachment)?.panelId === input.panelId)
+    return devices.slice(getPanelInputDeviceStartIndex(project, devices))
   const assemblyDeviceIds = new Set(selectProjectSupplyAssemblies(project).flatMap((candidate) =>
     candidate.nodes.map(getSupplyNodePhysicalDeviceId)))
   // Another assembly's input chain has its own graph ownership.
@@ -120,12 +136,13 @@ export function resolveCommonLoadTail(
     (connection) => connection.pathRole === 'inverter-grid-ac' &&
       connection.endpoints[1].nodeId === inverter.id
   )
-  const start = changeover ?? (directGridConnected
+  const separate = !changeover && inverter?.properties.acConnection === 'separate'
+  const start = changeover ?? (separate ? inverter : directGridConnected
     ? assembly.nodes.find((node) => node.kind === 'utility-source')
     : undefined)
   if (!start) return undefined
-  const pathRole = changeover ? 'load-ac' : 'grid-only-bypass-ac'
-  const startPort = changeover ? 'load' : 'out'
+  const pathRole = changeover || separate ? 'load-ac' : 'grid-only-bypass-ac'
+  const startPort = changeover ? 'load' : separate ? 'backup' : 'out'
   let expectedTail: SupplyPortRef | undefined
   if (project) {
     const installation = getProjectElectricalInstallation(project)
@@ -145,7 +162,7 @@ export function resolveCommonLoadTail(
       const switchIndex = devices.findIndex((device) => device.id === switchDeviceId)
       const serial = devices
         .slice(switchIndex + 1)
-        .filter((device) => device.supplyPath == null || device.supplyPath === 'serial')
+        .filter((device) => !device.supplyPanelInput && (device.supplyPath == null || device.supplyPath === 'serial'))
       const candidate = serial.length
         ? assembly.nodes.find((node) => getSupplyNodePhysicalDeviceId(node) === serial.at(-1)!.id)
         : start
@@ -311,7 +328,6 @@ export function buildSupplyElectricalTopology(project: ProjectWithOptionalV2Elec
         previous = current
       }
       link(previous, busKey(feed.panelId, feed.busSectionId))
-      continue
     }
     const assemblyAssociated =
       (feed.trunkDevices ?? []).some((device) => assemblyDevices.has(device.id)) ||
@@ -326,6 +342,7 @@ export function buildSupplyElectricalTopology(project: ProjectWithOptionalV2Elec
       !(feed.trunkDevices ?? []).some((device) => device.symbol === 'source_changeover')
     let assemblySeen = false
     for (const device of feed.trunkDevices ?? []) {
+      if (receivingDevices.some((receiving) => receiving.id === device.id)) continue
       const key = deviceKey(device.id)
       if (assemblyAssociated) handledDevices.add(device.id)
       if (assemblyDevices.has(device.id)) {

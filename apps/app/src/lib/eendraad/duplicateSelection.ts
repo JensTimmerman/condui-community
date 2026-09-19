@@ -17,7 +17,11 @@ import type { Selection } from '@/types/ui'
 import { generateId } from '@/utils'
 import { useProjectStore } from '@/stores/projectStore'
 import { useUIStore } from '@/stores/uiStore'
-import { getProjectElectricalPanels } from '@/lib/projectV2/electrical'
+import {
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
+} from '@/lib/projectV2/electrical'
+import { findGroundTrunkDeviceOwner } from '@/lib/eendraad/panelGround'
 import { findSupplyDeviceContainer } from '@/lib/eendraad/projectElectricalDomain'
 import { clonePlacementsForDuplicate } from '@/lib/eendraad/duplicateSitplanHelpers'
 import { endpointSupportsMultiplier, getEndpointMultiplier } from '@/utils/endpointMultipliers'
@@ -633,8 +637,16 @@ export function runEendraadDuplicate(
         actions.addSupplyTrunkDevice(clone, insertIndex + i, sourceSupplyTarget)
         newIds.push(clone.id)
       }
-    } else if (isGroundDevice && get.getGroundTrunkDeviceIndex) {
-      const indices = trunkIds.map((id) => get.getGroundTrunkDeviceIndex!(id)).filter((i) => i >= 0)
+    } else if (isGroundDevice) {
+      const project = get.getCurrentProject?.()
+      const panels = project ? getProjectElectricalPanels(project) : []
+      const installation = project ? getProjectElectricalInstallation(project) : undefined
+      const firstOwner = trunkIds[0]
+        ? findGroundTrunkDeviceOwner(panels, installation, trunkIds[0])
+        : undefined
+      const indices = trunkIds
+        .map((id) => findGroundTrunkDeviceOwner(panels, installation, id)?.index ?? -1)
+        .filter((i) => i >= 0)
       const insertIndex = indices.length > 0 ? Math.min(...indices) : 0
       for (let i = 0; i < devices.length; i++) {
         const sourceDevice = devices[i]!.device
@@ -648,7 +660,7 @@ export function runEendraadDuplicate(
               })
             : sourceDevice.placements,
         }
-        actions.addGroundTrunkDevice(clone, insertIndex + i)
+        actions.addGroundTrunkDevice(clone, insertIndex + i, firstOwner?.panel?.id)
         newIds.push(clone.id)
       }
     } else if (circuit && actions.updateTrunkDevice) {

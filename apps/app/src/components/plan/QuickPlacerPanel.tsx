@@ -19,6 +19,7 @@ import { useStoreWithEqualityFn } from 'zustand/traditional'
 import { useUIStore, type FloatingPanelDragSeed } from '@/stores/uiStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { DockablePanelShell } from '@/components/panels/DockablePanelShell'
+import CustomDropdown from '@/components/common/CustomDropdown'
 import { QuickPlacerSymbolPreview, getQuickPlacerPreviewMetrics } from './QuickPlacerSymbolPreview'
 
 type QuickPlacerMode = 'slow' | 'fast'
@@ -41,6 +42,7 @@ interface QuickPlacerPanelProps {
   circuits: QuickPlacerCircuit[]
   selectedCircuitId: string | null
   onSelectedCircuitIdChange: (circuitId: string) => void
+  onSelectedPanelIdChange: (panelId: string) => void
   mode: QuickPlacerMode
   onModeChange: (mode: QuickPlacerMode) => void
   fastAutoSkipCustom: boolean
@@ -93,13 +95,6 @@ function getModeTooltip(mode: QuickPlacerMode, t: (key: string) => string): stri
   return mode === 'fast' ? t('quickPlacer.mode.fastTooltip') : t('quickPlacer.mode.slowTooltip')
 }
 
-function getCircuitPanelBadge(circuit: QuickPlacerCircuit): string | null {
-  if (circuit.panelPathNames.length <= 1) return null
-  const nestedPath = circuit.panelPathNames.slice(1)
-  if (nestedPath.length === 0) return null
-  return nestedPath.join(' / ')
-}
-
 function selectionIdsEqual(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((id, index) => id === b[index])
 }
@@ -150,6 +145,7 @@ export const QuickPlacerPanel = forwardRef<HTMLDivElement, QuickPlacerPanelProps
       circuits,
       selectedCircuitId,
       onSelectedCircuitIdChange,
+      onSelectedPanelIdChange,
       mode,
       onModeChange,
       fastAutoSkipCustom,
@@ -175,12 +171,12 @@ export const QuickPlacerPanel = forwardRef<HTMLDivElement, QuickPlacerPanelProps
     const selectedPlacementIds = useStoreWithEqualityFn(
       useUIStore,
       (s) => (s.selection.type === 'placement' ? s.selection.ids : []),
-      selectionIdsEqual,
+      selectionIdsEqual
     )
     const selectedEndpointIds = useStoreWithEqualityFn(
       useUIStore,
       (s) => (s.selection.type === 'endpoint' ? s.selection.ids : []),
-      selectionIdsEqual,
+      selectionIdsEqual
     )
     const theme = useSettingsStore((state) => state.theme)
     const colors = useThemeColors()
@@ -229,6 +225,30 @@ export const QuickPlacerPanel = forwardRef<HTMLDivElement, QuickPlacerPanelProps
 
     const selectedCircuit =
       circuits.find((circuit) => circuit.id === selectedCircuitId) ?? circuits[0] ?? null
+    const panelOptions = useMemo(() => {
+      const seenPanelIds = new Set<string>()
+      return circuits.flatMap((circuit) => {
+        if (seenPanelIds.has(circuit.panelId)) return []
+        seenPanelIds.add(circuit.panelId)
+        return [
+          {
+            value: circuit.panelId,
+            label: circuit.panelPathLabel || circuit.panelName,
+          },
+        ]
+      })
+    }, [circuits])
+    const selectedPanelId = selectedCircuit?.panelId ?? panelOptions[0]?.value ?? ''
+    const panelCircuits = useMemo(
+      () => circuits.filter((circuit) => circuit.panelId === selectedPanelId),
+      [circuits, selectedPanelId]
+    )
+    const handlePanelChange = useCallback(
+      (panelId: string) => {
+        onSelectedPanelIdChange(panelId)
+      },
+      [onSelectedPanelIdChange]
+    )
     const isDark = theme.mode === 'dark'
 
     const styles = useMemo(() => {
@@ -280,9 +300,6 @@ export const QuickPlacerPanel = forwardRef<HTMLDivElement, QuickPlacerPanelProps
         circuitRail: {
           borderRightColor: colors.toolBubbleBorder,
           backgroundColor: mutedSurface,
-        },
-        panelBadge: {
-          color: colors.secondaryText,
         },
         circuitButton: {
           color: colors.textColor,
@@ -561,6 +578,19 @@ export const QuickPlacerPanel = forwardRef<HTMLDivElement, QuickPlacerPanelProps
           </div>
         </div>
 
+        {panelOptions.length > 1 && (
+          <div className="border-b px-3 py-2" style={styles.header}>
+            <CustomDropdown
+              value={selectedPanelId}
+              onChange={handlePanelChange}
+              options={panelOptions}
+              ariaLabel={t('quickPlacer.panelSelector')}
+              className="w-full rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-semibold text-gray-900 focus:border-sky-500 focus:ring-2 focus:ring-sky-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+              menuPortal
+            />
+          </div>
+        )}
+
         <div className="flex min-h-0 flex-1 overflow-hidden">
           <div
             data-library-scroll="true"
@@ -573,30 +603,15 @@ export const QuickPlacerPanel = forwardRef<HTMLDivElement, QuickPlacerPanelProps
             }}
           >
             <div className="space-y-1">
-              {circuits.map((circuit, index) => {
+              {panelCircuits.map((circuit) => {
                 const itemCount = circuit.branches.reduce(
                   (sum, branch) => sum + branch.items.length,
                   0
                 )
-                const panelBadge = getCircuitPanelBadge(circuit)
-                const previousCircuit = index > 0 ? circuits[index - 1] : null
-                const previousPanelBadge = previousCircuit
-                  ? getCircuitPanelBadge(previousCircuit)
-                  : null
-                const showPanelBadge = !!panelBadge && panelBadge !== previousPanelBadge
                 const showItemCount = !compactDockedLayout && circuit.identifier.trim().length <= 6
                 const isSelected = circuit.id === selectedCircuit?.id
                 return (
                   <div key={circuit.id}>
-                    {showPanelBadge && (
-                      <div
-                        className={`px-1 pb-1 pt-1.5 font-semibold uppercase tracking-[0.12em] ${compactDockedLayout ? 'text-[8px]' : 'text-[9px]'}`}
-                        style={styles.panelBadge}
-                        title={panelBadge}
-                      >
-                        {panelBadge}
-                      </div>
-                    )}
                     <button
                       ref={isSelected ? selectedCircuitButtonRef : null}
                       type="button"

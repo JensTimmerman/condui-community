@@ -198,6 +198,7 @@ export interface HitZone {
   /** Keep the hit target active without drawing an additional preview marker for it. */
   suppressDropHint?: boolean
   supplyFeedScope?: 'shared' | 'root'
+  supplyPanelInput?: boolean
   supplyInsertIndex?: number
   supplyPanelId?: string
   supplyConverterDcBranch?: 'right' | 'top'
@@ -1109,7 +1110,13 @@ function buildPanelNode(panelLayout: BottomUpPanelLayout): LayoutNode {
           // Make supply trunk devices easy to hit while dragging/dropping.
           padding: 10,
           supplyFeedScope: supplyDeviceData.feedScope,
-          supplyInsertIndex: supplyDeviceData.feedIndex,
+          supplyInsertIndex:
+            panelLayout.supplyEndpointKind === 'continuation'
+              ? Math.max(
+                  supplyDeviceData.feedIndex,
+                  panelLayout.panelLocalRootSupplyInsertBase ?? 0
+                )
+              : supplyDeviceData.feedIndex,
           supplyPanelId: panelLayout.panel.id,
           ...(supplyDevice.type === 'dc_bus'
             ? {
@@ -1430,6 +1437,16 @@ function buildPanelNode(panelLayout: BottomUpPanelLayout): LayoutNode {
     })
   }
 
+  const markPanelInput = (nodes: LayoutNode[]) => {
+    for (const node of nodes) {
+      if (node.hitZone?.type === 'supplyWire') {
+        node.hitZone.supplyPanelInput = panelLayout.supplyEndpointKind === 'continuation'
+      }
+      markPanelInput(node.children)
+    }
+  }
+  markPanelInput(children)
+
   return {
     id: `panel-${getPanelDiagramId(panelLayout)}`,
     type: 'panel',
@@ -1553,6 +1570,14 @@ function buildMainBusNode(
       const rightmostDevice = supplyDevicesSorted[supplyDevicesSorted.length - 1]
       const leftmostSharedDevice = sharedDevices[0]
 
+      const diagramId = getPanelDiagramId(panelLayout)
+      const separateConverter = !panelLayout.supplyChangeoverBranches
+        ? panelLayout.supplyDevices?.find(
+            ({ device }) =>
+              device.supplyPath === 'converter-branch' &&
+              device.converterAcConnection === 'separate'
+          )
+        : undefined
       const pushSupplySegment = (
         id: string,
         x1: number,
@@ -1568,15 +1593,20 @@ function buildMainBusNode(
         const isDirectChangeoverSlot =
           supplyConverterChangeoverSlot ||
           (scope === 'root' && insertIndex === directChangeoverInsertIndex)
-        const segmentX1 = isDirectChangeoverSlot
+        const compactChangeoverSlot = isDirectChangeoverSlot && !separateConverter
+        const segmentX1 = compactChangeoverSlot
           ? Math.max(x1, x2 - LAYOUT_CONSTANTS.SUPPLY_CHANGEOVER_RENDER_SIZE)
           : x1
         children.unshift({
           id,
           type: 'wire',
           bounds: {
-            x: segmentX1 - pad - (isDirectChangeoverSlot ? 1 : 0),
-            y: bendY - pad,
+            x: segmentX1 - pad - (compactChangeoverSlot ? 1 : 0),
+            y:
+              separateConverter &&
+              Math.abs((x1 + x2) / 2 - bendX) < Math.abs(separateConverter.x - bendX)
+                ? separateConverter.y - pad
+                : bendY - pad,
             width: x2 - segmentX1 + pad * 2,
             height: pad * 2,
           },
@@ -1594,38 +1624,85 @@ function buildMainBusNode(
 
       // Vertical segment from main bus down to bend point always belongs to the panel-local feed
       // when present; otherwise it is part of the shared path.
+      const continuationRootInsertBase = panelLayout.panelLocalRootSupplyInsertBase
       children.unshift({
-        id: `supply-wire-vertical-${panelLayout.panel.id}`,
+        id: `supply-wire-vertical-${diagramId}`,
         type: 'wire',
         bounds: {
           x: bendX - pad,
           y: mainBusElement.position.y,
           width: pad * 2,
-          height: bendY - mainBusElement.position.y,
+          height: (separateConverter?.y ?? bendY) - mainBusElement.position.y,
         },
         hitZone: {
           type: 'supplyWire',
           padding: 0,
           supplyFeedScope: 'root',
-          supplyInsertIndex: rootCount > 0 || sharedCount > 0 ? rootCount : sharedCount,
+          supplyInsertIndex:
+            continuationRootInsertBase != null
+              ? continuationRootInsertBase + rootCount
+              : rootCount > 0 || sharedCount > 0
+                ? rootCount
+                : sharedCount,
           supplyPanelId: panelLayout.panel.id,
         },
         children: [],
       })
 
-      if (hasSupplyDevices) {
+      if (hasSupplyDevices && panelLayout.supplyEndpointKind === 'continuation') {
+        // Continuation rails never own shared/grid topology. Left and right of a
+        // local protection must stay on this panel's root feed at/after insertBase,
+        // never splice at the start of the assembly supply wire.
+        const insertBase = continuationRootInsertBase ?? 0
+        const supplyEndX = supply.x + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
+        const supplyIsLeft = supplyEndX < bendX
+        const alongFromSupply = [...supplyDevicesSorted].sort((a, b) =>
+          supplyIsLeft ? a.x - b.x : b.x - a.x
+        )
+        const first = alongFromSupply[0]
+        const last = alongFromSupply[alongFromSupply.length - 1]
+        if (first) {
+          pushSupplySegment(
+            `supply-wire-segment-${diagramId}-supply`,
+            Math.min(supplyEndX, first.x),
+            Math.max(supplyEndX, first.x),
+            'root',
+            insertBase
+          )
+        }
+        for (let i = 0; i < alongFromSupply.length - 1; i++) {
+          const nearerSupply = alongFromSupply[i]!
+          const nearerBus = alongFromSupply[i + 1]!
+          pushSupplySegment(
+            `supply-wire-segment-${diagramId}-${i}`,
+            Math.min(nearerSupply.x, nearerBus.x),
+            Math.max(nearerSupply.x, nearerBus.x),
+            'root',
+            Math.max(nearerSupply.feedIndex + 1, insertBase)
+          )
+        }
+        if (last) {
+          pushSupplySegment(
+            `supply-wire-segment-${diagramId}-entry`,
+            Math.min(bendX, last.x),
+            Math.max(bendX, last.x),
+            'root',
+            Math.max(last.feedIndex + 1, insertBase)
+          )
+        }
+      } else if (hasSupplyDevices) {
         if (leftmostDevice) {
           if (rootCount === 0 && leftmostSharedDevice) {
             const separatorX = (bendX + leftmostSharedDevice.x) / 2
             pushSupplySegment(
-              `supply-wire-segment-${panelLayout.panel.id}-entry-root`,
+              `supply-wire-segment-${diagramId}-entry-root`,
               bendX,
               separatorX,
               'root',
               0
             )
             pushSupplySegment(
-              `supply-wire-segment-${panelLayout.panel.id}-entry-shared`,
+              `supply-wire-segment-${diagramId}-entry-shared`,
               separatorX,
               leftmostSharedDevice.x,
               'shared',
@@ -1633,7 +1710,7 @@ function buildMainBusNode(
             )
           } else {
             pushSupplySegment(
-              `supply-wire-segment-${panelLayout.panel.id}-entry`,
+              `supply-wire-segment-${diagramId}-entry`,
               bendX,
               leftmostDevice.x,
               leftmostDevice.feedScope,
@@ -1649,7 +1726,7 @@ function buildMainBusNode(
 
           if (left.feedScope === right.feedScope) {
             pushSupplySegment(
-              `supply-wire-segment-${panelLayout.panel.id}-${i}`,
+              `supply-wire-segment-${diagramId}-${i}`,
               left.x,
               right.x,
               right.feedScope,
@@ -1661,14 +1738,14 @@ function buildMainBusNode(
 
           const separatorX = (left.x + right.x) / 2
           pushSupplySegment(
-            `supply-wire-segment-${panelLayout.panel.id}-${i}-root`,
+            `supply-wire-segment-${diagramId}-${i}-root`,
             left.x,
             separatorX,
             'root',
             0
           )
           pushSupplySegment(
-            `supply-wire-segment-${panelLayout.panel.id}-${i}-shared`,
+            `supply-wire-segment-${diagramId}-${i}-shared`,
             separatorX,
             right.x,
             'shared',
@@ -1681,14 +1758,14 @@ function buildMainBusNode(
           if (sharedCount === 0 && rightmostDevice.feedScope === 'root') {
             const separatorX = (rightmostDevice.x + supplyEndX) / 2
             pushSupplySegment(
-              `supply-wire-segment-${panelLayout.panel.id}-supply-root`,
+              `supply-wire-segment-${diagramId}-supply-root`,
               rightmostDevice.x,
               separatorX,
               'root',
               0
             )
             pushSupplySegment(
-              `supply-wire-segment-${panelLayout.panel.id}-supply-shared`,
+              `supply-wire-segment-${diagramId}-supply-shared`,
               separatorX,
               supplyEndX,
               'shared',
@@ -1696,7 +1773,7 @@ function buildMainBusNode(
             )
           } else {
             pushSupplySegment(
-              `supply-wire-segment-${panelLayout.panel.id}-supply`,
+              `supply-wire-segment-${diagramId}-supply`,
               rightmostDevice.x,
               supplyEndX,
               rightmostDevice.feedScope,
@@ -1704,18 +1781,33 @@ function buildMainBusNode(
             )
           }
         }
-      } else if (panelLayout.supplyEndpointKind !== 'continuation') {
+      } else if (panelLayout.supplyEndpointKind === 'continuation') {
+        // Panel-only handoff frames still paint a horizontal rail to the Voeding
+        // endpoint. Without a drop slot there, protections can only be added through
+        // panel-canvas rewiring. The full rail is root-scoped: shared topology lives
+        // in the detached supply frame.
+        const supplyEndX = supply.x + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
+        const handoffLeft = Math.min(bendX, supplyEndX)
+        const handoffRight = Math.max(bendX, supplyEndX)
+        pushSupplySegment(
+          `supply-wire-segment-${diagramId}-handoff`,
+          handoffLeft,
+          handoffRight,
+          'root',
+          panelLayout.panelLocalRootSupplyInsertBase ?? 0
+        )
+      } else {
         const supplyEndX = supply.x + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
         const separatorX = (bendX + supplyEndX) / 2
         pushSupplySegment(
-          `supply-wire-segment-${panelLayout.panel.id}-stub-root`,
+          `supply-wire-segment-${diagramId}-stub-root`,
           bendX,
           separatorX,
           'root',
           0
         )
         pushSupplySegment(
-          `supply-wire-segment-${panelLayout.panel.id}-stub-shared`,
+          `supply-wire-segment-${diagramId}-stub-shared`,
           separatorX,
           supplyEndX,
           'shared',
@@ -2126,7 +2218,10 @@ function buildMainBusNode(
       }
       const directGridDevices =
         changeoverBranches || !converterGridInputConnected ? [] : gridDevices
-      let previousGridX = panelLayout.supplyBend?.x ?? converter.x
+      let previousGridX =
+        converter.device.converterAcConnection === 'separate'
+          ? converter.x
+          : (panelLayout.supplyBend?.x ?? converter.x)
       for (const candidate of directGridDevices) {
         children.unshift({
           id: `supply-direct-converter-grid-slot-${panelLayout.panel.id}-${candidate.device.id}`,

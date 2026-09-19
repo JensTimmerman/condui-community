@@ -271,7 +271,7 @@ const RenderNode = memo(function RenderNodeImpl({
       )
 
     case 'ground':
-      return <GroundSymbol key={node.id} x={node.bounds.x} y={node.bounds.y} />
+      return <GroundSymbol key={node.id} elementId={node.id} x={node.bounds.x} y={node.bounds.y} />
 
     case 'busBar':
       // Main bus or secondary bus container — visual line is rendered via wire segments

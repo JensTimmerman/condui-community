@@ -19,6 +19,7 @@ import {
   getSupplyDeviceMultiplier,
   syncSupplyDeviceMultiplierCount,
 } from '@/lib/eendraad/syncSupplyInverterMultiplier'
+import { allowedSocketCountsForEndpoint } from '@/lib/socket/modularSocket'
 
 const SOCKET_PREVIEW_SYMBOL_PX = 40
 const SOCKET_PREVIEW_OFFSET_PX = (MULTI_SOCKET_OFFSET / SYMBOL_SIZE) * SOCKET_PREVIEW_SYMBOL_PX
@@ -108,6 +109,7 @@ type SocketAddMoreDialogBodyProps = {
   message: string
   inputLabel: string
   currentValue: number
+  allowedCounts?: readonly number[]
   onConfirm: (value: number) => void
   onCancel: () => void
 }
@@ -117,6 +119,7 @@ function SocketAddMoreDialogBody({
   message,
   inputLabel,
   currentValue,
+  allowedCounts = [1, 2, 3, 4],
   onConfirm,
   onCancel,
 }: SocketAddMoreDialogBodyProps) {
@@ -140,7 +143,7 @@ function SocketAddMoreDialogBody({
           onOptionHover={setHoveredValue}
           menuPlacement="bottom"
           menuPortal
-          options={[1, 2, 3, 4].map((n) => ({
+          options={allowedCounts.map((n) => ({
             value: String(n),
             label: String(n),
           }))}
@@ -327,6 +330,7 @@ export function openSocketAddMoreDialog(endpoint: Endpoint, t: TFunction) {
         message={t('endpoints.setSocketCount', 'Set number of sockets')}
         inputLabel={t('endpoints.socketCount', 'Number of sockets')}
         currentValue={currentValue}
+        allowedCounts={allowedSocketCountsForEndpoint(endpoint)}
         onConfirm={(count) => {
           const st = useProjectStore.getState()
           const latest = st.getEndpointById(endpoint.id)

@@ -20,6 +20,7 @@ import { getPlanGraphicElementAsset } from '@/lib/plan/graphicElements'
 import { readLegacyCompatibilityFloors } from '@/lib/projectV2/buildingFloors'
 import { getProjectElectricalPanels } from '@/lib/projectV2/electrical'
 import { findPanelById } from '@/lib/panel/panelTree'
+import { isModularSocket } from '@/lib/socket/modularSocket'
 import { getSymbolById } from '@/lib/symbols'
 import { panelT } from './shared/propertiesSharedUtils'
 
@@ -322,7 +323,11 @@ function panelTitleForEndpoint(endpoint: Endpoint | undefined, t: TFunction): st
   if (sym === 'battery') return panelT(t, 'symbols.battery', 'Battery')
   if (isSwitch) return panelT(t, 'endpoints.switch', 'Switch')
   if (endpoint.type === 'light_point') return panelT(t, 'endpoints.light_point', 'Light')
-  if (endpoint.type === 'socket') return panelT(t, 'endpoints.socket', 'Socket')
+  if (endpoint.type === 'socket') {
+    return isModularSocket(endpoint)
+      ? panelT(t, 'endpoints.modularSocket', 'Modular socket')
+      : panelT(t, 'endpoints.socket', 'Socket')
+  }
   if (endpoint.type === 'fixed_appliance')
     return panelT(t, 'endpoints.fixed_appliance', 'Fixed Appliance')
   return panelT(t, 'endpoints.title', 'Endpoint')

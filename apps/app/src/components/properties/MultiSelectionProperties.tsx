@@ -63,6 +63,7 @@ import {
   resolveSharedValue,
   type SharedValue,
 } from './multiSelectionPropertiesUtils'
+import { isModularSocket, STANDARD_SOCKET_COUNTS } from '@/lib/socket/modularSocket'
 
 function MixedDropdown({
   shared,
@@ -485,6 +486,8 @@ function EndpointMultiEditor({ endpoints }: { endpoints: Endpoint[] }) {
   ) => ({ [key]: { ...(item[key] ?? {}), ...patch } }) as Partial<Endpoint>
   const allSolarPanels = endpoints.every((item) => item.symbol === 'solar_panel')
   const allBatteries = endpoints.every((item) => item.symbol === 'battery')
+  const allModularSockets = endpoints.every(isModularSocket)
+  const socketCountOptions = allModularSockets ? [1, 2] : STANDARD_SOCKET_COUNTS
   return (
     <div className="space-y-4">
       <BatchHeader count={endpoints.length} />
@@ -532,7 +535,7 @@ function EndpointMultiEditor({ endpoints }: { endpoints: Endpoint[] }) {
             <label className={labelClass}>{t('endpoints.socketCount', 'Socket count')}</label>
             <MixedDropdown
               shared={shared((item) => String(item.socketProps?.socketCount ?? 1))}
-              options={['1', '2', '3', '4'].map((value) => ({ value, label: value }))}
+              options={socketCountOptions.map((value) => ({ value: String(value), label: String(value) }))}
               onChange={(value) =>
                 apply((item) =>
                   patchNested(item, 'socketProps', {
@@ -542,52 +545,62 @@ function EndpointMultiEditor({ endpoints }: { endpoints: Endpoint[] }) {
               }
             />
           </div>
-          <div className="space-y-2">
-            <label className={labelClass}>{t('endpoints.socketOptions', 'Socket options')}</label>
-            <div>
-              <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">
-                {t('endpoints.socketSwitchOption', 'Switch')}
-              </label>
-              <MixedDropdown
-                shared={shared((item) =>
-                  item.socketProps?.switchOverlayLock
-                    ? 'switch_lock'
-                    : item.socketProps?.switchOverlay
-                      ? 'switch'
-                      : 'none'
-                )}
-                options={[
-                  { value: 'none', label: t('endpoints.socketSwitchNone', 'None') },
-                  {
-                    value: 'switch',
-                    label: t('endpoints.socketSwitchOverlay', 'Socket with two-pole switch'),
-                  },
-                  {
-                    value: 'switch_lock',
-                    label: t(
-                      'endpoints.socketSwitchOverlayLock',
-                      'Socket with two-pole lockable switch'
-                    ),
-                  },
-                ]}
+          {!allModularSockets && (
+            <>
+              <div className="space-y-2">
+                <label className={labelClass}>{t('endpoints.socketOptions', 'Socket options')}</label>
+                <div>
+                  <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">
+                    {t('endpoints.socketSwitchOption', 'Switch')}
+                  </label>
+                  <MixedDropdown
+                    shared={shared((item) =>
+                      item.socketProps?.switchOverlayLock
+                        ? 'switch_lock'
+                        : item.socketProps?.switchOverlay
+                          ? 'switch'
+                          : 'none'
+                    )}
+                    options={[
+                      { value: 'none', label: t('endpoints.socketSwitchNone', 'None') },
+                      {
+                        value: 'switch',
+                        label: t('endpoints.socketSwitchOverlay', 'Socket with two-pole switch'),
+                      },
+                      {
+                        value: 'switch_lock',
+                        label: t(
+                          'endpoints.socketSwitchOverlayLock',
+                          'Socket with two-pole lockable switch'
+                        ),
+                      },
+                    ]}
+                    onChange={(value) =>
+                      apply((item) =>
+                        isModularSocket(item)
+                          ? {}
+                          : patchNested(item, 'socketProps', {
+                              switchOverlay: value === 'switch',
+                              switchOverlayLock: value === 'switch_lock',
+                            })
+                      )
+                    }
+                  />
+                </div>
+              </div>
+              <MixedCheckbox
+                label={t('endpoints.waterproof', 'Waterproof')}
+                shared={shared((item) => !!item.socketProps?.waterproof)}
                 onChange={(value) =>
                   apply((item) =>
-                    patchNested(item, 'socketProps', {
-                      switchOverlay: value === 'switch',
-                      switchOverlayLock: value === 'switch_lock',
-                    })
+                    isModularSocket(item)
+                      ? {}
+                      : patchNested(item, 'socketProps', { waterproof: value })
                   )
                 }
               />
-            </div>
-          </div>
-          <MixedCheckbox
-            label={t('endpoints.waterproof', 'Waterproof')}
-            shared={shared((item) => !!item.socketProps?.waterproof)}
-            onChange={(value) =>
-              apply((item) => patchNested(item, 'socketProps', { waterproof: value }))
-            }
-          />
+            </>
+          )}
         </>
       )}
       {first.type === 'light_point' && (

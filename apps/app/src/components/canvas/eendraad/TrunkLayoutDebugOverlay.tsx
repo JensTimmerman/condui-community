@@ -9,11 +9,7 @@ import { LAYOUT_CONSTANTS } from '@/lib/layout/bottomUpLayout'
 import { getCircuitNotesPaintBounds } from '@/lib/layout/circuitNoteMetrics'
 import type { OneWireLayoutBlockKind } from '@/lib/layout/oneWireBlockLayout'
 import { getBusFeedMarkerPaintBounds } from '@/lib/layout/busFeedMarkerGeometry'
-import {
-  getCircuitConverterDcConnectionCount,
-  getOrdinaryCircuitConverterOutputRowY,
-  supportsCircuitConverterDcConnections,
-} from '@/lib/layout/circuitConverterGeometry'
+import { getCircuitTrunkPaintedEnvelope } from '@/lib/layout/trunkPaintedEnvelope'
 import type { WireSegment } from '@/types/schema'
 import { useSettingsStore } from '@/stores/settingsStore'
 
@@ -44,23 +40,6 @@ interface NoteDebugBox {
   anchorY: number
 }
 
-function collectDescendantIds(
-  panelLayout: BottomUpPanelLayout,
-  circuitLayout: BottomUpCircuitLayout
-): Set<string> {
-  const ids = new Set<string>()
-  const visit = (circuitId: string) => {
-    if (ids.has(circuitId)) return
-    ids.add(circuitId)
-    const circuit = panelLayout.circuits.find(
-      (candidate) => candidate.circuit.id === circuitId
-    )?.circuit
-    for (const childId of circuit?.subCircuitIds ?? []) visit(childId)
-  }
-  visit(circuitLayout.circuit.id)
-  return ids
-}
-
 function getCircuitDepth(circuitLayout: BottomUpCircuitLayout): number {
   let depth = 0
   let parent = circuitLayout.parentCircuit
@@ -75,100 +54,16 @@ function buildDebugBox(
   panelLayout: BottomUpPanelLayout,
   circuitLayout: BottomUpCircuitLayout
 ): TrunkDebugBox {
-  const circuitIds = collectDescendantIds(panelLayout, circuitLayout)
-  let minY = panelLayout.mainBus.y - LAYOUT_CONSTANTS.SYMBOL_SIZE
-  let maxY = panelLayout.mainBus.y + LAYOUT_CONSTANTS.SYMBOL_SIZE / 2
-
-  for (const branch of panelLayout.branches) {
-    if (!circuitIds.has(branch.circuitId)) continue
-    minY = Math.min(minY, branch.branchY - LAYOUT_CONSTANTS.SYMBOL_SIZE)
-    maxY = Math.max(maxY, branch.branchY + LAYOUT_CONSTANTS.SYMBOL_SIZE)
-  }
-  for (const element of panelLayout.elements) {
-    if (!element.circuitId || !circuitIds.has(element.circuitId)) continue
-    minY = Math.min(minY, element.position.y - LAYOUT_CONSTANTS.SYMBOL_SIZE)
-    maxY = Math.max(maxY, element.position.y + LAYOUT_CONSTANTS.SYMBOL_SIZE)
-    if (element.type === 'trunkDevice' && element.trunkDeviceId) {
-      const circuit = panelLayout.circuits.find(
-        (candidate) => candidate.circuit.id === element.circuitId
-      )?.circuit
-      const device = circuit?.trunkDevices?.find(
-        (candidate) => candidate.id === element.trunkDeviceId
-      )
-      if (supportsCircuitConverterDcConnections(device)) {
-        const count = getCircuitConverterDcConnectionCount(device)
-        minY = Math.min(
-          minY,
-          ...Array.from({ length: count }, (_, connectionIndex) =>
-            getOrdinaryCircuitConverterOutputRowY(device!, element.position.y, connectionIndex) -
-            LAYOUT_CONSTANTS.SYMBOL_SIZE
-          )
-        )
-      }
-    }
-  }
-  for (const note of panelLayout.circuitNotes ?? []) {
-    if (!circuitIds.has(note.circuitId) || note.notesVisible === false) continue
-    const noteBounds = getCircuitNotesPaintBounds(note.label, note.notesOrientation)
-    minY = Math.min(minY, note.y + noteBounds.top)
-  }
-
-  // Ordinary DC-bus endpoints are layout-tree children of the rail rather than
-  // top-level BottomUp elements. Mirror the frame envelope here so the cyan
-  // division box explains the same complete subtree as the rendered frame.
-  const circuit = panelLayout.circuits.find(
-    (candidate) => candidate.circuit.id === circuitLayout.circuit.id
-  )?.circuit
-  const dcBusBranchStep = LAYOUT_CONSTANTS.SYMBOL_SIZE + LAYOUT_CONSTANTS.TRUNK_DEVICE_SPACING
-  for (const bus of (circuit?.trunkDevices ?? []).filter((device) => device.type === 'dc_bus')) {
-    const busElement = panelLayout.elements.find(
-      (element) => element.type === 'trunkDevice' && element.trunkDeviceId === bus.id
-    )
-    let busY = busElement?.position.y
-    if (busY == null && bus.converterDcConnection) {
-      const converterElement = panelLayout.elements.find(
-        (element) =>
-          element.type === 'trunkDevice' &&
-          element.trunkDeviceId === bus.converterDcConnection?.converterId
-      )
-      const converter = circuit?.trunkDevices?.find(
-        (device) => device.id === bus.converterDcConnection?.converterId
-      )
-      if (converterElement && converter) {
-        busY = getOrdinaryCircuitConverterOutputRowY(
-          converter,
-          converterElement.position.y,
-          bus.converterDcConnection.connectionIndex
-        )
-      }
-    }
-    if (busY == null) continue
-
-    minY = Math.min(minY, busY - LAYOUT_CONSTANTS.SYMBOL_SIZE / 2)
-    for (const branch of (circuit?.branches ?? []).filter(
-      (candidate) => candidate.dcBusId === bus.id
-    )) {
-      if (branch.endpointIds.length === 0) continue
-      minY = Math.min(
-        minY,
-        busY - branch.endpointIds.length * dcBusBranchStep - 4
-      )
-    }
-  }
-
-  const anchorX =
-    circuitLayout.x +
-    circuitLayout.leftReserve +
-    Math.max(LAYOUT_CONSTANTS.PROTECTION_WIDTH, LAYOUT_CONSTANTS.SYMBOL_SIZE) / 2
+  const envelope = getCircuitTrunkPaintedEnvelope(panelLayout, circuitLayout)
   return {
     id: circuitLayout.circuit.id,
     code: circuitLayout.circuit.code,
     depth: getCircuitDepth(circuitLayout),
-    x: circuitLayout.x,
-    y: minY,
-    width: circuitLayout.width,
-    height: Math.max(1, maxY - minY),
-    anchorX,
+    ...envelope,
+    anchorX:
+      circuitLayout.x +
+      circuitLayout.leftReserve +
+      Math.max(LAYOUT_CONSTANTS.PROTECTION_WIDTH, LAYOUT_CONSTANTS.SYMBOL_SIZE) / 2,
   }
 }
 

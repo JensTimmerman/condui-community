@@ -170,8 +170,9 @@ function isNodeDraggableForTouch(
       const id = name.slice('frame-'.length)
       if (selection.type === 'frame' && selection.ids.includes(id)) return true
     }
-    if (name === 'ground-ground') {
-      if (selection.type === 'ground' && selection.ids.includes('ground')) return true
+    if (name?.startsWith('ground-')) {
+      const id = name.slice('ground-'.length)
+      if (selection.type === 'ground' && selection.ids.includes(id)) return true
     }
     if (name === 'supply-supply') {
       if (selection.type === 'supply' && selection.ids.includes('supply')) return true

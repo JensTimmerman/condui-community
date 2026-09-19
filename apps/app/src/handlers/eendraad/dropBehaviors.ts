@@ -7,6 +7,7 @@ import { logger } from '@/lib/logger'
  */
 
 import { useUIStore } from '@/stores/uiStore'
+import { useProjectStore } from '@/stores/projectStore'
 import {
   getNextTerminalStripLabel,
   getTerminalStripCreationProps,
@@ -30,7 +31,9 @@ import {
   resolveSitplanTargetFloorId,
 } from '@/lib/plan/sitplanTargetFloor'
 import { ensureEarthingSitplanPlacement } from '@/lib/plan/earthingSitplanPlacement'
+import { collectAllGroundTrunkDevices } from '@/lib/eendraad/panelGround'
 import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
+import { isModularSocketLibraryId } from '@/lib/socket/modularSocket'
 import { generateId, getEndpointTypeFromSymbol, getSymbolKeyFromSymbol } from '@/utils'
 import { getNextAvailableCircuitCode, countPanels } from '@/utils/project'
 import { applyLibraryPresetToEndpoint } from '@/utils/symbolMapping'
@@ -179,11 +182,12 @@ export interface DropBehaviorCallbacks {
   addSupplyTrunkDevice: (
     device: TrunkDevice,
     insertIndex?: number,
-    target?: { panelId?: string; feedScope?: DropTarget['supplyFeedScope'] }
+    target?: { panelId?: string; feedScope?: DropTarget['supplyFeedScope']; diagramId?: string; supplyPanelInput?: boolean }
   ) => void
   updateSupplyTrunkDevice?: (deviceId: string, updates: Partial<TrunkDevice>) => void
-  addGroundTrunkDevice: (device: TrunkDevice, insertIndex?: number) => void
+  addGroundTrunkDevice: (device: TrunkDevice, insertIndex?: number, panelId?: string) => void
   ensureJunctionPanelPlacementForLabel: (label: string, floorId?: string) => void
+  ensureSecondaryPanelEarthingStem?: (panelId: string) => void
   updateCircuit: (circuitId: string, updates: Partial<Circuit>) => void
   updateProtection: (protectionId: string, updates: Partial<ProtectionDevice>) => void
   updateInstallation: (
@@ -1948,7 +1952,7 @@ const endpointBehavior: DropBehavior = {
     // Do not require floors[0].layers — many floors omit `layers` in data; skipping auto-place
     // left endpoints invisible on every sitplan floor (bug).
     // Do not create placements for one-line-only or explicitly excluded symbols.
-    if (!canSymbolAppearOnSituationPlan(symbol.id)) {
+    if (!canSymbolAppearOnSituationPlan(symbol.id) || isModularSocketLibraryId(symbol.id)) {
       return
     }
 
@@ -2850,10 +2854,17 @@ const groundBehavior: DropBehavior = {
   validTargets: ['mainBus'],
   execute: (target, project, _symbol, _t, callbacks) => {
     const panel = findPanelForTarget(project, target)
-    if (!panel || !panel.isMain) return
+    if (!panel) return
 
-    if (projectInstallation(project)) {
+    if (panel.isMain === false) {
+      const ensureStem =
+        callbacks.ensureSecondaryPanelEarthingStem ??
+        useProjectStore.getState().ensureSecondaryPanelEarthingStem
+      ensureStem(panel.id)
+    } else if (projectInstallation(project)) {
       callbacks.updateInstallation({ hasGround: true })
+    } else {
+      return
     }
 
     const activeFloorId = resolveSitplanTargetFloorId(project, useUIStore.getState().activeFloorId)
@@ -2876,11 +2887,31 @@ const groundBehavior: DropBehavior = {
  * Earthing separator drop behavior
  */
 const earthingSeparatorBehavior: DropBehavior = {
-  validTargets: ['groundWire'],
+  validTargets: ['groundWire', 'mainBus'],
   execute: (target, project, symbol, _t, callbacks) => {
-    // Only allow on main panel ground wire
     const panel = findPanelForTarget(project, target)
-    if (!panel || !panel.isMain) return
+    if (!panel) return
+
+    if (panel.isMain === false && target.type === 'mainBus') {
+      const ensureStem =
+        callbacks.ensureSecondaryPanelEarthingStem ??
+        useProjectStore.getState().ensureSecondaryPanelEarthingStem
+      ensureStem(panel.id)
+      const activeFloorId = resolveSitplanTargetFloorId(project, useUIStore.getState().activeFloorId)
+      if (activeFloorId) {
+        const uiSnap = useUIStore.getState()
+        const preferredPlanPos =
+          getViewportCenterPlanSpaceIfApplicable(
+            uiSnap.viewportLayout,
+            uiSnap.planCanvasViewportPx,
+            uiSnap.activeFloorId,
+            activeFloorId,
+            uiSnap.planView
+          ) ?? undefined
+        ensureEarthingSitplanPlacement(activeFloorId, preferredPlanPos)
+      }
+      return
+    }
 
     if (target.type === 'groundWire') {
       addGroundTrunkDevice(symbol, target, project, callbacks)
@@ -3083,7 +3114,7 @@ function addGroundTrunkDevice(
         : { label: '', junctionIdentity: getNextJunctionIdentity(project, symbol.id) }),
       trunkPosition: insertIndex,
     }
-    callbacks.addGroundTrunkDevice(trunkDevice, insertIndex)
+    callbacks.addGroundTrunkDevice(trunkDevice, insertIndex, panelIdForGroundDevice(project, target))
     return
   }
   if (symbol.id === 'junction_panel') {
@@ -3096,7 +3127,7 @@ function addGroundTrunkDevice(
       label,
       trunkPosition: insertIndex,
     }
-    callbacks.addGroundTrunkDevice(trunkDevice, insertIndex)
+    callbacks.addGroundTrunkDevice(trunkDevice, insertIndex, panelIdForGroundDevice(project, target))
     return
   }
 
@@ -3111,7 +3142,8 @@ function addGroundTrunkDevice(
         trunkPosition: insertIndex + offset,
         earthingSeparatorPairId: pairId,
       },
-      insertIndex + offset
+      insertIndex + offset,
+      panelIdForGroundDevice(project, target)
     )
   })
 }
@@ -3122,8 +3154,9 @@ function getFirstJunctionPanelLabel(project: DropBehaviorProject): string | unde
   const supply = installation?.mainSupply?.supplyTrunkDevices ?? []
   const firstSupply = supply.find((d) => d.type === 'junction_panel')
   if (firstSupply?.label) return firstSupply.label
-  const ground = installation?.groundTrunkDevices ?? []
-  const firstGround = ground.find((d) => d.type === 'junction_panel')
+  const firstGround = collectAllGroundTrunkDevices(projectPanels(project), installation).find(
+    (d) => d.type === 'junction_panel'
+  )
   if (firstGround?.label) return firstGround.label
   const collectFromPanel = (panels: Panel[]): string | undefined => {
     for (const panel of panels) {
@@ -3342,6 +3375,8 @@ function addSupplyTrunkDevice(
   callbacks.addSupplyTrunkDevice(trunkDevice, insertIndex, {
     panelId: target.panelId,
     feedScope: target.supplyFeedScope,
+    diagramId: target.diagramId,
+    supplyPanelInput: target.supplyPanelInput,
   })
   return trunkDevice
 }
@@ -3493,6 +3528,7 @@ export const dropBehaviors: Record<string, DropBehavior> = {
   socket_gnd_child: endpointBehavior,
   double_socket_child: endpointBehavior,
   double_socket_gnd_child: endpointBehavior,
+  modular_socket: endpointBehavior,
   light_point: endpointBehavior,
   light_spot: endpointBehavior,
   light_led: endpointBehavior,
@@ -3708,6 +3744,11 @@ function findPanelForTarget(project: DropBehaviorProject, target: DropTarget): P
     return findPanelById(panels, target.panelId) ?? null
   }
   return panels.find((p) => p.isMain) || panels[0] || null
+}
+
+function panelIdForGroundDevice(project: DropBehaviorProject, target: DropTarget): string | undefined {
+  const panel = findPanelForTarget(project, target)
+  return panel?.isMain === false ? panel.id : undefined
 }
 
 function findProtectionByCircuitIdInProject(

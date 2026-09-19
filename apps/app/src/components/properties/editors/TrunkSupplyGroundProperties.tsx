@@ -142,6 +142,7 @@ import {
 } from '@/lib/layout/circuitConverterGeometry'
 import { resizeConverterDcConnections } from '@/lib/eendraad/resizeConverterDcConnections'
 import { isSupplyDeviceInDetachedFrame } from '@/lib/layout/supplyFrameDetachment'
+import { canConfigureSupplyInverterAcConnection, findSupplyInverterAssembly } from '@/lib/supplyAssembly/deviceReferences'
 
 const SYNERGRID_AUTO_MATCH_DEBOUNCE_MS = 450
 export function TrunkDeviceProperties({
@@ -343,6 +344,11 @@ export function TrunkDeviceProperties({
     : 'other'
   const em = device.energyMeterProps || {}
   const conv = device.conversionProps || {}
+  const inverterSupplyAssembly =
+    isSupplyDevice && currentProject ? findSupplyInverterAssembly(currentProject, device) : undefined
+  const hasExternalConverterChangeover = Boolean(
+    inverterSupplyAssembly?.nodes.some((node) => node.kind === 'changeover-switch')
+  )
   const circuitConverterDcConnectionCount = getCircuitConverterDcConnectionCount(device)
   const supplyDeviceMultiplier = getSupplyDeviceMultiplier(device)
   const supplyDeviceSerialNumbers = getSupplyDeviceSerialNumbers(device)
@@ -1702,6 +1708,36 @@ export function TrunkDeviceProperties({
         device.symbol === 'inverter' ||
         device.symbol === 'dc_dc_converter') && (
         <>
+          {isSupplyDevice && currentProject && canConfigureSupplyInverterAcConnection(currentProject, device) && (
+            <div>
+              <label className={labelClass}>
+                {t('supply.converterAcConnection', 'AC connection')}
+              </label>
+              <CustomDropdown
+                value={
+                  hasExternalConverterChangeover
+                    ? 'separate'
+                    : (device.converterAcConnection ?? 'shared')
+                }
+                onChange={(value) => {
+                  if (value !== 'shared' && value !== 'separate') return
+                  handleUpdate({ converterAcConnection: value })
+                }}
+                options={[
+                  {
+                    value: 'shared',
+                    label: t('supply.converterAcShared', 'Shared grid connection'),
+                  },
+                  {
+                    value: 'separate',
+                    label: t('supply.converterAcSeparate', 'Separate grid and backup connections'),
+                  },
+                ]}
+                disabled={hasExternalConverterChangeover}
+                className={selectClass}
+              />
+            </div>
+          )}
           {!isGroundDevice &&
             (circuit ||
               (isSupplyDevice &&

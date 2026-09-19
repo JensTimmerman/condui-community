@@ -24,11 +24,12 @@ type WindowWithEendraTapSuppression = Window & {
 interface GroundSymbolProps {
   x: number
   y: number
+  elementId?: string
   onDragEnd?: (newPos: { x: number; y: number }) => void
   onDragMove?: (newPos: { x: number; y: number }) => void
 }
 
-export function GroundSymbol({ x, y, onDragEnd, onDragMove }: GroundSymbolProps) {
+export function GroundSymbol({ x, y, elementId = 'ground', onDragEnd, onDragMove }: GroundSymbolProps) {
   const theme = useSettingsStore((state) => state.theme)
   const setSelection = useSetSelection()
   const canvasZoom = useEffectiveCanvasZoom(ZOOM_100, 'eendraad')
@@ -38,7 +39,7 @@ export function GroundSymbol({ x, y, onDragEnd, onDragMove }: GroundSymbolProps)
   
   const symbol = getSymbolById('earthing')
   const isDark = theme.mode === 'dark'
-  const isSelected = useIsTypeAndIdSelected('ground', 'ground')
+  const isSelected = useIsTypeAndIdSelected('ground', elementId)
   
   // Load and process the SVG image
   useEffect(() => {
@@ -61,10 +62,10 @@ export function GroundSymbol({ x, y, onDragEnd, onDragMove }: GroundSymbolProps)
     if ('shiftKey' in e.evt && e.evt.shiftKey) {
       // Shift + Click: Add to selection
       const { selection } = useUIStore.getState()
-      if (selection.type === 'ground' && !selection.ids.includes('ground')) {
-        setSelection({ type: 'ground', ids: [...selection.ids, 'ground'] })
+      if (selection.type === 'ground' && !selection.ids.includes(elementId)) {
+        setSelection({ type: 'ground', ids: [...selection.ids, elementId] })
       } else if (selection.type !== 'ground') {
-        setSelection({ type: 'ground', ids: ['ground'] })
+        setSelection({ type: 'ground', ids: [elementId] })
       }
     } else if (
       ('altKey' in e.evt && e.evt.altKey) ||
@@ -73,14 +74,14 @@ export function GroundSymbol({ x, y, onDragEnd, onDragMove }: GroundSymbolProps)
     ) {
       // Alt/Ctrl + Click: Remove from selection
       const { selection } = useUIStore.getState()
-      if (selection.type === 'ground' && selection.ids.includes('ground')) {
+      if (selection.type === 'ground' && selection.ids.includes(elementId)) {
         useUIStore.getState().clearSelection()
       }
     } else {
       // Normal click: Replace selection
-      setSelection({ type: 'ground', ids: ['ground'] })
+      setSelection({ type: 'ground', ids: [elementId] })
     }
-  }, [setSelection])
+  }, [elementId, setSelection])
   
   const handleDragMove = useCallback((e: GroundDragEvent) => {
     if (onDragMove) {
@@ -106,7 +107,7 @@ export function GroundSymbol({ x, y, onDragEnd, onDragMove }: GroundSymbolProps)
   
   return (
     <Group 
-      name="ground-ground" 
+      name={`ground-${elementId}`} 
       x={x} 
       y={y} 
       draggable={Boolean(onDragMove || onDragEnd)}

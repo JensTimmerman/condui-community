@@ -8,7 +8,9 @@ import {
   selectProjectElectricalPanels,
 } from '@/lib/projectV2/electrical'
 import { findPanelById } from '@/lib/panel/panelTree'
+import { installationHasAnyEarthing } from '@/lib/eendraad/panelGround'
 import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
+import { endpointSymbolVisibleOnSitplan } from '@/lib/plan/planSymbolVisibility'
 
 type SitplanPlacementRow = Placement & {
   endpointId?: string
@@ -94,7 +96,10 @@ export function usePlanPlacements(
   const placements = useMemo(() => {
     if (!activeFloorId || !currentProject) return []
     const floorPlacements = getPlacementsByFloor(activeFloorId)
-    const hasGround = selectProjectElectricalInstallation(currentProject)?.hasGround !== false
+    const hasGround = installationHasAnyEarthing(
+      selectProjectElectricalPanels(currentProject),
+      selectProjectElectricalInstallation(currentProject)
+    )
     let filtered = floorPlacements.filter((placement: SitplanPlacementRow) => {
       if (placement.isEarthing) return hasGround
       if (placement.junctionPanelLabel != null) return true
@@ -102,8 +107,8 @@ export function usePlanPlacements(
       const trunkDevice = placement.trunkDeviceId
         ? getTrunkDeviceById(placement.trunkDeviceId)?.device
         : undefined
-      const symbolKey = endpoint?.symbol ?? trunkDevice?.symbol
-      return canSymbolAppearOnSituationPlan(symbolKey)
+      if (endpoint) return endpointSymbolVisibleOnSitplan(endpoint)
+      return canSymbolAppearOnSituationPlan(trunkDevice?.symbol)
     })
     if (sitplanPanelFilterId) {
       const selectedPanel = findPanelById(

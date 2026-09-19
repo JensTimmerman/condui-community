@@ -11,6 +11,7 @@ import {
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { findMainPanel } from '@/lib/panel/panelTree'
+import { installationHasAnyEarthing } from '@/lib/eendraad/panelGround'
 
 type EarthingSitplanProject = ProjectWithOptionalV2Building & ProjectWithOptionalV2Electrical
 
@@ -185,7 +186,12 @@ function defaultEarthingPlanPosition(
  */
 export function healEarthingSitplanPlacements(project: EarthingSitplanProject): boolean {
   const inst = selectProjectElectricalInstallation(project)
-  if (!inst || inst.hasGround === false) return false
+  if (
+    !inst ||
+    !installationHasAnyEarthing(selectProjectElectricalPanels(project), inst)
+  ) {
+    return false
+  }
   const target = resolveEarthingTargetFloor(project)
   if (!target) return false
 
@@ -228,7 +234,11 @@ export function ensureEarthingSitplanPlacement(
   const store = useProjectStore.getState()
   const project = store.currentProject
   const installation = project ? selectProjectElectricalInstallation(project) : undefined
-  if (!project || !installation || installation.hasGround === false) {
+  if (
+    !project ||
+    !installation ||
+    !installationHasAnyEarthing(selectProjectElectricalPanels(project), installation)
+  ) {
     return null
   }
 

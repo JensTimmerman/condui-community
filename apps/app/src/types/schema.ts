@@ -176,6 +176,14 @@ export interface Panel {
   earthingSystem?: EarthingSystemType
   /** Earthing arrangement carried by the panel's backup feed (omit = none). */
   backupEarthingSystem?: EarthingSystemType
+  /**
+   * Local earth-electrode stem on a secondary board. Main-board earthing stays on
+   * {@link Installation.hasGround} / {@link Installation.groundTrunkDevices}.
+   * Missing or false means this board has no local electrode.
+   */
+  hasGround?: boolean
+  /** Devices on this panel's local ground wire (typically a linked earthing-separator pair). */
+  groundTrunkDevices?: TrunkDevice[]
 }
 
 export type ProtectionType =
@@ -271,14 +279,14 @@ export type CircuitKind =
 
 /**
  * Branch represents a horizontal branch in the eendraad diagram
- * Each branch contains one or more endpoints (switches + first endpoint, or subsequent endpoints)
+ * Each branch contains one or more endpoints in series along the stub.
  * The label is the single source of truth for the branch name (e.g. "A1").
  * All endpoints on the branch share this label.
  */
 export interface Branch {
   id: string
   label: string // Shared branch label (e.g. "A1") — source of truth for all endpoints on this branch
-  endpointIds: string[] // Endpoint IDs in order (switches first, then endpoint)
+  endpointIds: string[] // Endpoint IDs in series order along the branch (authoritative)
   /** Ordinary-panel DC rail that renders this endpoint branch as a vertical rail tap. */
   dcBusId?: string
   /**
@@ -642,6 +650,10 @@ export interface TrunkDevice {
    * Missing remains backward-compatible and means connected.
    */
   converterGridInputConnected?: boolean
+  /** Separate AC ports feed the common load through the inverter's internal transfer path. */
+  converterAcConnection?: 'shared' | 'separate'
+  /** Root-feed device downstream of the supply assembly handoff, before the panel bus. */
+  supplyPanelInput?: boolean
   /** ISO installation date. Preferred over the legacy year override. */
   installationDate?: string
   /** Explicitly keeps automatic/version-derived installation dates off this entity. */
@@ -797,6 +809,12 @@ export interface FixedApplianceDeviceProps {
   accumulationHeating?: boolean
   /** When symbol === 'heating' and accumulationHeating: use heating with fan symbol */
   withFan?: boolean
+  /**
+   * When symbol is an HVAC device (ventilation, boiler, heating, a downstream HVAC source, …):
+   * derived from branch layout — the unit sits immediately after an HVAC source (furnace/heat
+   * pump). Synced on branch changes. Enables the "add more" multiplier, mirroring lights.
+   */
+  chainedAfterHvacSource?: boolean
 }
 
 /** Solar panel specific props */
@@ -910,6 +928,12 @@ export interface SocketDeviceProps {
   waterproof?: boolean
   /** Number of physical sockets in this endpoint (1-4). Multiple sockets are drawn repeated & offset. Default 1. */
   socketCount?: number
+  /**
+   * Panel-mounted DIN modular socket. Electrically identical to a wall socket
+   * (same one-wire symbol and rules). Shown in the panel view, omitted from the
+   * situation plan, and limited to 1 or 2 outlets (2 or 4 modules).
+   */
+  modular?: boolean
 }
 
 export interface Endpoint {
@@ -1391,8 +1415,8 @@ export interface Installation {
   feedTopology?: FeedTopology
   /** Ground cable specification (separate from supply cable) */
   groundCable?: CableSpec
-  hasGround?: boolean // Flag: show ground wire on main panel (default: true for main panel, false for sub-panels)
-  /** Devices on the ground wire (earthing separators).
+  hasGround?: boolean // Flag: show the shared earth electrode on main boards (default true). Secondary boards use Panel.hasGround.
+  /** Devices on the shared ground wire (earthing separators).
    *  Drawn on the vertical ground wire between ground symbol and main bus. */
   groundTrunkDevices?: TrunkDevice[]
   /** Sitplan placements for junction panels (one per unique label). */

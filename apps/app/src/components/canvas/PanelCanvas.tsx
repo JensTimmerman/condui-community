@@ -2274,6 +2274,19 @@ export default function PanelCanvas({ onMultiFingerSwipe, capabilities }: PanelC
                     }
                   />
                 </Group>
+                {dragPreview.invalid && (
+                  <Rect
+                    x={previewX}
+                    y={previewY}
+                    width={previewWidth}
+                    height={previewHeight}
+                    stroke="#ef4444"
+                    strokeWidth={2}
+                    dash={[8, 4]}
+                    fill="transparent"
+                    listening={false}
+                  />
+                )}
               </Group>
             )
           })()}

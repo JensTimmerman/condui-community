@@ -739,6 +739,7 @@
     "label": "Label",
     "notes": "Notes",
     "socket": "Socket",
+    "modularSocket": "Modular socket",
     "switch": "Switch",
     "light_point": "Light point",
     "fixed_appliance": "Fixed appliance",
@@ -767,6 +768,8 @@
     "socketCount": "Number of sockets",
     "setSocketCount": "Set number of sockets",
     "lightCount": "Number of lights",
+    "ventilationCount": "Number of ventilators",
+    "hvacDeviceCount": "Number of units",
     "switchPoles": "Poles",
     "switchPoles1": "1 pole",
     "switchPoles2": "2 poles",
@@ -805,7 +808,22 @@
       "function_none": "None",
       "function_heat": "Heat",
       "function_cool": "Cool",
-      "function_heat_cool": "Heat / Cool"
+      "function_heat_cool": "Heat / Cool",
+      "energy_electricity_short": "Elec.",
+      "energy_gas_fan_short": "Gas (fan)",
+      "energy_gas_atmospheric_short": "Gas (atm)",
+      "energy_liquid_short": "Liquid",
+      "energy_solid_short": "Solid",
+      "energy_none_short": "None",
+      "type_heat_exchange_short": "Exch.",
+      "type_cogeneration_short": "Cogen",
+      "type_tap_spiral_short": "Spiral",
+      "type_boiler_short": "Boiler",
+      "type_none_short": "None",
+      "function_none_short": "None",
+      "function_heat_short": "Heat",
+      "function_cool_short": "Cool",
+      "function_heat_cool_short": "Heat/Cool"
     },
     "relay": {
       "maxCurrentRating": "Max Current Rating",
@@ -1208,6 +1226,7 @@
   },
   "quickPlacer": {
     "title": "Quick Placer",
+    "panelSelector": "Panel",
     "mode": {
       "slow": "Slow",
       "fast": "Fast",
@@ -1550,6 +1569,18 @@
           "details": "For a typical dwelling, AREI requires at least two separate circuits for lighting (lighting or mixed leaf circuits). Container circuits with sub-circuits are not counted.",
           "remediation": "Add a second lighting or mixed circuit so lighting is spread across at least two circuits."
         },
+        "installation-earthing": {
+          "shortTitle": "No earthing",
+          "message": "Installation has no earthing",
+          "details": "No earth electrode is shown on any board. This can be valid, but most installations need one earthing point.",
+          "remediation": "Add earthing on the main board, or drop it on a secondary board if the electrode is there."
+        },
+        "multiple-earthing-locations": {
+          "shortTitle": "Earthing on more than one board",
+          "message": "Earthing is shown on more than one board",
+          "details": "The installation has earth electrodes on separate boards. Confirm this is intended; typically there is a single earthing point.",
+          "remediation": "Keep earthing on one board and remove the extra earth stem."
+        },
         "cable-cross-section": {
           "shortTitle": "Cables missing cross-section",
           "message": "Circuit has cable segments without cross-section",
@@ -1694,7 +1725,7 @@
       "supplyModePaths": {
         "message": "No valid grid/backup path for {{phases}}",
         "details": "The one-line topology does not provide a complete, coordinated grid and backup path for {{phases}}.",
-        "remediation": "Reconnect the grid, backup and load sides so every shown phase has a complete path through the intended changeover."
+        "remediation": "Reconnect the grid, backup and load sides so every shown phase has a complete supply path."
       },
       "supplyConductorProtectionCoordination": {
         "message": "{{protectionLabel}}: {{section}} mm² conductor is too small for {{ratingA}} A protection",
@@ -1809,6 +1840,14 @@
       "hasSupplyOrigin": {
         "message": "Main supply origin should be specified",
         "details": "The main supply origin (grid, generator, pv_inverter, etc.) should be specified in the installation settings."
+      },
+      "installationHasEarthing": {
+        "message": "Installation has no earthing",
+        "details": "No earth electrode is shown on any board. This can be valid, but most installations need one earthing point."
+      },
+      "installationHasSingleEarthingLocation": {
+        "message": "Earthing is shown on more than one board",
+        "details": "The installation has earth electrodes on separate boards. Confirm this is intended; typically there is a single earthing point."
       },
       "nonHouseholdPanelShowsGroundedNetwork": {
         "message": "Board {{panelName}} does not show its grounded network system",
@@ -2268,6 +2307,9 @@
     "port1": "Port 1",
     "port2": "Port 2",
     "converterPhases": "AC phases",
+    "converterAcConnection": "AC connection",
+    "converterAcShared": "Shared grid connection",
+    "converterAcSeparate": "Separate grid and backup connections",
     "converterDcConnections": "DC connections",
     "converterTopDcConnections": "Top DC connections",
     "inverterUnit": "Inverter",

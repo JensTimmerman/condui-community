@@ -1,6 +1,7 @@
 import { logger } from '@/lib/logger'
 import { symbolCanAppearInPanelGrid } from '@/lib/panel/panelGridSymbolEligibility'
 export { symbolCanAppearInPanelGrid } from '@/lib/panel/panelGridSymbolEligibility'
+import { isModularSocket } from '@/lib/socket/modularSocket'
 import type {
   Circuit,
   DomoticaOutputWireProps,
@@ -42,7 +43,7 @@ import {
   resolvePanelSupplyLinkForPanel,
   resolvePanelSupplyLinkForPanelInPanels,
 } from '@/lib/eendraad/panelSupplyLink'
-import { syncPlugInPropsForDcEndpoints } from '@/lib/eendraad/endpointInsertAfter'
+import { syncDerivedEndpointFlags } from '@/lib/eendraad/endpointInsertAfter'
 import { relabelDomoticaChildRows } from '@/lib/eendraad/domoticaOutputOrdering'
 import {
   applyAutomaticMainBusNamingToPanel,
@@ -53,6 +54,7 @@ import {
   dedupePanelProtectionsInPanelTree,
 } from '@/lib/eendraad/mainBusOrder'
 import { findPanelById, findPanelByName } from '@/lib/panel/panelTree'
+import { findGroundTrunkDeviceOwner } from '@/lib/eendraad/panelGround'
 import { findPanelGridDuplicateFindings } from '@/lib/panel/panelGridDuplicates'
 import { DEFAULT_RCBO_SENSITIVITY_MA } from '@/lib/protectionDefaults'
 import { DEFAULT_PANEL_GRID_COLUMNS, DEFAULT_PANEL_GRID_ROWS } from '@/lib/panel/panelGridDefaults'
@@ -1019,7 +1021,27 @@ export function getAllProtections(panel: Panel): ProtectionDevice[] {
 
 /** Endpoints that users may explicitly include in the panel view. */
 export function endpointCanAppearInPanelGrid(endpoint: Endpoint): boolean {
-  return symbolCanAppearInPanelGrid(endpoint.symbol)
+  return symbolCanAppearInPanelGrid(endpoint.symbol) || isModularSocket(endpoint)
+}
+
+function findEndpointForPanelModuleRef(
+  panels: Panel[],
+  ref: PanelGridModuleRef
+): Endpoint | undefined {
+  if (ref.kind !== 'domotica') return undefined
+  for (const panel of panels) {
+    const found = findEndpointById(panel, ref.endpointId)
+    if (found) return found.endpoint
+  }
+  return undefined
+}
+
+/** Modular sockets stay in the panel view; hide/show cannot remove them. */
+export function panelGridModuleIsAlwaysVisibleInPanel(
+  ref: PanelGridModuleRef,
+  panels: Panel[]
+): boolean {
+  return isModularSocket(findEndpointForPanelModuleRef(panels, ref))
 }
 
 /** One-wire trunk devices that have a physical representation in the panel view. */
@@ -1055,8 +1077,10 @@ export function getDefaultPanelGridModuleRefs(
       refs.push({ kind: 'trunkDevice', id: d.id, scope: 'supply' })
     }
   }
-  if (panel.isMain && installation?.groundTrunkDevices) {
-    for (const d of installation.groundTrunkDevices) {
+  const groundDevices =
+    panel.isMain === false ? panel.groundTrunkDevices : installation?.groundTrunkDevices
+  if (groundDevices) {
+    for (const d of groundDevices) {
       if (!trunkDeviceCanAppearInPanelGrid(d)) continue
       refs.push({ kind: 'trunkDevice', id: d.id, scope: 'ground' })
     }
@@ -1214,13 +1238,17 @@ export function panelGridModuleIsVisibleByDefault(
     }
     return false
   }
-  if (ref.kind === 'domotica') return false
+  if (ref.kind === 'domotica') {
+    return isModularSocket(findEndpointForPanelModuleRef(allPanels, ref))
+  }
 
   let device: TrunkDevice | undefined
   if (ref.scope === 'supply' && installation) {
     device = getPanelSupplyTrunkDevices(installation, allPanels, panel).find((d) => d.id === ref.id)
   } else if (ref.scope === 'ground') {
-    device = installation?.groundTrunkDevices?.find((d) => d.id === ref.id)
+    device =
+      panel.groundTrunkDevices?.find((d) => d.id === ref.id) ??
+      installation?.groundTrunkDevices?.find((d) => d.id === ref.id)
   } else if (ref.scope === 'circuit') {
     const localCircuit = getAllCircuits(panel).find((candidate) => candidate.id === ref.circuitId)
     device = localCircuit?.trunkDevices?.find((d) => d.id === ref.id)
@@ -1358,7 +1386,7 @@ export function isModuleRefValid(
       )
     }
     if (ref.scope === 'ground') {
-      return !!installation?.groundTrunkDevices?.find((d) => d.id === ref.id)
+      return !!findGroundTrunkDeviceOwner(panels, installation, ref.id)
     }
     if (ref.scope === 'circuit' && ref.circuitId) {
       for (const panel of panels) {
@@ -1623,7 +1651,7 @@ export function normalizeDomoticaProject(project: ElectricalDomainProject): void
     const circuits = getAllCircuits(panel)
     for (const circuit of circuits) {
       normalizeDomoticaCircuit(circuit)
-      syncPlugInPropsForDcEndpoints(circuit)
+      syncDerivedEndpointFlags(circuit)
       // Domotica is excluded from sitplan; clear stale placements on load/migration.
       for (const endpoint of circuit.endpoints) {
         if (endpoint.symbol === 'domotica' && endpoint.placements.length > 0) {

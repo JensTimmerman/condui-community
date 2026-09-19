@@ -17,6 +17,14 @@ type ValidatableProject = ValidationProject & {
 }
 
 export type ValidationStatus = 'error' | 'warning' | 'ok'
+export type ValidationDisplayKind = 'pending' | ValidationStatus
+
+type ValidationResultCurrency = {
+  isLoading: boolean
+  isDirty: boolean
+  lastValidatedSignature: string | null
+  currentSignature: string | null
+}
 
 type ValidationRunReason =
   | 'idle_signature_change'
@@ -70,6 +78,27 @@ function computeStatus(issues: Issue[]): ValidationStatus {
   const hasWarnings = issues.some((i) => i.severity === 'warning')
   if (hasWarnings) return 'warning'
   return 'ok'
+}
+
+/** True only after a run has finished for the signature currently on screen. */
+export function isValidationResultCurrent(state: ValidationResultCurrency): boolean {
+  return (
+    !state.isLoading &&
+    !state.isDirty &&
+    state.lastValidatedSignature != null &&
+    state.lastValidatedSignature === state.currentSignature
+  )
+}
+
+/**
+ * Visual status for the header/dock/panel. Unfinished, aborted, or stale runs
+ * are pending — never "all clear".
+ */
+export function getValidationDisplayKind(
+  state: ValidationResultCurrency & { status: ValidationStatus }
+): ValidationDisplayKind {
+  if (!isValidationResultCurrent(state)) return 'pending'
+  return state.status
 }
 
 export const useValidationStore = create<ValidationState>()(
@@ -175,25 +204,22 @@ export const useValidationStore = create<ValidationState>()(
         })
       }
       const failValidation = (error: unknown) => {
-        if (error instanceof DOMException && error.name === 'AbortError') {
-          set((state) => {
-            if (state.pendingSignature === sig) {
-              state.pendingSignature = null
-              state.isLoading = false
-            }
-          })
-          return
+        const aborted = error instanceof DOMException && error.name === 'AbortError'
+        if (!aborted) {
+          logger.error('[Validation Store] Validation error:', error)
+          trackGoogleAnalyticsEvent('validation_run_error', { reason })
         }
-        logger.error('[Validation Store] Validation error:', error)
-        trackGoogleAnalyticsEvent('validation_run_error', { reason })
         set((state) => {
-          state.issues = []
-          state.status = 'ok'
           if (state.pendingSignature === sig) {
             state.pendingSignature = null
             state.isLoading = false
           }
-          // Keep dirty state as-is (project is still unvalidated).
+          // Never treat a failed or superseded run as a completed pass.
+          // Keep the last issues/status for context, but mark results stale
+          // so the UI shows waiting instead of a false all-clear.
+          if (state.lastValidatedSignature !== state.currentSignature) {
+            state.isDirty = true
+          }
         })
       }
 
@@ -237,7 +263,8 @@ export const useValidationStore = create<ValidationState>()(
       const before = get()
       if (
         before.lastValidatedSignature === sig &&
-        before.lastValidatedProjectId === project.project.id
+        before.lastValidatedProjectId === project.project.id &&
+        before.pendingSignature !== sig
       ) {
         logger.info('[Validation] project opened — already validated, skipping', {
           projectId: project.project.id,
@@ -253,7 +280,9 @@ export const useValidationStore = create<ValidationState>()(
       set((state) => {
         state.lastProjectSnapshot = project
         state.currentSignature = sig
-        state.pendingSignature = null
+        // Keep an in-flight run for this same revision; clearing it made the
+        // watcher think work was done and skip rescheduling after refresh.
+        if (state.pendingSignature !== sig) state.pendingSignature = null
         state.isDirty = state.lastValidatedSignature !== sig
       })
 

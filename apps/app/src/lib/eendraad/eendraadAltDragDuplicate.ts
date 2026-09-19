@@ -65,7 +65,6 @@ export interface EendraadAltDragDuplicateDeps {
   setSelection: (sel: Selection) => void
   getFloorById: (floorId: string) => { id: string; layers?: string[] } | null
   getProtectionById: (protectionId: string) => ProtectionDevice | null
-  updateEndpointSocketCount: (endpointId: string, count: number) => void
   syncEndpointMultiplierCount: (endpointId: string, count: number) => boolean
 }
 
@@ -125,10 +124,7 @@ export function duplicateCircuitDcBranchDeviceAtDropTarget(
 export function incrementAltDragSameSymbolEndpoint(
   sourceEndpoint: Endpoint,
   targetEndpoint: Endpoint | null,
-  deps: Pick<
-    EendraadAltDragDuplicateDeps,
-    'updateEndpointSocketCount' | 'syncEndpointMultiplierCount'
-  >,
+  deps: Pick<EendraadAltDragDuplicateDeps, 'syncEndpointMultiplierCount'>,
 ): boolean | null {
   if (
     targetEndpoint?.id !== sourceEndpoint.id ||
@@ -142,7 +138,6 @@ export function incrementAltDragSameSymbolEndpoint(
     sourceEndpoint.symbol,
     { endpoint: targetEndpoint },
     {
-      updateSocketCount: deps.updateEndpointSocketCount,
       syncEndpointCount: deps.syncEndpointMultiplierCount,
       syncSupplyDeviceCount: () => false,
     },

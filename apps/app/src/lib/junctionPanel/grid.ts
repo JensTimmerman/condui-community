@@ -5,6 +5,7 @@ import {
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { walkPanels } from '@/lib/panel/panelTree'
+import { collectAllGroundTrunkDevices } from '@/lib/eendraad/panelGround'
 import type {
   JunctionPanelTerminalComponent,
   PanelGridConfig,
@@ -68,7 +69,10 @@ export function updateSharedJunctionPanelGrid(
   const identity = (target.junctionIdentity ?? target.label ?? '').trim().toUpperCase()
   const devices: TrunkDevice[] = [
     ...getAllSupplyTrunkDevices(project),
-    ...(getProjectElectricalInstallation(project)?.groundTrunkDevices ?? []),
+    ...collectAllGroundTrunkDevices(
+      getProjectElectricalPanels(project),
+      getProjectElectricalInstallation(project)
+    ),
   ]
   for (const panel of walkPanels(getProjectElectricalPanels(project))) {
     const circuits = [

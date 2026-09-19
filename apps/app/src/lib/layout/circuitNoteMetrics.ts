@@ -13,6 +13,13 @@ export const CIRCUIT_NOTES_VERTICAL_X_NUDGE = CIRCUIT_NOTES_LINE_HEIGHT / 4
 export const CIRCUIT_NOTES_PAINT_PADDING = 8
 export const CIRCUIT_NOTES_MIN_WIDTH = 60
 export const CIRCUIT_NOTES_MAX_WIDTH = 200
+/**
+ * Extra crop clearance above painted notes. Matches the one-wire frame's
+ * vertical-note margin (20) plus its 8px frame inset so PDF overlays and
+ * italic overhangs stay on the sheet.
+ */
+export const CIRCUIT_NOTES_VERTICAL_SLICE_CLEARANCE = 28
+export const CIRCUIT_NOTES_HORIZONTAL_SLICE_CLEARANCE = 8
 export const CIRCUIT_NOTES_DEFAULT_FONT_FAMILY = 'Figtree'
 
 /** Preserve authored line breaks without letting invisible indentation skew centering. */

@@ -25,6 +25,7 @@ export const symbolTooltipsFrBE = {
   // Outlets
   socket_gnd_child: 'Prise avec terre et protection enfant.',
   double_socket_gnd_child: 'Double prise avec terre et protection enfant.',
+  modular_socket: 'Prise montée dans le tableau, absente du plan.',
   socket_child: 'Prise avec protection enfant, sans terre.',
   double_socket_child: 'Double prise avec protection enfant, sans terre.',
 

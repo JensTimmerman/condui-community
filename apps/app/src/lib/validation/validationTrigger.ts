@@ -24,8 +24,9 @@ type ValidationSignatureProject = ProjectWithOptionalV2Electrical &
 /**
  * Data that the validation engine actually reads. Excludes general floor plan
  * geometry (walls, doors, windows, sitplan notes, etc.) so that drawing in plan
- * mode does not trigger re-validation. Hidden situation-plan placement IDs are
- * included separately because their visibility is validation-relevant.
+ * mode does not trigger re-validation. Situation-plan visibility and symbol
+ * pose (position, rotation, scale, hide/show) are also excluded: only whether
+ * a required symbol is missing from the plan is validation-relevant.
  *
  * IMPORTANT: We aggressively memoize the validation signature based on these
  * top-level keys so that large projects do not incur a full JSON.stringify
@@ -52,9 +53,12 @@ const NON_VALIDATION_KEYS = new Set([
   'text',
   'title',
 
-  // Positional / rotational properties
+  // Positional / rotational / pose properties
   'pos',
   'rotationDeg',
+  'rotationMode',
+  'scale',
+  'locked',
   'startPoint',
   'endPoint',
   'wireRoute',
@@ -71,6 +75,17 @@ function isCircuitLikeObject(obj: Record<string, unknown>): boolean {
   return typeof obj.code === 'string' && !!obj.cable && Array.isArray(obj.endpoints)
 }
 
+function isPoint2(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const point = value as Record<string, unknown>
+  return typeof point.x === 'number' && typeof point.y === 'number'
+}
+
+/** Endpoint, trunk-device, earthing, and junction-panel symbols on a floor plan. */
+function isSituationPlanPlacement(obj: Record<string, unknown>): boolean {
+  return typeof obj.id === 'string' && typeof obj.floorId === 'string' && isPoint2(obj.pos)
+}
+
 /**
  * Strip non-validation fields from the project slice so that purely visual
  * toggles (like showDomainChangeLabel on trunk devices) do not trigger
@@ -82,6 +97,11 @@ function stripNonValidationFields(value: unknown): unknown {
   }
   if (value && typeof value === 'object') {
     const obj = value as Record<string, unknown>
+    if (isSituationPlanPlacement(obj)) {
+      // Presence and floor identity only. Dragging, rotating, scaling, or
+      // hiding a symbol must not schedule a validation run.
+      return { id: obj.id, floorId: obj.floorId }
+    }
     const out: Record<string, unknown> = {}
     const isCircuit = isCircuitLikeObject(obj)
     for (const [key, val] of Object.entries(obj)) {
@@ -191,16 +211,8 @@ export function getValidationSignature(project: ValidationSignatureProject | nul
     trunkSpans: frame.trunkSpans,
   }))
   slice.situationPlanFloors = slices.floors
-    .map((floor) => {
-      const hiddenIds =
-        (floor as { hiddenSitplanElementIds?: string[] }).hiddenSitplanElementIds ??
-        (floor as { hiddenSitplanPlacementIds?: string[] }).hiddenSitplanPlacementIds
-      return {
-        floorId: floor.id,
-        hiddenPlacementIds: [...(hiddenIds ?? [])].sort(),
-      }
-    })
-    .sort((a, b) => a.floorId.localeCompare(b.floorId))
+    .map((floor) => floor.id)
+    .sort((a, b) => a.localeCompare(b))
 
   lastProjectSlices = slices
   lastSignature = JSON.stringify(slice)

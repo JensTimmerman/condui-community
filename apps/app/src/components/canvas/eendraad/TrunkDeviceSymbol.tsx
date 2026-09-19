@@ -1,5 +1,8 @@
-import { hasSupplyInlineLabels, getSupplyInlineLabelLines } from '@/lib/layout/supplyInlineDeviceLabels'
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import {
+  hasSupplyInlineLabels,
+  getSupplyInlineLabelLines,
+} from '@/lib/layout/supplyInlineDeviceLabels'
+import { useState, useEffect, useCallback, useContext, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   HOVER_OUTLINE_DASH_PX,
@@ -87,7 +90,7 @@ import { MultiplierBadge } from './MultiplierBadge'
 import { useCanvasPanOrClickGesture } from './CanvasPanOrClickGesture'
 import { DomainMarker } from './DomainMarker'
 import { getProjectElectricalInstallation } from '@/lib/projectV2/electrical'
-import { getEarthingSeparatorPairIds } from '@/lib/eendraad/earthingSeparatorPairs'
+import { resolveEarthingSeparatorPairIds } from '@/lib/eendraad/earthingSeparatorPairs'
 import {
   getPhaseAssignmentLabel,
   phaseAssignmentDiffersFromInstallation,
@@ -101,6 +104,8 @@ import {
   getConverterConnectionDomains,
   getConverterCornerPosition,
   getConverterDomainCorner,
+  getSeparateSupplyInverterArtworkLayout,
+  getSeparateSupplyInverterDomainMarkers,
   isDirectionalConverterSymbol,
 } from '@/lib/converterArtwork'
 import { countSymbolLabelVisualLines } from '@/lib/symbolLabelMetrics'
@@ -133,6 +138,7 @@ import {
 } from '@/lib/eendraad/resizeConverterDcConnections'
 import { isVerticalSupplyDevice } from '@/lib/layout/supplyDeviceOrientation'
 import type { SupplyTopLabelPlacement } from '@/lib/layout/supplyTopLabelLayout'
+import { ConverterResizeViewportContext } from './ConverterResizeViewportContext'
 
 type EendraadPointerEvent = {
   cancelBubble: boolean
@@ -172,6 +178,7 @@ interface TrunkDeviceSymbolProps {
     device: TrunkDevice
     x: number
     y: number
+    metadataCalloutRect?: { left: number; top: number; right: number; bottom: number }
     topLabelPlacements?: SupplyTopLabelPlacement[]
   }>
   /** Left-to-right supply layouts are solved in canonical space, then mirrored back. */
@@ -273,6 +280,7 @@ export function TrunkDeviceSymbol({
   shouldSuppressKonvaDragEnd,
   draggableCircuitTrunk = false,
 }: TrunkDeviceSymbolProps) {
+  const resizeConverterWithViewportAnchor = useContext(ConverterResizeViewportContext)
   const setSelection = useSetSelection()
   const setHover = useSetHover()
   const clearHover = useClearHover()
@@ -389,8 +397,17 @@ export function TrunkDeviceSymbol({
         SYMBOL_SIZE
       )
     : {}
+  const isSeparateSupplyInverter =
+    device.symbol === 'inverter' &&
+    device.converterAcConnection === 'separate' &&
+    isHorizontal === true &&
+    (device.supplyPath === 'converter-branch' || device.supplyPath === 'backup')
+  const separateInverterDcSide = supplyMirrorAxisX != null ? 'left' : 'right'
   const converterArtworkLayout = isDirectionalConverter
     ? (() => {
+        if (isSeparateSupplyInverter) {
+          return getSeparateSupplyInverterArtworkLayout(separateInverterDcSide)
+        }
         const domains = getDomainForSymbol(device.symbol)
         return getConverterArtworkLayout(
           domains.inputDomain === 'DC' ? 'DC' : 'AC',
@@ -615,6 +632,38 @@ export function TrunkDeviceSymbol({
       }
     }
 
+    // The layout owns the measured card bounds, including mirror and frame offsets.
+    // Do not run a second packing pass with different font metrics and obstacles.
+    if (renderedPeerPositions.some((peer) => peer.metadataCalloutRect)) {
+      return {
+        clusters,
+        placements: new Map(
+          renderedPeerPositions.flatMap((peer) => {
+            const rect = peer.metadataCalloutRect
+            if (!rect) return []
+            const center =
+              peer.device.id === device.id
+                ? { x: position.x, y: position.y }
+                : { x: peer.x, y: peer.y }
+            return [
+              [
+                peer.device.id,
+                {
+                  id: peer.device.id,
+                  symbolPosition: center,
+                  x: rect.left - center.x,
+                  y: rect.top - center.y,
+                  width: rect.right - rect.left,
+                  height: rect.bottom - rect.top,
+                  rect,
+                },
+              ],
+            ]
+          })
+        ),
+      }
+    }
+
     const mainBusLabelRects = supplyPanelLabel
       ? wireSegments
           .filter((segment) => supplyPanelId == null || segment.panelId === supplyPanelId)
@@ -802,12 +851,22 @@ export function TrunkDeviceSymbol({
   const metadataCalloutWidth = useMemo(
     () =>
       metadataCallout?.width ??
+      metadataCalloutGroup.get(device.id)?.width ??
       getMetadataCalloutWidth(
         renderedMetadataCalloutLines.map((line) => measureSymbolLabelTextWidth(line, fontFamily, 8))
       ),
-    [fontFamily, metadataCallout?.width, renderedMetadataCalloutLines]
+    [
+      device.id,
+      fontFamily,
+      metadataCalloutGroup,
+      metadataCallout?.width,
+      renderedMetadataCalloutLines,
+    ]
   )
-  const metadataCalloutHeight = metadataCallout?.height ?? metadataCalloutVisualLineCount * 10 + 10
+  const metadataCalloutHeight =
+    metadataCallout?.height ??
+    metadataCalloutGroup.get(device.id)?.height ??
+    metadataCalloutVisualLineCount * 10 + 10
   const metadataCalloutPlacement = useMemo(() => {
     if (metadataCallout) return { x: metadataCallout.x, y: metadataCallout.y }
     const groupPlacement = metadataCalloutGroup.get(device.id)
@@ -877,6 +936,7 @@ export function TrunkDeviceSymbol({
       symbolHeight: renderedSymbolSize.height,
       placementKind: metadataCalloutPlacementKind,
       mirrorHorizontally: supplyMirrorAxisX != null,
+      adaptiveAnchors: ownSupplyPosition?.metadataCalloutRect != null,
     })
   const metadataCalloutTargetIds =
     metadataCallout?.targetIds ??
@@ -1027,12 +1087,7 @@ export function TrunkDeviceSymbol({
       }
 
       const currentProject = useProjectStore.getState().currentProject
-      const pairedIds = currentProject
-        ? getEarthingSeparatorPairIds(
-            getProjectElectricalInstallation(currentProject)?.groundTrunkDevices,
-            device.id
-          )
-        : [device.id]
+      const pairedIds = resolveEarthingSeparatorPairIds(currentProject, device.id)
       if (e.evt.shiftKey) {
         const { selection } = useUIStore.getState()
         if (
@@ -1116,7 +1171,16 @@ export function TrunkDeviceSymbol({
   const rotateMirroredChangeover =
     isHorizontal === true && device.symbol === 'source_changeover' && supplyMirrorAxisX != null
   const renderedSymbolRotationDeg =
-    symbolRotationDeg ?? (isRelay ? (isHorizontal ? 0 : 90) : rotateMirroredChangeover ? 180 : rotateForHorizontal ? 90 : 0)
+    symbolRotationDeg ??
+    (isRelay
+      ? isHorizontal
+        ? 0
+        : 90
+      : rotateMirroredChangeover
+        ? 180
+        : rotateForHorizontal
+          ? 90
+          : 0)
   const protectionLabelSource = isInlineSwitch
     ? {
         ...device,
@@ -1155,11 +1219,18 @@ export function TrunkDeviceSymbol({
       renderedSymbolSize.width,
       renderedSymbolSize.height,
       converterIconMargin,
-      converterIconSize
+      converterIconSize,
+      converterIconSize,
+      !isSeparateSupplyInverter
     )
   }
   const converterAcPosition = converterArtworkImagePosition('AC')
   const converterDcPosition = converterArtworkImagePosition('DC')
+  const separateInverterDomainMarkers = getSeparateSupplyInverterDomainMarkers(
+    renderedSymbolSize.width,
+    renderedSymbolSize.height,
+    separateInverterDcSide
+  )
   const dcDcConverterPositions =
     isDirectionalConverter && device.symbol === 'dc_dc_converter'
       ? (['bottom-left', 'top-right'] as const).map((corner) =>
@@ -1736,7 +1807,12 @@ export function TrunkDeviceSymbol({
               converterResizeCountRef.current = null
               setConverterResizePreviewCount(null)
               if (nextCount !== circuitConverterConnectionCount) {
-                resizeConverterDcConnections(device.id, nextCount)
+                const previousAnchor = circuitConverterAnchor ?? position
+                if (resizeConverterWithViewportAnchor) {
+                  resizeConverterWithViewportAnchor(device.id, nextCount, previousAnchor)
+                } else {
+                  resizeConverterDcConnections(device.id, nextCount)
+                }
               }
             }}
             onMouseEnter={(event) => {
@@ -1796,6 +1872,12 @@ export function TrunkDeviceSymbol({
             listening={false}
           />
         )}
+      {isSeparateSupplyInverter && (
+        <>
+          <DomainMarker domain="DC" {...separateInverterDomainMarkers.DC} color={getSecondaryTextColor(isDark ?? false)} />
+          <DomainMarker domain="AC" {...separateInverterDomainMarkers.AC} color={getSecondaryTextColor(isDark ?? false)} />
+        </>
+      )}
       {!isDirectionalConverter &&
         isConversionSymbol &&
         (device.supplyPath === 'backup' || device.supplyPath === 'converter-branch') && (

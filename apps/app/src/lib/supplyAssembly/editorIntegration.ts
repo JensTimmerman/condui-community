@@ -33,6 +33,49 @@ import {
   resolveAssemblyPanelInput,
 } from './electricalTopology'
 
+/** Pull extra trunk devices into the assembly graph for this reconcile pass only. */
+export type SupplyAssemblyReconcileOptions = {
+  absorbDeviceIds?: Iterable<string>
+  absorbNewSerialDevices?: boolean
+}
+
+function assemblyOwnedPhysicalDeviceIds(
+  assembly: OffGridSupplyAssembly,
+  extraIds?: Iterable<string>
+): Set<string> {
+  const ids = new Set<string>()
+  for (const node of assembly.nodes) {
+    const deviceId = getSupplyNodePhysicalDeviceId(node)
+    if (deviceId) ids.add(deviceId)
+  }
+  if (extraIds) {
+    for (const id of extraIds) ids.add(id)
+  }
+  return ids
+}
+
+function selectSerialLoadDevicesForAssembly(
+  devices: TrunkDevice[],
+  afterIndex: number,
+  ownedDeviceIds: Set<string>,
+  options?: SupplyAssemblyReconcileOptions
+): TrunkDevice[] {
+  const serial = devices.filter((device, index) => {
+    if (index <= afterIndex || device.supplyPanelInput) return false
+    return device.supplyPath == null || device.supplyPath === 'serial'
+  })
+  if (options?.absorbNewSerialDevices) return serial
+  const absorb = new Set(options?.absorbDeviceIds ?? [])
+  const lastOwned = serial.findLastIndex((device) => ownedDeviceIds.has(device.id))
+  return serial.filter((device, index) => {
+    if (ownedDeviceIds.has(device.id) || absorb.has(device.id)) return true
+    // Historical common-path devices omitted from the graph sit before the current
+    // tail. Continuation-rail devices are appended after that tail and must stay
+    // on the panel-only feed.
+    return lastOwned === -1 || index < lastOwned
+  })
+}
+
 const BACKUP_CONVERSION_SYMBOLS = new Set([
   'transformer',
   'rectifier',
@@ -660,6 +703,7 @@ export function buildDirectConverterSupplyAssembly(
         label: converter.label,
         properties: {
           serialNumber: converter.conversionProps?.serialNumber,
+          acConnection: converter.converterAcConnection,
           ...(gridInputConnected ? {} : { gridInputConnected: false }),
         },
         ports: [
@@ -1645,7 +1689,8 @@ function supplyAcBranchNode(device: TrunkDevice, conductors: AcPhase[]): SupplyN
  */
 export function reconcileDirectConverterCommonLoadPath(
   project: ProjectWithOptionalV2Electrical,
-  panelId: string
+  panelId: string,
+  options?: SupplyAssemblyReconcileOptions
 ): boolean {
   const installation = getProjectElectricalInstallation(project)
   if (!installation) return false
@@ -1661,20 +1706,25 @@ export function reconcileDirectConverterCommonLoadPath(
   if (!converter) return false
   const assembly = findAssemblyForDirectConverter(project, converter.id)
   if (assembly?.loadHandoffs.some((handoff) => handoff.id === `${assembly.id}-root-input-${panelId}`)) {
-    return initializeDirectConverterPanelBranches(project, assembly)
+    return initializeDirectConverterPanelBranches(project, assembly, options)
   }
   const utility = assembly?.nodes.find((node) => node.kind === 'utility-source')
+  const inverter = assembly?.nodes.find((node) => node.id === converter.id && node.kind === 'inverter-unit')
+  const separate = converter.symbol === 'inverter' && converter.converterAcConnection === 'separate'
   if (
     !assembly ||
     !utility ||
-    !assembly.connections.some(
+    (!separate && !assembly.connections.some(
       (edge) => edge.pathRole === 'inverter-grid-ac' && edge.endpoints[1].nodeId === converter.id
-    )
+    ))
   )
     return false
-  const serial = devices
-    .slice(converterIndex + 1)
-    .filter((device) => device.supplyPath == null || device.supplyPath === 'serial')
+  const serial = selectSerialLoadDevicesForAssembly(
+    devices,
+    converterIndex,
+    assemblyOwnedPhysicalDeviceIds(assembly, options?.absorbDeviceIds),
+    options
+  )
   const generated = assembly.loadHandoffs.filter((handoff) =>
     isGeneratedCommonPanelHandoff(assembly, handoff)
   )
@@ -1692,20 +1742,22 @@ export function reconcileDirectConverterCommonLoadPath(
   )
     return false
   const pathPrefix = `${assembly.id}-common-load-`
+  const inverterIds = new Set(assembly.nodes.filter(isInverterUnitNode).map((node) => node.id))
   const oldPath = assembly.connections.filter(
-    (edge) => edge.id.startsWith(pathPrefix) && edge.pathRole === 'grid-only-bypass-ac'
+    (edge) => edge.id.startsWith(pathPrefix) && (edge.pathRole === 'grid-only-bypass-ac' || edge.pathRole === 'load-ac')
   )
   const oldNodeIds = new Set(
     oldPath
       .flatMap((edge) => edge.endpoints.map((end) => end.nodeId))
-      .filter((id) => id !== utility.id && !generatedNodeIds.has(id))
+      .filter((id) => id !== utility.id && !inverterIds.has(id) && !generatedNodeIds.has(id))
   )
   const generatedEdges = assembly.connections.filter(
     (edge) =>
       generatedNodeIds.has(edge.endpoints[1].nodeId) &&
-      edge.id === `${assembly.id}-to-${edge.endpoints[1].nodeId}` &&
-      edge.pathRole === 'grid-only-bypass-ac' &&
-      (edge.endpoints[0].nodeId === utility.id || oldNodeIds.has(edge.endpoints[0].nodeId))
+      (edge.id === `${assembly.id}-to-${edge.endpoints[1].nodeId}` ||
+        edge.id.startsWith(`${assembly.id}-to-${edge.endpoints[1].nodeId}-unit-`)) &&
+      (edge.pathRole === 'grid-only-bypass-ac' || edge.pathRole === 'load-ac') &&
+      (edge.endpoints[0].nodeId === utility.id || inverterIds.has(edge.endpoints[0].nodeId) || oldNodeIds.has(edge.endpoints[0].nodeId))
   )
   const ownedEdges = new Set([...oldPath, ...generatedEdges])
   // An unknown incoming handoff, or private routing through one of the generated
@@ -1728,16 +1780,30 @@ export function reconcileDirectConverterCommonLoadPath(
   const previous = JSON.stringify(assembly)
   const previousConnections = assembly.connections
   const conductors = acConductors(project)
+  if (inverter?.kind === 'inverter-unit') {
+    inverter.properties.acConnection = converter.converterAcConnection
+    if (separate && !inverter.ports.some((candidate) => candidate.role === 'inverter-backup-ac')) {
+      inverter.ports.push(port('backup', 'inverter-backup-ac', getSupplyConverterAcConductors(converter, installation.nominalVoltage.system), 'source', 'many'))
+    }
+    for (const group of assembly.inverterGroups.filter((candidate) => candidate.unitNodeIds.includes(inverter.id))) {
+      if (separate) {
+        group.shared.capabilities.supportsBackupSupply = true
+        group.shared.capabilities.hasDedicatedBackupAcOutput = true
+        group.use.enabledForBackup = true
+      }
+    }
+  }
   assembly.connections = assembly.connections.filter((edge) => !ownedEdges.has(edge))
   assembly.nodes = assembly.nodes.filter((node) => !oldNodeIds.has(node.id))
-  let tail: [string, string] = [utility.id, 'out']
+  const commonRole = separate ? 'load-ac' : 'grid-only-bypass-ac'
+  let tail: [string, string] = separate ? [converter.id, 'backup'] : [utility.id, 'out']
   for (const device of serial) {
     assembly.connections.push(
       connection(
         `${pathPrefix}${device.id}`,
         tail,
         [device.id, 'source'],
-        'grid-only-bypass-ac',
+        commonRole,
         conductors
       )
     )
@@ -1806,12 +1872,13 @@ export function reconcileDirectConverterCommonLoadPath(
         `${assembly.id}-to-${handoff.handoffNodeId}`,
         tail,
         [handoff.handoffNodeId, 'in'],
-        'grid-only-bypass-ac',
+        commonRole,
         conductors
       )
     )
   }
   assembly.connections = preserveConnectionWireProperties(previousConnections, assembly.connections)
+  reconcileInverterUnitMultiplier(project, converter)
   reconcileSupplyAssemblyAcConductorFlow(project, panelId)
   return JSON.stringify(assembly) !== previous
 }
@@ -1819,7 +1886,8 @@ export function reconcileDirectConverterCommonLoadPath(
 /** Upgrade the shared diagram without promoting a root panel's devices to shared ownership. */
 export function initializeDirectConverterPanelBranches(
   project: ProjectWithOptionalV2Electrical,
-  assembly: OffGridSupplyAssembly
+  assembly: OffGridSupplyAssembly,
+  options?: SupplyAssemblyReconcileOptions
 ): boolean {
   if (assembly.presetIntent !== 'grid_connected_storage_branch') return false
   const panelId = getAssemblyPanelId(assembly, project)
@@ -1841,22 +1909,51 @@ export function initializeDirectConverterPanelBranches(
   if (!initialized && assembly.connections.some((edge) => edge.pathRole !== 'inverter-grid-ac' && edge.domain !== 'DC')) return false
   const before = JSON.stringify(assembly)
   const prefix = `${assembly.id}-root-chain-`
+  const separate = converter.symbol === 'inverter' && converter.converterAcConnection === 'separate'
+  const inverter = assembly.nodes.find((node) => node.id === converter.id && node.kind === 'inverter-unit')
+  if (inverter?.kind === 'inverter-unit') {
+    inverter.properties.acConnection = converter.converterAcConnection
+    if (separate && !inverter.ports.some((candidate) => candidate.role === 'inverter-backup-ac')) {
+      inverter.ports.push(port('backup', 'inverter-backup-ac', getSupplyConverterAcConductors(converter, installation.nominalVoltage.system), 'source', 'many'))
+    }
+    for (const group of assembly.inverterGroups.filter((candidate) => candidate.unitNodeIds.includes(inverter.id))) {
+      if (separate) {
+        group.shared.capabilities.supportsBackupSupply = true
+        group.shared.capabilities.hasDedicatedBackupAcOutput = true
+        group.use.enabledForBackup = true
+      }
+    }
+  }
   const previousEdges = assembly.connections
+  const inverterIds = new Set(assembly.nodes.filter(isInverterUnitNode).map((node) => node.id))
   const ownedIds = new Set(assembly.connections.filter((edge) => edge.id.startsWith(prefix))
     .flatMap((edge) => edge.endpoints.map((endpoint) => endpoint.nodeId))
-    .filter((id) => id !== utility.id && id !== `${ownerHandoffId}-node`))
-  const serial = devices.filter((device) => device.supplyPath == null || device.supplyPath === 'serial')
+    .filter((id) => id !== utility.id && !inverterIds.has(id) && id !== `${ownerHandoffId}-node`))
+  const serial = !initialized
+    ? devices.filter((device) => device.supplyPath == null || device.supplyPath === 'serial')
+    : selectSerialLoadDevicesForAssembly(
+        devices,
+        -1,
+        assemblyOwnedPhysicalDeviceIds(assembly, options?.absorbDeviceIds),
+        options
+      )
   assembly.nodes = assembly.nodes.filter((node) => !ownedIds.has(node.id))
   assembly.connections = assembly.connections.filter((edge) => !edge.id.startsWith(prefix))
   const conductors = acConductors(project)
   let tail: [string, string] = [utility.id, 'out']
   let converterTap: [string, string] = tail
+  let onBackup = false
   for (const device of serial) {
+    if (separate && !onBackup && devices.indexOf(device) > converterIndex) {
+      tail = [converter.id, 'backup']
+      onBackup = true
+    }
     if (!assembly.nodes.some((node) => node.id === device.id)) assembly.nodes.push(supplyAcBranchNode(device, conductors))
-    assembly.connections.push(connection(`${prefix}${device.id}`, tail, [device.id, 'source'], 'grid-ac', conductors))
+    assembly.connections.push(connection(`${prefix}${device.id}`, tail, [device.id, 'source'], onBackup ? 'load-ac' : 'grid-ac', conductors))
     tail = [device.id, 'load']
     if (devices.indexOf(device) < converterIndex) converterTap = tail
   }
+  if (separate && !onBackup) tail = [converter.id, 'backup']
   // The converter branches off this root's own feed, while other roots still
   // branch from the common utility output before these local protections.
   const gridHeads = assembly.connections.filter((edge) => edge.pathRole === 'inverter-grid-ac' &&
@@ -1879,6 +1976,7 @@ export function initializeDirectConverterPanelBranches(
     if (assembly.connections.filter((edge) => edge.endpoints[0].nodeId === node.id && edge.endpoints[0].portId === candidate.id).length > 1) candidate.maxConnections = 'many'
   }
   assembly.connections = preserveConnectionWireProperties(previousEdges, assembly.connections)
+  reconcileInverterUnitMultiplier(project, converter)
   reconcileSupplyAssemblyAcConductorFlow(project, panelId)
   return before !== JSON.stringify(assembly)
 }
@@ -1975,7 +2073,8 @@ export function reconcileDirectConverterGridProtections(
 /** Rebuilds both converter AC paths from their ordered, placeable supply devices. */
 export function reconcileSupplyAssemblyBranchProtections(
   project: ProjectWithOptionalV2Electrical,
-  panelId: string
+  panelId: string,
+  options?: SupplyAssemblyReconcileOptions
 ): boolean {
   const installation = getProjectElectricalInstallation(project)
   if (!installation) return false
@@ -2020,9 +2119,11 @@ export function reconcileSupplyAssemblyBranchProtections(
     (device) => device.changeoverGridPlacement === 'input-leg'
   )
   const changeoverIndex = rootDevices.findIndex((device) => device.id === changeover.id)
-  const loadDevices = rootDevices.filter(
-    (device, index) =>
-      index > changeoverIndex && (device.supplyPath == null || device.supplyPath === 'serial')
+  const loadDevices = selectSerialLoadDevicesForAssembly(
+    rootDevices,
+    changeoverIndex,
+    assemblyOwnedPhysicalDeviceIds(assembly, options?.absorbDeviceIds),
+    options
   )
   const gridDevices = [...inlineGridDevices, ...inverterInputDevices]
   const branchDeviceIds = new Set(

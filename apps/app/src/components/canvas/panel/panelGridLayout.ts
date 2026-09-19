@@ -4,7 +4,7 @@
 import type { Panel, PanelGridConfig, PanelGridModuleRef, PanelGridSlot } from '@/types/schema'
 import { panelGridModuleRefKey } from '@/lib/panel/panelGridModuleRef'
 export { panelGridModuleRefKey } from '@/lib/panel/panelGridModuleRef'
-import { getModuleWidthInCols } from '@/lib/panel/panelGridModuleWidth'
+import { getModuleWidthInCols, moduleWidthFollowsDevice } from '@/lib/panel/panelGridModuleWidth'
 export { getModuleWidthInCols } from '@/lib/panel/panelGridModuleWidth'
 import { findTrunkDeviceInProject } from '@/lib/eendraad/findTrunkDeviceInProject'
 import { clamp } from '@/lib/geometry'
@@ -154,6 +154,7 @@ export function resolveModuleWidthCols(
   slot?: { moduleWidth?: number; moduleWidthManual?: boolean }
 ): number {
   const poleBased = getModuleWidthInCols(ref, project)
+  if (moduleWidthFollowsDevice(ref, project)) return poleBased
   if (slot?.moduleWidthManual === true) {
     return Math.max(MIN_PANEL_GRID_MODULE_WIDTH, slot.moduleWidth ?? poleBased)
   }

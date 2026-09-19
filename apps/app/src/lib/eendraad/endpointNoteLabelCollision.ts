@@ -1,7 +1,21 @@
-export const ENDPOINT_NOTE_WIRE_CLEARANCE = 4
+import {
+  WIRE_LABEL_DISTANCE_FROM_WIRE,
+  WIRE_LABEL_FONT_SIZE,
+} from '@/lib/wireTextLabel'
+
+/** Extra gap past the outer edge of the vertical wire-property label. */
+const ENDPOINT_NOTE_WIRE_LABEL_GAP = 2
+
+/**
+ * Clear the branch trunk stroke and the vertical wire-property label beside it
+ * (anchor at distanceFromWire, ±fontSize/2 after −90° rotation).
+ */
+export const ENDPOINT_NOTE_WIRE_CLEARANCE =
+  WIRE_LABEL_DISTANCE_FROM_WIRE + WIRE_LABEL_FONT_SIZE / 2 + ENDPOINT_NOTE_WIRE_LABEL_GAP
+
 export const ENDPOINT_NOTE_SLOT_GAP = 2
 
-/** Minimum label-left X relative to an endpoint, keeping the note just clear of the branch wire. */
+/** Minimum label-left X relative to an endpoint, keeping the note clear of the trunk wire label. */
 export function getEndpointNoteMinimumLeftX(endpointX: number, branchWireX: number): number {
   return branchWireX - endpointX + ENDPOINT_NOTE_WIRE_CLEARANCE
 }

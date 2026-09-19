@@ -3,6 +3,7 @@
  */
 
 import type { SymbolMetadata } from '@/lib/symbols'
+import { withModularSocketProps } from '@/lib/socket/modularSocket'
 import type { Endpoint, EndpointType, SymbolKey } from '@/types/schema'
 
 /**
@@ -18,7 +19,8 @@ export function getEndpointTypeFromSymbol(symbol: SymbolMetadata): EndpointType 
     id === 'socket_child' ||
     id === 'socket_gnd_child' ||
     id === 'double_socket_child' ||
-    id === 'double_socket_gnd_child'
+    id === 'double_socket_gnd_child' ||
+    id === 'modular_socket'
   ) {
     return 'socket'
   }
@@ -147,6 +149,7 @@ export function getSymbolKeyFromSymbol(symbol: SymbolMetadata): SymbolKey | unde
   }
   if (id === 'double_socket_child') return 'socket_child' as SymbolKey
   if (id === 'double_socket_gnd_child') return 'socket_gnd_child' as SymbolKey
+  if (id === 'modular_socket') return 'socket_gnd_child' as SymbolKey
 
   // Switches (return resolved id for legacy)
   if (
@@ -369,6 +372,7 @@ export function isActualEndpointSymbol(symbol: SymbolMetadata): boolean {
     id === 'socket_gnd_child' ||
     id === 'double_socket_child' ||
     id === 'double_socket_gnd_child' ||
+    id === 'modular_socket' ||
     id === 'light_point' ||
     id === 'light_spot' ||
     id === 'light_led' ||
@@ -477,5 +481,8 @@ export function getDefaultLabel(symbol: SymbolMetadata, locale: string = 'nl-BE'
 export function applyLibraryPresetToEndpoint(symbol: SymbolMetadata, endpoint: Endpoint): void {
   if (symbol.id === 'double_socket_child' || symbol.id === 'double_socket_gnd_child') {
     endpoint.socketProps = { ...(endpoint.socketProps ?? {}), socketCount: 2 }
+  }
+  if (symbol.id === 'modular_socket') {
+    endpoint.socketProps = withModularSocketProps(endpoint.socketProps)
   }
 }

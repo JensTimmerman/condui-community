@@ -7,8 +7,13 @@ import {
 import type { Project, ProjectSliceCreator } from './projectStoreTypes'
 import { recordSessionAction } from '@/lib/diagnostics/sessionActionLog'
 import { syncSequentialEndpointBranchLabelsToCircuit } from '@/lib/eendraad/automaticEndpointBranchNaming'
-import { syncPlugInPropsForDcEndpoints } from '@/lib/eendraad/endpointInsertAfter'
+import { syncDerivedEndpointFlags } from '@/lib/eendraad/endpointInsertAfter'
 import { getEarthingSeparatorPairIds } from '@/lib/eendraad/earthingSeparatorPairs'
+import {
+  applySecondaryPanelEarthingStem,
+  collectAllGroundTrunkDevices,
+  findGroundTrunkDeviceOwner,
+} from '@/lib/eendraad/panelGround'
 import { pruneEendraadFrames } from '@/lib/eendraad/frameContent'
 import { logger } from '@/lib/logger'
 import {
@@ -61,8 +66,10 @@ import {
   generateId,
   getNextAvailableCircuitCode,
 } from '@/utils/project'
+import { findPanelById } from '@/lib/panel/panelTree'
 import { getAllSupplyTrunkDevices } from '@/lib/feedTopology'
 import { removeSupplyDevicePlacements } from '@/lib/supplyAssembly/inverterMultipliers'
+import { isModularSocket, normalizeModularSocketProps } from '@/lib/socket/modularSocket'
 
 type MutablePlacementOwner = {
   placement: Placement
@@ -77,7 +84,7 @@ function findMutablePlacementOwner(
   const installation = getEditableProjectElectricalInstallation(project)
   const installationTrunkDevices = [
     ...getAllSupplyTrunkDevices(project),
-    ...(installation?.groundTrunkDevices ?? []),
+    ...collectAllGroundTrunkDevices(getEditableProjectElectricalPanels(project), installation),
   ]
   for (const device of installationTrunkDevices) {
     const placement = device.placements?.find((candidate) => candidate.id === placementId)
@@ -104,98 +111,109 @@ function findMutablePlacementOwner(
 
 export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
   // Ground trunk device actions (devices on the ground wire)
-  addGroundTrunkDevice: (device, insertIndex) =>
+  addGroundTrunkDevice: (device, insertIndex, panelId) =>
     set((state) => {
-      if (state.currentProject) {
-        const installation = getEditableProjectElectricalInstallation(state.currentProject)
-        if (!installation) return
-        if (!installation.groundTrunkDevices) {
-          installation.groundTrunkDevices = []
-        }
-        // Insert at the specified index, or append at end
-        const idx = insertIndex ?? installation.groundTrunkDevices.length
-        installation.groundTrunkDevices.splice(idx, 0, device)
+      if (!state.currentProject) return
+      const targetPanel = panelId
+        ? findPanelById(getEditableProjectElectricalPanels(state.currentProject), panelId)
+        : undefined
+      if (targetPanel && targetPanel.isMain === false) {
+        if (!targetPanel.groundTrunkDevices) targetPanel.groundTrunkDevices = []
+        const idx = insertIndex ?? targetPanel.groundTrunkDevices.length
+        targetPanel.groundTrunkDevices.splice(idx, 0, device)
+        targetPanel.hasGround = true
         state.isDirty = true
+        return
       }
+      const installation = getEditableProjectElectricalInstallation(state.currentProject)
+      if (!installation) return
+      if (!installation.groundTrunkDevices) {
+        installation.groundTrunkDevices = []
+      }
+      const idx = insertIndex ?? installation.groundTrunkDevices.length
+      installation.groundTrunkDevices.splice(idx, 0, device)
+      state.isDirty = true
     }),
 
   updateGroundTrunkDevice: (deviceId, updates) =>
     set((state) => {
-      if (state.currentProject) {
-        const installation = getProjectElectricalInstallation(state.currentProject)
-        const devices = installation?.groundTrunkDevices
-        if (devices) {
-          const device = devices.find((d) => d.id === deviceId)
-          if (device) {
-            Object.assign(device, updates)
-            syncManualChronologyForInstallDateUpdate(
-              state.currentProject,
-              { id: deviceId, type: 'trunkDevice' },
-              updates
-            )
-            state.isDirty = true
-          }
-        }
-      }
+      if (!state.currentProject) return
+      const owner = findGroundTrunkDeviceOwner(
+        getEditableProjectElectricalPanels(state.currentProject),
+        getEditableProjectElectricalInstallation(state.currentProject),
+        deviceId
+      )
+      const device = owner?.devices[owner.index]
+      if (!device) return
+      Object.assign(device, updates)
+      syncManualChronologyForInstallDateUpdate(
+        state.currentProject,
+        { id: deviceId, type: 'trunkDevice' },
+        updates
+      )
+      state.isDirty = true
     }),
 
   deleteGroundTrunkDevice: (deviceId) =>
     set((state) => {
-      if (state.currentProject) {
-        const project = state.currentProject
-        const installation = getProjectElectricalInstallation(project)
-        const panels = getProjectElectricalPanels(project)
-        if (!installation) return
-        let removedLabel: string | undefined
-        if (installation.groundTrunkDevices) {
-          const idsToDelete = new Set(
-            getEarthingSeparatorPairIds(installation.groundTrunkDevices, deviceId)
-          )
-          const removed = installation.groundTrunkDevices.filter((device) =>
-            idsToDelete.has(device.id)
-          )
-          if (removed.length > 0) {
-            installation.groundTrunkDevices = installation.groundTrunkDevices.filter(
-              (device) => !idsToDelete.has(device.id)
-            )
-            const removedJunctionPanel = removed.find((device) => device.type === 'junction_panel')
-            if (removedJunctionPanel) removedLabel = removedJunctionPanel.label
-            for (const removedId of idsToDelete) {
-              cleanupPanelGridSlotsForDevice(panels, {
-                kind: 'trunkDevice',
-                id: removedId,
-                scope: 'ground',
-              })
-            }
-            pruneEendraadFrames(project, { removedMemberIds: [...idsToDelete] })
-            state.isDirty = true
-          }
+      if (!state.currentProject) return
+      const project = state.currentProject
+      const installation = getEditableProjectElectricalInstallation(project)
+      const panels = getEditableProjectElectricalPanels(project)
+      if (!installation) return
+      const owner = findGroundTrunkDeviceOwner(panels, installation, deviceId)
+      if (!owner) return
+      const idsToDelete = new Set(getEarthingSeparatorPairIds(owner.devices, deviceId))
+      const removed = owner.devices.filter((device) => idsToDelete.has(device.id))
+      if (removed.length === 0) return
+      if (owner.panel) {
+        owner.panel.groundTrunkDevices = owner.devices.filter((device) => !idsToDelete.has(device.id))
+      } else {
+        installation.groundTrunkDevices = owner.devices.filter((device) => !idsToDelete.has(device.id))
+      }
+      const removedLabel = removed.find((device) => device.type === 'junction_panel')?.label
+      for (const removedId of idsToDelete) {
+        cleanupPanelGridSlotsForDevice(panels, {
+          kind: 'trunkDevice',
+          id: removedId,
+          scope: 'ground',
+        })
+      }
+      pruneEendraadFrames(project, { removedMemberIds: [...idsToDelete] })
+      state.isDirty = true
+      if (removedLabel && installation.junctionPanelPlacements) {
+        const remainingDevices: { label?: string }[] = []
+        installation.mainSupply?.supplyTrunkDevices?.forEach((d) => {
+          if (d.type === 'junction_panel') remainingDevices.push({ label: d.label })
+        })
+        for (const device of collectAllGroundTrunkDevices(panels, installation)) {
+          if (device.type === 'junction_panel') remainingDevices.push({ label: device.label })
         }
-        if (removedLabel && installation.junctionPanelPlacements) {
-          const remainingDevices: { label?: string }[] = []
-          installation.mainSupply?.supplyTrunkDevices?.forEach((d) => {
-            if (d.type === 'junction_panel') remainingDevices.push({ label: d.label })
-          })
-          installation.groundTrunkDevices?.forEach((d) => {
-            if (d.type === 'junction_panel') remainingDevices.push({ label: d.label })
-          })
-          for (const panel of panels) {
-            const circuits = getAllCircuits(panel)
-            circuits.forEach((c) =>
-              c.trunkDevices?.forEach((d) => {
-                if (d.type === 'junction_panel') remainingDevices.push({ label: d.label })
-              })
-            )
-          }
-          const stillUsed = remainingDevices.some((d) => d.label === removedLabel)
-          if (!stillUsed) {
-            installation.junctionPanelPlacements = installation.junctionPanelPlacements.filter(
-              (jp) => jp.label !== removedLabel
-            )
-          }
+        for (const panel of panels) {
+          const circuits = getAllCircuits(panel)
+          circuits.forEach((c) =>
+            c.trunkDevices?.forEach((d) => {
+              if (d.type === 'junction_panel') remainingDevices.push({ label: d.label })
+            })
+          )
+        }
+        const stillUsed = remainingDevices.some((d) => d.label === removedLabel)
+        if (!stillUsed) {
+          installation.junctionPanelPlacements = installation.junctionPanelPlacements.filter(
+            (jp) => jp.label !== removedLabel
+          )
         }
       }
     }),
+
+  ensureSecondaryPanelEarthingStem: (panelId) =>
+    set((state) => {
+      if (!state.currentProject) return
+      const panel = findPanelById(getEditableProjectElectricalPanels(state.currentProject), panelId)
+      if (!panel) return
+      if (applySecondaryPanelEarthingStem(panel)) state.isDirty = true
+    }),
+
 
   ensureJunctionPanelPlacementForLabel: (label, floorId) => {
     const state = get()
@@ -477,7 +495,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
             if (!endpoint.domoticaChildProps) {
               normalizeDomoticaCircuit(result.circuit)
             }
-            syncPlugInPropsForDcEndpoints(result.circuit)
+            syncDerivedEndpointFlags(result.circuit)
             syncSequentialEndpointBranchLabelsToCircuit(result.circuit)
             healPlanWiring(state.currentProject)
             if (endpoint.placements.length > 0) {
@@ -604,8 +622,8 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
           }
           normalizeDomoticaCircuit(sourceCircuit)
           normalizeDomoticaCircuit(targetCircuit.circuit)
-          syncPlugInPropsForDcEndpoints(sourceCircuit)
-          syncPlugInPropsForDcEndpoints(targetCircuit.circuit)
+          syncDerivedEndpointFlags(sourceCircuit)
+          syncDerivedEndpointFlags(targetCircuit.circuit)
           state.lastWorkedCircuitId = targetCircuit.circuit.id
           state.isDirty = true
           return
@@ -671,6 +689,9 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
                 // Add to new circuit — branch labels synced sequentially after topology change.
                 const { label: _omitLabel, ...endpointUpdatesWithoutLabel } = updates
                 Object.assign(result.endpoint, endpointUpdatesWithoutLabel)
+                if (isModularSocket(result.endpoint)) {
+                  result.endpoint.socketProps = normalizeModularSocketProps(result.endpoint.socketProps)
+                }
                 syncManualChronologyForInstallDateUpdate(
                   state.currentProject,
                   { id, type: 'endpoint' },
@@ -701,6 +722,9 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
               }
             } else {
               Object.assign(result.endpoint, updates)
+              if (isModularSocket(result.endpoint)) {
+                result.endpoint.socketProps = normalizeModularSocketProps(result.endpoint.socketProps)
+              }
               syncManualChronologyForInstallDateUpdate(
                 state.currentProject,
                 { id, type: 'endpoint' },
@@ -817,7 +841,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
 
             removeEndpointIdsFromCircuit(result.circuit, idsToDelete)
             normalizeDomoticaCircuit(result.circuit)
-            syncPlugInPropsForDcEndpoints(result.circuit)
+            syncDerivedEndpointFlags(result.circuit)
             syncSequentialEndpointBranchLabelsToCircuit(result.circuit)
             healPlanWiring(state.currentProject)
             if (
@@ -865,7 +889,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
                 newIndex: index - 1,
                 newOrder: branch.endpointIds,
               })
-              syncPlugInPropsForDcEndpoints(result.circuit)
+              syncDerivedEndpointFlags(result.circuit)
               healPlanWiring(state.currentProject)
               state.isDirty = true
               return
@@ -878,7 +902,7 @@ export const createPlanPlacementSlice: ProjectSliceCreator = (set, get) => ({
                 newIndex: index + 1,
                 newOrder: branch.endpointIds,
               })
-              syncPlugInPropsForDcEndpoints(result.circuit)
+              syncDerivedEndpointFlags(result.circuit)
               healPlanWiring(state.currentProject)
               state.isDirty = true
               return

@@ -7,6 +7,11 @@ export const APPLIANCE_SYMBOLS = [
   ...getSymbolsByCategory('sound'),
 ]
 
+/** HVAC-only symbol keys, used to limit the appliance-type dropdown for HVAC-chained units. */
+export const HVAC_TYPE_SYMBOLS: SymbolKey[] = getSymbolsByCategory('hvac').map(
+  (sym) => sym.id as SymbolKey
+)
+
 /** Normalize legacy socket symbol keys for display (old projects may have socket_230v/socket_3phase) */
 export function normalizeSocketSymbol(symbol: SymbolKey | string | undefined): SymbolKey {
   if (symbol === 'socket_230v') return 'socket_gnd_child'

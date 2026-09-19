@@ -1,4 +1,4 @@
-import type { SymbolMetadata } from '@/lib/symbols'
+import { isHvacDeviceSymbol, type SymbolMetadata } from '@/lib/symbols'
 import type { Circuit, Endpoint } from '@/types/schema'
 import type { DropTarget } from '@/lib/layout/findDropTarget'
 import {
@@ -74,7 +74,12 @@ export function computeEndpointInsertAfter(
       const isFixedAfterSocket = isFixedAppliance && insertAfterEp?.type === 'socket'
       const isDcAfterConversion =
         isDcOnlyEndpointSymbol(symbol) && isEnergyConversionEndpointSymbol(insertAfterEp?.symbol)
-      if (insertAfterEp && (isFixedAfterSocket || isDcAfterConversion)) {
+      const isVentilationAfterHvacSource =
+        symbol.id === 'ventilation' && insertAfterEp?.symbol === 'furnace'
+      if (
+        insertAfterEp &&
+        (isFixedAfterSocket || isDcAfterConversion || isVentilationAfterHvacSource)
+      ) {
         return { insertAfterEndpointId: insertAfterEp.id, createNewBranch: false }
       }
     }
@@ -132,32 +137,62 @@ export function isPlugInDcEndpointInCircuit(circuit: Circuit, endpoint: Endpoint
   return false
 }
 
-function applyPlugInFlagToProps<P extends { plugIn?: boolean }>(
-  props: P | undefined,
-  plugIn: boolean,
-): P | undefined {
-  if (plugIn) {
-    return { ...(props ?? ({} as P)), plugIn: true }
+/**
+ * True when an HVAC device (ventilation, boiler, heating, or a downstream HVAC source) sits
+ * immediately after an HVAC source (furnace/heat pump) on its branch. Any HVAC-category device
+ * can be chained after a source and multiplied, not only ventilation — so changing a chained
+ * unit's type afterwards keeps its "add more" multiplier instead of orphaning its placements.
+ */
+export function isHvacDeviceAfterHvacSourceInCircuit(circuit: Circuit, endpoint: Endpoint): boolean {
+  if (!isHvacDeviceSymbol(endpoint.symbol)) return false
+  const branches = circuit.branches ?? []
+  for (const branch of branches) {
+    const idx = branch.endpointIds.indexOf(endpoint.id)
+    if (idx <= 0) continue
+    const prev = circuit.endpoints.find((e) => e.id === branch.endpointIds[idx - 1])
+    return prev?.symbol === 'furnace'
   }
-  if (!props?.plugIn) return props
-  const { plugIn: _removed, ...rest } = props
+  return false
+}
+
+function applyDerivedBooleanFlag<P extends object, K extends keyof P>(
+  props: P | undefined,
+  key: K,
+  value: boolean,
+): P | undefined {
+  if (value) {
+    return { ...(props ?? ({} as P)), [key]: true } as P
+  }
+  if (!props?.[key]) return props
+  const { [key]: _removed, ...rest } = props
   return Object.keys(rest).length > 0 ? (rest as P) : undefined
 }
 
 /**
- * Keep battery/solar plugIn props in sync with branch topology (hidden, for validation/export).
+ * Keep topology-derived endpoint flags in sync with branch layout (hidden, for validation/export
+ * and to gate UI such as the "add more" multiplier):
+ * - battery/solar `plugIn` when immediately after a socket
+ * - HVAC devices `chainedAfterHvacSource` when immediately after an HVAC source (furnace/heat pump)
  */
-export function syncPlugInPropsForDcEndpoints(circuit: Circuit): void {
+export function syncDerivedEndpointFlags(circuit: Circuit): void {
   for (const ep of circuit.endpoints) {
     if (ep.symbol === 'solar_panel') {
-      ep.solarPanelProps = applyPlugInFlagToProps(
+      ep.solarPanelProps = applyDerivedBooleanFlag(
         ep.solarPanelProps,
+        'plugIn',
         isPlugInDcEndpointInCircuit(circuit, ep),
       )
     } else if (ep.symbol === 'battery') {
-      ep.batteryProps = applyPlugInFlagToProps(
+      ep.batteryProps = applyDerivedBooleanFlag(
         ep.batteryProps,
+        'plugIn',
         isPlugInDcEndpointInCircuit(circuit, ep),
+      )
+    } else if (isHvacDeviceSymbol(ep.symbol)) {
+      ep.fixedApplianceProps = applyDerivedBooleanFlag(
+        ep.fixedApplianceProps,
+        'chainedAfterHvacSource',
+        isHvacDeviceAfterHvacSourceInCircuit(circuit, ep),
       )
     }
   }

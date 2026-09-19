@@ -33,12 +33,7 @@ import {
 import { preparePanelScene } from './sceneProviders/panelSceneProvider'
 import { prepareSitplanScene } from './sceneProviders/sitplanSceneProvider'
 import { prepareEendraadScene } from './sceneProviders/eendraadSceneProvider'
-import {
-  calculateEendraadSlices,
-  chooseEendraadDocumentScale,
-  EENDRAAD_MAX_SCALE_MM_PER_PX,
-} from './slicing/eendraadSlicing'
-import { getPdfContentHeightMm } from './pdfPageLayout'
+import { calculateEendraadSlices } from './slicing/eendraadSlicing'
 import { A4_LANDSCAPE, A4_PORTRAIT } from './pageSizes'
 import { buildInfoBlockSvg } from './infoBlockSvg'
 import { getInfoBlockTotalWidth, isInspectionAgencyInfoBlockVisible } from '@/lib/infoBlockLayout'
@@ -164,10 +159,9 @@ function buildExportPlan(options: ExportOptions, context: ExportContext): Export
   return pages
 }
 
-/** Pre-prepared eendraad full scenes and document-wide scale for all eendraad pages. */
+/** Pre-prepared eendraad full scenes for all eendraad pages. */
 interface EendraadPrepCache {
   byPanelId: Map<string, ExportScene>
-  documentGlobalScale: number
 }
 
 interface EendraadOverlayCache {
@@ -177,7 +171,8 @@ interface EendraadOverlayCache {
 /**
  * Prepare scene for a page
  * Handles eendraad slicing and scene preparation. When eendraadCache is provided,
- * reuses the same cloned scene for all slices (consistent theme) and document scale.
+ * reuses the same cloned scene for all slices (consistent theme). Each panel
+ * height-fits independently so every page of that panel shares one scale.
  */
 async function prepareSceneForPage(
   page: ExportPage,
@@ -204,11 +199,9 @@ async function prepareSceneForPage(
         throw new ExportError('NO_CONTENT', `Eendraad scene for diagram ${diagramId} not in cache`)
       }
 
-      const documentGlobalScale = eendraadCache?.documentGlobalScale
       const { slices, globalScale, mainBusY } = await calculateEendraadSlices(
         panelLayout,
-        fullScene,
-        documentGlobalScale
+        fullScene
       )
 
       for (let i = 0; i < slices.length; i++) {
@@ -362,13 +355,13 @@ export async function exportToPDF(
         )
       }
 
-      // Pre-pass: prepare all eendraad full scenes once and compute one document-wide scale
+      // Pre-pass: prepare all eendraad full scenes once. Each panel later
+      // chooses its own height-fit scale so tall notes only shrink that board.
       let eendraadCache: EendraadPrepCache | undefined
       let eendraadOverlayCache: EendraadOverlayCache | undefined
       const eendraadPages = pages.filter((p) => p.scene.kind === 'eendraad')
       if (eendraadPages.length > 0 && context.eendraadLayout) {
         const byPanelId = new Map<string, ExportScene>()
-        let maxHeight = 0
         const overlayByPanelId = new Map<string, ReturnType<typeof collectEendraadTextOverlays>>()
         for (const page of eendraadPages) {
           const diagramId = page.scene.id.replace('eendraad-', '')
@@ -397,44 +390,14 @@ export async function exportToPDF(
             diagramId
           )
           overlayByPanelId.set(diagramId, [...baseOverlays, ...noteOverlays, ...wireLabelOverlays])
-          if (panelLayout.frameRole !== 'supply') {
-            maxHeight = Math.max(maxHeight, fullScene.bounds.height)
-          }
         }
-        const usableHeight = getPdfContentHeightMm('landscape', {
-          hasInfoBlock: true,
-          hasPanelTitle: true,
-          infoBlockNativeWidth: getInfoBlockTotalWidth(
-            isInspectionAgencyInfoBlockVisible(context.project)
-          ),
-        })
-        const rawDocumentScale = usableHeight / maxHeight
-        const initialDocumentScale = Math.min(rawDocumentScale, EENDRAAD_MAX_SCALE_MM_PER_PX)
-        const documentGlobalScale = chooseEendraadDocumentScale(
-          context.eendraadLayout.panels,
-          byPanelId,
-          initialDocumentScale
-        )
         eendraadCache = {
           byPanelId,
-          documentGlobalScale,
         }
         eendraadOverlayCache = {
           byPanelId: overlayByPanelId,
         }
-        if (rawDocumentScale > EENDRAAD_MAX_SCALE_MM_PER_PX) {
-          exportLog(
-            `[Export] Eendraad document scale capped: raw=${rawDocumentScale.toFixed(4)} -> ${initialDocumentScale.toFixed(4)} mm/px (max=${EENDRAAD_MAX_SCALE_MM_PER_PX})`
-          )
-        }
-        if (documentGlobalScale < initialDocumentScale) {
-          exportLog(
-            `[Export] Eendraad page compaction: scale ${initialDocumentScale.toFixed(4)} -> ${documentGlobalScale.toFixed(4)} mm/px to remove a sparse trailing page`
-          )
-        }
-        exportLog(
-          `[Export] Eendraad pre-pass: ${byPanelId.size} panels, maxHeight=${maxHeight.toFixed(0)}, documentScale=${eendraadCache.documentGlobalScale.toFixed(4)}`
-        )
+        exportLog(`[Export] Eendraad pre-pass: ${byPanelId.size} panels`)
       }
 
       // Resolve effective installer profile and shared strings for per-page info block

@@ -57,6 +57,7 @@ export function disconnectSupplyInverterGridInputInProject(
   // so preserve whichever single/split panel organization the user already chose.
   if (
     !hasModularChangeover &&
+    inverter.converterAcConnection !== 'separate' &&
     !setPanelFeedOrganizationInProject(project, panelId, 'split-backup')
   ) {
     return false

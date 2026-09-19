@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useProjectStore, type ProjectState } from '@/stores/projectStore'
-import { useValidationStore, type ValidationState } from '@/stores/validationStore'
+import {
+  getValidationDisplayKind,
+  useValidationStore,
+  type ValidationState,
+} from '@/stores/validationStore'
 import { useUIStore } from '@/stores/uiStore'
 import { getValidationSignature } from '@/lib/validation/validationTrigger'
 import { AlertCircle, AlertTriangle, CheckCircle2, RotateCw } from 'lucide-react'
-import type { ValidationStatus } from '@/stores/validationStore'
 import { queryOneWireSegments } from '@/lib/projectV2/annotations'
 import { getProjectElectricalInstallation, getProjectElectricalPanels } from '@/lib/projectV2/electrical'
 import { logger } from '@/lib/logger'
@@ -42,19 +45,41 @@ function cancelIdle(handle: RequestIdleCallbackHandle) {
 
 interface ValidationStateIconProps {
   className?: string
-  statusOverride?: ValidationStatus
+  /** When true, skip pending/result state and always show a warning. */
+  disabledOutsideBelgium?: boolean
 }
 
-export function ValidationStateIcon({ className = 'w-5 h-5', statusOverride }: ValidationStateIconProps) {
-  const storedStatus = useValidationStore((state: ValidationState) => state.status)
+export function ValidationStateIcon({
+  className = 'w-5 h-5',
+  disabledOutsideBelgium = false,
+}: ValidationStateIconProps) {
+  const status = useValidationStore((state: ValidationState) => state.status)
   const isLoading = useValidationStore((state: ValidationState) => state.isLoading)
   const isDirty = useValidationStore((state: ValidationState) => state.isDirty)
+  const lastValidatedSignature = useValidationStore(
+    (state: ValidationState) => state.lastValidatedSignature
+  )
+  const currentSignature = useValidationStore((state: ValidationState) => state.currentSignature)
 
-  const status = statusOverride ?? storedStatus
-  if (isDirty && !isLoading && statusOverride === undefined) {
-    return <RotateCw className={`${className} text-gray-500 dark:text-gray-400`} />
+  if (disabledOutsideBelgium) {
+    return <AlertTriangle className={`${className} text-yellow-500`} />
   }
-  switch (status) {
+
+  const displayKind = getValidationDisplayKind({
+    status,
+    isLoading,
+    isDirty,
+    lastValidatedSignature,
+    currentSignature,
+  })
+  if (displayKind === 'pending') {
+    return (
+      <RotateCw
+        className={`${className} animate-spin text-gray-500 dark:text-gray-400`}
+      />
+    )
+  }
+  switch (displayKind) {
     case 'error':
       return <AlertCircle className={`${className} text-red-500`} />
     case 'warning':
@@ -74,6 +99,11 @@ function ValidationStatusIcon() {
   const status = useValidationStore((state: ValidationState) => state.status)
   const isLoading = useValidationStore((state: ValidationState) => state.isLoading)
   const isDirty = useValidationStore((state: ValidationState) => state.isDirty)
+  const pendingSignature = useValidationStore((state: ValidationState) => state.pendingSignature)
+  const lastValidatedSignature = useValidationStore(
+    (state: ValidationState) => state.lastValidatedSignature
+  )
+  const currentSignature = useValidationStore((state: ValidationState) => state.currentSignature)
   const setCurrentSignature = useValidationStore(
     (state: ValidationState) => state.setCurrentSignature
   )
@@ -82,7 +112,6 @@ function ValidationStatusIcon() {
   const toggleValidationWindow = useUIStore((state) => state.toggleValidationWindow)
   const validationDisabledOutsideBelgium =
     currentProject != null && getProjectElectricalInstallation(currentProject)?.address.country !== 'BE'
-  const displayStatus: ValidationStatus = validationDisabledOutsideBelgium ? 'warning' : status
 
   // Signature generation walks the canonical electrical graph. Keep it out of the
   // input event that mutated that graph; validation itself is already idle-scheduled.
@@ -164,12 +193,12 @@ function ValidationStatusIcon() {
   // A project revision is the authoritative editing signal. Pointer events alone
   // are insufficient: keyboard commands, undo, programmatic drops, and a long
   // synchronous commit can all mutate after the last pointer event. Restart the
-  // quiet period from the committed revision and abort any obsolete worker run.
+  // quiet period from the committed revision so a waiting timer waits longer.
+  // Do not abort an in-flight worker here: identity-only project updates and
+  // refreshes were cancelling the only scheduled run, then never restarting it.
   useEffect(() => {
     lastInteractionRef.current = Date.now()
-    cancelScheduledValidation()
-    cancelActiveValidationWorker()
-  }, [cancelScheduledValidation, currentProject])
+  }, [currentProject])
 
   useEffect(() => {
     const markInteraction = () => {
@@ -177,7 +206,6 @@ function ValidationStatusIcon() {
       if (now - lastInteractionMarkRef.current < 250) return
       lastInteractionMarkRef.current = now
       lastInteractionRef.current = now
-      cancelActiveValidationWorker()
     }
 
     // Capture common “active editing” signals (covers dragging, drawing, typing, zooming).
@@ -203,25 +231,28 @@ function ValidationStatusIcon() {
     if (lastSignatureRef.current !== signature) {
       logger.info('[Validation] signature changed')
       lastSignatureRef.current = signature
+      // The in-flight worker is for a different revision. Drop it; a new run
+      // is scheduled below after the quiet period. Same-signature churn must
+      // not abort, or a refresh/click can kill the only remaining run.
+      cancelActiveValidationWorker()
     }
 
     // Light stage: mark “dirty” immediately (icon can reflect this without running validation).
     setCurrentSignature(signature)
 
-    // Cancel any pending heavy validation.
-    cancelScheduledValidation()
-
-    // If the validation store has already validated this signature, or is
-    // about to (e.g. the project-open flow scheduled it), there is nothing
-    // for us to do here. This prevents the signature watcher from racing
-    // the project-open validation when the project is first loaded.
+    // If the validation store has already validated this signature, or a run
+    // for it is already in flight, do not queue a duplicate. If a previous
+    // attempt was aborted, pending/loading clear and this effect reschedules.
     const validationState = useValidationStore.getState()
-    if (
-      validationState.lastValidatedSignature === signature ||
-      validationState.pendingSignature === signature
-    ) {
+    if (validationState.pendingSignature === signature || validationState.isLoading) {
       return
     }
+    if (validationState.lastValidatedSignature === signature && !validationState.isDirty) {
+      cancelScheduledValidation()
+      return
+    }
+
+    cancelScheduledValidation()
 
     const tryScheduleHeavyValidation = () => {
       const now = Date.now()
@@ -258,6 +289,10 @@ function ValidationStatusIcon() {
     setCurrentSignature,
     inactivityMs,
     idleDelayMs,
+    isDirty,
+    isLoading,
+    pendingSignature,
+    lastValidatedSignature,
   ])
 
   const handleClick = () => {
@@ -269,19 +304,31 @@ function ValidationStatusIcon() {
     event.currentTarget.blur()
   }
 
+  const displayKind = validationDisabledOutsideBelgium
+    ? 'warning'
+    : getValidationDisplayKind({
+        status,
+        isLoading,
+        isDirty,
+        lastValidatedSignature,
+        currentSignature,
+      })
+
   const getIcon = () => {
-    return <ValidationStateIcon className="w-5 h-5" statusOverride={displayStatus} />
+    return (
+      <ValidationStateIcon
+        className="w-5 h-5"
+        disabledOutsideBelgium={validationDisabledOutsideBelgium}
+      />
+    )
   }
 
-  const getTitle = (status: ValidationStatus) => {
-    if (isLoading) return t('validation.checking', { defaultValue: 'Checking...' })
+  const getTitle = (kind: typeof displayKind) => {
     if (validationDisabledOutsideBelgium)
       return t('validation.disabledOutsideBelgium', { defaultValue: 'Validation disabled outside Belgium.' })
-    if (isDirty)
-      return t('validation.needsValidation', {
-        defaultValue: 'Needs validation (waiting for idle)',
-      })
-    switch (status) {
+    if (kind === 'pending')
+      return t('validation.checking', { defaultValue: 'Checking...' })
+    switch (kind) {
       case 'error':
         return t('validation.errorsFound', {
           count: errorCount,
@@ -307,12 +354,12 @@ function ValidationStatusIcon() {
           ? 'bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-300'
           : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300'
       }`}
-      title={getTitle(displayStatus)}
+      title={getTitle(displayKind)}
       disabled={isLoading}
       aria-pressed={validationWindowOpen}
     >
       {getIcon()}
-      {(errorCount > 0 || warningCount > 0) && (
+      {displayKind !== 'pending' && (errorCount > 0 || warningCount > 0) && (
         <span
           className={`text-xs font-semibold ${
             validationWindowOpen

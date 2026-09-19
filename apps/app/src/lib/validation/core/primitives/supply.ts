@@ -125,7 +125,13 @@ function hasCompliantRootFeedBackupRcd(
 function supplyModePaths(context: CheckContext): Issue[] {
   const assembly = findAssembly(context)
   const installation = getProjectElectricalInstallation(context.project)
-  if (!assembly || !installation || assembly.presetIntent === 'grid_connected_storage_branch') {
+  if (!assembly || !installation) return []
+  if (
+    assembly.presetIntent === 'grid_connected_storage_branch' &&
+    !assembly.nodes.some(
+      (node) => node.kind === 'inverter-unit' && node.properties.acConnection === 'separate'
+    )
+  ) {
     return []
   }
   if (validateOffGridSupplyAssembly(assembly).status === 'invalid') return []
@@ -176,7 +182,7 @@ function supplyModePaths(context: CheckContext): Issue[] {
       }),
       remediation: i18n.t('validation.primitives.supplyModePaths.remediation', {
         defaultValue:
-          'Reconnect the grid, backup and load sides so every shown phase has a complete path through the intended changeover.',
+          'Reconnect the grid, backup and load sides so every shown phase has a complete intended supply path.',
       }),
       citations: [
         {

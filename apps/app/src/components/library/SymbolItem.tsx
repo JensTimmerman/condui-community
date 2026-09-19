@@ -510,11 +510,34 @@ function FluorescentLibraryIcon() {
   )
 }
 
+function ModularSocketLibraryIcon() {
+  return (
+    <div className="w-8 h-8 flex items-center justify-center">
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 48 48"
+        className="w-full h-full dark:invert"
+        fill="none"
+        stroke="#000"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <rect x={1.5} y={1.5} width={45} height={45} rx={1} />
+        <g transform="translate(2.2 2.2) scale(0.91)">
+          <SocketOutletGlyph showGround />
+        </g>
+      </svg>
+    </div>
+  )
+}
+
 // Symbol IDs that use a custom React component for library preview only (not the main SVG).
 const LIBRARY_ICON_CUSTOM: Record<string, () => ReactNode> = {
   light_fluorescent: () => <FluorescentLibraryIcon />,
   double_socket_gnd_child: () => <DoubleSocketLibraryIcon showGround />,
   double_socket_child: () => <DoubleSocketLibraryIcon showGround={false} />,
+  modular_socket: () => <ModularSocketLibraryIcon />,
 }
 
 function SymbolPreview({ svgPath, symbolId }: SymbolPreviewProps) {

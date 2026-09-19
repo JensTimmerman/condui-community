@@ -43,6 +43,7 @@ import { findCircuitInProject, resolveFrameContentItems } from '@/lib/eendraad/f
 import { endpointSupportsMultiplier } from '@/utils/endpointMultipliers'
 import { isActualEndpoint } from '@/utils/symbolMapping'
 import { symbolRequiresSituationPlanPlacement } from '@/lib/plan/situationPlanSymbolEligibility'
+import { isModularSocket } from '@/lib/socket/modularSocket'
 import { resolvePanelForDistributionEndpoint } from '@/lib/plan/panelDistributionEndpoint'
 import { panelGridModuleRefKey } from '@/lib/panel/panelGridModuleRef'
 import {
@@ -58,6 +59,7 @@ import {
   getAllSupplyTrunkDevices,
   getPanelFeedProjection,
 } from '@/lib/feedTopology'
+import { collectAllGroundTrunkDevices } from '@/lib/eendraad/panelGround'
 import { queryOneWireFrames, type AnnotationProject } from '@/lib/projectV2/annotations'
 import {
   selectProjectBuildingFloorIds,
@@ -127,7 +129,10 @@ function collectPlanPlacementIdentityConflicts(
   }
   visit(getProjectElectricalPanels(project))
   for (const device of getAllSupplyTrunkDevices(project)) addDevice(device)
-  for (const device of getProjectElectricalInstallation(project)?.groundTrunkDevices ?? []) {
+  for (const device of collectAllGroundTrunkDevices(
+    getProjectElectricalPanels(project),
+    getProjectElectricalInstallation(project)
+  )) {
     addDevice(device)
   }
 
@@ -175,7 +180,7 @@ function compatibleMultiplierMerge(
 
 /** Optional plan symbols are valid with zero placements and must never be reported as orphans. */
 function endpointExpectedOnSitplan(ep: Circuit['endpoints'][number]): boolean {
-  return symbolRequiresSituationPlanPlacement(ep.symbol)
+  return symbolRequiresSituationPlanPlacement(ep.symbol) && !isModularSocket(ep)
 }
 
 type SupplyTrunkVisualPlacementMissingReason =
@@ -652,7 +657,8 @@ export function detectPanelOrphans(project: OrphanDetectionProject, panelId: str
       }
       if (ref.scope === 'ground') {
         return (
-          projectInstallation?.groundTrunkDevices?.find((d) => d.id === ref.id)?.label || ref.id
+          collectAllGroundTrunkDevices(projectPanels, projectInstallation).find((d) => d.id === ref.id)
+            ?.label || ref.id
         )
       }
       const circuit = ref.circuitId ? findCircuitInProject(project, ref.circuitId) : null
@@ -1053,16 +1059,19 @@ export function detectPanelOrphans(project: OrphanDetectionProject, panelId: str
   // Supply/ground trunk devices belong to main panels. Resolve supply devices through the
   // canonical feed projection so current V2 root-feed devices are included alongside legacy
   // mainSupply devices.
-  if (currentPanel.isMain === true) {
-    for (const td of projectInstallation
-      ? (getPanelFeedProjection(projectInstallation, projectPanels, currentPanel)?.devices ?? [])
-      : []) {
+    for (const td of currentPanel.groundTrunkDevices ?? []) {
       allTrunkDeviceIds.add(td.id)
     }
-    for (const td of projectInstallation?.groundTrunkDevices ?? []) {
-      allTrunkDeviceIds.add(td.id)
+    if (currentPanel.isMain === true) {
+      for (const td of projectInstallation
+        ? (getPanelFeedProjection(projectInstallation, projectPanels, currentPanel)?.devices ?? [])
+        : []) {
+        allTrunkDeviceIds.add(td.id)
+      }
+      for (const td of projectInstallation?.groundTrunkDevices ?? []) {
+        allTrunkDeviceIds.add(td.id)
+      }
     }
-  }
 
   for (const frame of frames) {
     for (const span of frame.trunkSpans ?? []) {

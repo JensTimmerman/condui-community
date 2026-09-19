@@ -98,6 +98,7 @@ export interface DropTarget {
   supplyDeviceInsertIndex?: number
   /** Which feed path a supply-wire drop should target on a main panel. */
   supplyFeedScope?: 'shared' | 'root'
+  supplyPanelInput?: boolean
   /** Which physical DC branch of a hybrid supply converter is targeted. */
   supplyConverterDcBranch?: 'right' | 'top'
   supplyConverterDcConnectionIndex?: number
@@ -1671,6 +1672,7 @@ function buildDropTarget(node: LayoutNode, ctx: WalkContext, position?: Point): 
     position
   ) {
     target.supplyFeedScope = node.hitZone?.supplyFeedScope
+    target.supplyPanelInput = node.hitZone?.supplyPanelInput
     target.supplyConverterDcBranch = node.hitZone?.supplyConverterDcBranch
     target.supplyConverterDcConnectionIndex = node.hitZone?.supplyConverterDcConnectionIndex
     target.supplyDcBusId = node.hitZone?.supplyDcBusId

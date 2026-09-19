@@ -14,6 +14,7 @@ import { isKeyboardTypingTarget } from '@/lib/ui/keyboardTypingTarget'
 import { panelGridModuleRefKey } from '@/components/canvas/panel/panelGridLayout'
 import { openPanelHiddenModulesDialog } from '@/components/canvas/panel/openPanelHiddenModulesDialog'
 import { getSharedSupplyFrameDevices, SHARED_SUPPLY_FRAME_ID } from '@/lib/panel/sharedSupplyFrame'
+import { isModularSocket } from '@/lib/socket/modularSocket'
 import type { Panel, PanelGridModuleRef } from '@/types/schema'
 import type { Point, Selection as CanvasSelection } from '@/types/ui'
 
@@ -183,38 +184,53 @@ export function usePanelContextMenu({
 
       if (isMultiSelect) {
         const moduleKeys = new Set<string>()
+        const hideableKeys = new Set<string>()
         if (selection.type === 'protection') {
           for (const id of selection.ids) {
             const m = contextModules.find(
               (x: ModuleItem) => x.ref.kind === 'protection' && x.ref.id === id
             )
-            if (m) moduleKeys.add(panelGridModuleRefKey(m.ref))
+            if (m) {
+              const key = panelGridModuleRefKey(m.ref)
+              moduleKeys.add(key)
+              hideableKeys.add(key)
+            }
           }
         } else if (selection.type === 'trunkDevice') {
           for (const id of selection.ids) {
             const m = resolveModuleItemForPanelCanvas('trunkDevice', id)
-            if (m) moduleKeys.add(panelGridModuleRefKey(m.ref))
+            if (m) {
+              const key = panelGridModuleRefKey(m.ref)
+              moduleKeys.add(key)
+              hideableKeys.add(key)
+            }
           }
         } else if (selection.type === 'endpoint') {
+          const getEndpointById = useProjectStore.getState().getEndpointById
           for (const id of selection.ids) {
             const m = contextModules.find(
               (x: ModuleItem) => x.ref.kind === 'domotica' && x.ref.endpointId === id
             )
-            if (m) moduleKeys.add(panelGridModuleRefKey(m.ref))
+            if (!m) continue
+            const key = panelGridModuleRefKey(m.ref)
+            moduleKeys.add(key)
+            if (!isModularSocket(getEndpointById(id))) hideableKeys.add(key)
           }
         }
 
         if (moduleKeys.size > 0) {
           // Bottom section: Hide in this view + Delete (multi)
-          items.push(
-            { label: '', onClick: () => {}, separator: true },
-            {
+          items.push({ label: '', onClick: () => {}, separator: true })
+          if (hideableKeys.size > 0) {
+            items.push({
               label: t('contextMenu.hideInThisView', 'Hide in this view'),
               icon: getContextMenuIcon('hideInThisView'),
               onClick: () => {
-                moduleKeys.forEach((key) => hideModuleFromPanel(contextPanelId, key))
+                hideableKeys.forEach((key) => hideModuleFromPanel(contextPanelId, key))
               },
-            },
+            })
+          }
+          items.push(
             {
               label: t('contextMenu.deleteAll'),
               icon: getContextMenuIcon('delete'),
@@ -353,11 +369,16 @@ export function usePanelContextMenu({
 
             // Bottom section: Hide in this view + Delete for single module
             items.push({ label: '', onClick: () => {}, separator: true })
-            items.push({
-              label: t('contextMenu.hideInThisView', 'Hide in this view'),
-              icon: getContextMenuIcon('hideInThisView'),
-              onClick: () => hideModuleFromPanel(contextPanelId, key!),
-            })
+            const hideBlocked =
+              ref.kind === 'domotica' &&
+              isModularSocket(useProjectStore.getState().getEndpointById(ref.endpointId))
+            if (!hideBlocked) {
+              items.push({
+                label: t('contextMenu.hideInThisView', 'Hide in this view'),
+                icon: getContextMenuIcon('hideInThisView'),
+                onClick: () => hideModuleFromPanel(contextPanelId, key!),
+              })
+            }
             items.push({
               label: t('contextMenu.delete'),
               icon: getContextMenuIcon('delete'),

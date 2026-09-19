@@ -17,6 +17,7 @@ import {
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { findPanelById } from '@/lib/panel/panelTree'
+import { findGroundTrunkDeviceOwner } from '@/lib/eendraad/panelGround'
 import { panelGridModuleRefKey } from './panelGridLayout'
 import { assemblyOwnsPanelInput, buildSupplyElectricalTopology } from '@/lib/supplyAssembly/electricalTopology'
 import { selectProjectSupplyAssemblies } from '@/lib/projectV2/electrical'
@@ -214,8 +215,9 @@ export function findPanelContainingModuleRef(
 
   if (ref.kind === 'trunkDevice' && ref.scope === 'ground') {
     const panels = projectPanels(project)
-    const list = projectInstallation(project)?.groundTrunkDevices ?? []
-    if (!list.some((d) => d.id === ref.id)) return null
+    const owner = findGroundTrunkDeviceOwner(panels, projectInstallation(project), ref.id)
+    if (!owner) return null
+    if (owner.panel) return owner.panel
     return panels.find((p) => p.isMain) ?? panels[0] ?? null
   }
 
@@ -682,8 +684,9 @@ export function getRelationEdges(
       }
     }
     if (ref.scope === 'ground') {
-      const list = installation?.groundTrunkDevices ?? []
-      const idx = list.findIndex((d) => d.id === ref.id)
+      const owner = findGroundTrunkDeviceOwner(panels, installation, ref.id)
+      const list = owner?.devices ?? []
+      const idx = owner?.index ?? -1
       if (idx > 0) {
         const prev = list[idx - 1]
         if (prev) parentRefs.push({ kind: 'trunkDevice', id: prev.id, scope: 'ground' })

@@ -47,6 +47,7 @@ export interface DropZoneHintMatch {
   panelId?: string
   endpointId?: string
   supplyFeedScope?: 'shared' | 'root'
+  supplyPanelInput?: boolean
   supplyDeviceInsertIndex?: number
   supplyConverterDcBranch?: 'right' | 'top'
   supplyConverterDcConnectionIndex?: number
@@ -577,6 +578,38 @@ function appendTrunkTopSlotHints(
   }
 }
 
+/** Horizontal offset of the chain-slot hint from the HVAC source's right edge. */
+const VENTILATION_AFTER_HVAC_GAP = 22
+
+/**
+ * Ventilation units can be chained immediately after an HVAC source (furnace/heat pump).
+ * Surface a dedicated dashed-circle hint just to the right of each furnace endpoint so the
+ * chain slot is discoverable while dragging a ventilation symbol from the library.
+ */
+function appendVentilationAfterHvacSourceHints(
+  symbol: SymbolMetadata,
+  layoutTree: LayoutTree,
+  hints: DropZoneHint[]
+): void {
+  if (symbol.id !== 'ventilation') return
+  const visit = (node: LayoutNode) => {
+    if (node.type === 'endpoint') {
+      const endpoint = node.domainRef as Endpoint | undefined
+      if (endpoint?.symbol === 'furnace') {
+        const bounds = getHitZoneBounds(node, 'core')
+        hints.push({
+          nodeId: `ventilation-after-hvac-${endpoint.id}`,
+          x: bounds.right + VENTILATION_AFTER_HVAC_GAP,
+          y: (bounds.top + bounds.bottom) / 2,
+          targetType: 'endpoint',
+        })
+      }
+    }
+    node.children.forEach(visit)
+  }
+  layoutTree.panels.forEach(visit)
+}
+
 function hintAnchor(node: LayoutNode): { x: number; y: number } {
   if (node.hitZone?.dropHintAnchor) return node.hitZone.dropHintAnchor
   const bounds = getHitZoneBounds(node, 'core')
@@ -620,8 +653,8 @@ function shouldSkipContainerNode(node: LayoutNode): boolean {
   return false
 }
 
-function supplySegmentSuffix(nodeId: string, panelId: string): string | null {
-  const prefix = `supply-wire-segment-${panelId}-`
+function supplySegmentSuffix(nodeId: string, panelKey: string): string | null {
+  const prefix = `supply-wire-segment-${panelKey}-`
   if (!nodeId.startsWith(prefix)) return null
   return nodeId.slice(prefix.length)
 }
@@ -635,22 +668,22 @@ function isSupplyWireSlotSegment(node: LayoutNode, panelNode: LayoutNode): boole
   // serial supply insertion slot. This includes the span before an existing protection;
   // when the inverter grid leg is absent, that span is the otherwise-empty visible slot.
   if (id.startsWith('supply-changeover-grid-slot-')) return true
-  const panelId = panelNode.domainId ?? panelNode.id
+  const panelKey = panelNode.diagramId ?? panelNode.domainId ?? panelNode.id
   if (id.includes('supply-wire-vertical')) return false
 
   const hasHorizontalSegments = panelNode.children.some((c) =>
-    c.id?.startsWith(`supply-wire-segment-${panelId}-`)
+    c.id?.startsWith(`supply-wire-segment-${panelKey}-`)
   )
 
-  const suffix = supplySegmentSuffix(id, panelId)
+  const suffix = supplySegmentSuffix(id, panelKey)
   if (suffix != null) {
-    if (suffix === 'stub-root' || suffix === 'stub-shared') return true
+    if (suffix === 'stub-root' || suffix === 'stub-shared' || suffix === 'handoff') return true
     if (suffix === 'entry-root' || suffix === 'entry-shared') return false
     if (suffix.endsWith('-root') || suffix.endsWith('-shared')) return false
     return suffix === 'entry' || /^\d+$/.test(suffix) || suffix === 'supply' || suffix === 'stub'
   }
 
-  if (!hasHorizontalSegments && id === `supply-wire-${panelId}`) {
+  if (!hasHorizontalSegments && id === `supply-wire-${panelKey}`) {
     return true
   }
 
@@ -674,6 +707,7 @@ function buildHintMatch(
     return {
       panelId: node.hitZone?.supplyPanelId ?? ctx.panelId,
       supplyFeedScope: node.hitZone?.supplyFeedScope ?? 'shared',
+      supplyPanelInput: node.hitZone?.supplyPanelInput,
       supplyDeviceInsertIndex: node.hitZone?.supplyInsertIndex,
       supplyConverterDcBranch: node.hitZone?.supplyConverterDcBranch,
       supplyConverterDcConnectionIndex: node.hitZone?.supplyConverterDcConnectionIndex,
@@ -1082,11 +1116,15 @@ function shouldIncludeHintNode(
   }
 
   if (hitType === 'groundWire' && !ctx.panelIsMain) {
-    return false
+    const panel = ctx.panelId
+      ? findPanelById(getProjectElectricalPanels(project), ctx.panelId)
+      : undefined
+    if (panel?.hasGround !== true) return false
   }
 
-  if (symbol.id === 'earthing' && hitType === 'mainBus' && !ctx.panelIsMain) {
-    return false
+  if ((symbol.id === 'earthing' || symbol.id === 'earthing_separator') && hitType === 'mainBus') {
+    if (!ctx.panelIsMain) return false
+    if (symbol.id === 'earthing_separator') return false
   }
 
   if (TRUNK_ONLY_ON_CIRCUIT_SYMBOLS.has(symbol.id) && node.type === 'branch') {
@@ -1487,6 +1525,33 @@ export function resolveActiveDropZoneHintNodeId(
   }).nodeId
 }
 
+function collectSecondaryPanelEarthingBusHints(layoutTree: LayoutTree): DropZoneHint[] {
+  return layoutTree.panels.flatMap((panelNode) => {
+    const panel = panelNode.domainRef as Panel | undefined
+    if (!panel || panel.isMain !== false || panel.hasGround === true) return []
+    const bus = panelNode.children.find((node) => node.type === 'busBar')
+    if (!bus) return []
+    const horizontalPadding = 12
+    const verticalPadding = 14
+    return [
+      {
+        nodeId: `secondary-panel-earthing-bus-${panelNode.id}`,
+        x: bus.bounds.x + bus.bounds.width / 2,
+        y: bus.bounds.y + bus.bounds.height / 2,
+        targetType: 'mainBus' as const,
+        match: { panelId: panel.id },
+        outline: {
+          x: bus.bounds.x - horizontalPadding,
+          y: bus.bounds.y - verticalPadding,
+          width: bus.bounds.width + horizontalPadding * 2,
+          height: bus.bounds.height + verticalPadding * 2,
+          cornerRadius: 8,
+        },
+      },
+    ]
+  })
+}
+
 /**
  * Returns hint markers for every legal drop target of the given symbol on the current layout.
  */
@@ -1565,10 +1630,15 @@ export function collectDropZoneHints(
 
   const hints = [
     ...sameSymbolHints,
+    ...((symbol.id === 'earthing' || symbol.id === 'earthing_separator')
+      ? collectSecondaryPanelEarthingBusHints(layoutTree)
+      : []),
     ...dedupeMainBusHints(dedupeSupplyWireHints(rawHints)).filter((hint) =>
       canCreateSupplyTopologyFromDrop(symbol, hint.targetType)
     ),
   ]
+  appendVentilationAfterHvacSourceHints(symbol, layoutTree, hints)
+
   const completedHints: DropZoneHint[] =
     symbol.id === 'source_changeover' ? appendDirectChangeoverAreaHints(layoutTree, hints) : hints
   const movingPanelId = options?.movingPanelAttachmentId

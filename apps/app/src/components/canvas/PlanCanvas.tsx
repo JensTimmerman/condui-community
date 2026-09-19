@@ -185,6 +185,7 @@ import { pickPlanFloorForSelectionFit } from '@/lib/plan/planFocusFloorForSelect
 import { healEarthingSitplanPlacements } from '@/lib/plan/earthingSitplanPlacement'
 import {
   buildQuickPlacerCircuits,
+  findNextQuickPlacerCircuit,
   flattenQuickPlacerCircuit,
   type QuickPlacerItem,
 } from '@/lib/plan/quickPlacer'
@@ -663,6 +664,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
   const quickPlacerFastOverlayRef = useRef<HTMLDivElement | null>(null)
   const quickPlacerPreviousSelectionRef = useRef<Selection | null>(null)
   const quickPlacerWasFastRef = useRef(false)
+  const suppressQuickPlacerPanelFocusRef = useRef(false)
   const [selectedSegmentIndices, applySelectedSegmentIndices] = useState<Map<string, number[]>>(
     new Map()
   )
@@ -1452,6 +1454,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
     updateDoor,
     updateWindow,
     windowsForRender,
+    zoom: planView.zoom,
   })
   const toolMoveHandleColor = '#ffffff'
   const toolMoveHandleStrokeColor = '#0284c7'
@@ -3966,6 +3969,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
       const handleContextMenu = (event: MouseEvent) => {
         if (event.button !== 2) return
         const target = event.target
+        if (target instanceof Element && target.closest('[data-floor-selection-row]')) return
         const insidePlan = target instanceof Node && !!containerRef.current?.contains(target)
         if (!insidePlan) return
         event.preventDefault()
@@ -5114,6 +5118,10 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
         !selectedQuickPlacerCircuit
       )
         return
+      if (suppressQuickPlacerPanelFocusRef.current) {
+        suppressQuickPlacerPanelFocusRef.current = false
+        return
+      }
       applyEendraadCircuitFocus({
         circuitId: selectedQuickPlacerCircuit.id,
         setSelection: applySelection,
@@ -5158,23 +5166,19 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
         return
       }
 
-      const currentCircuitIndex = selectedQuickPlacerCircuit
-        ? quickPlacerCircuits.findIndex((circuit) => circuit.id === selectedQuickPlacerCircuit.id)
-        : -1
-
-      if (currentCircuitIndex === -1) {
+      if (!selectedQuickPlacerCircuit) {
         applyQuickPlacerFastIndex(0)
         return
       }
 
-      for (let offset = 1; offset <= quickPlacerCircuits.length; offset += 1) {
-        const nextCircuit =
-          quickPlacerCircuits[(currentCircuitIndex + offset) % quickPlacerCircuits.length]
-        if (!nextCircuit) continue
-        const nextSequence = flattenQuickPlacerCircuit(nextCircuit, {
+      const nextCircuit = findNextQuickPlacerCircuit(
+        quickPlacerCircuits,
+        selectedQuickPlacerCircuit.id,
+        {
           autoSkipCustom: quickPlacerFastAutoSkipCustom,
-        })
-        if (nextSequence.length === 0) continue
+        }
+      )
+      if (nextCircuit) {
         applyQuickPlacerSelectedCircuitId(nextCircuit.id)
         applyQuickPlacerFastIndex(0)
         return
@@ -5270,6 +5274,25 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
       applyQuickPlacerFastIndex,
       applyQuickPlacerManualCircuitFocusToken,
       applyQuickPlacerSelectedCircuitId,
+      quickPlacerMode,
+    ]
+  )
+
+  const handleQuickPlacerSelectedPanelChange = useCallback(
+    (panelId: string) => {
+      const firstCircuit = quickPlacerCircuits.find((circuit) => circuit.panelId === panelId)
+      if (!firstCircuit) return
+      if (quickPlacerMode === 'fast') suppressQuickPlacerPanelFocusRef.current = true
+      applyQuickPlacerSelectedCircuitId(firstCircuit.id)
+      applyQuickPlacerFastIndex(0)
+      trackGoogleAnalyticsEvent('quick_placer_panel_select', {
+        mode: quickPlacerMode,
+      })
+    },
+    [
+      applyQuickPlacerFastIndex,
+      applyQuickPlacerSelectedCircuitId,
+      quickPlacerCircuits,
       quickPlacerMode,
     ]
   )
@@ -5536,6 +5559,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
 
       const handleContextMenu = (event: MouseEvent) => {
         const target = event.target
+        if (target instanceof Element && target.closest('[data-floor-selection-row]')) return
         const insidePlan = target instanceof Node && !!containerRef.current?.contains(target)
         if (!insidePlan) return
         event.preventDefault()
@@ -7986,7 +8010,9 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
                 fontFamily={fontFamily}
                 getCanvasPointFromEvent={makeCanvasPointFromEvent}
                 isActive={openingWidthEditorActive && !isExporting}
-                onActivate={() => setOpeningWidthEditorActive(true)}
+                onActivate={() => {
+                  if (canEditFloorPlan) setOpeningWidthEditorActive(true)
+                }}
                 onDimensionDragStart={beginOpeningDimensionDrag}
                 onDimensionDragMove={(pointer, modifiers) =>
                   applyOpeningDimensionDrag(pointer, 'preview', modifiers)
@@ -8600,6 +8626,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
                 <FloorSelectionDialog
                   currentFloorId={activeFloorId}
                   showReferenceOverlayToggles={isFloorPlanMode}
+                  allowFloorDuplication
                   readOnly={!canEditFloorPlan}
                   onSelect={(floorId, options) => {
                     applyActiveFloor(floorId)
@@ -8639,6 +8666,7 @@ function PlanCanvas({ onMultiFingerSwipe, capabilities }: PlanCanvasProps = {}) 
             circuits={quickPlacerCircuits}
             selectedCircuitId={quickPlacerSelectedCircuitId}
             onSelectedCircuitIdChange={handleQuickPlacerSelectedCircuitChange}
+            onSelectedPanelIdChange={handleQuickPlacerSelectedPanelChange}
             mode={quickPlacerMode}
             onModeChange={handleQuickPlacerModeChange}
             fastAutoSkipCustom={quickPlacerFastAutoSkipCustom}

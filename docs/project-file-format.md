@@ -1,12 +1,13 @@
 # Condui portable project file format
 
-This document specifies the local project archive that Condui reads and writes. It is the compatibility contract for project backup, transfer, and self-hosted use. It intentionally documents portable project data only. Hosted-service behavior is not part of this format.
+This document specifies the portable project archive that Condui reads and writes in both the hosted and community editions. It is the compatibility contract for project backup, transfer, and self-hosted use. Hosted storage and permissions are not part of this format.
 
 The implementation sources of truth are:
 
 - `apps/app/src/types/projectV2.ts` for the current JSON document types;
 - `apps/app/src/lib/projectV2/migration.ts` for accepted schema versions and normalization;
-- `apps/app/src/editions/community/communityProjectPackage.ts` for local archive reading and writing.
+- `apps/app/src/lib/export/portableProjectPackage.ts` for the shared archive reader and writer;
+- `apps/app/src/lib/export/exportProjectToZip.ts` and `apps/app/src/lib/export/importProjectFromZip.ts` for hosted-only policy and version-history integration.
 
 ## Archive
 
@@ -17,9 +18,9 @@ A project file is a DEFLATE-compressed ZIP archive. File names use `/` separator
 | `project.json`  | Yes               | The persisted project document.                                   |
 | `manifest.json` | Written by Condui | Informational archive metadata. The importer does not rely on it. |
 
-Readers must ignore unrecognized archive entries. Portable local archives keep project-owned payloads as data URLs inside `project.json`; the local writer does not create separate source-sidecar entries.
+Readers must ignore unrecognized archive entries. Binary project-owned payloads may be externalized below `assets/`; readers hydrate those references back into data URLs or SVG text. Optional version-history and cached-PDF entries are informational extensions and must not be required for project loading.
 
-The current manifest has archive format version `1`, the format label `condui-project`, and the `project.json` entry name. The archive-format version and the project schema version are independent.
+The current manifest has archive format version `1`, the format label `project-with-assets`, and the `project.json` entry name. The archive-format version and the project schema version are independent.
 
 ## `project.json`
 
@@ -58,11 +59,24 @@ structural one-wire carrier for a secondary panel connected directly to a busbar
 retains the feeder circuit and `subPanelId`, but readers must not interpret it as a
 physical protection device or render a protection symbol.
 
+A secondary panel may persist `hasGround: true` with `groundTrunkDevices` for a local
+earth-electrode stem on that board. The shared main-board electrode remains on
+`disciplines.electrical.installation.hasGround` and `groundTrunkDevices`. Missing or
+`false` panel values mean that board has no local electrode. Older files without these
+panel fields remain valid.
+
 An EV endpoint with `symbol: "ev"` may persist
 `evChargerProps.integratedDcResidualProtection: true` when the charger includes
 coordinated residual-DC protection or detection, such as 6 mA DC detection. Missing
 or `false` means the helper validation does not treat the charger as providing that
 protection. The field is optional and older projects remain valid without it.
+
+A socket endpoint may persist `socketProps.modular: true` for a panel-mounted DIN
+modular socket. It is electrically identical to a wall socket and uses the same
+one-wire symbol and rules. Readers must omit it from the situation plan without
+treating the missing placement as invalid. It remains visible in the panel view
+and is limited to one or two outlets (two or four DIN modules). Missing or `false`
+means an ordinary wall socket.
 
 `disciplines.electrical.supplyAssemblies` optionally stores source-side electrical
 topology before a root feed or panel input. Each assembly owns a versioned port graph,
@@ -85,6 +99,24 @@ positions, using the panel overflow band when necessary, without deleting or rew
 them. Missing arrays mean that the project has no supply-assembly data. The
 existing one-wire, panel, and situation-plan canvases derive the representations they
 need from the same topology.
+
+A supply inverter trunk device may persist `converterAcConnection: "shared"` or
+`"separate"`. Missing values retain the shared grid-connection arrangement.
+`"separate"` represents distinct grid and backup AC ports with internal transfer;
+without an external changeover, the common downstream load is supplied from the
+backup port in both operating modes. The supply graph mirrors this setting in the
+inverter node's optional `properties.acConnection`. Existing external-changeover
+graphs and independently connected backup circuit handoffs retain their routing.
+Older direct assemblies may contain only root-feed devices marked
+`supplyPath: "converter-branch"`, without a saved supply graph. They remain editable;
+changing their AC connection setting materializes the graph and preserves their DC devices.
+
+A root-feed trunk device may persist `supplyPanelInput: true`. It belongs electrically
+after the supply assembly's handoff and before that root panel's bus, independently
+of physical `panelMounting`. Assembly reconciliation must not absorb it into the
+upstream supply graph. Missing or false retains legacy ownership inference. These
+devices remain in the root feed's ordered `trunkDevices` array and render on the
+receiving panel, including installations with only one main panel.
 
 The first main panel's `gridView.supplyPanelVisible: false` also dismisses the
 shared grid frame when it has no visible modules. This removes only the empty
@@ -514,9 +546,11 @@ An importer may replace the root `project.id` when the imported identity collide
 Floor-plan images, processed images, vectors, and local installer artwork are stored in the project fields that own them. Binary payloads use standard data URLs; SVG content may be stored as SVG text where the schema permits it. Readers must preserve unrecognized asset metadata but must not fetch or execute unknown content automatically.
 
 Current writers externalize and hydrate floor-plan payloads through the native `assets` array and
-the asset IDs referenced by `building.floors`. Historical inline floor payloads are converted to
-those containers during import normalization; storage and ZIP asset adapters do not treat a
-top-level `floors` array as a second runtime asset authority.
+the asset IDs referenced by `building.floors`. They also externalize imported diagram sources
+and installer artwork. Historical inline floor payloads are converted to those containers
+during import normalization; storage and ZIP asset adapters do not treat a top-level `floors`
+array as a second runtime asset authority. Hosted and community readers use the same limits,
+path rules, validation, and legacy repair behavior.
 
 CAD-derived floor plans use imported-plan asset kind `cad-vector` (distinct from PDF vector imports). When present, `cadReference` stores versioned source-coordinate metadata: source units, uncropped asset size, per-floor crop in both asset and model space, import-session linkage for multi-floor splits, and the forward/inverse transform parameters captured at import. Legacy projects imported before this metadata existed do not carry `cadReference`.
 
@@ -546,7 +580,7 @@ The importer enforces these defensive limits:
 
 | Limit          |   Value |
 | -------------- | ------: |
-| `project.json` | 160 MiB |
+| `project.json` | 20 MiB (160 MiB only for recognized legacy embedded-image documents) |
 
 Archive producers should stay comfortably below these limits. Consumers must not trust paths, MIME types, dimensions, identifiers, or JSON properties merely because they appear in an archive.
 

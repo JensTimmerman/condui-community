@@ -210,6 +210,7 @@ function buildEntityIndex(project: ProjectWithOptionalV2Electrical): EntityIndex
         endpoints.set(endpoint.id, { endpoint, circuit })
       for (const device of circuit.trunkDevices ?? []) trunks.set(device.id, device)
     }
+    for (const device of panel.groundTrunkDevices ?? []) trunks.set(device.id, device)
   }
 
   const electrical = getProjectElectrical(project)

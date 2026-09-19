@@ -1,6 +1,7 @@
 import { getAllSupplyTrunkDevices } from '@/lib/feedTopology'
 import {
   selectProjectSupplyAssemblies,
+  selectProjectElectricalInstallation,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import type { TrunkDevice } from '@/types/schema'
@@ -42,6 +43,34 @@ export function resolveSupplyNodeDevice(
 
 export function supplyNodeReferencesDevice(node: SupplyNode, deviceId: string): boolean {
   return node.deviceId === deviceId || (!node.deviceId && node.id === deviceId)
+}
+
+/** Assembly membership is independent of the frame used to draw its equipment. */
+export function findSupplyInverterAssembly(
+  project: ProjectWithOptionalV2Electrical,
+  device: TrunkDevice
+): OffGridSupplyAssembly | undefined {
+  if (device.symbol !== 'inverter') return undefined
+  return selectProjectSupplyAssemblies(project).find((assembly) =>
+    assembly.nodes.some(
+      (node) => node.kind === 'inverter-unit' && supplyNodeReferencesDevice(node, device.id)
+    )
+  )
+}
+
+/** Older direct supply assemblies are stored as root-feed devices without a graph. */
+export function canConfigureSupplyInverterAcConnection(
+  project: ProjectWithOptionalV2Electrical,
+  device: TrunkDevice
+): boolean {
+  if (device.symbol !== 'inverter') return false
+  if (findSupplyInverterAssembly(project, device)) return true
+  return (selectProjectElectricalInstallation(project)?.feedTopology?.rootFeeds ?? []).some(
+    (feed) => feed.trunkDevices?.some(
+      (candidate) => candidate.id === device.id && candidate.symbol === 'inverter' &&
+        candidate.supplyPath === 'converter-branch'
+    )
+  )
 }
 
 /**

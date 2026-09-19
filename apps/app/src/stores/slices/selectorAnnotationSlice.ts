@@ -1,6 +1,6 @@
 import { getProjectStoreApi } from './projectStoreHistory'
 import type { ProjectSliceCreator } from './projectStoreTypes'
-import { syncPlugInPropsForDcEndpoints } from '@/lib/eendraad/endpointInsertAfter'
+import { syncDerivedEndpointFlags } from '@/lib/eendraad/endpointInsertAfter'
 import { pruneEendraadFrames } from '@/lib/eendraad/frameContent'
 import {
   findCircuitById,
@@ -17,6 +17,7 @@ import {
   isModuleRefValid,
   normalizeDomoticaCircuit,
   panelGridModuleIsVisibleByDefault,
+  panelGridModuleIsAlwaysVisibleInPanel,
   panelGridModuleRefKey,
   removeEndpointIdsFromCircuit,
 } from '@/lib/eendraad/projectElectricalDomain'
@@ -33,6 +34,7 @@ import { getSupplyDeviceVisibilitySurface, isSupplyDeviceVisibleInPanel } from '
 import { getTerminalStripId } from '@/lib/terminalStrip/labels'
 import { setPanelFeedOrganizationInProject } from '@/lib/panel/panelFeedOrganization'
 import { findPanelById } from '@/lib/panel/panelTree'
+import { collectAllGroundTrunkDevices, findGroundTrunkDeviceOwner } from '@/lib/eendraad/panelGround'
 import {
   buildAutoSitplanPlacement,
   getViewportCenterPlanSpaceIfApplicable,
@@ -399,7 +401,7 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
           if (mounting?.kind === 'grid') return false
           if (mounting?.kind === 'panel' && mounting.panelId !== panel.id) return false
         }
-        if (hiddenKeys.has(key)) return false
+        if (hiddenKeys.has(key) && !panelGridModuleIsAlwaysVisibleInPanel(ref, panels)) return false
         if (
           !panelGridModuleIsVisibleByDefault(ref, panel, installation, panels) &&
           !mountedSupplyKeys.has(key) &&
@@ -549,7 +551,7 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
       const key = panelGridModuleRefKey(m.ref)
       if (m.ref.kind === 'trunkDevice' && m.ref.scope === 'supply' &&
         !isSupplyDeviceVisibleInPanel(currentProject, m.ref.id)) return false
-      if (hiddenKeys.has(key)) return false
+      if (hiddenKeys.has(key) && !panelGridModuleIsAlwaysVisibleInPanel(m.ref, panels)) return false
       if (
         !panelGridModuleIsVisibleByDefault(m.ref, panel, installation, panels) &&
         !mountedSupplyKeys.has(key) &&
@@ -601,6 +603,7 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
           !isSupplyDeviceVisibleInPanel(currentProject, ref.id)
       }
       const key = panelGridModuleRefKey(ref)
+      if (panelGridModuleIsAlwaysVisibleInPanel(ref, panels)) return false
       if (hiddenKeys.has(key)) return true
       if (sharedSupplyKeys.has(key)) return false
       return (
@@ -657,7 +660,10 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
         }
       }
     }
-    for (const device of installation?.groundTrunkDevices ?? []) {
+    for (const device of collectAllGroundTrunkDevices(
+      selectProjectElectricalPanels(currentProject),
+      installation
+    )) {
       for (const placement of device.placements ?? []) {
         if (placement.floorId === floorId) {
           result.push({ ...placement, trunkDeviceId: device.id })
@@ -717,10 +723,13 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
 
     // Check ground trunk devices
     const installation = selectProjectElectricalInstallation(currentProject)
-    const groundDevice = installation?.groundTrunkDevices?.find((d) => d.id === deviceId)
-    if (groundDevice) {
-      // Ground devices are not associated with a circuit
-      return { device: groundDevice, circuit: null, isGroundDevice: true }
+    const groundOwner = findGroundTrunkDeviceOwner(
+      selectProjectElectricalPanels(currentProject),
+      installation,
+      deviceId
+    )
+    if (groundOwner) {
+      return { device: groundOwner.devices[groundOwner.index]!, circuit: null, isGroundDevice: true }
     }
 
     // Check circuit trunk devices
@@ -1094,7 +1103,7 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
         if (!circuitResult || circuitResult.circuit.code === 'PANEL') return
         if (repairCircuitBranchMembership(circuitResult.circuit)) {
           normalizeDomoticaCircuit(circuitResult.circuit)
-          syncPlugInPropsForDcEndpoints(circuitResult.circuit)
+          syncDerivedEndpointFlags(circuitResult.circuit)
           state.isDirty = true
         }
       } else if (payload.kind === 'repairSubCircuitSelfReference') {
@@ -1152,7 +1161,7 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
         if (circuit.code === 'PANEL') return
         if (repairCircuitBranchMembership(circuit)) {
           normalizeDomoticaCircuit(circuit)
-          syncPlugInPropsForDcEndpoints(circuit)
+          syncDerivedEndpointFlags(circuit)
           state.isDirty = true
         }
         return
@@ -1166,7 +1175,7 @@ export const createSelectorAnnotationSlice: ProjectSliceCreator = (set, get) => 
       if (!found || found.circuit.code === 'PANEL') return
       if (repairCircuitBranchMembership(found.circuit)) {
         normalizeDomoticaCircuit(found.circuit)
-        syncPlugInPropsForDcEndpoints(found.circuit)
+        syncDerivedEndpointFlags(found.circuit)
         state.isDirty = true
       }
     }),

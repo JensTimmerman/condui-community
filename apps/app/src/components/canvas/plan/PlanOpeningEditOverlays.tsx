@@ -18,10 +18,8 @@ import {
 } from '@/constants/canvasConstants'
 import { getThemeColor } from '@/lib/theme/colors'
 import { useBlinkingCaret, withDimensionCaret } from '@/hooks/useBlinkingCaret'
-import {
-  normalizeDimensionRotationDeg,
-  type DimensionDragModifiers,
-} from '@/lib/plan/dimensionDragGesture'
+import type { DimensionDragModifiers } from '@/lib/plan/dimensionDragGesture'
+import { getOpeningWidthEditorGeometry } from '@/lib/plan/openingWidthEditorGeometry'
 
 type PlanCanvasInputEvent = KonvaEventObject<MouseEvent | TouchEvent | PointerEvent | DragEvent>
 
@@ -257,26 +255,10 @@ export function PlanOpeningWidthEditor({
   const caretVisible = useBlinkingCaret(isActive)
   if (!opening) return null
 
-  const { center, tangent } = opening
-  const offsetDistance = screenPxToCanvasUnits(zoom, 24, 14, 44)
-  const normal = { x: -tangent.y, y: tangent.x }
-  const isDoorEditor = opening.kind === 'door'
-  const anchorOffset = getOpeningWidthEditorAnchorOffset(
+  const { anchor, outwardNormal, rotationDeg: labelRotationDeg } = getOpeningWidthEditorGeometry(
     opening,
-    normal,
-    tangent,
-    offsetDistance,
-    isDoorEditor
+    zoom
   )
-  const anchor: Point2 = {
-    x: center.x + anchorOffset.x,
-    y: center.y + anchorOffset.y,
-  }
-  const anchorLength = Math.hypot(anchorOffset.x, anchorOffset.y)
-  const outwardNormal =
-    anchorLength > 1e-8
-      ? { x: anchorOffset.x / anchorLength, y: anchorOffset.y / anchorLength }
-      : normal
   const label = withDimensionCaret(valueText, ' cm', isActive, caretVisible)
   const fontSize = 13 / zoom
   const paddingX = 8 / zoom
@@ -285,9 +267,6 @@ export function PlanOpeningWidthEditor({
   const textWidth = Math.max(24 / zoom, label.length * approxCharWidth)
   const boxWidth = textWidth + paddingX * 2
   const boxHeight = fontSize + paddingY * 2
-  const labelRotationDeg = normalizeDimensionRotationDeg(
-    (Math.atan2(tangent.y, tangent.x) * 180) / Math.PI
-  )
   const strokeColor = '#0284c7'
   const textColor = themeMode === 'dark' ? '#ffffff' : '#000000'
   const strokeWidth = screenPxToCanvasUnits(
@@ -321,7 +300,6 @@ export function PlanOpeningWidthEditor({
       }}
       onPointerDown={(event) => {
         event.cancelBubble = true
-        onActivate()
       }}
       onClick={(event) => {
         event.cancelBubble = true
@@ -363,29 +341,4 @@ export function PlanOpeningWidthEditor({
       </Group>
     </Group>
   )
-}
-
-function getOpeningWidthEditorAnchorOffset(
-  opening: SelectedOpeningWidthEditorModel,
-  normal: Point2,
-  tangent: Point2,
-  offsetDistance: number,
-  isDoorEditor: boolean
-): Point2 {
-  if (isDoorEditor) {
-    const swing = opening.doorSwing ?? 'right'
-    const baseDirection = opening.doorDirection ?? 'in'
-    const effectiveDirection =
-      swing === 'left' ? (baseDirection === 'in' ? 'out' : 'in') : baseDirection
-    const sideSign = effectiveDirection === 'in' ? -1 : 1
-    return {
-      x: normal.x * offsetDistance * sideSign,
-      y: normal.y * offsetDistance * sideSign,
-    }
-  }
-
-  const isMostlyHorizontal = Math.abs(tangent.x) >= Math.abs(tangent.y)
-  return isMostlyHorizontal
-    ? { x: 0, y: tangent.x >= 0 ? -offsetDistance : offsetDistance }
-    : { x: tangent.y >= 0 ? offsetDistance : -offsetDistance, y: 0 }
 }

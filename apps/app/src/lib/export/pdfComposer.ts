@@ -1,8 +1,8 @@
 /**
  * PDF page composition
  * Handles adding SVG content to PDF pages with proper scaling and positioning.
- * When an info block SVG is provided, it is placed in a reserved bottom-right zone
- * and the main content is scaled to fit above it so nothing overlaps.
+ * The info block is a bottom-right obstacle. One-wire schematics sit below the
+ * title/QR and scale down until that reserved rectangle is clear.
  */
 
 import type { jsPDF } from 'jspdf'
@@ -19,8 +19,11 @@ import { getExportFontFamily } from './fontPostProcessor'
 import { INFO_BLOCK_HEIGHT } from '@/lib/infoBlockLayout'
 import { exportLog } from './exportLogger'
 import {
+  getEendraadSchematicAreaMm,
+  getEendraadSchematicTopMm,
   getInfoBlockReservedZoneMm,
   getPdfContentHeightMm,
+  limitEendraadScaleToInfoBlockCollision,
   PANEL_TITLE_HEIGHT_MM,
 } from './pdfPageLayout'
 import { getThemeColors } from '@/lib/theme/colors'
@@ -28,6 +31,43 @@ import { getThemeColors } from '@/lib/theme/colors'
 const REFERENCE_IMAGE_SIZE_MM = 12.75
 const REFERENCE_LABEL_GAP_MM = 1.2
 const REFERENCE_URL_FONT_SIZE_PT = 5
+
+function getEendraadSchematicPlacement(
+  bounds: { x: number; y: number; width: number; height: number; space?: 'scene' },
+  globalScale: number,
+): {
+  scale: number
+  viewBox: string
+  scaledWidth: number
+  scaledHeight: number
+  x: number
+  y: number
+  fitBounds: { x: number; y: number; width: number; height: number; space: 'scene' }
+} {
+  const { widthMm: contentWidth } = getEendraadSchematicAreaMm('landscape')
+  // Never shrink to fit a wide leftover. Clip horizontally instead so symbols
+  // stay large relative to the title and QR. Vertical scale must still clear
+  // the info-box obstacle because the bus occupies the bottom of every page.
+  const scale = limitEendraadScaleToInfoBlockCollision(bounds.height, globalScale)
+  const viewWidth = Math.min(bounds.width, contentWidth / Math.max(scale, 0.01))
+  const scaledWidth = viewWidth * scale
+  const scaledHeight = bounds.height * scale
+  return {
+    scale,
+    viewBox: `${bounds.x} ${bounds.y} ${viewWidth} ${bounds.height}`,
+    scaledWidth,
+    scaledHeight,
+    x: PAGE_MARGIN + (contentWidth - scaledWidth) / 2,
+    y: getEendraadSchematicTopMm(),
+    fitBounds: {
+      x: bounds.x,
+      y: bounds.y,
+      width: viewWidth,
+      height: bounds.height,
+      space: 'scene',
+    },
+  }
+}
 const LIMITED_RASTER_DPI = 174
 const LIMITED_RASTER_WATERMARK_OPACITY = 0.1
 const LIMITED_RASTER_JPEG_QUALITY = 0.62
@@ -141,17 +181,17 @@ export async function composePdfPage(
 
     const bounds = page.scene.bounds
     const isEendraadSlice = !!page.scene.eendraadSlice
-    const scale = isEendraadSlice
-      ? Math.min(
-          page.scene.eendraadSlice!.globalScale,
-          contentWidth / bounds.width,
-          contentHeight / bounds.height
-        )
+    const eendraadPlacement = isEendraadSlice
+      ? getEendraadSchematicPlacement(bounds, page.scene.eendraadSlice!.globalScale)
+      : null
+    const scale = eendraadPlacement
+      ? eendraadPlacement.scale
       : Math.min(contentWidth / bounds.width, contentHeight / bounds.height)
-    const scaledWidth = bounds.width * scale
-    const scaledHeight = bounds.height * scale
-    const x = contentX + (contentWidth - scaledWidth) / 2
-    const y = contentY + (contentHeight - scaledHeight) / 2
+    const scaledWidth = eendraadPlacement?.scaledWidth ?? bounds.width * scale
+    const scaledHeight = eendraadPlacement?.scaledHeight ?? bounds.height * scale
+    const x = eendraadPlacement?.x ?? contentX + (contentWidth - scaledWidth) / 2
+    const y = eendraadPlacement?.y ?? contentY + (contentHeight - scaledHeight) / 2
+    const viewBox = eendraadPlacement?.viewBox ?? `${bounds.x} ${bounds.y} ${bounds.width} ${bounds.height}`
 
     exportLog(
       `[Export] Composing page: content area ${contentWidth.toFixed(0)}x${contentHeight.toFixed(0)}mm, scaled ${scaledWidth.toFixed(2)}x${scaledHeight.toFixed(2)}mm at (${x.toFixed(2)}, ${y.toFixed(2)})mm`
@@ -161,10 +201,6 @@ export async function composePdfPage(
     const svgDoc = parser.parseFromString(svgString, 'image/svg+xml')
     const svgElement = svgDoc.documentElement
 
-    // Use the scene bounds directly for the viewBox. For eendraad slices,
-    // bounds now come from the full scene (panel frame/content) while the
-    // actual slice area is enforced via contentClipRect in scene coords.
-    const viewBox = `${bounds.x} ${bounds.y} ${bounds.width} ${bounds.height}`
     svgElement.setAttribute('viewBox', viewBox)
     svgElement.setAttribute('preserveAspectRatio', 'xMidYMid meet')
     svgElement.setAttribute('width', `${scaledWidth}`)
@@ -287,7 +323,7 @@ export async function composePdfPage(
       contentY: y,
       contentWidth: scaledWidth,
       contentHeight: scaledHeight,
-      fitBounds: bounds,
+      fitBounds: eendraadPlacement?.fitBounds ?? bounds,
       scale,
     }
   } catch (error) {
@@ -442,22 +478,21 @@ export async function composeLimitedRasterPdfPage(
 
     const bounds = page.scene.bounds
     const isEendraadSlice = !!page.scene.eendraadSlice
-    const scale = isEendraadSlice
-      ? Math.min(
-          page.scene.eendraadSlice!.globalScale,
-          contentWidth / bounds.width,
-          contentHeight / bounds.height
-        )
+    const eendraadPlacement = isEendraadSlice
+      ? getEendraadSchematicPlacement(bounds, page.scene.eendraadSlice!.globalScale)
+      : null
+    const scale = eendraadPlacement
+      ? eendraadPlacement.scale
       : Math.min(contentWidth / bounds.width, contentHeight / bounds.height)
-    const scaledWidth = bounds.width * scale
-    const scaledHeight = bounds.height * scale
-    const x = contentX + (contentWidth - scaledWidth) / 2
-    const y = contentY + (contentHeight - scaledHeight) / 2
+    const scaledWidth = eendraadPlacement?.scaledWidth ?? bounds.width * scale
+    const scaledHeight = eendraadPlacement?.scaledHeight ?? bounds.height * scale
+    const x = eendraadPlacement?.x ?? contentX + (contentWidth - scaledWidth) / 2
+    const y = eendraadPlacement?.y ?? contentY + (contentHeight - scaledHeight) / 2
+    const viewBox = eendraadPlacement?.viewBox ?? `${bounds.x} ${bounds.y} ${bounds.width} ${bounds.height}`
 
     const parser = new DOMParser()
     const svgDoc = parser.parseFromString(svgString, 'image/svg+xml')
     const svgElement = svgDoc.documentElement
-    const viewBox = `${bounds.x} ${bounds.y} ${bounds.width} ${bounds.height}`
     svgElement.setAttribute('viewBox', viewBox)
     svgElement.setAttribute('preserveAspectRatio', 'xMidYMid meet')
 
@@ -551,7 +586,7 @@ export async function composeLimitedRasterPdfPage(
       contentY: y,
       contentWidth: scaledWidth,
       contentHeight: scaledHeight,
-      fitBounds: bounds,
+      fitBounds: eendraadPlacement?.fitBounds ?? bounds,
       scale,
     }
   } catch (error) {

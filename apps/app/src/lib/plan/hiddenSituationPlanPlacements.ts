@@ -8,6 +8,7 @@ import type { Panel, SymbolKey } from '@/types/schema'
 import { canSymbolAppearOnSituationPlan } from '@/lib/plan/situationPlanSymbolEligibility'
 import { hasCustomPlacement } from '@/lib/plan/customPlacement'
 import { getSituationPlanPlacementIdsHiddenByPanel } from '@/lib/plan/panelPlanPlacementVisibility'
+import { isModularSocket } from '@/lib/socket/modularSocket'
 
 export type ProjectWithSituationPlanPlacements = ProjectWithOptionalV2Electrical &
   ProjectWithOptionalV2Building
@@ -51,6 +52,7 @@ export function getHiddenSituationPlanPlacements(
         seenCircuitIds.add(circuit.id)
         for (const endpoint of circuit.endpoints) {
           if (!canSymbolAppearOnSituationPlan(endpoint.symbol)) continue
+          if (isModularSocket(endpoint)) continue
           for (const placement of endpoint.placements) {
             if (seenPlacementIds.has(placement.id)) continue
             if (!hiddenByFloor.get(placement.floorId)?.has(placement.id)) continue

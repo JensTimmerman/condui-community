@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf'
 import type { BottomUpPanelLayout } from '@/lib/layout/bottomUpLayout'
-import { LAYOUT_CONSTANTS } from '@/lib/layout/bottomUpLayout'
+import { estimateProtectionNameLabelWidth, LAYOUT_CONSTANTS } from '@/lib/layout/bottomUpLayout'
 import {
   CIRCUIT_NOTES_FONT_SIZE,
   CIRCUIT_NOTES_LINE_HEIGHT,
@@ -40,6 +40,8 @@ import { exportLog } from './exportLogger'
 const LABEL_FONT_SIZE = 11
 /** Parent panel name on sub-panel feeder (matches layoutTree visual / panel canvas secondary line). */
 const SUBPANEL_PARENT_TAG_FONT_SIZE = 10
+/** PDF-only extra gap so rotated specs clear the drop; canvas already uses DISTANCE_FROM_WIRE. */
+const WIRE_LABEL_PDF_DISTANCE_NUDGE_PX = 2
 const LABEL_Y_OFFSET = 8
 const NOTES_FONT_SIZE = 10
 const SECONDARY_BUS_REFERENCE_FONT_SIZE = 8
@@ -180,6 +182,12 @@ export interface ExportTextOverlay {
   debugOffsetAlongWire?: number
 }
 
+/** Right edge of a centered circuit code, matching CircuitLabel's center box. */
+function getCenteredCircuitLabelRight(x: number, text: string): number {
+  const width = Math.max(24, estimateProtectionNameLabelWidth(text))
+  return x + width / 2
+}
+
 function getBaselineForOverlay(kind: ExportLabelKind): PdfBaseline {
   switch (kind) {
     case 'circuit-note':
@@ -209,10 +217,19 @@ export function collectEendraadTextOverlays(
 
   const subPanelFeedAnchors = getSubPanelIncomingFeedLabelAnchors(panelLayout)
   const protectionXByCircuitId = new Map<string, number>()
+  const circuitLabelByCircuitId = new Map<string, { x: number; text: string }>()
   for (const el of panelLayout.elements) {
     if (el.type === 'protection' && el.circuitId) {
       protectionXByCircuitId.set(el.circuitId, el.position.x)
     }
+  }
+  for (const el of panelLayout.elements) {
+    if (el.type !== 'label' || el.branchId || el.id?.startsWith('circuit-notes-') || !el.circuitId) {
+      continue
+    }
+    const text = (el.translationKey ? i18n.t(el.translationKey) : (el.label ?? '')).trim()
+    if (!text) continue
+    circuitLabelByCircuitId.set(el.circuitId, { x: el.position.x, text })
   }
 
   for (const el of panelLayout.elements) {
@@ -265,13 +282,18 @@ export function collectEendraadTextOverlays(
       ? el.position.x + LAYOUT_CONSTANTS.LABEL_OFFSET
       : (el.circuitId ? protectionXByCircuitId.get(el.circuitId) : undefined) ??
         el.position.x
+    const circuitLabel = el.circuitId ? circuitLabelByCircuitId.get(el.circuitId) : undefined
+    const x =
+      isBranchLabel && circuitLabel
+        ? getCenteredCircuitLabelRight(circuitLabel.x, circuitLabel.text)
+        : el.position.x
 
     overlays.push({
       id: el.id,
       kind,
       circuitId: el.circuitId,
       text,
-      x: el.position.x,
+      x,
       y: el.position.y - LABEL_Y_OFFSET,
       columnX,
       fontSize: LABEL_FONT_SIZE,
@@ -419,12 +441,15 @@ export function collectEendraadWireLabelOverlays(
       if (!stackLayout?.main.renderedText) continue
 
       const stackAnchorX =
-        exportLabelOrigin.x - (stackLayout.anchorX - wireSegment.startPoint.x)
+        exportLabelOrigin.x + (stackLayout.anchorX - wireSegment.startPoint.x)
       const stackAnchorY = exportLabelOrigin.y + offsetAlongWire
-      // Keep the main cable properties at their established PDF position.
-      // Only subsequent lines should follow Konva's post-rotation +X order.
+      // Konva rotates the stack -90° around the group origin, so each line's
+      // world X is anchorX + line.y + fontSize/2 (to the right of the wire).
       const mainLabelX =
-        stackAnchorX - stackLayout.main.y - WIRE_LABEL_FONT_SIZE / 2
+        stackAnchorX +
+        stackLayout.main.y +
+        WIRE_LABEL_FONT_SIZE / 2 +
+        WIRE_LABEL_PDF_DISTANCE_NUDGE_PX
 
       const pushStackLine = (
         suffix: string,
@@ -472,7 +497,10 @@ export function collectEendraadWireLabelOverlays(
     })
 
     if (!layout?.renderedText) continue
-    const labelX = exportLabelOrigin.x - (layout.anchorX - wireSegment.startPoint.x)
+    const labelX =
+      exportLabelOrigin.x +
+      (layout.anchorX - wireSegment.startPoint.x) +
+      WIRE_LABEL_PDF_DISTANCE_NUDGE_PX
     const labelY = exportLabelOrigin.y + offsetAlongWire
 
     overlays.push({
@@ -803,7 +831,6 @@ function scenePxToPdfFontSizePt(
 
 const DEBUG_CIRCUIT_NOTE_ANCHORS = false
 const DEBUG_WIRE_LABEL_ANCHORS = false
-const WIRE_LABEL_PDF_PERPENDICULAR_OFFSET_FACTOR = 2.0
 
 function drawDebugCross(
   pdf: jsPDF,
@@ -837,13 +864,18 @@ function rotatePointAround(
 export function getWireLabelPdfInsertionPoint(
   anchor: { x: number; y: number },
   textWidth: number,
-  textHeight: number,
+  _textHeight: number,
   rotation: number,
 ): { x: number; y: number } {
+  // jsPDF draws these labels with baseline 'middle', matching Konva's
+  // offsetY = fontSize/2. Only convert the centered overlay into a
+  // left-aligned insertion along the rotated text. Do not add a leftover
+  // top-baseline jump in the perpendicular axis — that parks the specs
+  // a full text-height (or more) away from the wire.
   return rotatePointAround(
     {
       x: anchor.x + textWidth / 2,
-      y: anchor.y - textHeight * WIRE_LABEL_PDF_PERPENDICULAR_OFFSET_FACTOR,
+      y: anchor.y,
     },
     anchor,
     rotation,
@@ -1495,6 +1527,12 @@ export function injectEendraadLabelsIntoSvg(
     if (!text) continue
 
     const isBranchLabel = !!el.branchId
+    const circuitLabel = labelElements.find(
+      (candidate) => candidate.circuitId === el.circuitId && !candidate.branchId
+    )
+    if (isBranchLabel && circuitLabel?.label) {
+      x = getCenteredCircuitLabelRight(circuitLabel.position.x, circuitLabel.label)
+    }
     const alignIsRight = isBranchLabel
     const fontSizePx =
       subPanelFeedAnchors && el.id?.startsWith('parent-tag-')

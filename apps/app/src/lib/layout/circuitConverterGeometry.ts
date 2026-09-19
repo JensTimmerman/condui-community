@@ -81,6 +81,11 @@ export function getSupplyConverterBodyGeometry(
   }
 }
 
+/** Extra horizontal room occupied by a widened supply converter beyond one block. */
+export function getSupplyConverterHorizontalGrowth(device: TrunkDevice | undefined): number {
+  return (getCircuitConverterDcConnectionCount(device) - 1) * CIRCUIT_CONVERTER_BLOCK_SIZE
+}
+
 export function getCircuitConverterOutputRowY(
   device: TrunkDevice,
   anchorY: number,

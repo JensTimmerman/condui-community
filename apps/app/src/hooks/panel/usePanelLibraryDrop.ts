@@ -45,6 +45,13 @@ import {
 import type { DropTarget } from '@/lib/layout/findDropTarget'
 import { trackSymbolPlace } from '@/lib/analytics/editorEventAnalytics'
 import { DEFAULT_PANEL_GRID_COLUMNS, DEFAULT_PANEL_GRID_ROWS } from '@/lib/panel/panelGridDefaults'
+import {
+  canDropModularSocketOnPanel,
+  findPreferredModularSocketCircuit,
+  findPreferredModularSocketProtection,
+  isModularSocketLibraryId,
+  MODULAR_SOCKET_SINGLE_MODULE_WIDTH,
+} from '@/lib/socket/modularSocket'
 
 type Project = NonNullable<ProjectState['currentProject']>
 
@@ -55,6 +62,7 @@ type DragPreview = {
   symbol: SymbolMetadata
   previewRef: PanelGridModuleRef | null
   previewWidthCols: number
+  invalid?: boolean
   autoParent?: { parentRef: PanelGridModuleRef; placement: { row: number; col: number } | null }
 }
 
@@ -80,6 +88,7 @@ type UsePanelLibraryDropOptions = {
 }
 
 function getLibraryDropWidthCols(symbol: SymbolMetadata, project: Project | null): number {
+  if (isModularSocketLibraryId(symbol.id)) return MODULAR_SOCKET_SINGLE_MODULE_WIDTH
   if (symbol.id === 'energy_meter')
     return Math.max(1, polesFromConfig(getVoltagePolesConfig(project)))
   if (symbol.id === ROTATING_SWITCH_SYMBOL_ID) return 1
@@ -171,12 +180,12 @@ export function usePanelLibraryDrop({
         return
       }
 
-      // Check if symbol is a protection device or energy meter
       const isProtectionDevice = (PROTECTION_SYMBOL_IDS as readonly string[]).includes(symbol.id)
       const isEnergyMeter = symbol.id === 'energy_meter'
+      const isModularSocket = isModularSocketLibraryId(symbol.id)
       const previewWidthCols = getLibraryDropWidthCols(symbol, currentProject)
 
-      if (!isProtectionDevice && !isEnergyMeter) {
+      if (!isProtectionDevice && !isEnergyMeter && !isModularSocket) {
         setDragPreview(null)
         return
       }
@@ -308,6 +317,8 @@ export function usePanelLibraryDrop({
         } else if (isEnergyMeter) {
           previewRef = { kind: 'trunkDevice', id: 'preview', scope: 'circuit' }
         }
+      } else if (isModularSocket && (inMainFrame || inSupplyFrame)) {
+        previewRef = { kind: 'domotica', endpointId: 'preview', circuitId: 'preview' }
       }
 
       if (previewRef) {
@@ -316,6 +327,9 @@ export function usePanelLibraryDrop({
           symbol,
           previewRef,
           previewWidthCols,
+          invalid: isModularSocket
+            ? inSupplyFrame || !canDropModularSocketOnPanel(panel)
+            : undefined,
           ...(autoParent != null ? { autoParent } : {}),
         }
         setDragPreview(next)
@@ -406,6 +420,11 @@ export function usePanelLibraryDrop({
         position.x <= frameRight &&
         position.y >= supFrameTop &&
         position.y <= supFrameBottom
+      const inMainFrame =
+        position.x >= frameLeft &&
+        position.x <= frameRight &&
+        position.y >= mainPanelY - FRAME_MARGIN &&
+        position.y <= mainPanelY + contentHeight + FRAME_MARGIN
       const groupX = position.x - FRAME_MARGIN
       const groupY = position.y - FRAME_MARGIN
       const supplyPlacementsForDrop = combinedPlacements.filter(
@@ -433,6 +452,7 @@ export function usePanelLibraryDrop({
 
       // Check if symbol is an energy meter
       const isEnergyMeter = symbol.id === 'energy_meter'
+      const isModularSocket = isModularSocketLibraryId(symbol.id)
       const droppedModuleWidthCols = getLibraryDropWidthCols(symbol, currentProject)
 
       // Drop to supply chain only when actually dropped inside supply frame.
@@ -750,6 +770,90 @@ export function usePanelLibraryDrop({
 
         // Select the newly created trunk device
         useUIStore.getState().setSelection({ type: 'trunkDevice', ids: [deviceId] })
+        trackSymbolPlace({
+          canvas: 'panel',
+          symbol,
+          placementMethod: 'library_drop',
+          targetType: 'panel_grid',
+        })
+      } else if (isModularSocket && inMainFrame) {
+        const localX = position.x - FRAME_MARGIN
+        const localY = position.y - mainPanelY - FRAME_MARGIN
+        const snapped = snapToGrid(localX, localY + CELL_H / 2)
+        const mainPlacements = combinedPlacements.filter(
+          (p): p is typeof p & { inSupplyPanel: false } => !p.inSupplyPanel
+        )
+        const hitProtection = mainPlacements.find(
+          (pl) =>
+            pl.ref.kind === 'protection' &&
+            localX >= pl.x &&
+            localX <= pl.x + pl.width &&
+            localY + mainPanelY >= pl.y &&
+            localY + mainPanelY <= pl.y + pl.height
+        )
+        const hitProtectionId =
+          hitProtection?.ref.kind === 'protection' ? hitProtection.ref.id : undefined
+        const hitProtectionDevice = hitProtectionId
+          ? panel.protections.find((protection) => protection.id === hitProtectionId)
+          : undefined
+        const protection = findPreferredModularSocketProtection(panel, hitProtectionDevice)
+        if (!protection) return
+        const targetCircuit = findPreferredModularSocketCircuit(panel, protection)
+
+        if (!targetCircuit) {
+          logger.warn('PanelCanvas: No available circuit found for modular socket')
+          return
+        }
+
+        const callbacks = createPanelDropBehaviorCallbacks()
+        executeDropBehavior(
+          symbol,
+          { type: 'circuit', panelId: panel.id, circuitId: targetCircuit.id } as DropTarget,
+          currentProject as DropBehaviorProject,
+          t,
+          callbacks,
+          false
+        )
+
+        const createdId = useUIStore.getState().selection.ids[0]
+        const projectAfterDrop = useProjectStore.getState().currentProject
+        const persistedPanel = projectAfterDrop
+          ? findPanelById(getProjectElectricalPanels(projectAfterDrop), panel.id)
+          : undefined
+        const persistedCircuit = persistedPanel
+          ? collectCircuits(persistedPanel).find((circuit) => circuit.id === targetCircuit.id)
+          : undefined
+        if (
+          !createdId ||
+          !persistedPanel ||
+          !persistedCircuit?.endpoints.some((endpoint) => endpoint.id === createdId)
+        ) {
+          logger.error('PanelCanvas: Modular socket could not be assigned to the target circuit', {
+            panelId: panel.id,
+            circuitId: targetCircuit.id,
+            createdId,
+          })
+          return
+        }
+
+        const moduleRef: PanelGridModuleRef = {
+          kind: 'domotica',
+          endpointId: createdId,
+          circuitId: targetCircuit.id,
+        }
+        const moduleWidthCols = getModuleWidthInCols(moduleRef, projectAfterDrop ?? currentProject)
+        const existingSlots = persistedPanel.gridView?.slots ?? []
+        const row = clamp(snapped.row, 0, rows - 1)
+        const col = Math.max(
+          0,
+          Math.min(
+            cols - moduleWidthCols,
+            Math.round(localX / CELL_W) - Math.floor(moduleWidthCols / 2)
+          )
+        )
+        const newSlots = [...existingSlots, { row, col, module: moduleRef }]
+        useProjectStore.getState().unhideModuleFromPanel(panel.id, panelGridModuleRefKey(moduleRef))
+        updatePanelGridSlots(panel.id, newSlots)
         trackSymbolPlace({
           canvas: 'panel',
           symbol,

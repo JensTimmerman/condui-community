@@ -221,9 +221,11 @@ export function useEendraadDragPreview(
               : {}),
           })
         }
-      } else if (symbol.id === 'earthing') {
-        // Ground/earthing can be dropped on main bus of main panels
-        if (dropTarget.type === 'mainBus') {
+      } else if (symbol.id === 'earthing' || symbol.id === 'earthing_separator') {
+        if (
+          dropTarget.type === 'mainBus' ||
+          (symbol.id === 'earthing_separator' && dropTarget.type === 'groundWire')
+        ) {
           setDragPreview({ position, symbolData: symbol, dropTarget })
         } else {
           setDragPreview(null)

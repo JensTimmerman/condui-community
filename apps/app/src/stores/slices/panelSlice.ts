@@ -27,6 +27,7 @@ import {
   isTerminalStripDevice,
   setTerminalStripPanelId,
 } from '@/lib/eendraad/projectElectricalDomain'
+import { isModularSocket } from '@/lib/socket/modularSocket'
 import { ensureInstallationFeedTopology, getAllSupplyTrunkDevices } from '@/lib/feedTopology'
 import { setSupplyDevicePanelVisibility } from '@/lib/panel/supplyPanelVisibility'
 import {
@@ -673,6 +674,20 @@ export const createPanelSlice: ProjectSliceCreator = (set, get) => ({
       }
       const panel = findPanelById(getEditableProjectElectricalPanels(state.currentProject), panelId)
       if (!panel) return
+      for (const circuit of getAllCircuits(panel)) {
+        for (const endpoint of circuit.endpoints) {
+          if (
+            panelGridModuleRefKey({
+              kind: 'domotica',
+              endpointId: endpoint.id,
+              circuitId: circuit.id,
+            }) === moduleRefKey &&
+            isModularSocket(endpoint)
+          ) {
+            return
+          }
+        }
+      }
       if (!panel.gridView) {
         panel.gridView = {
           rows: DEFAULT_PANEL_GRID_ROWS,

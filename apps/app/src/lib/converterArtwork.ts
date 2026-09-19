@@ -26,6 +26,28 @@ export const CONVERTER_ARTWORK_PATHS = {
 /** Relative size of the AC/DC artwork inside the 20-unit converter symbol. */
 export const CONVERTER_DOMAIN_ICON_SIZE_RATIO = 9 / 20
 
+/** Physical corners for the separate grid/load supply inverter, without catalog mirroring. */
+export function getSeparateSupplyInverterArtworkLayout(dcSide: 'left' | 'right'): ConverterArtworkLayout {
+  return dcSide === 'left'
+    ? {
+        diagonal: 'bottom-left-to-top-right',
+        domainCorners: { DC: 'top-left', AC: 'bottom-right' },
+      }
+    : {
+        diagonal: 'top-left-to-bottom-right',
+        domainCorners: { DC: 'top-right', AC: 'bottom-left' },
+      }
+}
+
+/** Outside opposite corners, clear of the horizontal and vertical connection wires. */
+export function getSeparateSupplyInverterDomainMarkers(width: number, height: number, dcSide: 'left' | 'right') {
+  const dcSign = dcSide === 'left' ? -1 : 1
+  return {
+    DC: { x: dcSign * (width / 2 + 3.5), y: -height / 2 - 3 },
+    AC: { x: -dcSign * (width / 2 + 3.5), y: height / 2 + 5 },
+  }
+}
+
 export function isDirectionalConverterSymbol(symbolId: string | undefined): boolean {
   return symbolId === 'rectifier' || symbolId === 'inverter'
 }

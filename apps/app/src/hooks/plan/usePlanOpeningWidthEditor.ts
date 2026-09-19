@@ -1,9 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { computeOpeningGeometry } from '@/handlers/plan/wallDrawing'
 import type { Door, Floor, Point2, Wall, Window } from '@/types/schema'
 import type { Selection } from '@/types/ui'
 import type { ProjectState } from '@/stores/projectStore'
-import { isKeyboardTypingTarget } from '@/lib/ui/keyboardTypingTarget'
+import {
+  clearFloorPlanDrawDimensionEditor,
+  setFloorPlanDrawDimensionEditor,
+} from '@/components/canvas/plan/floorPlanDrawDimensionEditorStore'
+import { getOpeningWidthEditorGeometry } from '@/lib/plan/openingWidthEditorGeometry'
 
 export type PlanOpeningWidthEditorModel = {
   kind: 'door' | 'window'
@@ -20,6 +24,7 @@ type UsePlanOpeningWidthEditorOptions = {
   activeTool: string
   canvasPxPerMeter: number
   canEditFloorPlan: boolean
+  zoom: number
   doorsForRender: Door[]
   isFloorPlanMode: boolean
   selection: Selection
@@ -39,10 +44,8 @@ export function usePlanOpeningWidthEditor({
   updateDoor,
   updateWindow,
   windowsForRender,
+  zoom,
 }: UsePlanOpeningWidthEditorOptions) {
-  const commitTimeoutRef = useRef<number | null>(null)
-  const lastTypedAtRef = useRef<number>(0)
-  const appendWindowMsRef = useRef<number>(3000)
   const [openingWidthText, setOpeningWidthText] = useState('')
   const [openingWidthEditorActive, setOpeningWidthEditorActive] = useState(false)
 
@@ -85,16 +88,14 @@ export function usePlanOpeningWidthEditor({
     selection.type,
     windowsForRender,
   ])
+  const openingWidthEditorOwnerId = selectedOpeningForWidthEditor
+    ? `opening-width:${selectedOpeningForWidthEditor.kind}:${selectedOpeningForWidthEditor.id}`
+    : 'opening-width'
 
   useEffect(() => {
     if (!selectedOpeningForWidthEditor) {
       setOpeningWidthText('')
       setOpeningWidthEditorActive(false)
-      lastTypedAtRef.current = 0
-      if (commitTimeoutRef.current != null) {
-        clearTimeout(commitTimeoutRef.current)
-        commitTimeoutRef.current = null
-      }
       return
     }
 
@@ -103,65 +104,68 @@ export function usePlanOpeningWidthEditor({
       Number.isFinite(widthDisplay) ? `${Math.round(widthDisplay * 10) / 10}` : ''
     )
     setOpeningWidthEditorActive(false)
-    lastTypedAtRef.current = 0
-    if (commitTimeoutRef.current != null) {
-      clearTimeout(commitTimeoutRef.current)
-      commitTimeoutRef.current = null
-    }
   }, [canvasPxPerMeter, selectedOpeningForWidthEditor])
 
   useEffect(() => {
-    if (!selectedOpeningForWidthEditor) return
-    if (commitTimeoutRef.current != null) {
-      clearTimeout(commitTimeoutRef.current)
+    if (!selectedOpeningForWidthEditor || !openingWidthEditorActive || !canEditFloorPlan) {
+      if (!canEditFloorPlan && openingWidthEditorActive) setOpeningWidthEditorActive(false)
+      clearFloorPlanDrawDimensionEditor(openingWidthEditorOwnerId)
+      return
     }
-    commitTimeoutRef.current = window.setTimeout(() => {
-      const parsed = parseFloat(openingWidthText.trim().replace(',', '.'))
-      if (!Number.isFinite(parsed) || parsed <= 0) return
-      const widthPx = (parsed / 100) * canvasPxPerMeter
-      if (!Number.isFinite(widthPx) || widthPx <= 0) return
-      if (Math.abs(widthPx - selectedOpeningForWidthEditor.width) < 1e-4) return
-      if (selectedOpeningForWidthEditor.kind === 'door') {
-        updateDoor(selectedOpeningForWidthEditor.id, { width: widthPx })
-      } else {
-        updateWindow(selectedOpeningForWidthEditor.id, { width: widthPx })
-      }
-    }, 350)
-    return () => {
-      if (commitTimeoutRef.current != null) {
-        clearTimeout(commitTimeoutRef.current)
-        commitTimeoutRef.current = null
-      }
-    }
-  }, [canvasPxPerMeter, openingWidthText, selectedOpeningForWidthEditor, updateDoor, updateWindow])
 
-  useEffect(() => {
-    if (!selectedOpeningForWidthEditor) return
-    const handleOpeningWidthKeyDown = (event: KeyboardEvent) => {
-      if (isKeyboardTypingTarget(event.target)) return
-      if (event.ctrlKey || event.metaKey || event.altKey) return
-      if (!canEditFloorPlan) return
+    const geometry = getOpeningWidthEditorGeometry(selectedOpeningForWidthEditor, zoom)
+    setFloorPlanDrawDimensionEditor({
+      ownerId: openingWidthEditorOwnerId,
+      fields: [
+        {
+          id: openingWidthEditorOwnerId,
+          anchor: geometry.anchor,
+          placement: 'center',
+          value: openingWidthText,
+          active: true,
+          rotationDeg: geometry.rotationDeg,
+        },
+      ],
+      onActivate: () => undefined,
+      onChange: (_id, value) => setOpeningWidthText(value),
+      onEnter: () => {
+        const parsed = Number.parseFloat(openingWidthText.replace(',', '.'))
+        const widthPx = (parsed / 100) * canvasPxPerMeter
+        if (!Number.isFinite(widthPx) || widthPx <= 0) return
+        if (Math.abs(widthPx - selectedOpeningForWidthEditor.width) >= 1e-4) {
+          if (selectedOpeningForWidthEditor.kind === 'door') {
+            updateDoor(selectedOpeningForWidthEditor.id, { width: widthPx })
+          } else {
+            updateWindow(selectedOpeningForWidthEditor.id, { width: widthPx })
+          }
+        }
+        setOpeningWidthEditorActive(false)
+      },
+      onTab: () => undefined,
+      onEscape: () => {
+        const widthDisplay = (selectedOpeningForWidthEditor.width / canvasPxPerMeter) * 100
+        setOpeningWidthText(
+          Number.isFinite(widthDisplay) ? `${Math.round(widthDisplay * 10) / 10}` : ''
+        )
+        setOpeningWidthEditorActive(false)
+      },
+    })
+  }, [
+    canvasPxPerMeter,
+    canEditFloorPlan,
+    openingWidthEditorActive,
+    openingWidthEditorOwnerId,
+    openingWidthText,
+    selectedOpeningForWidthEditor,
+    updateDoor,
+    updateWindow,
+    zoom,
+  ])
 
-      if (event.key === 'Backspace') {
-        event.preventDefault()
-        setOpeningWidthEditorActive(true)
-        setOpeningWidthText((prev) => prev.slice(0, -1))
-        lastTypedAtRef.current = Date.now()
-        return
-      }
-      if (event.key.length === 1 && /[0-9.,]/.test(event.key)) {
-        event.preventDefault()
-        const now = Date.now()
-        const shouldReplace =
-          lastTypedAtRef.current === 0 || now - lastTypedAtRef.current > appendWindowMsRef.current
-        setOpeningWidthEditorActive(true)
-        setOpeningWidthText((prev) => (shouldReplace ? event.key : `${prev}${event.key}`))
-        lastTypedAtRef.current = now
-      }
-    }
-    window.addEventListener('keydown', handleOpeningWidthKeyDown)
-    return () => window.removeEventListener('keydown', handleOpeningWidthKeyDown)
-  }, [canEditFloorPlan, selectedOpeningForWidthEditor])
+  useEffect(
+    () => () => clearFloorPlanDrawDimensionEditor(openingWidthEditorOwnerId),
+    [openingWidthEditorOwnerId]
+  )
 
   return {
     openingWidthEditorActive,

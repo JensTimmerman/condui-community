@@ -535,6 +535,7 @@ export function moveSupplyTrunkDeviceAtDropTarget(
   if (
     sameContainer &&
     insertIndex === originalGroupIndex &&
+    Boolean(device.supplyPanelInput) === Boolean(target.supplyPanelInput) &&
     (device.supplyPath ?? 'serial') === (targetSupplyPath ?? 'serial') &&
     (target.type !== 'supplyConverterDcWire' ||
       getSupplyConverterDcConnectionIndex(device) ===
@@ -566,6 +567,8 @@ export function moveSupplyTrunkDeviceAtDropTarget(
   }
   for (const movingDevice of movingDevices) {
     movingDevice.supplyPath = targetSupplyPath
+    if (target.supplyPanelInput) movingDevice.supplyPanelInput = true
+    else delete movingDevice.supplyPanelInput
     if (target.type === 'supplyConverterDcWire') {
       movingDevice.supplyConverterDcConnectionIndex =
         target.supplyConverterDcConnectionIndex ??

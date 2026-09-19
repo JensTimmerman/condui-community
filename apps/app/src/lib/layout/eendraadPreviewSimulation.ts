@@ -84,6 +84,7 @@ import {
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
 import { findPanelById } from '@/lib/panel/panelTree'
+import { applySecondaryPanelEarthingStem } from '@/lib/eendraad/panelGround'
 import { getMainBusInsertionSectionId } from '@/lib/panel/panelBusSections'
 import { getPanelFeedOrganization } from '@/lib/panel/panelFeedOrganization'
 import { canCreateSupplyTopologyFromDrop } from '@/lib/supplyTopologyFeature'
@@ -1627,11 +1628,15 @@ function simulateSupplyTrunkDevice(
         : {}),
   }
 
+  if (target.supplyPanelInput) trunkDevice.supplyPanelInput = true
   if (insertIndex >= 0 && insertIndex <= supplyDevices.length) {
     supplyDevices.splice(insertIndex, 0, trunkDevice)
   } else {
     supplyDevices.push(trunkDevice)
   }
+  supplyDevices.forEach((device, index) => {
+    device.trunkPosition = index
+  })
 
   if (mainTargetPanel?.isMain && target.panelId) {
     const topology = installation.feedTopology
@@ -1666,11 +1671,13 @@ function simulateGroundTrunkDevice(
   symbol: SymbolMetadata,
   changeSet: EendraadPreviewChangeSet
 ): void {
+  const panel = target.panelId ? findPanelById(projectPanels(project), target.panelId) : undefined
   const installation = mutableProjectInstallation(project)
-  if (!installation) return
-  const groundDevices: TrunkDevice[] = installation.groundTrunkDevices
-    ? [...installation.groundTrunkDevices]
-    : []
+  const usePanelStem = panel?.isMain === false
+  if (!usePanelStem && !installation) return
+  const groundDevices: TrunkDevice[] = usePanelStem
+    ? [...(panel.groundTrunkDevices ?? [])]
+    : [...(installation?.groundTrunkDevices ?? [])]
   const deviceId = generateId()
   const insertIndex = target.groundDeviceInsertIndex ?? groundDevices.length
 
@@ -1706,11 +1713,34 @@ function simulateGroundTrunkDevice(
     groundDevices.push(trunkDevice)
   }
 
-  installation.groundTrunkDevices = groundDevices
+  if (usePanelStem && panel) {
+    panel.groundTrunkDevices = groundDevices
+    panel.hasGround = true
+    if (!changeSet.affectedPanelIds.includes(panel.id)) changeSet.affectedPanelIds.push(panel.id)
+  } else if (installation) {
+    installation.groundTrunkDevices = groundDevices
+    const mainPanel = projectPanels(project).find((p) => p.isMain) ?? projectPanels(project)[0]
+    if (mainPanel && !changeSet.affectedPanelIds.includes(mainPanel.id)) {
+      changeSet.affectedPanelIds.push(mainPanel.id)
+    }
+  }
   changeSet.createdGroundTrunkDeviceIds.push(deviceId)
   changeSet.createdTrunkDeviceIds.push(deviceId)
+}
 
-  // Ground wire is rendered on the main panel.
+function simulateEarthingStemDrop(
+  project: PreviewProject,
+  target: DropTarget,
+  changeSet: EendraadPreviewChangeSet
+): void {
+  const panel = target.panelId ? findPanelById(projectPanels(project), target.panelId) : undefined
+  if (panel?.isMain === false) {
+    applySecondaryPanelEarthingStem(panel)
+    if (!changeSet.affectedPanelIds.includes(panel.id)) changeSet.affectedPanelIds.push(panel.id)
+    return
+  }
+  const installation = mutableProjectInstallation(project)
+  if (installation) installation.hasGround = true
   const mainPanel = projectPanels(project).find((p) => p.isMain) ?? projectPanels(project)[0]
   if (mainPanel && !changeSet.affectedPanelIds.includes(mainPanel.id)) {
     changeSet.affectedPanelIds.push(mainPanel.id)
@@ -2108,6 +2138,14 @@ export function simulateDropOnProject(
   // Ground trunk devices (vertical ground wire)
   if (target.type === 'groundWire') {
     simulateGroundTrunkDevice(cloned, target, symbol, changeSet)
+    return changeSet
+  }
+
+  if (
+    (symbol.id === 'earthing' || symbol.id === 'earthing_separator') &&
+    target.type === 'mainBus'
+  ) {
+    simulateEarthingStemDrop(cloned, target, changeSet)
     return changeSet
   }
 

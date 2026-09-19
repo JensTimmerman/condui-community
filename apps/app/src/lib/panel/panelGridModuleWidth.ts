@@ -3,7 +3,8 @@ import {
   getProjectElectricalPanels,
   type ProjectWithOptionalV2Electrical,
 } from '@/lib/projectV2/electrical'
-import type { Panel, PanelGridModuleRef, ProtectionDevice } from '@/types/schema'
+import { getModularSocketModuleWidth, isModularSocket } from '@/lib/socket/modularSocket'
+import type { Endpoint, Panel, PanelGridModuleRef, ProtectionDevice } from '@/types/schema'
 
 function polesFromPolesConfig(config: string | undefined): number {
   if (!config) return 1
@@ -18,6 +19,24 @@ function findProtectionRecursive(panels: Panel[], id: string): ProtectionDevice 
     const protection = panel.protections.find((candidate) => candidate.id === id)
     if (protection) return protection
     const nested = findProtectionRecursive(panel.subPanels ?? [], id)
+    if (nested) return nested
+  }
+  return null
+}
+
+function findEndpointRecursive(panels: Panel[], id: string): Endpoint | null {
+  for (const panel of panels) {
+    for (const circuit of panel.circuits) {
+      const endpoint = circuit.endpoints.find((candidate) => candidate.id === id)
+      if (endpoint) return endpoint
+    }
+    for (const protection of panel.protections) {
+      for (const circuit of protection.circuits ?? []) {
+        const endpoint = circuit.endpoints.find((candidate) => candidate.id === id)
+        if (endpoint) return endpoint
+      }
+    }
+    const nested = findEndpointRecursive(panel.subPanels ?? [], id)
     if (nested) return nested
   }
   return null
@@ -47,6 +66,19 @@ export function getModuleWidthInCols(
       }
     }
   }
-  if (ref.kind === 'domotica') return 2
+  if (ref.kind === 'domotica') {
+    const endpoint = findEndpointRecursive(getProjectElectricalPanels(project), ref.endpointId)
+    if (endpoint && isModularSocket(endpoint)) return getModularSocketModuleWidth(endpoint)
+    return 2
+  }
   return 1
+}
+
+/** Modular sockets keep a derived 2/4-module width; slot resize cannot override it. */
+export function moduleWidthFollowsDevice(
+  ref: PanelGridModuleRef,
+  project: ProjectWithOptionalV2Electrical | null
+): boolean {
+  if (!project || ref.kind !== 'domotica') return false
+  return isModularSocket(findEndpointRecursive(getProjectElectricalPanels(project), ref.endpointId))
 }

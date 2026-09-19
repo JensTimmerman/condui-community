@@ -106,10 +106,6 @@ export async function prepareProjectForCloudMove(project: ProjectV2): Promise<Pr
   return project
 }
 
-export async function markCloudProjectMovedToLocal(_projectId: string): Promise<void> {
-  throw new Error('Cloud storage is not active.')
-}
-
 export async function adoptUnscopedLocalProjectsForUser(_userId: string): Promise<void> {}
 
 export function isProjectStorageModeAvailable(mode: string): mode is ProjectStorageMode {

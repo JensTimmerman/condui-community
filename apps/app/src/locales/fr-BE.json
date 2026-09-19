@@ -739,6 +739,7 @@
     "label": "Étiquette",
     "notes": "Notes",
     "socket": "Prise de courant",
+    "modularSocket": "Prise modulaire",
     "switch": "Interrupteur",
     "light_point": "Point lumineux",
     "fixed_appliance": "Appareil fixe",
@@ -767,6 +768,8 @@
     "socketCount": "Nombre de prises",
     "setSocketCount": "Définir le nombre de prises",
     "lightCount": "Nombre de points lumineux",
+    "ventilationCount": "Nombre de ventilateurs",
+    "hvacDeviceCount": "Nombre d'appareils",
     "switchPoles": "Pôles",
     "switchPoles1": "1 pôle",
     "switchPoles2": "2 pôles",
@@ -805,7 +808,22 @@
       "function_none": "Aucune",
       "function_heat": "Chauffage",
       "function_cool": "Refroidissement",
-      "function_heat_cool": "Chauffage / refroidissement"
+      "function_heat_cool": "Chauffage / refroidissement",
+      "energy_electricity_short": "Élec.",
+      "energy_gas_fan_short": "Gaz (forcé)",
+      "energy_gas_atmospheric_short": "Gaz (atm.)",
+      "energy_liquid_short": "Liquide",
+      "energy_solid_short": "Solide",
+      "energy_none_short": "Aucune",
+      "type_heat_exchange_short": "Échang.",
+      "type_cogeneration_short": "Cogén.",
+      "type_tap_spiral_short": "Spirale",
+      "type_boiler_short": "Chaud.",
+      "type_none_short": "Aucun",
+      "function_none_short": "Aucune",
+      "function_heat_short": "Chauff.",
+      "function_cool_short": "Refroid.",
+      "function_heat_cool_short": "Ch./refr."
     },
     "relay": {
       "maxCurrentRating": "Courant nominal max.",
@@ -1205,6 +1223,7 @@
   },
   "quickPlacer": {
     "title": "PlaceRapide",
+    "panelSelector": "Tableau",
     "mode": {
       "slow": "Lent",
       "fast": "Rapide",
@@ -1544,6 +1563,18 @@
           "details": "Pour un logement typique, le RGIE exige au moins deux circuits séparés pour l'éclairage (circuits feuilles d'éclairage ou mixtes). Les circuits conteneurs avec sous-circuits ne comptent pas.",
           "remediation": "Ajoutez un second circuit d'éclairage ou mixte afin de répartir l'éclairage sur au moins deux circuits."
         },
+        "installation-earthing": {
+          "shortTitle": "Pas de mise à la terre",
+          "message": "L'installation n'a pas de mise à la terre",
+          "details": "Aucune électrode de terre n'est affichée sur un tableau. Cela peut être correct, mais la plupart des installations ont besoin d'un point de terre.",
+          "remediation": "Ajoutez la terre sur le tableau principal, ou déposez-la sur un tableau secondaire si l'électrode s'y trouve."
+        },
+        "multiple-earthing-locations": {
+          "shortTitle": "Terre sur plusieurs tableaux",
+          "message": "La mise à la terre apparaît sur plus d'un tableau",
+          "details": "L'installation montre des électrodes de terre sur des tableaux distincts. Vérifiez que c'est voulu ; en principe il n'y a qu'un point de terre.",
+          "remediation": "Gardez la terre sur un seul tableau et retirez la tige de terre supplémentaire."
+        },
         "cable-cross-section": {
           "shortTitle": "Segments sans section de câble",
           "message": "Le circuit a des segments de câble sans section transversale",
@@ -1685,7 +1716,7 @@
       "supplyModePaths": {
         "message": "Aucun chemin réseau/secours valide pour {{phases}}",
         "details": "La topologie unifilaire ne fournit pas un chemin réseau et secours complet et coordonné pour {{phases}}.",
-        "remediation": "Reconnectez les côtés réseau, secours et charge afin que chaque phase représentée dispose d’un chemin complet via l’inverseur de source prévu."
+        "remediation": "Reconnectez les côtés réseau, secours et charge afin que chaque phase représentée dispose d’un chemin d’alimentation complet."
       },
       "supplyConductorProtectionCoordination": {
         "message": "{{protectionLabel}} : le conducteur de {{section}} mm² est trop petit pour une protection de {{ratingA}} A",
@@ -1792,6 +1823,14 @@
       "hasSupplyOrigin": {
         "message": "L'origine de l'alimentation principale doit être spécifiée",
         "details": "L'origine de l'alimentation principale (réseau, générateur, pv_inverter, etc.) doit être spécifiée dans les paramètres d'installation."
+      },
+      "installationHasEarthing": {
+        "message": "L'installation n'a pas de mise à la terre",
+        "details": "Aucune électrode de terre n'est affichée sur un tableau. Cela peut être correct, mais la plupart des installations ont besoin d'un point de terre."
+      },
+      "installationHasSingleEarthingLocation": {
+        "message": "La mise à la terre apparaît sur plus d'un tableau",
+        "details": "L'installation montre des électrodes de terre sur des tableaux distincts. Vérifiez que c'est voulu ; en principe il n'y a qu'un point de terre."
       },
       "nonHouseholdPanelShowsGroundedNetwork": {
         "message": "Le tableau {{panelName}} n’affiche pas son schéma de mise à la terre",
@@ -2250,6 +2289,9 @@
     "port1": "Port 1",
     "port2": "Port 2",
     "converterPhases": "Phases CA",
+    "converterAcConnection": "Raccordement CA",
+    "converterAcShared": "Raccordement réseau commun",
+    "converterAcSeparate": "Raccordements réseau et secours séparés",
     "converterDcConnections": "Connexions CC",
     "converterTopDcConnections": "Connexions CC supérieures",
     "inverterUnit": "Onduleur",

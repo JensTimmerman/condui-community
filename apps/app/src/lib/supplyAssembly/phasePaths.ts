@@ -63,6 +63,9 @@ function internallyConnectedPorts(
     (port) => port.domain === 'AC' && port.conductors.includes(phase)
   )
   if (node.kind === 'ac-distribution' || node.kind === 'protection') return [acPorts]
+  if (node.kind === 'inverter-unit' && node.properties.acConnection === 'separate' && mode === 'grid') {
+    return [acPorts.filter((port) => port.role === 'inverter-grid-ac' || port.role === 'inverter-backup-ac')]
+  }
   if (node.kind !== 'changeover-switch') return []
 
   const sourceRole = mode === 'grid' ? 'source-grid-ac' : 'source-backup-ac'
@@ -76,12 +79,14 @@ function buildPhaseAdjacency(
 ): Map<string, TraversalEdge[]> {
   const adjacency = new Map<string, TraversalEdge[]>()
   const allowedRoles = mode === 'grid' ? GRID_PATH_ROLES : BACKUP_PATH_ROLES
+  const internalTransfer = assembly.nodes.some((node) => node.kind === 'inverter-unit' && node.properties.acConnection === 'separate')
 
   for (const connection of assembly.connections) {
     if (
       connection.domain !== 'AC' ||
       !connection.conductors.includes(phase) ||
-      !allowedRoles.has(connection.pathRole)
+      !(allowedRoles.has(connection.pathRole) || (mode === 'grid' && internalTransfer &&
+        (connection.pathRole === 'inverter-grid-ac' || connection.pathRole === 'inverter-backup-ac')))
     ) {
       continue
     }
@@ -208,15 +213,20 @@ function derivePathsToHandoff(
     const gridChangeover = nodeIdOfKind(assembly, gridRoute, 'changeover-switch')
     const backupChangeover = nodeIdOfKind(assembly, backupRoute, 'changeover-switch')
     const inverterUnitNodeId = nodeIdOfKind(assembly, backupRoute, 'inverter-unit')
+    const internalTransfer = Boolean(inverterUnitNodeId && gridRoute?.nodeIds.has(inverterUnitNodeId) &&
+      assembly.nodes.some((node) => node.id === inverterUnitNodeId && node.kind === 'inverter-unit' && node.properties.acConnection === 'separate'))
+    const isolatedInternalTransfer = !gridRoute && Boolean(backupRoute && inverterUnitNodeId &&
+      assembly.nodes.some((node) => node.id === inverterUnitNodeId && node.kind === 'inverter-unit' &&
+        node.properties.acConnection === 'separate' && node.properties.gridInputConnected === false))
     const isCoordinatedBackup =
-      Boolean(gridRoute && backupRoute && inverterUnitNodeId && gridChangeover) &&
-      gridChangeover === backupChangeover
+      Boolean(gridRoute && backupRoute && inverterUnitNodeId) &&
+      (internalTransfer || (Boolean(gridChangeover) && gridChangeover === backupChangeover))
     const isGridOnlyThroughChangeover = Boolean(
       gridRoute && !backupRoute && gridChangeover && !hasBackupSource
     )
     const isBackupOnlyThroughChangeover = Boolean(
       !gridRoute && backupRoute && backupChangeover && inverterUnitNodeId && !hasGridSource
-    )
+    ) || isolatedInternalTransfer
 
     return {
       phase,

@@ -431,6 +431,42 @@ export const beAreiBook1_2025: RulePack = {
       tags: ['circuit', 'lighting'],
     },
     {
+      id: 'be.areibook1.2025.installation-earthing',
+      title: 'Installation earthing present',
+      severity: 'warning',
+      appliesTo: ['board'],
+      checks: [{ name: 'installationHasEarthing' }],
+      message: 'validation.rules.be.areibook1.2025.installation-earthing.message',
+      details: 'validation.rules.be.areibook1.2025.installation-earthing.details',
+      remediation: 'validation.rules.be.areibook1.2025.installation-earthing.remediation',
+      citations: [
+        {
+          code: 'AREI',
+          title: 'Algemeen Reglement op de Elektrische Installaties',
+          section: '§ 5.4.2.1',
+        },
+      ],
+      tags: ['earthing', 'ground', 'consistency'],
+    },
+    {
+      id: 'be.areibook1.2025.multiple-earthing-locations',
+      title: 'Single earthing location',
+      severity: 'warning',
+      appliesTo: ['board'],
+      checks: [{ name: 'installationHasSingleEarthingLocation' }],
+      message: 'validation.rules.be.areibook1.2025.multiple-earthing-locations.message',
+      details: 'validation.rules.be.areibook1.2025.multiple-earthing-locations.details',
+      remediation: 'validation.rules.be.areibook1.2025.multiple-earthing-locations.remediation',
+      citations: [
+        {
+          code: 'AREI',
+          title: 'Algemeen Reglement op de Elektrische Installaties',
+          section: '§ 5.4.2.1',
+        },
+      ],
+      tags: ['earthing', 'ground', 'consistency'],
+    },
+    {
       id: 'be.areibook1.2025.max-endpoints-per-circuit',
       title: 'Max endpoints per circuit',
       severity: 'error',

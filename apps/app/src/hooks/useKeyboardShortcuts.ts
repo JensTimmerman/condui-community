@@ -19,7 +19,11 @@ import type { CanvasType, ViewportLayout } from '@/types/ui'
 import { isStructuralCanvasEnabled } from '@/lib/structuralCanvas/availability'
 import type { EditorCapabilities } from '@/lib/viewerMode'
 import { isKeyboardTypingTarget } from '@/lib/ui/keyboardTypingTarget'
-import { getProjectElectricalInstallation } from '@/lib/projectV2/electrical'
+import {
+  getProjectElectricalInstallation,
+  getProjectElectricalPanels,
+} from '@/lib/projectV2/electrical'
+import { findGroundTrunkDeviceOwner } from '@/lib/eendraad/panelGround'
 import { useDialogStore } from '@/stores/dialogStore'
 import HiddenItemsDialog, { type HiddenItem } from '@/components/common/HiddenItemsDialog'
 import { getSymbolById } from '@/lib/symbols'
@@ -283,10 +287,13 @@ export function useKeyboardShortcuts(options?: { capabilities?: EditorCapabiliti
                     (d: { id: string }) => d.id === id
                   ) ?? -1,
                 getGroundTrunkDeviceIndex: (id: string) =>
-                  (store.currentProject
-                    ? getProjectElectricalInstallation(store.currentProject)
-                    : undefined
-                  )?.groundTrunkDevices?.findIndex((d: { id: string }) => d.id === id) ?? -1,
+                  store.currentProject
+                    ? findGroundTrunkDeviceOwner(
+                        getProjectElectricalPanels(store.currentProject),
+                        getProjectElectricalInstallation(store.currentProject),
+                        id
+                      )?.index ?? -1
+                    : -1,
               }
               if (canDuplicateEendraadSelection(selDup, getters)) {
                 const dupResult = runEendraadDuplicate(

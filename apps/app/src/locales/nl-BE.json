@@ -745,6 +745,7 @@
     "label": "Label",
     "notes": "Notities",
     "socket": "Contactdoos",
+    "modularSocket": "Modulaire contactdoos",
     "switch": "Schakelaar",
     "light_point": "Lichtpunt",
     "fixed_appliance": "Vast toestel",
@@ -773,6 +774,8 @@
     "socketCount": "Aantal contactdozen",
     "setSocketCount": "Aantal contactdozen instellen",
     "lightCount": "Aantal lichtpunten",
+    "ventilationCount": "Aantal ventilatoren",
+    "hvacDeviceCount": "Aantal toestellen",
     "switchPoles": "Polen",
     "switchPoles1": "1 pool",
     "switchPoles2": "2 polen",
@@ -811,7 +814,22 @@
       "function_none": "Geen",
       "function_heat": "Verwarming",
       "function_cool": "Koeling",
-      "function_heat_cool": "Verwarmen / koelen"
+      "function_heat_cool": "Verwarmen / koelen",
+      "energy_electricity_short": "Elek.",
+      "energy_gas_fan_short": "Gas (vent.)",
+      "energy_gas_atmospheric_short": "Gas (atm.)",
+      "energy_liquid_short": "Vloeibaar",
+      "energy_solid_short": "Vast",
+      "energy_none_short": "Geen",
+      "type_heat_exchange_short": "Wissel.",
+      "type_cogeneration_short": "WKK",
+      "type_tap_spiral_short": "Spiraal",
+      "type_boiler_short": "Boiler",
+      "type_none_short": "Geen",
+      "function_none_short": "Geen",
+      "function_heat_short": "Verw.",
+      "function_cool_short": "Koel.",
+      "function_heat_cool_short": "Verw./koel"
     },
     "relay": {
       "maxCurrentRating": "Max. nominale stroom",
@@ -1211,6 +1229,7 @@
   },
   "quickPlacer": {
     "title": "SnelPlaatser",
+    "panelSelector": "Bord",
     "mode": {
       "slow": "Traag",
       "fast": "Snel",
@@ -1553,6 +1572,18 @@
           "details": "Voor een typische woning vereist het AREI minstens twee afzonderlijke stroombanen voor verlichting (verlichtings- of gemengde kringen). Tel alleen bladkringen: een container met subkringen telt niet mee.",
           "remediation": "Voeg een tweede verlichtings- of gemengde stroombaan toe zodat de verlichting over minstens twee kringen verdeeld is."
         },
+        "installation-earthing": {
+          "shortTitle": "Geen aarding",
+          "message": "De installatie heeft geen aarding",
+          "details": "Er is op geen enkel bord een aardelektrode getoond. Dat kan kloppen, maar de meeste installaties hebben één aardpunt nodig.",
+          "remediation": "Voeg aarding toe op het hoofdbord, of sleep ze naar een onderbord als de elektrode daar zit."
+        },
+        "multiple-earthing-locations": {
+          "shortTitle": "Aarding op meerdere borden",
+          "message": "Aarding staat op meer dan één bord",
+          "details": "De installatie toont aardelektrodes op aparte borden. Controleer of dit klopt; meestal is er één aardpunt.",
+          "remediation": "Houd de aarding op één bord en verwijder de extra aardingsstam."
+        },
         "cable-cross-section": {
           "shortTitle": "Kabels zonder doorsnede",
           "message": "Stroombaan heeft kabelsegmenten zonder doorsnede",
@@ -1697,7 +1728,7 @@
       "supplyModePaths": {
         "message": "Geen geldig net-/backuppad voor {{phases}}",
         "details": "De getekende topologie bevat geen volledig en gecoördineerd net- en backuppad voor {{phases}}.",
-        "remediation": "Verbind de net-, backup- en lastzijde opnieuw zodat elke getekende fase een volledig pad door de bedoelde omschakelaar heeft."
+        "remediation": "Verbind de net-, backup- en lastzijde opnieuw zodat elke getekende fase een volledig voedingspad heeft."
       },
       "supplyConductorProtectionCoordination": {
         "message": "{{protectionLabel}}: geleider van {{section}} mm² is te klein voor een beveiliging van {{ratingA}} A",
@@ -1812,6 +1843,14 @@
       "hasSupplyOrigin": {
         "message": "Hoofdvoeding oorsprong moet worden opgegeven",
         "details": "De hoofdvoeding oorsprong (net, generator, pv_inverter, etc.) moet worden opgegeven in de installatie-instellingen."
+      },
+      "installationHasEarthing": {
+        "message": "De installatie heeft geen aarding",
+        "details": "Er is op geen enkel bord een aardelektrode getoond. Dat kan kloppen, maar de meeste installaties hebben één aardpunt nodig."
+      },
+      "installationHasSingleEarthingLocation": {
+        "message": "Aarding staat op meer dan één bord",
+        "details": "De installatie toont aardelektrodes op aparte borden. Controleer of dit klopt; meestal is er één aardpunt."
       },
       "nonHouseholdPanelShowsGroundedNetwork": {
         "message": "Bord {{panelName}} toont het geaarde netsysteem niet",
@@ -2271,6 +2310,9 @@
     "port1": "Poort 1",
     "port2": "Poort 2",
     "converterPhases": "AC-fasen",
+    "converterAcConnection": "AC-aansluiting",
+    "converterAcShared": "Gedeelde netaansluiting",
+    "converterAcSeparate": "Aparte net- en back-upaansluitingen",
     "converterDcConnections": "DC-aansluitingen",
     "converterTopDcConnections": "DC-aansluitingen bovenaan",
     "inverterUnit": "Omvormer",

@@ -101,6 +101,9 @@ export class ProjectIndex {
     for (const panel of panels) {
       this.allPanels.push(panel)
       this.panelById.set(panel.id, panel)
+      for (const device of panel.groundTrunkDevices ?? []) {
+        this.trunkDeviceById.set(device.id, device)
+      }
 
       const panelCircuits: Circuit[] = []
 

@@ -73,6 +73,7 @@ import {
   getProjectElectricalPanels,
 } from '@/lib/projectV2/electrical'
 import { getAllCircuits, getAllProtections } from '@/lib/eendraad/projectElectricalDomain'
+import { collectAllGroundTrunkDevices } from '@/lib/eendraad/panelGround'
 import type { ProjectV2 } from '@/types/projectV2'
 import {
   getPhaseAssignmentLabel,
@@ -131,7 +132,7 @@ function getWireRenderLookup(project: ProjectV2): WireRenderLookup {
   for (const device of installation?.mainSupply?.supplyTrunkDevices ?? []) {
     trunkDevices.set(device.id, device)
   }
-  for (const device of installation?.groundTrunkDevices ?? []) {
+  for (const device of collectAllGroundTrunkDevices(panels, installation)) {
     trunkDevices.set(device.id, device)
   }
   for (const panel of panels) {
